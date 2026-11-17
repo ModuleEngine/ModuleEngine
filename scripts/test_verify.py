@@ -89,11 +89,12 @@ class RegistryTests(Fixture):
             self.assertTrue(chosen)
             self.assertFalse(any(s.get("ignored") or s.get("resources") for s in chosen))
         ignored = [s for s in self.data["steps"] if s.get("ignored")]
-        self.assertEqual(len(ignored), 19)
+        self.assertEqual(len(ignored), 21)
         self.assertEqual({s["id"] for s in ignored if s.get("excluded")}, {
             "fixture-emitter", "catchup-diagnostic", "g1-team-palette", "audio-source-clock",
             "audio-registered-pcm8", "audio-start-retry", "audio-owner-retirement", "g1-cpu-timing",
             "render-settings-history", "custom-player-settings", "custom-player-settings-rollback", "custom-player-settings-stale",
+            "native-window-icons", "native-window-z-order",
         })
         self.assertEqual(len(verify.plan(self.data, self.steps, "native")["steps"]), 5)
         self.assertEqual(len(verify.plan(self.data, self.steps, "package")["steps"]), 2)
