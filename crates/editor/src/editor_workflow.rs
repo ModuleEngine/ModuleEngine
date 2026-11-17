@@ -40,6 +40,7 @@ pub enum Command {
     LoadLayout,
     ResetLayout,
     PlayPause,
+    Restart,
     Stop,
     Quit,
 }
@@ -61,6 +62,7 @@ impl ExportKind {
 #[derive(Clone, Debug)]
 enum Action {
     Asset(BrowserAction),
+    Scene(module_engine_project::SceneSourceEdit),
     Open,
     OpenPath(PathBuf),
     New(workspace_files::ProjectTemplate),
@@ -113,6 +115,7 @@ fn same_path(a: &Path, b: &Path) -> bool {
 }
 
 pub struct Workflow {
+    pub(super) workspace_dialog: Option<super::workspaces::WorkspaceDialog>,
     saved: GraphDocument,
     recent: RecentProjects,
     recent_path: Option<PathBuf>,
@@ -123,6 +126,7 @@ pub struct Workflow {
     new_engine_choice: crate::engine_profiles::EngineChoice,
     report: String,
     show_report: bool,
+    pub(super) command_targets: BTreeMap<String, egui::Rect>,
     menu_rects: BTreeMap<String, egui::Rect>,
     capture_menu: Option<String>,
     asset_history: BTreeMap<u64, AssetOperationRecord>,
@@ -134,6 +138,7 @@ pub struct Workflow {
 impl Workflow {
     pub fn new(document: GraphDocument) -> Self {
         Self {
+            workspace_dialog: None,
             saved: document,
             recent: RecentProjects::default(),
             recent_path: None,
@@ -144,6 +149,7 @@ impl Workflow {
             new_engine_choice: Default::default(),
             report: String::new(),
             show_report: false,
+            command_targets: BTreeMap::new(),
             menu_rects: BTreeMap::new(),
             capture_menu: if std::env::var_os("EFRAME_SCREENSHOT_TO").is_some()
                 || std::env::var_os("MODULE_ENGINE_UI_SCREENSHOT_TO").is_some()
@@ -160,7 +166,10 @@ impl Workflow {
         }
     }
     pub fn blocks_document_edits(&self) -> bool {
-        self.job.is_some() || self.guard.is_some() || self.show_report
+        self.job.is_some()
+            || self.guard.is_some()
+            || self.show_report
+            || self.workspace_dialog.is_some()
     }
     pub(super) fn has_asset_history(&self) -> bool {
         !self.asset_history.is_empty()
@@ -231,22 +240,16 @@ impl Editor {
     pub(super) fn has_unsaved_work(&self) -> bool {
         self.json_dirty
             || self.has_module_tool_drafts()
+            || self.game_workbench.has_inspector_drafts()
             || self.game_workbench.has_graph_draft()
             || self.document != self.workflow.saved
     }
     fn prepare_file_operation(&mut self) -> Result<(), String> {
-        self.require_resolved_module_tools("saving")?;
-        if self.game_workbench.has_graph_draft() {
-            return Err("Apply or discard the Gameplay Systems draft before saving. It is not included in the saved project.".into());
-        }
-        if self.json_dirty && !self.apply_json() {
-            return Err(self.status.clone());
-        }
-        self.validate_candidate(&self.document, self.can_author_engine())
+        self.file_operation_candidate().map(|_| ())
     }
     /// Stage pending JSON for Save As without crossing the authoring-state
     /// boundary. A cancelled picker or failed publication must retain the draft.
-    fn file_operation_candidate(&self) -> Result<GraphDocument, String> {
+    pub(super) fn file_operation_candidate(&self) -> Result<GraphDocument, String> {
         self.require_resolved_module_tools("saving")?;
         if self.game_workbench.has_graph_draft() {
             return Err("Apply or discard the Gameplay Systems draft before saving. It is not included in the saved project.".into());
@@ -307,6 +310,7 @@ impl Editor {
         }
         match action {
             Action::Asset(action) => self.perform_asset_action(action, ctx),
+            Action::Scene(edit) => self.perform_scene_transaction(edit, ctx),
             Action::Open => self.start_dialog(DialogPurpose::Open, ctx),
             Action::OpenPath(path) => {
                 if !self.load_workflow(path) {
@@ -316,7 +320,7 @@ impl Editor {
             Action::New(empty) => self.start_dialog(DialogPurpose::New(empty), ctx),
             Action::Quit => {
                 self.workflow.allow_close = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
             }
             Action::Export(kind) => self.start_dialog(DialogPurpose::Export(kind), ctx),
             Action::Check => self.start_cli("Checking project", "--check", None, ctx),
@@ -409,9 +413,17 @@ impl Editor {
                 .is_some_and(|(a, b)| same_path(&a, &b))
         {
             let candidate = save_candidate.expect("Save As candidate");
-            if let Err(error) = project::save(&path, &candidate) {
-                self.report_error(error);
-                return;
+            let saved = self
+                .source_files
+                .as_ref()
+                .map_err(Clone::clone)
+                .and_then(|state| project::save_with_source_state(&path, &candidate, state));
+            match saved {
+                Ok(state) => self.source_files = Ok(state),
+                Err(error) => {
+                    self.report_error(error);
+                    return;
+                }
             }
             if self.json_dirty || candidate != self.document {
                 self.apply_validated_json(candidate);
@@ -535,13 +547,50 @@ impl Editor {
         });
     }
     pub(super) fn request_asset_action(&mut self, action: BrowserAction, ctx: &egui::Context) {
+        if let BrowserAction::Scene { asset, action } = action {
+            let Some(id) = self.scene_id_for_asset(&asset) else {
+                self.status = "Scene asset is not registered in this project".into();
+                return;
+            };
+            use super::scene_sources::SceneCommand;
+            use crate::assets_ui::SceneAssetAction;
+            let command = match action {
+                SceneAssetAction::Open => SceneCommand::Open(id),
+                SceneAssetAction::Duplicate => SceneCommand::Duplicate(id),
+                SceneAssetAction::Rename => SceneCommand::Rename(id),
+                SceneAssetAction::Move => SceneCommand::Move(id),
+                SceneAssetAction::Delete => SceneCommand::Delete(id),
+                SceneAssetAction::SetEntry => SceneCommand::SetEntry(id),
+            };
+            self.request_scene_command(command, ctx);
+            return;
+        }
+
         if self.game_workbench.is_play_session()
             || self.playing
             || self.workflow.blocks_document_edits()
         {
             return;
         }
+        if let BrowserAction::Move { id, folder } = &action
+            && let Some(scene) = self.scene_id_for_asset(id)
+        {
+            self.request_scene_transaction(
+                module_engine_project::SceneSourceEdit::Move {
+                    scene,
+                    folder: folder.clone(),
+                },
+                ctx,
+            );
+            return;
+        }
         if matches!(action, BrowserAction::Refresh) {
+            self.scene_source_ui.external_error = self
+                .source_files
+                .as_ref()
+                .map_err(Clone::clone)
+                .and_then(|state| state.verify(&self.project_asset_root()))
+                .err();
             self.assets.invalidate();
             self.game_workbench.invalidate_assets();
             return;
@@ -554,6 +603,45 @@ impl Editor {
         }
         self.cancel_active_scene_gestures();
         self.request_action(Action::Asset(action), ctx);
+    }
+    pub(super) fn request_scene_transaction(
+        &mut self,
+        edit: module_engine_project::SceneSourceEdit,
+        ctx: &egui::Context,
+    ) {
+        self.request_action(Action::Scene(edit), ctx);
+    }
+    fn perform_scene_transaction(
+        &mut self,
+        edit: module_engine_project::SceneSourceEdit,
+        ctx: &egui::Context,
+    ) {
+        if self.playing || self.game_workbench.is_play_session() {
+            self.report_error("Stop Play before changing scene files".into());
+            return;
+        }
+        if !self.save_workflow() {
+            self.report_error(self.status.clone());
+            return;
+        }
+        self.flush_history();
+        let before = self.document.clone();
+        let accepted = self.source_files.clone();
+        let root = self.project_asset_root();
+        let protected = self.asset_protected_paths();
+        let backend = self
+            .distribution
+            .as_ref()
+            .map(|d| d.package_root.clone())
+            .unwrap_or_else(project::source_root);
+        let objects = self.asset_property_object_ids();
+        self.spawn_job("Writing scene source files…", ctx, move || {
+            let workspace = crate::host::asset_workspace_at(&root, protected, &backend, objects)?
+                .with_project_source(accepted?);
+            Ok(Outcome::Asset(Box::new(
+                workspace.edit_scene_source(&before, &edit)?,
+            )))
+        });
     }
     fn perform_asset_action(&mut self, action: BrowserAction, ctx: &egui::Context) {
         if self.game_workbench.is_play_session() || self.playing {
@@ -593,15 +681,18 @@ impl Editor {
         self.flush_history();
         let before = self.document.clone();
         let project_path = PathBuf::from(&self.path);
+        let accepted = self.source_files.clone();
         self.spawn_job("Changing assets…", ctx, move || {
+            let accepted = accepted?;
             let workspace = crate::host::asset_workspace_at(
                 &root,
                 protected.clone(),
                 &backend_root,
                 property_object_ids,
-            )?;
+            )?
+            .with_project_source(accepted.clone());
             let manifest = AssetManifest::from_value(&before.asset_manifest)?;
-            let operation = match action {
+            let mut operation = match action {
                 BrowserAction::NewFolder { path } => workspace.create_folder(&before, &path)?,
                 BrowserAction::Rename { id, name } => {
                     if name.is_empty()
@@ -634,7 +725,11 @@ impl Editor {
                     workspace.delete_asset(&before, &id, policy)?
                 }
                 BrowserAction::Restore { trash_id } => {
-                    workspace.restore_deleted(&before, &trash_id)?
+                    if workspace.scene_trash_identity(&trash_id)?.is_some() {
+                        workspace.restore_scene_source(&before, &trash_id)?
+                    } else {
+                        workspace.restore_deleted(&before, &trash_id)?
+                    }
                 }
                 BrowserAction::Import { folder } => {
                     if protected
@@ -657,9 +752,17 @@ impl Editor {
                 .game
                 .as_ref()
                 .map_or(Ok(()), |game| game.validate_scene_data());
-            if let Err(error) =
-                validation.and_then(|_| project::save(&project_path, &operation.document))
-            {
+            let publication = validation.and_then(|_| {
+                if operation.source_files.is_none() {
+                    operation.source_files = Some(project::save_with_source_state(
+                        &project_path,
+                        &operation.document,
+                        &accepted,
+                    )?);
+                }
+                Ok(())
+            });
+            if let Err(error) = publication {
                 let rollback = operation.record.undo(&root, &operation.document);
                 return Err(match rollback {
                     Ok(_) => format!("Save failed; files restored: {error}"),
@@ -691,17 +794,74 @@ impl Editor {
         }
         let root = self.project_asset_root();
         let result = (|| {
-            let document = if forward {
-                record.redo(&root, &self.document)?
+            let target = if forward {
+                &record.after
             } else {
-                record.undo(&root, &self.document)?
+                &record.before
             };
-            if let Err(error) = self
-                .validate_candidate(&document, self.can_author_engine())
-                .and_then(|_| self.validate_asset_restore(&document))
-                .and_then(|_| project::save(Path::new(&self.path), &document))
+            self.validate_candidate(target, self.can_author_engine())?;
+            let accepted = self.source_files.as_ref().map_err(Clone::clone)?.clone();
+            accepted.require_project_path(Path::new(&self.path))?;
+            let (document, state, rollback_record) = if record.source_project.is_some() {
+                let backend = self
+                    .distribution
+                    .as_ref()
+                    .map(|d| d.package_root.clone())
+                    .unwrap_or_else(project::source_root);
+                let workspace = crate::host::asset_workspace_at(
+                    &root,
+                    self.asset_protected_paths(),
+                    &backend,
+                    self.asset_property_object_ids(),
+                )?
+                .with_project_source(accepted);
+                let operation =
+                    workspace.replay_project_operation(&record, &self.document, forward)?;
+                (
+                    operation.document,
+                    operation
+                        .source_files
+                        .ok_or("Missing replay source generation")?,
+                    Some(operation.record),
+                )
+            } else {
+                let document = if forward {
+                    record.redo(&root, &self.document)?
+                } else {
+                    record.undo(&root, &self.document)?
+                };
+                if let Err(error) = self.validate_asset_restore(&document) {
+                    let rollback = if forward {
+                        record.undo(&root, &document)
+                    } else {
+                        record.redo(&root, &document)
+                    };
+                    return Err(format!(
+                        "{error}; rollback: {}",
+                        rollback.err().unwrap_or_else(|| "files restored".into())
+                    ));
+                }
+                match project::save_with_source_state(Path::new(&self.path), &document, &accepted) {
+                    Ok(state) => (document, state, None),
+                    Err(error) => {
+                        let rollback = if forward {
+                            record.undo(&root, &document)
+                        } else {
+                            record.redo(&root, &document)
+                        };
+                        return Err(format!(
+                            "{error}; rollback: {}",
+                            rollback.err().unwrap_or_else(|| "files restored".into())
+                        ));
+                    }
+                }
+            };
+            if rollback_record.is_some()
+                && let Err(error) = self.validate_asset_restore(&document)
             {
-                let rollback = if forward {
+                let rollback = if let Some(record) = rollback_record {
+                    record.undo(&root, &document)
+                } else if forward {
                     record.undo(&root, &document)
                 } else {
                     record.redo(&root, &document)
@@ -711,6 +871,7 @@ impl Editor {
                     rollback.err().unwrap_or_else(|| "files restored".into())
                 ));
             }
+            self.source_files = Ok(state);
             if forward {
                 self.history.redo();
             } else {
@@ -740,7 +901,9 @@ impl Editor {
         self.workflow.show_report = true;
     }
     pub(super) fn workflow_frame(&mut self, ctx: &egui::Context) {
-        match self.ui_capture.tick(ctx) {
+        let capture_ready = std::env::var_os("MODULE_ENGINE_CAPTURE_WAIT_READY").is_none()
+            || !self.game_workbench.has_pending_preparation();
+        match self.ui_capture.tick(ctx, capture_ready) {
             Ok(true) => {
                 self.workflow.allow_close = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -781,10 +944,24 @@ impl Editor {
                                 .and_then(|_| self.validate_asset_restore(&operation.document))
                             {
                                 let root = self.project_asset_root();
-                                let rollback =
-                                    operation.record.undo(&root, &operation.document).and_then(
-                                        |before| project::save(Path::new(&self.path), &before),
-                                    );
+                                let rollback = operation
+                                    .record
+                                    .undo(&root, &operation.document)
+                                    .and_then(|before| {
+                                        if operation.record.source_project.is_some() {
+                                            return Ok(());
+                                        }
+                                        let accepted = operation
+                                            .source_files
+                                            .as_ref()
+                                            .ok_or("Missing committed source generation")?;
+                                        self.source_files = Ok(project::save_with_source_state(
+                                            Path::new(&self.path),
+                                            &before,
+                                            accepted,
+                                        )?);
+                                        Ok(())
+                                    });
                                 self.report_error(format!(
                                     "{error}; restoration: {}",
                                     rollback
@@ -793,7 +970,31 @@ impl Editor {
                                 ));
                                 return;
                             }
+                            if operation.document == self.document
+                                && operation.record.files.is_empty()
+                                && operation.record.created_directories.is_empty()
+                            {
+                                if let Some(state) = operation.source_files {
+                                    self.source_files = Ok(state);
+                                }
+                                self.status = "No authored source changes".into();
+                                return;
+                            }
+                            let newly_added_scene =
+                                operation.document.game.as_ref().and_then(|g| {
+                                    g.scenes
+                                        .keys()
+                                        .find(|id| {
+                                            !operation.record.before.game.as_ref().is_some_and(
+                                                |before| before.scenes.contains_key(*id),
+                                            )
+                                        })
+                                        .cloned()
+                                });
                             let label = operation.record.label.clone();
+                            if let Some(state) = &operation.source_files {
+                                self.source_files = Ok(state.clone());
+                            }
                             self.restore_document(operation.document.clone());
                             self.history_dirty = false;
                             let entry =
@@ -808,6 +1009,9 @@ impl Editor {
                             self.dirty = false;
                             self.assets.invalidate();
                             self.game_workbench.invalidate_assets();
+                            if let Some(scene) = newly_added_scene {
+                                self.open_authored_scene(&scene);
+                            }
                             if operation.diagnostics.is_empty() {
                                 self.status = label;
                             } else {
@@ -835,13 +1039,31 @@ impl Editor {
                 Err(mpsc::TryRecvError::Empty) => {}
             }
         }
-        if ctx.input(|i| i.viewport().close_requested()) && !self.workflow.allow_close {
+        if ctx.input(|i| i.viewport().close_requested()) && self.scene_source_ui.active() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.status = "Finish or cancel the scene dialog before closing".into();
+        }
+        if ctx.input(|i| i.viewport().close_requested())
+            && !self.workflow.allow_close
+            && !self.scene_source_ui.active()
+        {
             if self.workflow.job.is_some() || self.workflow.guard.is_some() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             } else if self.has_unsaved_work() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.workflow.guard = Some(Action::Quit);
             }
+        }
+        self.workflow_shortcuts(ctx);
+    }
+    pub(super) fn workflow_shortcuts(&mut self, ctx: &egui::Context) {
+        // The held move owns keyboard cancellation and pointer input until
+        // release. Do not open another document/workspace mid-transaction.
+        if self.area_drag.is_some() {
+            return;
+        }
+        if !ctx.input(|i| i.focused) {
+            return;
         }
         if !self.workflow.blocks_document_edits() {
             let text = ctx.text_edit_focused();
@@ -870,7 +1092,7 @@ impl Editor {
             }
         }
     }
-    fn command_available(&self, command: Command) -> bool {
+    pub(super) fn command_available(&self, command: Command) -> bool {
         if self.workflow.blocks_document_edits() {
             return false;
         }
@@ -884,11 +1106,39 @@ impl Editor {
             Command::ExportPlayer => self.document.game.is_some(),
             Command::Undo => self.history_dirty || self.history.can_undo(),
             Command::Redo => self.history.can_redo(),
-            Command::Stop => self.document.game.is_some(),
+            Command::Stop => self.playing || self.game_workbench.is_play_session(),
+            Command::Restart => {
+                self.game_workbench.is_play_session() && self.game_workbench.has_game_host()
+            }
             _ => true,
         }
     }
+    #[cfg(test)]
+    pub(super) fn workflow_report_text(&self) -> &str {
+        &self.workflow.report
+    }
+    fn command_disabled_reason(&self, command: Command) -> &'static str {
+        if self.workflow.blocks_document_edits() {
+            return "Finish the current dialog or operation first.";
+        }
+        match command {
+            Command::Stop => "No active Play session.",
+            Command::Restart => "Start Play and wait for the Game host to be ready.",
+            Command::ExportSource | Command::ExportTeam | Command::UpdateEngineContracts => {
+                "Requires Full with checked engine sources."
+            }
+            Command::ExportPlayer => "Open a game project first.",
+            Command::Undo => "No earlier authored change.",
+            Command::Redo => "No later authored change.",
+            _ => "Unavailable for the current project or distribution.",
+        }
+    }
     pub(super) fn dispatch_command(&mut self, command: Command, ctx: &egui::Context) {
+        if self.scene_source_ui.active() {
+            self.status = "Finish or cancel the scene dialog first".into();
+            return;
+        }
+
         if !self.command_available(command) {
             return;
         }
@@ -955,18 +1205,10 @@ impl Editor {
             Command::SaveLayout => self.save_personal_layouts(),
             Command::LoadLayout => self.load_personal_layouts(),
             Command::ResetLayout => {
-                let layout = DockLayout::default_for(self.workspace);
-                match self.workspace {
-                    WorkspaceKind::Engine => {
-                        self.engine_layout = layout;
-                        self.engine_panes.clear();
-                    }
-                    WorkspaceKind::Project => {
-                        self.project_layout = layout;
-                        self.project_panes.clear();
-                    }
-                }
-                self.personal_dirty = true;
+                self.workflow.workspace_dialog = Some(super::workspaces::WorkspaceDialog::Reset(
+                    self.workspaces.active_id(),
+                    self.workspace,
+                ));
             }
             Command::PlayPause => {
                 if !self.playing
@@ -977,6 +1219,11 @@ impl Editor {
                 }
                 self.playing = !self.playing;
             }
+            Command::Restart => {
+                if let Err(error) = self.game_workbench.restart_game() {
+                    self.status = error;
+                }
+            }
             Command::Stop => self.stop_game(),
         }
     }
@@ -986,6 +1233,7 @@ impl Editor {
                 self.command_available(command),
                 egui::Button::new(label).shortcut_text(shortcut),
             )
+            .on_disabled_hover_text(self.command_disabled_reason(command))
             .clicked();
         if clicked {
             ui.close();
@@ -993,6 +1241,10 @@ impl Editor {
         clicked
     }
     pub(super) fn draw_workflow_toolbar(&mut self, ui: &mut egui::Ui) {
+        // Shell density is local: inspectors and dialogs keep their form spacing.
+        super::editor_ui::compact_spacing(ui);
+        // The explicit separator owns the vertical gap between shell rows.
+        ui.spacing_mut().item_spacing.y = 0.;
         let mut commands = vec![];
         let mut recent = None;
         let mut window = None;
@@ -1005,12 +1257,12 @@ impl Editor {
                             .ok()
                             .map(|p| p.identity.id)
                             .unwrap_or_else(|| "unresolved".into());
-                    ui.label(format!("Engine for New: {selected}"));
+                    ui.label(format!("Configuration for New: {selected}"));
                     ui.add_enabled_ui(!self.workflow.blocks_document_edits(), |ui| {
                         ui.radio_value(
                             &mut self.workflow.new_engine_choice,
                             EngineChoice::InheritCurrent,
-                            "Inherit current Engine",
+                            "Use current configuration",
                         );
                         ui.add_enabled_ui(self.can_author_engine(), |ui| {
                             for kind in [
@@ -1022,7 +1274,7 @@ impl Editor {
                                 ui.radio_value(
                                     &mut self.workflow.new_engine_choice,
                                     EngineChoice::Selected(kind),
-                                    format!("Choose {} Engine", kind.label()),
+                                    format!("Use {} configuration", kind.label()),
                                 );
                             }
                         });
@@ -1080,6 +1332,7 @@ impl Editor {
                         commands.push(command);
                     }
                 }
+                self.scene_file_menu(ui);
                 ui.menu_button("Export", |ui| {
                     for (command, label) in [
                         (Command::ExportPlayer, "Windows Player…"),
@@ -1104,6 +1357,7 @@ impl Editor {
                     (Command::Undo, "Undo", "Ctrl+Z"),
                     (Command::Redo, "Redo", "Ctrl+Y / Ctrl+Shift+Z"),
                     (Command::History, "History / Merge", ""),
+                    (Command::ProjectSettings, "Project Settings", ""),
                 ] {
                     if self.menu_item(ui, command, label, shortcut) {
                         commands.push(command);
@@ -1115,6 +1369,23 @@ impl Editor {
                 .insert("Edit".into(), menu.response.rect);
             let menu = ui.menu_button("Tools", |ui| {
                 for (command, label) in [
+                    (
+                        Command::PlayPause,
+                        if self.playing {
+                            "Pause Game"
+                        } else {
+                            "Play Game"
+                        },
+                    ),
+                    (Command::Stop, "Stop Game"),
+                    (Command::Restart, "Restart Game"),
+                ] {
+                    if self.menu_item(ui, command, label, "") {
+                        commands.push(command);
+                    }
+                }
+                ui.separator();
+                for (command, label) in [
                     (Command::Check, "Check Project"),
                     (
                         Command::UpdateEngineContracts,
@@ -1122,7 +1393,6 @@ impl Editor {
                     ),
                     (Command::ExportPlayer, "Build Windows Player…"),
                     (Command::Diagnostics, "Diagnostics"),
-                    (Command::ProjectSettings, "Project Settings"),
                 ] {
                     if self.menu_item(ui, command, label, "") {
                         commands.push(command);
@@ -1143,73 +1413,183 @@ impl Editor {
                 .menu_rects
                 .insert("Tools".into(), menu.response.rect);
             let menu = ui.menu_button("Windows", |ui| {
-                for descriptor in self.available_editors() {
-                    if ui
-                        .add_enabled(
-                            !self.workflow.blocks_document_edits(),
-                            egui::Button::new(descriptor.label),
-                        )
-                        .clicked()
-                    {
-                        window = Some(descriptor.editor);
-                        ui.close();
+                let available = self.available_editors();
+                for group in [
+                    "Composition",
+                    "Authoring",
+                    "Code",
+                    "Play",
+                    "Review",
+                    "Game tools",
+                    "Module tools",
+                    "Legacy",
+                ] {
+                    let entries: Vec<_> = available
+                        .iter()
+                        .filter(|d| self.window_menu_group(d.editor) == group)
+                        .collect();
+                    if entries.is_empty() {
+                        continue;
                     }
+                    ui.menu_button(group, |ui| {
+                        for descriptor in entries {
+                            if ui
+                                .add_enabled(
+                                    !self.workflow.blocks_document_edits(),
+                                    egui::Button::new(&descriptor.label),
+                                )
+                                .clicked()
+                            {
+                                window = Some(descriptor.editor);
+                                ui.close();
+                            }
+                        }
+                    });
                 }
                 ui.separator();
-                for (command, label) in [
-                    (Command::SaveLayout, "Save Layout"),
-                    (Command::LoadLayout, "Load Saved Layout"),
-                    (Command::ResetLayout, "Reset Layout"),
-                ] {
-                    if self.menu_item(ui, command, label, "") {
-                        commands.push(command);
+                ui.menu_button("Workspaces", |ui| {
+                    if ui.button("Create workspace…").clicked() {
+                        self.workflow.workspace_dialog =
+                            Some(super::workspaces::WorkspaceDialog::Create(String::new()));
+                        ui.close();
                     }
-                }
+                    if let Some(id) = self.workspaces.active_id() {
+                        if ui.button("Rename current workspace…").clicked() {
+                            self.workflow.workspace_dialog =
+                                Some(super::workspaces::WorkspaceDialog::Rename(
+                                    id,
+                                    self.workspaces.active_name().unwrap_or_default(),
+                                ));
+                            ui.close();
+                        }
+                        if ui.button("Delete current workspace…").clicked() {
+                            self.workflow.workspace_dialog =
+                                Some(super::workspaces::WorkspaceDialog::Delete(id));
+                            ui.close();
+                        }
+                    }
+                    for (command, label) in [
+                        (Command::SaveLayout, "Save layouts"),
+                        (Command::LoadLayout, "Reload saved layouts"),
+                        (Command::ResetLayout, "Reset selected layout…"),
+                    ] {
+                        if self.menu_item(ui, command, label, "") {
+                            commands.push(command);
+                        }
+                    }
+                });
             });
             self.workflow
                 .menu_rects
                 .insert("Windows".into(), menu.response.rect);
-        });
-        ui.separator();
-        ui.horizontal_wrapped(|ui| {
-            ui.strong("MODULE ENGINE / 0.4");
             ui.separator();
             ui.add_enabled_ui(!self.workflow.blocks_document_edits(), |ui| {
-                ui.selectable_value(&mut self.workspace, WorkspaceKind::Project, "Project");
-                if self.can_author_engine() {
-                    ui.selectable_value(&mut self.workspace, WorkspaceKind::Engine, "Engine");
-                }
+                self.workspace_tabs(ui)
             });
-            ui.separator();
-            for (command, label) in [
-                (
-                    Command::PlayPause,
-                    if self.playing { "Pause" } else { "Play" },
-                ),
-                (Command::Stop, "Stop"),
-                (Command::Save, "Save"),
-            ] {
-                if ui
-                    .add_enabled(self.command_available(command), egui::Button::new(label))
-                    .clicked()
-                {
-                    commands.push(command);
-                }
-            }
-            ui.separator();
-            ui.label(&self.document.name).on_hover_text(&self.path);
-            if self.has_unsaved_work() {
-                ui.colored_label(Color32::from_rgb(240, 183, 92), "● unsaved");
-            }
-            if let Some(job) = &self.workflow.job {
-                ui.spinner();
-                ui.label(format!(
-                    "{} {:.1}s",
-                    job.title,
-                    job.started.elapsed().as_secs_f32()
-                ));
-            }
         });
+        ui.add(egui::Separator::default().spacing(super::editor_ui::CHROME_GAP));
+        egui::Frame::new()
+            .inner_margin(egui::Margin::symmetric(0, super::editor_ui::CHROME_PAD))
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    super::editor_ui::compact_spacing(ui);
+                    use super::editor_ui::{self, Icon};
+                    let title = if self.has_unsaved_work() {
+                        format!("{} · unsaved", self.document.name)
+                    } else {
+                        self.document.name.clone()
+                    };
+                    let identity_width = if ui.available_width() >= 800. {
+                        320.
+                    } else {
+                        (ui.available_width() - 220.).clamp(64., 240.)
+                    };
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(identity_width, 32.),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.set_width(identity_width);
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(title).strong()).truncate(),
+                            )
+                            .on_hover_text(&self.path)
+                            .context_menu(|ui| {
+                                ui.label(&self.path);
+                                if ui.button("Copy project path").clicked() {
+                                    ui.ctx().copy_text(self.path.clone());
+                                    ui.close();
+                                }
+                            });
+                        },
+                    );
+                    ui.separator();
+                    for (command, icon, label) in [
+                        (
+                            Command::PlayPause,
+                            if self.playing {
+                                Icon::Pause
+                            } else {
+                                Icon::Play
+                            },
+                            if self.playing {
+                                "Pause · retain the Play copy"
+                            } else {
+                                "Play · run a copy of the authored scene"
+                            },
+                        ),
+                        (Command::Stop, Icon::Stop, "Stop · return to authored Scene"),
+                        (
+                            Command::Restart,
+                            Icon::Restart,
+                            "Restart Game · restart the current Play session",
+                        ),
+                    ] {
+                        let enabled = self.command_available(command);
+                        let help = if enabled {
+                            label.to_owned()
+                        } else {
+                            format!(
+                                "{label}\nUnavailable: {}",
+                                self.command_disabled_reason(command)
+                            )
+                        };
+                        let response = editor_ui::icon_button(ui, icon, &help, enabled, false);
+                        self.workflow
+                            .command_targets
+                            .insert(format!("{command:?}"), response.rect);
+                        if response.clicked() {
+                            commands.push(command);
+                        }
+                    }
+                    ui.separator();
+                    if editor_ui::icon_button(
+                        ui,
+                        Icon::Save,
+                        "Save Project · Ctrl+S",
+                        self.command_available(Command::Save),
+                        false,
+                    )
+                    .clicked()
+                    {
+                        commands.push(Command::Save);
+                    }
+                    if ui.available_width() > 180. {
+                        ui.label(if self.can_author_engine() {
+                            "Full · sources checked"
+                        } else {
+                            "Project editing · Engine locked"
+                        });
+                    }
+                    if let Some(job) = &self.workflow.job {
+                        ui.spinner();
+                        ui.label(format!(
+                            "{} · {:.1}s",
+                            job.title,
+                            job.started.elapsed().as_secs_f32()
+                        ));
+                    }
+                });
+            });
         let ctx = ui.ctx().clone();
         if let Some(path) = recent {
             self.request_action(Action::OpenPath(path), &ctx);
@@ -1251,16 +1631,20 @@ impl Editor {
         self.workflow.capture_menu = None;
     }
     pub(super) fn draw_workflow_modals(&mut self, ctx: &egui::Context) {
+        self.draw_workspace_dialog(ctx);
+        if !self.workflow.blocks_document_edits() {
+            self.draw_scene_source_dialog(ctx);
+        }
         if self.workflow.guard.is_some() {
             let response = egui::Modal::new(egui::Id::new("unsaved-project")).show(ctx,|ui| {
-                ui.set_min_width(440.); ui.heading("Unsaved changes");
+                ui.set_width((ctx.content_rect().width()-32.).clamp(160.,560.)); ui.heading("Unsaved changes");
                 ui.label("Save the current project before continuing?");
                 self.module_tool_draft_resolutions_ui(ui);
                 if self.game_workbench.has_graph_draft() { ui.label("There is a Gameplay Systems draft. Click Cancel, apply or discard the draft in the editor, then try saving again."); }
                 if !self.status.is_empty() { ui.label(&self.status); }
-                ui.horizontal(|ui| {
-                    if ui.add_enabled(!self.has_module_tool_drafts(), egui::Button::new("Save and continue")).clicked() { Some(0) }
-                    else if !matches!(self.workflow.guard, Some(Action::Asset(_))) && ui.add_enabled(!self.has_module_tool_drafts(), egui::Button::new(if matches!(self.workflow.guard, Some(Action::Check | Action::Export(_))) { "Use saved version" } else { "Don't save" })).clicked() { Some(1) }
+                ui.horizontal_wrapped(|ui| {
+                    if ui.add_enabled(!self.has_module_tool_drafts() && !self.game_workbench.has_inspector_drafts() && !self.game_workbench.has_graph_draft(), egui::Button::new("Save and continue")).clicked() { Some(0) }
+                    else if !matches!(self.workflow.guard, Some(Action::Asset(_) | Action::Scene(_))) && ui.add_enabled(!self.has_module_tool_drafts() && !self.game_workbench.has_inspector_drafts(), egui::Button::new(if matches!(self.workflow.guard, Some(Action::Check | Action::Export(_))) { "Use saved version" } else { "Don't save" })).clicked() { Some(1) }
                     else if ui.button("Cancel").clicked() { Some(2) } else { None }
                 }).inner
             });
@@ -1272,12 +1656,16 @@ impl Editor {
         }
         if self.workflow.show_report {
             let response = egui::Modal::new(egui::Id::new("operation-report")).show(ctx, |ui| {
-                ui.set_min_width(560.);
+                ui.set_width((ctx.content_rect().width() - 32.).clamp(160., 720.));
                 ui.heading("Operation result");
                 egui::ScrollArea::vertical()
-                    .max_height(360.)
+                    .max_height((ctx.content_rect().height() - 160.).clamp(48., 440.))
                     .show(ui, |ui| {
-                        ui.label(&self.workflow.report);
+                        ui.add(
+                            egui::Label::new(&self.workflow.report)
+                                .wrap()
+                                .selectable(true),
+                        );
                     });
                 self.module_tool_draft_resolutions_ui(ui);
                 ui.button("Close").clicked()
@@ -1301,7 +1689,10 @@ impl Editor {
                     self.status = error;
                     return;
                 }
-                if matches!(self.workflow.guard, Some(Action::Asset(_))) {
+                if matches!(
+                    self.workflow.guard,
+                    Some(Action::Asset(_) | Action::Scene(_))
+                ) {
                     return;
                 }
                 if let Some(action) = self.workflow.guard.take() {
@@ -1522,7 +1913,7 @@ pub(crate) fn verify_workflow(source: &Path, output: &Path) -> Result<serde_json
         Some(&copy_context.compile_root()?),
         WorldKind::Objects,
     )?;
-    host.services.set_enabled(false);
+    host.set_services_enabled(false);
     host.step(1. / 60., &module_engine_core::GameInput::default())?;
     let frame = host.render(640, 480)?;
     // Player rendering omits diagnostic depth readbacks. Compare actual output
@@ -1556,7 +1947,7 @@ pub(crate) fn verify_workflow(source: &Path, output: &Path) -> Result<serde_json
         ("File", "Open Project"),
         ("Edit", "History / Merge"),
         ("Tools", "Check Project"),
-        ("Windows", "Save Layout"),
+        ("Windows", "Save layouts"),
     ] {
         let ctx = egui::Context::default();
         configure_style(&ctx);
@@ -1599,6 +1990,37 @@ pub(crate) fn verify_workflow(source: &Path, output: &Path) -> Result<serde_json
         // A newly opened popup needs a sizing frame before its text is painted.
         ctx.run_ui(raw(), |ui| editor.draw_workflow_toolbar(ui))
             .drop_without_applying_deltas();
+        if menu == "Windows" {
+            let result = ctx.run_ui(raw(), |ui| editor.draw_workflow_toolbar(ui));
+            let point = result.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Workspaces" => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            });
+            result.drop_without_applying_deltas();
+            let point = point.ok_or("Actual Windows menu did not display Workspaces")?;
+            let mut input = raw();
+            input.events = vec![
+                egui::Event::PointerMoved(point),
+                egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Modifiers::NONE,
+                },
+                egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Modifiers::NONE,
+                },
+            ];
+            ctx.run_ui(input, |ui| editor.draw_workflow_toolbar(ui))
+                .drop_without_applying_deltas();
+            ctx.run_ui(raw(), |ui| editor.draw_workflow_toolbar(ui))
+                .drop_without_applying_deltas();
+        }
         let result = ctx.run_ui(raw(), |ui| editor.draw_workflow_toolbar(ui));
         let visible = result.shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.text().contains(expected)));
         result.drop_without_applying_deltas();
@@ -1626,7 +2048,7 @@ pub(crate) fn verify_workflow(source: &Path, output: &Path) -> Result<serde_json
     )?;
     let player_doc = crate::game_package::validate_package(&player)?;
     let mut player_host = crate::game_host::new(player_doc, &player, None, WorldKind::Objects)?;
-    player_host.services.set_enabled(false);
+    player_host.set_services_enabled(false);
     player_host.step(1. / 60., &module_engine_core::GameInput::default())?;
     let player_frame = player_host.render(640, 480)?;
     if player_frame.rgba != frame.rgba {
@@ -1651,18 +2073,18 @@ pub(crate) fn verify_workflow(source: &Path, output: &Path) -> Result<serde_json
 }
 
 #[cfg(test)]
-mod workflow_tests {
+pub(crate) mod workflow_tests {
     use super::*;
     use eframe::egui::{Event, Id, Pos2, Rect, Sense, Vec2};
     use module_engine_core::{WorldKind, demo_document};
 
-    struct Fixture {
+    pub(crate) struct Fixture {
         owner: PathBuf,
-        root: PathBuf,
-        path: PathBuf,
+        pub(crate) root: PathBuf,
+        pub(crate) path: PathBuf,
     }
     impl Fixture {
-        fn new(game: bool) -> (Self, Editor) {
+        pub(crate) fn new(game: bool) -> (Self, Editor) {
             let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.work/test-temp");
             fs::create_dir_all(&base).unwrap();
             let stamp = SystemTime::now()
@@ -1754,6 +2176,22 @@ mod workflow_tests {
         }
     }
 
+    fn assert_copy_candidate(actual: &GraphDocument, expected: &GraphDocument) {
+        let mut content = actual.clone();
+        if let Some(original) = &expected.game {
+            let game = content.game.as_mut().expect("Copied game missing");
+            assert!(!game.scene_assets.is_empty());
+            assert!(game.scene_assets.keys().eq(original.scenes.keys()));
+            for (id, old) in &original.scene_assets {
+                assert_eq!(game.scene_assets[id].id, old.id);
+            }
+            game.scene_assets = original.scene_assets.clone();
+        }
+        assert!(
+            content == *expected,
+            "Authored content changed beyond explicit scene-file storage metadata"
+        );
+    }
     #[test]
     fn recent_projects_save_load_is_isolated_per_test_editor() {
         let (fixture, mut first) = Fixture::new(false);
@@ -1806,7 +2244,7 @@ mod workflow_tests {
         editor.document.name = "Unsaved working scene".into();
         editor.changed(false);
     }
-    fn complete_asset_job(editor: &mut Editor, ctx: &egui::Context) {
+    pub(crate) fn complete_asset_job(editor: &mut Editor, ctx: &egui::Context) {
         let started = Instant::now();
         while editor.workflow.job.is_some() {
             assert!(
@@ -1842,7 +2280,10 @@ mod workflow_tests {
             name: "renamed.txt".into(),
         };
         editor.request_asset_action(action.clone(), &ctx);
-        assert!(matches!(editor.workflow.guard, Some(Action::Asset(_))));
+        assert!(matches!(
+            editor.workflow.guard,
+            Some(Action::Asset(_) | Action::Scene(_))
+        ));
         editor.resolve_guard(2, &ctx);
         assert!(fixture.root.join("assets/note.txt").is_file());
         assert!(!fixture.root.join("assets/renamed.txt").exists());
@@ -2036,9 +2477,12 @@ mod workflow_tests {
                         "{label}: {}",
                         editor.workflow.report
                     );
-                    assert_eq!(project::read(&destination).unwrap(), candidate, "{label}");
-                    assert_eq!(editor.document, candidate, "{label}");
-                    assert_eq!(editor.workflow.saved, candidate, "{label}");
+                    assert_copy_candidate(&project::read(&destination).unwrap(), &candidate);
+                    assert_copy_candidate(&editor.document, &candidate);
+                    assert!(
+                        editor.workflow.saved == editor.document,
+                        "Saved boundary differs"
+                    );
                     assert_eq!(Path::new(&editor.path), destination.canonicalize().unwrap());
                     assert_eq!(
                         editor.workflow.recent.paths[0],
@@ -2150,26 +2594,9 @@ mod workflow_tests {
                         relative.display()
                     );
                 }
-                // The writer retains its staged JSON after failed replacement.
-                // It is recovery data, not permission to mutate any original.
-                assert_eq!(
-                    remaining.len(),
-                    1,
-                    "{label}: unexpected recovery: {remaining:?}"
-                );
-                let recovery = remaining.keys().next().unwrap();
-                assert_eq!(recovery.components().count(), 1);
                 assert!(
-                    recovery
-                        .file_name()
-                        .unwrap()
-                        .to_string_lossy()
-                        .starts_with("blocked-project.tmp-")
-                );
-                assert_eq!(
-                    project::read(&fixture.root.join(recovery)).unwrap(),
-                    *expected,
-                    "{label}: recovery candidate"
+                    remaining.is_empty(),
+                    "{label}: rejected project path must not stage files: {remaining:?}"
                 );
                 assert_eq!(
                     fs::read(&recent_path).unwrap(),
@@ -2437,7 +2864,7 @@ mod workflow_tests {
         for mode in ["cancel", "picker-error", "copy-error", "same-path-error"] {
             let (fixture, mut editor) = Fixture::new(true);
             let ctx = egui::Context::default();
-            let candidate = stage_save_as_json_draft(&fixture, &mut editor);
+            stage_save_as_json_draft(&fixture, &mut editor);
             let result = match mode {
                 "cancel" => Ok(None),
                 "picker-error" => Err("Injected picker configuration error".into()),
@@ -2469,34 +2896,10 @@ mod workflow_tests {
                     relative.display()
                 );
             }
-            if mode == "same-path-error" {
-                // The existing project writer deliberately retains its staged
-                // JSON when replacing the destination fails. Account for this
-                // exact recovery artifact; every original file remains checked.
-                assert_eq!(
-                    remaining.len(),
-                    1,
-                    "unexpected recovery files: {remaining:?}"
-                );
-                let recovery = remaining.keys().next().unwrap();
-                assert_eq!(recovery.components().count(), 1);
-                assert!(
-                    recovery
-                        .file_name()
-                        .unwrap()
-                        .to_string_lossy()
-                        .starts_with("same-path-error.tmp-")
-                );
-                assert!(
-                    project::read(&fixture.root.join(recovery)).unwrap() == candidate,
-                    "recovery file differs from staged candidate"
-                );
-            } else {
-                assert!(
-                    remaining.is_empty(),
-                    "{mode}: unexpected new files: {remaining:?}"
-                );
-            }
+            assert!(
+                remaining.is_empty(),
+                "{mode}: known invalid targets must reject before staging: {remaining:?}"
+            );
             assert_eq!(
                 fs::read(editor.workflow.recent_path.as_ref().unwrap()).unwrap(),
                 recent
@@ -2567,13 +2970,10 @@ mod workflow_tests {
         assert!(!editor.workflow.show_report, "{}", editor.workflow.report);
         let destination = destination.canonicalize().unwrap();
         assert_eq!(Path::new(&editor.path), destination);
+        assert_copy_candidate(&project::read(&destination).unwrap(), &candidate);
+        assert_copy_candidate(&editor.document, &candidate);
         assert!(
-            project::read(&destination).unwrap() == candidate,
-            "saved copy candidate differs"
-        );
-        assert!(editor.document == candidate, "adopted copy differs");
-        assert!(
-            editor.workflow.saved == candidate,
+            editor.workflow.saved == editor.document,
             "copy saved boundary differs"
         );
         assert!(!editor.json_dirty && !editor.dirty);
@@ -2774,6 +3174,7 @@ mod workflow_tests {
             "playing":editor.playing,"play_session":editor.game_workbench.is_play_session(),
             "recent":editor.workflow.recent,"time":editor.time,
             "module_document_instance":editor.module_document_instance,
+            "source_files":format!("{:?}", editor.source_files),
         })
     }
     fn assert_file_command_state(editor: &Editor, expected: &serde_json::Value, stage: &str) {
@@ -3012,23 +3413,21 @@ mod workflow_tests {
                 },
             )
         }
-        fn text_point(output: &egui::FullOutput, label: &str) -> Pos2 {
-            output
-                .shapes
-                .iter()
-                .find_map(|shape| {
-                    if let egui::Shape::Text(text) = &shape.shape
-                        && text.galley.text() == label
-                        && shape
-                            .clip_rect
-                            .contains(text.pos + text.galley.size() * 0.5)
-                    {
-                        Some(text.pos + text.galley.size() * 0.5)
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_else(|| panic!("Visible UI text not found: {label}"))
+        fn text_point(output: egui::FullOutput, label: &str) -> Pos2 {
+            let point = output.shapes.iter().find_map(|shape| {
+                if let egui::Shape::Text(text) = &shape.shape
+                    && text.galley.text() == label
+                    && shape
+                        .clip_rect
+                        .contains(text.pos + text.galley.size() * 0.5)
+                {
+                    Some(text.pos + text.galley.size() * 0.5)
+                } else {
+                    None
+                }
+            });
+            output.drop_without_applying_deltas();
+            point.unwrap_or_else(|| panic!("Visible UI text not found: {label}"))
         }
         fn pointer(point: Pos2, pressed: bool) -> Vec<Event> {
             vec![
@@ -3043,8 +3442,7 @@ mod workflow_tests {
         }
         frame(&ctx, &mut editor, &fixture.root, 0., vec![]).drop_without_applying_deltas();
         let output = frame(&ctx, &mut editor, &fixture.root, 0.1, vec![]);
-        let header = text_point(&output, "Stages, order and declared resources");
-        output.drop_without_applying_deltas();
+        let header = text_point(output, "Stages, order and declared resources");
         // Open the actual collapsing header; guessing its private auto-ID would
         // accidentally target the canvas node also labelled "Input".
         frame(&ctx, &mut editor, &fixture.root, 0.2, pointer(header, true))
@@ -3058,8 +3456,7 @@ mod workflow_tests {
         )
         .drop_without_applying_deltas();
         let output = frame(&ctx, &mut editor, &fixture.root, 1., vec![]);
-        let stage = text_point(&output, &stage_name);
-        output.drop_without_applying_deltas();
+        let stage = text_point(output, &stage_name);
         frame(&ctx, &mut editor, &fixture.root, 1.1, pointer(stage, true))
             .drop_without_applying_deltas();
         frame(&ctx, &mut editor, &fixture.root, 1.2, pointer(stage, false))
@@ -3117,12 +3514,23 @@ mod workflow_tests {
                     events,
                     ..Default::default()
                 },
-                |ui| editor.library(ui),
+                |ui| {
+                    editor.draw_workflow_toolbar(ui);
+                    editor.library(ui);
+                },
             )
         };
-        let output = library_frame(&mut editor, vec![]);
-        let export = text_point(&output, "Export project…");
-        output.drop_without_applying_deltas();
+        let file = text_point(library_frame(&mut editor, vec![]), "File");
+        for pressed in [true, false] {
+            library_frame(&mut editor, pointer(file, pressed)).drop_without_applying_deltas();
+        }
+        library_frame(&mut editor, vec![]).drop_without_applying_deltas();
+        let submenu = text_point(library_frame(&mut editor, vec![]), "Export");
+        for pressed in [true, false] {
+            library_frame(&mut editor, pointer(submenu, pressed)).drop_without_applying_deltas();
+        }
+        library_frame(&mut editor, vec![]).drop_without_applying_deltas();
+        let export = text_point(library_frame(&mut editor, vec![]), "Full source project…");
         for pressed in [true, false] {
             library_frame(&mut editor, pointer(export, pressed)).drop_without_applying_deltas();
         }
@@ -3132,7 +3540,7 @@ mod workflow_tests {
         ));
         assert!(
             editor.workflow.job.is_none(),
-            "Library must not export synchronously or open a picker before resolving the draft"
+            "Export menu must not export synchronously or open a picker before resolving the draft"
         );
         editor.resolve_guard(0, &library_ctx);
         assert!(matches!(
@@ -3142,6 +3550,251 @@ mod workflow_tests {
         assert!(editor.game_workbench.has_graph_draft());
         assert_eq!(crate::project::read(&fixture.path).unwrap(), original);
         editor.resolve_guard(2, &library_ctx);
+    }
+
+    #[test]
+    fn node_parameter_ui_retains_selection_save_export_cancel_and_one_undo() {
+        let (fixture, mut editor) = Fixture::new(false);
+        let original = editor.document.clone();
+        let original_bytes = fs::read(&fixture.path).unwrap();
+        let ctx = egui::Context::default();
+        configure_style(&ctx);
+        ctx.style_mut_of(egui::Theme::Dark, |style| style.animation_time = 0.);
+        editor.graph_canvas.zoom = 0.65;
+        editor.graph_canvas.pan = Vec2::ZERO;
+        fn frame(
+            editor: &mut Editor,
+            ctx: &egui::Context,
+            events: Vec<egui::Event>,
+        ) -> egui::FullOutput {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(1400., 1100.),
+                    )),
+                    focused: true,
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    editor.workflow_shortcuts(ctx);
+                    editor.draw_workflow_toolbar(ui);
+                    ui.add_enabled_ui(!editor.workflow.blocks_document_edits(), |ui| {
+                        for (id, rect) in [
+                            (
+                                0,
+                                egui::Rect::from_min_max(
+                                    egui::pos2(8., 120.),
+                                    egui::pos2(810., 1050.),
+                                ),
+                            ),
+                            (
+                                1,
+                                egui::Rect::from_min_max(
+                                    egui::pos2(830., 120.),
+                                    egui::pos2(1390., 1050.),
+                                ),
+                            ),
+                        ] {
+                            ui.scope_builder(
+                                egui::UiBuilder::new()
+                                    .id_salt(("node-draft-fixture", id))
+                                    .max_rect(rect),
+                                |ui| {
+                                    ui.set_clip_rect(rect);
+                                    if id == 0 {
+                                        editor.graph_panel(ui);
+                                    } else {
+                                        editor.node_inspector(ui);
+                                    }
+                                },
+                            );
+                        }
+                    });
+                    editor.draw_workflow_modals(ctx);
+                },
+            )
+        }
+        fn point(output: egui::FullOutput, label: &str) -> egui::Pos2 {
+            let result = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == label => {
+                    let p = text.pos + text.galley.size() * 0.5;
+                    shape.clip_rect.contains(p).then_some(p)
+                }
+                _ => None,
+            });
+            output.drop_without_applying_deltas();
+            result.unwrap_or_else(|| panic!("Visible control missing: {label}"))
+        }
+        fn click(editor: &mut Editor, ctx: &egui::Context, p: egui::Pos2) {
+            frame(editor, ctx, vec![egui::Event::PointerMoved(p)]).drop_without_applying_deltas();
+            for pressed in [true, false] {
+                frame(
+                    editor,
+                    ctx,
+                    vec![egui::Event::PointerButton {
+                        pos: p,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    }],
+                )
+                .drop_without_applying_deltas();
+            }
+            frame(editor, ctx, vec![]).drop_without_applying_deltas();
+        }
+        fn key(key: Key) -> egui::Event {
+            egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::COMMAND,
+            }
+        }
+        frame(&mut editor, &ctx, vec![]).drop_without_applying_deltas();
+        let base = editor.graph_canvas.layout.headers["base"].center();
+        click(&mut editor, &ctx, base);
+        assert_eq!(editor.graph_canvas.selected.as_deref(), Some("base"));
+        let header = point(frame(&mut editor, &ctx, vec![]), "Module parameters (JSON)");
+        click(&mut editor, &ctx, header);
+        let key_id = vec!["base".into()];
+        let initial = serde_json::to_string_pretty(
+            &original
+                .root
+                .nodes
+                .iter()
+                .find(|n| n.id == "base")
+                .unwrap()
+                .params,
+        )
+        .unwrap();
+        let text = point(frame(&mut editor, &ctx, vec![]), &initial);
+        click(&mut editor, &ctx, text);
+        assert!(ctx.text_edit_focused());
+        let edit = "{\"value\":2.0,\"unknown\":null}";
+        frame(
+            &mut editor,
+            &ctx,
+            vec![key(Key::A), egui::Event::Text(edit.into())],
+        )
+        .drop_without_applying_deltas();
+        assert!(editor.node_drafts.has_pending());
+        assert_eq!(editor.document, original);
+        let world = editor.graph_canvas.layout.headers["world"].center();
+        click(&mut editor, &ctx, world);
+        click(&mut editor, &ctx, base);
+        assert_eq!(
+            editor
+                .node_drafts
+                .view(
+                    &key_id,
+                    "scalar.value",
+                    &original
+                        .root
+                        .nodes
+                        .iter()
+                        .find(|n| n.id == "base")
+                        .unwrap()
+                        .params
+                )
+                .0,
+            edit
+        );
+        frame(&mut editor, &ctx, vec![key(Key::S)]).drop_without_applying_deltas();
+        assert!(
+            editor.status.contains("module parameter drafts"),
+            "{}",
+            editor.status
+        );
+        assert_eq!(fs::read(&fixture.path).unwrap(), original_bytes);
+        assert!(editor.workflow.show_report);
+        let close = point(frame(&mut editor, &ctx, vec![]), "Close");
+        click(&mut editor, &ctx, close);
+        assert!(!editor.workflow.show_report);
+        let file = point(frame(&mut editor, &ctx, vec![]), "File");
+        click(&mut editor, &ctx, file);
+        let export = point(frame(&mut editor, &ctx, vec![]), "Export");
+        click(&mut editor, &ctx, export);
+        let source = point(frame(&mut editor, &ctx, vec![]), "Full source project…");
+        click(&mut editor, &ctx, source);
+        assert!(matches!(
+            editor.workflow.guard,
+            Some(Action::Export(ExportKind::Source))
+        ));
+        assert!(editor.workflow.job.is_none());
+        let cancel = point(frame(&mut editor, &ctx, vec![]), "Cancel");
+        click(&mut editor, &ctx, cancel);
+        assert!(editor.workflow.guard.is_none());
+        assert!(editor.node_drafts.has_pending());
+        assert_eq!(editor.document, original);
+        let cursor = editor.history.cursor();
+        let apply = point(frame(&mut editor, &ctx, vec![]), "Apply parameters");
+        click(&mut editor, &ctx, apply);
+        assert!(!editor.node_drafts.has_pending(), "{}", editor.status);
+        assert_eq!(
+            editor
+                .document
+                .root
+                .nodes
+                .iter()
+                .find(|n| n.id == "base")
+                .unwrap()
+                .params,
+            serde_json::json!({"value":2.0,"unknown":null})
+        );
+        assert_eq!(editor.history.cursor(), cursor + 1);
+        let accepted = editor.document.clone();
+        editor.undo();
+        assert_eq!(editor.document, original);
+        editor.redo();
+        assert_eq!(editor.document, accepted);
+        let cursor = editor.history.cursor();
+        assert!(!editor.apply_node_parameters(&key_id).unwrap());
+        assert_eq!(editor.history.cursor(), cursor);
+        let current = editor
+            .document
+            .root
+            .nodes
+            .iter()
+            .find(|n| n.id == "base")
+            .unwrap()
+            .params
+            .clone();
+        editor.node_drafts.update(
+            key_id.clone(),
+            "scalar.value",
+            &current,
+            "{\"value\":4.0}".into(),
+        );
+        editor
+            .document
+            .root
+            .nodes
+            .iter_mut()
+            .find(|n| n.id == "base")
+            .unwrap()
+            .params["value"] = serde_json::json!(3.0);
+        let external = editor.document.clone();
+        assert!(editor.apply_node_parameters(&key_id).is_err());
+        assert_eq!(editor.document, external);
+        frame(&mut editor, &ctx, vec![]).drop_without_applying_deltas();
+        let base = editor.graph_canvas.layout.headers["base"].center();
+        click(&mut editor, &ctx, base);
+        let discard = point(frame(&mut editor, &ctx, vec![]), "Discard parameters");
+        click(&mut editor, &ctx, discard);
+        assert!(!editor.node_drafts.has_pending());
+        assert_eq!(editor.document, external);
+        assert_eq!(fs::read(&fixture.path).unwrap(), original_bytes);
+        editor
+            .node_drafts
+            .update(key_id, "scalar.value", &current, "{".into());
+        editor.adopt_module_tool_document();
+        assert!(
+            !editor.node_drafts.has_pending(),
+            "New document adoption must clear only the previous document's parameter cache"
+        );
     }
 
     #[test]

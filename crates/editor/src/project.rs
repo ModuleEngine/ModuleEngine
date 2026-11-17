@@ -12,11 +12,14 @@ use std::{
 };
 
 pub fn read(path: &Path) -> Result<GraphDocument, String> {
-    let document = module_engine_project::read_document_strict(path)
-        .map_err(|error| format!("{}: {error}", path.display()))?;
-    let package = crate::distribution::detect(path, &document, None)?;
-    crate::engine_profiles::validate(&document, &package.package_root)?;
-    Ok(document)
+    Ok(read_with_source_state(path)?.document)
+}
+pub fn read_with_source_state(path: &Path) -> Result<module_engine_project::LoadedProject, String> {
+    let loaded = module_engine_project::read_project_source(path)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let package = crate::distribution::detect(path, &loaded.document, None)?;
+    crate::engine_profiles::validate(&loaded.document, &package.package_root)?;
+    Ok(loaded)
 }
 /// Fill only missing implementation pins. A conflicting declared pin is retained.
 #[cfg(test)]
@@ -92,6 +95,20 @@ pub fn save(path: &Path, document: &GraphDocument) -> Result<(), String> {
     crate::host::validate_game_at(document, &distribution.package_root)?;
     crate::engine_profiles::validate(document, &distribution.package_root)?;
     save_document_with_backup(path, document).map(|_| ())
+}
+
+pub fn save_with_source_state(
+    path: &Path,
+    document: &GraphDocument,
+    accepted: &module_engine_project::ProjectFileState,
+) -> Result<module_engine_project::ProjectFileState, String> {
+    let distribution = crate::distribution::detect(path, document, None)?;
+    distribution.validate_document(document)?;
+    crate::host::validate_game_at(document, &distribution.package_root)?;
+    crate::engine_profiles::validate(document, &distribution.package_root)?;
+    module_engine_project::save_project_with_state(path, document, accepted)?
+        .source_files
+        .ok_or_else(|| "Source publication did not return an accepted generation".into())
 }
 
 /// An exported source workspace in the current directory takes precedence over
@@ -315,6 +332,7 @@ pub fn export_with_package_root(
             return Err(format!("Exported asset hash differs: {}", entry.path));
         }
     }
+    packaged = module_engine_project::externalize_scenes(&packaged, false)?;
     save_document_with_backup(&target.join("project.json"), &packaged)?;
     crate::distribution::write_full_manifest(&target, &packaged)?;
     Ok(target)
@@ -584,6 +602,7 @@ pub fn export_team_with_package_root(
         "# ModuleEngine Team 0.4\n\nRun .\\ModuleEngine.exe from this directory, or use .\\run.ps1.\nEngine architecture and gameplay system order are frozen by .module-engine-package.json. Edit Project settings, authored scenes/templates, participating component values and scheduled gameplay Update Rust sources.\nRust Custom requires the pinned Rust/Cargo toolchain plus host MSVC/Windows SDK. Doctor: .\\scripts\\bootstrap.ps1 -Json. Explicit restoration: .\\scripts\\bootstrap.ps1 -Restore; tools/cache remain package-local. .sdk contains the pinned Core compilation SDK, not the native editor authoring workspace. Team never enables Engine from another source tree. This profile is an authoring policy, not a security sandbox.\n").map_err(|e|e.to_string())?;
     #[cfg(unix)]
     write_unix_team_launcher(&target)?;
+    packaged = module_engine_project::externalize_scenes(&packaged, false)?;
     save_document_with_backup(&target.join("project.json"), &packaged)?;
     crate::distribution::write_team_manifest(&target, &packaged)?;
     Ok(target)

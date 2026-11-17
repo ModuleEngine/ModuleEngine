@@ -34,6 +34,8 @@ pub(crate) mod tests {
             color: [180, 150, 90, 255],
         });
         document.game = Some(GameProject {
+            player_preferences: None,
+            scene_assets: Default::default(),
             entry_scene: "empty".into(),
             scenes: BTreeMap::from([(
                 "empty".into(),

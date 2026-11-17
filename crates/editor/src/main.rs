@@ -2,6 +2,7 @@
 
 mod activity;
 mod app;
+mod app_icon;
 mod assets_ui;
 mod authoring;
 mod canvas;
@@ -20,8 +21,10 @@ mod host;
 mod layout;
 mod native_dialogs;
 mod player;
+mod player_settings_verification;
 mod project;
 mod puzzle_verification;
+mod render_settings_verification;
 mod runtime_delivery;
 mod scalar;
 mod scene_assets_verification;
@@ -83,10 +86,12 @@ fn run() -> Result<(), String> {
             "ModuleEngine 0.4\n\n  module-engine-editor [project.json] [--profile full|team]\n  module-engine-editor --new-game game-project.json\n  module-engine-editor --play game-project.json\n  module-engine-editor --export-game game-project.json folder\n  module-engine-editor --game-check game-project.json [output-folder]\n  module-engine-editor --player-benchmark game-project.json [output-folder]\n  module-engine-editor --check project.json\n  module-engine-editor --render project.json output.png\n  module-engine-editor --export project.json folder\n  module-engine-editor --export-team project.json folder\n  module-engine-editor --self-check [output-folder]\n  module-engine-editor --integration-check [output-folder]\n  module-engine-editor --settings-check [output-folder]\n  module-engine-editor --editor-ui-check game-project.json output-folder\n\nMouse: drag nodes; output pin -> compatible input pin; double click compound.\n3D: drag to orbit; wheel to zoom. See README.md and README.ru.md for documentation."
         );
         println!(
-            "  module-engine-editor --scene-assets-check game-project.json output-folder\n\nScene: G/R/S tools, MMB orbit, Shift+MMB pan, wheel zoom, F frame, Escape cancel."
+            "  module-engine-editor --scene-assets-check game-project.json output-folder\n\nScene: hold RMB + WASD to fly, Q/E down/up, mouse to look, RMB+wheel speed, G/R/S tools, MMB orbit, Shift+MMB pan, wheel zoom, F frame, Escape cancel."
         );
         println!("  module-engine-editor --editor-benchmark game-project.json output-folder");
         println!("  module-engine-editor --game-worker-check game-project.json output-folder");
+        println!("  module-engine-editor --render-settings-check output-folder");
+        println!("  module-engine-editor --new-settings-sample output-folder");
         println!("  module-engine-editor --new-puzzle puzzle-project.json");
         println!("  module-engine-editor --new-g1 crate-garden/project.json");
         println!("  module-engine-editor --g1-check crate-garden/project.json output-folder");
@@ -154,7 +159,11 @@ fn run() -> Result<(), String> {
                 .get(1)
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("puzzle-project.json"));
-            project::save(&path, &game_templates::puzzle_document())?;
+            let document = module_engine_project::externalize_scenes(
+                &game_templates::puzzle_document(),
+                false,
+            )?;
+            project::save(&path, &document)?;
             println!("Authored puzzle project: {}", path.display());
             return Ok(());
         }
@@ -274,7 +283,9 @@ fn run() -> Result<(), String> {
                 .get(1)
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("game-project.json"));
-            project::save(&path, &game_host::demo_document())?;
+            let document =
+                module_engine_project::externalize_scenes(&game_host::demo_document(), false)?;
+            project::save(&path, &document)?;
             println!("Authored game project: {}", path.display());
             return Ok(());
         }
@@ -337,10 +348,22 @@ fn run() -> Result<(), String> {
                 .get(1)
                 .map(PathBuf::from)
                 .unwrap_or(std::env::current_dir().map_err(|e| e.to_string())?);
-            let document: GraphDocument = serde_json::from_slice(
-                &fs::read(root.join("project.json")).map_err(|e| e.to_string())?,
-            )
-            .map_err(|e| e.to_string())?;
+            let path = root.join("project.json");
+            let value: serde_json::Value =
+                serde_json::from_slice(&fs::read(&path).map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())?;
+            // Sealing inventories the installation; old inline installation
+            // descriptors remain untouched. Opening a project is still strict.
+            let document = if value.get("scene_storage_version").is_some()
+                || value
+                    .get("schema_version")
+                    .and_then(serde_json::Value::as_u64)
+                    == Some(module_engine_core::SCHEMA_VERSION as u64)
+            {
+                module_engine_project::read_project_source(&path)?.document
+            } else {
+                serde_json::from_value(value).map_err(|e| e.to_string())?
+            };
             distribution::write_full_manifest(&root, &document)?;
             println!("Complete source inventory recorded: {}", root.display());
             return Ok(());
@@ -363,6 +386,27 @@ fn run() -> Result<(), String> {
                     "diagnostics":package.diagnostics,"custom_compile_root":root,
                 }))
                 .map_err(|e| e.to_string())?
+            );
+            return Ok(());
+        }
+        Some("--render-settings-check") => {
+            let folder = Path::new(
+                args.get(1)
+                    .ok_or("Provide a new render settings output folder")?,
+            );
+            let report = render_settings_verification::run(folder)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?
+            );
+            return Ok(());
+        }
+        Some("--new-settings-sample") => {
+            let folder = Path::new(args.get(1).ok_or("Provide a new settings sample folder")?);
+            let report = player_settings_verification::create(folder)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
             );
             return Ok(());
         }
@@ -460,7 +504,7 @@ fn run() -> Result<(), String> {
                     Some(&distribution.compile_root()?),
                     kind,
                 )?;
-                host.services.set_enabled(false);
+                host.set_services_enabled(false);
                 for _ in 0..90 {
                     host.step(1. / 60., &module_engine_core::GameInput::default())?;
                 }
@@ -561,10 +605,13 @@ fn run() -> Result<(), String> {
         host::ensure_authoring_configuration(&mut document);
     }
     let diagnostic_personal_root = ui_capture::diagnostic_personal_root()?;
+    let capture_geometry = ui_capture::capture_geometry()?;
     let options = module_engine_player::ui::native_options(
         eframe::egui::ViewportBuilder::default()
-            .with_inner_size([1580.0, 940.0])
-            .with_min_inner_size([1100.0, 720.0]),
+            .with_icon(app_icon::icon())
+            .with_inner_size(capture_geometry.map_or([1580., 940.], |g| g.size))
+            .with_min_inner_size([320.0, 240.0])
+            .with_clamp_size_to_monitor_size(true),
     )?;
     let open_custom = std::env::var_os("MODULE_ENGINE_SHOW_CUSTOM").is_some();
     eframe::run_native(
@@ -573,6 +620,12 @@ fn run() -> Result<(), String> {
         Box::new(move |cc| {
             module_engine_player::ui::report_graphics(cc);
             app::configure_style(&cc.egui_ctx);
+            if let Some(geometry) = capture_geometry {
+                cc.egui_ctx.set_zoom_factor(geometry.zoom);
+                cc.egui_ctx.data_mut(|d| {
+                    d.insert_temp(eframe::egui::Id::new("diagnostic-geometry"), geometry)
+                });
+            }
             let bridge = module_engine_player::ui::presentation_bridge(cc)?;
             let mut editor = app::Editor::new_native_with_diagnostic_personal_root(
                 document,

@@ -61,3 +61,10 @@ LRU удаляет записи сверх лимита. Активные экз
 `stats()` возвращает атомарный snapshot без файлового IO, чтения исходников и захвата build mutex. `program_hits`, `cache_misses`, `cargo_build_invocations`, root/dependency built/fresh, eviction/coalescing, resident limits, причины отказов и время proof/build позволяют отличить повторное использование от настоящей пересборки. Snapshot не включает значения environment или тексты Custom; обычная диагностика компилятора сохраняет свой прежний формат. `root_artifacts_built` считает обычный worker binary, а не его build script.
 
 Проверки runtime покрывают независимость экземпляров, реальные fresh events, cancellation/coalescing, bounded eviction/leases и повреждение products. Production Workbench regression отдельно проверяет Game → Scene → Stop → Game, исходный state/time, новый PID и неизменность авторского документа. Native Editor benchmark проверяет весь пользовательский маршрут с прежним общим watchdog 45 секунд; счётчики store добавлены к отчёту без ослабления его критериев. Результаты конкретных запусков и известные ограничения находятся в [review-fixes-20261016.md](review-fixes-20261016.md).
+
+Аудит макросов SDK допускает литеральные `env!("CARGO_PKG_NAME")` и
+`env!("CARGO_PKG_VERSION")`: оба значения сверяются с хешируемым манифестом пакета
+и метаданными зависимостей Cargo. Неизвестные входы окружения SDK и вычисляемые
+аргументы макросов по-прежнему не кешируются. Метаданные возможностей используют
+имя пакета; отклонение этого доказанного значения заставляло бы повторно
+компилировать неизменённый Custom.

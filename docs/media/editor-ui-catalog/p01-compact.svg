@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="900" viewBox="0 0 480 900" role="img" aria-labelledby="title desc">
+<title id="title">P01 / Engine Overview / compact area</title>
+<desc id="desc">Static ModuleEngine editor design proposal. Not a running editor screenshot. See the bilingual catalogue for requirements and actual implementation boundaries.</desc>
+<rect x="0" y="0" width="480" height="900" rx="0" fill="#111823" stroke="none" stroke-width="1"/>
+<text x="16" y="30" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="600" fill="#E6EDF5" data-max-width="448">P01 / Engine Overview</text>
+<text x="16" y="54" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="448">DESIGN PROPOSAL · 480-point dock area</text>
+<rect x="16" y="72" width="448" height="792" rx="4" fill="#192230" stroke="#334155" stroke-width="1"/>
+<rect x="16" y="72" width="448" height="32" rx="0" fill="#202D3E" stroke="none" stroke-width="1"/>
+<text x="28" y="93" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="600" fill="#E6EDF5" data-max-width="392">Engine Overview</text>
+<g transform="translate(432 78) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9 L12 15 L18 9"/></g>
+<text x="28" y="128" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="424">Example project · Full source</text>
+<rect x="16" y="840" width="448" height="24" rx="0" fill="#202D3E" stroke="none" stroke-width="1"/>
+<text x="28" y="857" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="424">Area prototype · illustrative data</text>
+<g transform="translate(28 152) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12 H4 M11 5 L4 12 L11 19"/></g>
+<text x="56" y="167" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="204">Back to composition</text>
+<text x="28" y="214" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="424">Technical Engine / Rendering</text>
+<text x="28" y="250" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="600" fill="#E6EDF5" data-max-width="424">Rendering</text>
+<text x="28" y="278" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#B6C4D5" data-max-width="424">Turns the scene into the image shown on screen.</text>
+<g data-ui-role="section-heading">
+<text x="28" y="332" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600" fill="#E6EDF5" data-max-width="392">Current configuration</text>
+</g>
+<text x="28" y="367" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="132">Implementation</text>
+<text x="172" y="367" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="280">Vulkan renderer</text>
+<text x="28" y="395" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="132">Rendering path</text>
+<text x="172" y="395" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="280">Forward</text>
+<text x="28" y="423" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="132">Scene input</text>
+<text x="172" y="423" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="280">Scene3D</text>
+<g data-ui-role="primary-action">
+<rect x="28" y="456" width="188" height="28" rx="4" fill="#66D6C4" stroke="none" stroke-width="1"/>
+<text x="40" y="475" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="600" fill="#0E2224" data-max-width="164">Open render graph</text>
+</g>
+<text x="36" y="515" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="192">Show renderer node</text>
+<g data-ui-role="section-heading">
+<text x="28" y="576" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600" fill="#E6EDF5" data-max-width="392">Capability evidence</text>
+</g>
+<text x="28" y="607" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="132">Installed</text>
+<text x="172" y="607" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="280">Yes · source registry</text>
+<text x="28" y="635" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="132">Offered</text>
+<text x="172" y="635" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="280">Yes · selected profile</text>
+<text x="28" y="663" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="132">Participating</text>
+<text x="172" y="663" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="280">Yes · authored route</text>
+<text x="28" y="700" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="424">These facts do not establish runtime readiness.</text>
+<g transform="translate(28 740) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6 L15 12 L9 18"/></g>
+<text x="56" y="755" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="140">Source details</text>
+<text x="236" y="755" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="160">Refresh evidence</text>
+<text x="16" y="886" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="448">Proposed area layout · no native UI acceptance.</text>
+</svg>

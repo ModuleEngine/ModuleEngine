@@ -1,0 +1,4 @@
+interface:
+  display_name: "ModuleEngine UI Design"
+  short_description: "Design ModuleEngine editor flows and controls"
+  default_prompt: "Use $moduleengine-ui-design to design a clear ModuleEngine editor task flow using the project UI baseline."

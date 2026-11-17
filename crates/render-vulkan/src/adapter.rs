@@ -23,7 +23,20 @@ use std::{
 /// cannot block or reconfigure a previously accepted renderer.
 pub fn install(registry: &mut ModuleRegistry, resource_root: &Path) -> Result<(), String> {
     for descriptor in module_descriptors() {
+        let metadata = module_engine_core::CapabilityMetadata::new(
+            &descriptor.label,
+            &descriptor.description,
+            module_engine_core::CapabilityOwner::Engine,
+            module_engine_core::CapabilityKind::RenderPass,
+            env!("CARGO_PKG_NAME"),
+        )
+        .configured_by([
+            module_engine_core::CapabilityConfiguration::RenderGraph,
+            module_engine_core::CapabilityConfiguration::HlslSource,
+        ]);
+        let id = descriptor.id.clone();
         registry.register_module(descriptor)?;
+        registry.describe_module(&id, metadata)?;
     }
     let resource_root = resource_root.to_path_buf();
     registry.register_renderer_with_adapter(
@@ -36,6 +49,21 @@ pub fn install(registry: &mut ModuleRegistry, resource_root: &Path) -> Result<()
                 document,
             )?))
         },
+    )?;
+    let descriptor = renderer_descriptor();
+    registry.describe_module(
+        "render.vulkan",
+        module_engine_core::CapabilityMetadata::new(
+            &descriptor.label,
+            &descriptor.description,
+            module_engine_core::CapabilityOwner::Engine,
+            module_engine_core::CapabilityKind::Renderer,
+            env!("CARGO_PKG_NAME"),
+        )
+        .configured_by([
+            module_engine_core::CapabilityConfiguration::RootGraph,
+            module_engine_core::CapabilityConfiguration::RenderGraph,
+        ]),
     )
 }
 

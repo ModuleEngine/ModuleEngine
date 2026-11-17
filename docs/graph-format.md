@@ -4,7 +4,12 @@
 
 [English](graph-format.md) | [Русский](ru/graph-format.md) | [Documentation](README.md)
 
-GraphDocument is UTF-8 JSON. The current schema_version is 3; versions 1/2 are read with defaults for new fields. Loading migrates the document in memory; saving an existing file leaves an exact backup. Unknown versions are rejected.
+GraphDocument is UTF-8 JSON; the current `schema_version` is **4**. Normal Open
+requires the current schema. Versions 1–3 require the explicit **Migrate copy**
+route; opening does not migrate or overwrite the original. Unsupported versions
+reject. An external authored project additionally uses `scene_storage_version: 1`
+and scene bindings instead of embedded bodies; [scene files](scene-files.md)
+defines that separate container and the hydrated in-memory representation.
 
 <a id="документ"></a>
 

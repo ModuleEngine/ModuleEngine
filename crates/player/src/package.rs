@@ -46,7 +46,7 @@ pub struct PlayerManifest {
     pub native_platform: Option<String>,
 }
 
-fn read_manifest(root: &Path) -> Result<PlayerManifest, String> {
+pub(crate) fn read_manifest(root: &Path) -> Result<PlayerManifest, String> {
     let manifest: PlayerManifest = serde_json::from_slice(
         &fs::read(root.join("player.json")).map_err(|error| error.to_string())?,
     )

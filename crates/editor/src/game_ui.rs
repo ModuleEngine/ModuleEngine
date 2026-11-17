@@ -1,4 +1,8 @@
 //! Authored scenes and staged execution graphs. Play never writes authored data.
+#[path = "hierarchy_ui.rs"]
+mod hierarchy_ui;
+#[path = "inspector_drafts.rs"]
+mod inspector_drafts;
 use crate::player::update_render_diagnostic;
 use crate::{
     activity::{ActivitySnapshot, BuildProgress},
@@ -8,6 +12,7 @@ use crate::{
     player,
 };
 use eframe::egui::{self, Color32, Vec2};
+pub use hierarchy_ui::{HierarchyAction, SceneMenuAction};
 #[cfg(test)]
 use module_engine_arpg::{ArpgInput, ExecutionGraphExt, GameInputExt};
 use module_engine_core::*;
@@ -183,16 +188,17 @@ pub struct GameWorkbench {
     gpu_texture: module_engine_player::gpu_presentation::GpuTexture,
     gpu_bridge: Option<Arc<module_engine_player::gpu_presentation::GpuPresentationBridge>>,
     displayed_camera: Option<Camera>,
+    displayed_settings: module_engine_core::ScriptSettingsSnapshot,
     visible_scene_owners: BTreeSet<u64>,
     pub error: Option<String>,
     render_error: Option<String>,
-    field_key: Option<(String, u64)>,
     component_drafts: BTreeMap<String, Value>,
+    inspector_drafts: inspector_drafts::InspectorDrafts,
     advanced: String,
     template_key: Option<String>,
     template_draft: Option<Prefab>,
     template_name: String,
-    scene_name: String,
+    hierarchy: hierarchy_ui::HierarchyState,
     systems: CanvasState,
     positions: BTreeMap<String, [f32; 2]>,
     positions_root: Option<PathBuf>,
@@ -207,7 +213,6 @@ pub struct GameWorkbench {
     pending_worker_epoch: Option<(u64, u64)>,
     pub rejected: Option<(String, CompiledScript)>,
     migration: String,
-    source_selected: String,
     compile_root: Option<PathBuf>,
     backend_root: Option<PathBuf>,
     world_kind: WorldKind,
@@ -226,6 +231,7 @@ pub struct GameWorkbench {
     worker_playing: Option<bool>,
     worker_viewport: Option<[usize; 2]>,
     worker_view_visible: bool,
+    requested_viewport: Option<[usize; 2]>,
     worker_frame: Option<Arc<Frame>>,
     worker_rejected_document: Option<Arc<GraphDocument>>,
     worker_deferred_document: Option<(Arc<GraphDocument>, bool)>,
@@ -268,16 +274,17 @@ impl Default for GameWorkbench {
             gpu_texture: Default::default(),
             gpu_bridge: None,
             displayed_camera: None,
+            displayed_settings: Default::default(),
             visible_scene_owners: BTreeSet::new(),
             error: None,
             render_error: None,
-            field_key: None,
             component_drafts: BTreeMap::new(),
+            inspector_drafts: Default::default(),
             advanced: String::new(),
             template_key: None,
             template_draft: None,
             template_name: String::new(),
-            scene_name: String::new(),
+            hierarchy: Default::default(),
             systems: {
                 let mut canvas = CanvasState::new("game-systems");
                 canvas.zoom = 0.64;
@@ -296,7 +303,6 @@ impl Default for GameWorkbench {
             pending_worker_epoch: None,
             rejected: None,
             migration: "null".into(),
-            source_selected: String::new(),
             compile_root: None,
             backend_root: None,
             world_kind: WorldKind::Objects,
@@ -312,6 +318,7 @@ impl Default for GameWorkbench {
             worker_playing: None,
             worker_viewport: None,
             worker_view_visible: false,
+            requested_viewport: None,
             worker_frame: None,
             worker_rejected_document: None,
             worker_deferred_document: None,
@@ -481,6 +488,7 @@ impl GameWorkbench {
         self.worker_snapshot.as_ref()
     }
     pub fn begin_ui_frame(&mut self) {
+        self.requested_viewport = None;
         self.worker_view_visible = false;
         self.visible_scene_owners.clear();
     }
@@ -494,14 +502,12 @@ impl GameWorkbench {
         {
             host.retain_authored_presentation_owners(&self.visible_scene_owners);
         }
-        if self.worker.is_some()
-            && !self.worker_view_visible
-            && self.worker_viewport != Some([0, 0])
-        {
-            self.worker_viewport = Some([0, 0]);
+        let size = self.requested_viewport.unwrap_or([0, 0]);
+        if self.worker.is_some() && self.worker_viewport != Some(size) {
+            self.worker_viewport = Some(size);
             self.queue_worker_command(WorkerCommand::SetViewport {
-                width: 0,
-                height: 0,
+                width: size[0],
+                height: size[1],
             });
         }
     }
@@ -903,7 +909,7 @@ impl GameWorkbench {
                     retire_in_background(host);
                     return Err(error);
                 }
-                host.services.set_enabled(!preview);
+                host.set_services_enabled(!preview);
                 if !preview {
                     Self::frame_game_start(&mut host);
                 }
@@ -1022,7 +1028,7 @@ impl GameWorkbench {
             .and_then(|mut host| {
                 worker_progress.stage("Preparing GPU window presentation");
                 host.set_presentation_target(presentation_target)?;
-                host.services.set_enabled(false);
+                host.set_services_enabled(false);
                 Ok(host)
             })
         });
@@ -1280,6 +1286,14 @@ impl GameWorkbench {
                 .zip(self.graph_base.as_ref())
                 .is_some_and(|(draft, base)| draft != base)
     }
+    pub fn has_inspector_drafts(&self) -> bool {
+        self.inspector_drafts
+            .has_drafts(&self.component_drafts, &self.advanced)
+    }
+    pub fn discard_inspector_drafts(&mut self) {
+        self.inspector_drafts.clear();
+        self.component_drafts.clear();
+    }
     pub fn discard_graph_draft(&mut self) {
         self.graph_draft = None;
         self.graph_base = None;
@@ -1323,10 +1337,10 @@ impl GameWorkbench {
         self.texture = None;
         self.gpu_texture = Default::default();
         self.displayed_camera = None;
+        self.displayed_settings.clear();
         self.game_frame = GameFrameCache::default();
         update_render_diagnostic(&mut self.error, &mut self.render_error, Ok(()));
         self.play_session = false;
-        self.field_key = None;
         self.template_key = None;
         self.cancel_pending_custom();
         self.pending_worker_epoch = None;
@@ -1646,7 +1660,7 @@ impl GameWorkbench {
         }
         result
     }
-    fn restart_game(&mut self) -> Result<(), String> {
+    pub fn restart_game(&mut self) -> Result<(), String> {
         if self.worker.is_some() {
             self.worker_inputs.clear();
             self.input = GameInput::default();
@@ -1674,7 +1688,6 @@ impl GameWorkbench {
     pub fn select(&mut self, id: Option<u64>) {
         if self.selected != id {
             self.selected = id;
-            self.field_key = None;
         }
     }
     pub fn is_play_session(&self) -> bool {
@@ -1683,7 +1696,7 @@ impl GameWorkbench {
     pub fn normalize_selection(&mut self, game: &GameProject) {
         if !game.scenes.contains_key(&self.scene) {
             self.scene = game.entry_scene.clone();
-            self.field_key = None;
+            self.select(None);
         }
         if self.selected.is_some_and(|id| {
             !game.scenes[&self.scene]
@@ -1702,8 +1715,8 @@ impl GameWorkbench {
         self.texture = None;
         self.gpu_texture = Default::default();
         self.displayed_camera = None;
+        self.displayed_settings.clear();
         self.game_frame = GameFrameCache::default();
-        self.field_key = None;
     }
     pub fn ensure_preview(
         &mut self,
@@ -1751,7 +1764,7 @@ impl GameWorkbench {
             kind,
             self.programs.clone(),
         )?;
-        host.services.set_enabled(false);
+        host.set_services_enabled(false);
         self.preview_host = Some(host);
         self.preview_document = Some(candidate);
         Ok(())
@@ -1772,7 +1785,6 @@ impl GameWorkbench {
             host.refresh_author_preview(&candidate)?;
             self.preview_document = Some(candidate);
         }
-        self.field_key = None;
         Ok(())
     }
     /// Stopped Game displays authored geometry; Play/Pause retain the source HUD.
@@ -1790,26 +1802,16 @@ impl GameWorkbench {
             return false;
         }
         ui.horizontal_wrapped(|ui| {
-            ui.strong("GAME");
-            if ui.button(if *playing { "Pause" } else { "Play" }).clicked() {
-                *playing = !*playing;
-            }
-            if ui.button("Stop").clicked() {
-                *playing = false;
-                self.stop();
-            }
-            if ui
-                .add_enabled(self.has_game_host(), egui::Button::new("Restart"))
-                .clicked()
-            {
-                let _ = self.restart_game();
-            }
+            ui.label(if self.play_session {
+                if *playing { "Playing" } else { "Paused" }
+            } else {
+                "Authored preview"
+            });
             ui.label("Click the viewport to focus game controls");
         });
         if let Err(error) = self.ensure(document, root, compile_root, kind) {
             self.error = Some(error);
         }
-        self.custom_ui(ui, document, compile_root);
         if let Some(error) = &self.error {
             ui.colored_label(Color32::LIGHT_RED, error);
         }
@@ -1819,7 +1821,8 @@ impl GameWorkbench {
         }
         if let Some(host) = &mut self.host {
             let size = ui.available_size().max(Vec2::splat(1.));
-            let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+            let (rect, response) =
+                crate::app::editor_ui::image_area(ui, size, egui::Sense::click());
             let aim = if self.play_session {
                 player::preview_aim_for(
                     host.presentation_id(),
@@ -1836,9 +1839,8 @@ impl GameWorkbench {
             };
             if rect.width() > 2. && rect.height() > 2. {
                 let physical = rect.size() * ui.ctx().pixels_per_point();
-                let fit = (1280. / physical.x).min(720. / physical.y).min(1.);
-                let width = (physical.x * fit).round().max(1.) as usize;
-                let height = (physical.y * fit).round().max(1.) as usize;
+                let width = physical.x.round().max(1.) as usize;
+                let height = physical.y.round().max(1.) as usize;
                 let key = GameFrameKey {
                     revision: host.presentation_revision(),
                     camera: host.camera,
@@ -1869,6 +1871,8 @@ impl GameWorkbench {
                             ) {
                                 Ok(true) => {
                                     self.displayed_camera = host.last_presented_camera();
+                                    self.displayed_settings =
+                                        host.last_presented_settings().clone();
                                     self.game_frame.key = Some(GameFrameKey {
                                         camera: host.last_presented_camera().unwrap_or(key.camera),
                                         revision: host
@@ -1940,6 +1944,23 @@ impl GameWorkbench {
                         .cloned()
                         .collect(),
                 };
+                let menu_data = host
+                    .player_settings_snapshot()
+                    .and_then(|settings| host.script_ui_snapshot().map(|menus| (settings, menus)));
+                let script_ui = match menu_data {
+                    Ok((settings, menus)) => module_engine_player::script_ui::draw_script_ui(
+                        ui,
+                        rect,
+                        &menus,
+                        &settings,
+                        &self.displayed_settings,
+                        None,
+                    ),
+                    Err(error) => {
+                        ui.colored_label(Color32::LIGHT_RED, error);
+                        Default::default()
+                    }
+                };
                 let collected = player::collect_input_with_status_for(
                     ui,
                     &response,
@@ -1950,14 +1971,19 @@ impl GameWorkbench {
                         camera: self.displayed_camera.unwrap_or(host.camera),
                         aim,
                         respect_editor_focus: true,
-                        world_enabled: *playing,
+                        world_enabled: *playing && !script_ui.blocks_world,
                     },
                     &status,
                 );
-                let active =
-                    response.hovered() || response.has_focus() || collected.controls_active;
-                let input = collected.input;
-                if *playing || input.restart {
+                let active = ui.input(|i| i.focused)
+                    && (response.hovered()
+                        || response.has_focus()
+                        || collected.controls_active
+                        || script_ui.blocks_world);
+                let mut input = collected.input;
+                input.actions.extend(script_ui.input.actions);
+                input.action_values.extend(script_ui.input.action_values);
+                if active && (*playing || input.restart) {
                     self.aim_input = input.clone();
                     merge_view_input(&mut self.input, input, active);
                 }
@@ -1977,7 +2003,7 @@ impl GameWorkbench {
             return;
         };
         let size = ui.available_size().max(Vec2::splat(1.));
-        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+        let (rect, response) = crate::app::editor_ui::image_area(ui, size, egui::Sense::click());
         let aim = if self.play_session {
             player::preview_aim_for(
                 snapshot.presentation_ids.first().map(String::as_str),
@@ -1996,18 +2022,13 @@ impl GameWorkbench {
             return;
         }
         let physical = rect.size() * ui.ctx().pixels_per_point();
-        let fit = (1280. / physical.x).min(720. / physical.y).min(1.);
         let size = [
-            (physical.x * fit).round().max(1.) as usize,
-            (physical.y * fit).round().max(1.) as usize,
+            physical.x.round().max(1.) as usize,
+            physical.y.round().max(1.) as usize,
         ];
-        if self.worker_viewport != Some(size) {
-            self.worker_viewport = Some(size);
-            self.queue_worker_command(WorkerCommand::SetViewport {
-                width: size[0],
-                height: size[1],
-            });
-        }
+        self.requested_viewport = Some(self.requested_viewport.map_or(size, |previous| {
+            [previous[0].max(size[0]), previous[1].max(size[1])]
+        }));
         if let Some(frame) = &snapshot.frame {
             if self
                 .worker_frame
@@ -2024,6 +2045,7 @@ impl GameWorkbench {
                     Ok(true) => {
                         self.worker_frame = Some(frame.clone());
                         self.displayed_camera = Some(snapshot.camera);
+                        self.displayed_settings = snapshot.frame_settings.clone();
                         self.performance.game_render_calls += 1;
                         update_render_diagnostic(&mut self.error, &mut self.render_error, Ok(()));
                     }
@@ -2074,6 +2096,16 @@ impl GameWorkbench {
                 .cloned()
                 .collect(),
         };
+        let script_ui = module_engine_player::script_ui::draw_script_ui(
+            ui,
+            rect,
+            &snapshot.script_ui,
+            &snapshot.player_settings,
+            &self.displayed_settings,
+            // Render diagnostics have their own status; valid menu choices
+            // remain usable to recover from a failed frame.
+            snapshot.script_ui_error.as_deref(),
+        );
         let collected = player::collect_input_with_status_for(
             ui,
             &response,
@@ -2084,13 +2116,19 @@ impl GameWorkbench {
                 camera: self.displayed_camera.unwrap_or(snapshot.camera),
                 aim,
                 respect_editor_focus: true,
-                world_enabled: playing,
+                world_enabled: playing && !script_ui.blocks_world,
             },
             &status,
         );
-        let active = response.hovered() || response.has_focus() || collected.controls_active;
-        let input = collected.input;
-        if playing || input.restart {
+        let active = ui.input(|i| i.focused)
+            && (response.hovered()
+                || response.has_focus()
+                || collected.controls_active
+                || script_ui.blocks_world);
+        let mut input = collected.input;
+        input.actions.extend(script_ui.input.actions);
+        input.action_values.extend(script_ui.input.action_values);
+        if active && (playing || input.restart) {
             self.aim_input = input.clone();
             merge_view_input(&mut self.input, input, active);
         }
@@ -2099,129 +2137,6 @@ impl GameWorkbench {
         } else {
             Duration::from_millis(250)
         });
-    }
-    /// Hierarchy and Inspector share authored selection, independently of Game.
-    pub fn hierarchy_ui(&mut self, ui: &mut egui::Ui, document: &mut GraphDocument) -> bool {
-        let Some(original) = document.game.clone() else {
-            ui.label("Open or create a game project through File.");
-            return false;
-        };
-        let mut game = original.clone();
-        self.normalize_selection(&game);
-        ui.heading("Hierarchy");
-        ui.add_enabled_ui(!self.play_session, |ui| {
-            let before = self.scene.clone();
-            egui::ComboBox::from_id_salt("authored-scene")
-                .selected_text(&self.scene)
-                .show_ui(ui, |ui| {
-                    for id in game.scenes.keys() {
-                        ui.selectable_value(&mut self.scene, id.clone(), id);
-                    }
-                });
-            if self.scene != before {
-                self.select(None);
-                self.preview_document = None;
-            }
-            ui.horizontal_wrapped(|ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.scene_name)
-                        .hint_text("Scene name")
-                        .desired_width(140.),
-                );
-                for (label, duplicate) in [("+ Scene", false), ("Duplicate", true)] {
-                    if ui.button(label).clicked() {
-                        match create_scene(&mut game, &self.scene, &self.scene_name, duplicate) {
-                            Ok(id) => {
-                                self.scene = id;
-                                self.scene_name.clear();
-                                self.select(None);
-                            }
-                            Err(error) => self.error = Some(error),
-                        }
-                    }
-                }
-            });
-            ui.horizontal_wrapped(|ui| {
-                if ui.button("Set as entry").clicked() {
-                    game.entry_scene = self.scene.clone();
-                }
-                ui.label(format!("Entry: {}", game.entry_scene));
-            });
-            ui.horizontal(|ui| {
-                if ui.button("+ Object").clicked() {
-                    let scene = game.scenes.get_mut(&self.scene).unwrap();
-                    match next_object_id(scene) {
-                        Ok(id) => {
-                            scene.objects.push(AuthoredObject::new(WorldObject {
-                                id,
-                                parent: None,
-                                transform: Transform::default(),
-                                color: [190, 190, 190, 255],
-                            }));
-                            self.select(Some(id));
-                        }
-                        Err(error) => self.error = Some(error),
-                    }
-                }
-                if ui
-                    .add_enabled(self.selected.is_some(), egui::Button::new("Delete"))
-                    .clicked()
-                    && let Some(id) = self.selected
-                {
-                    delete_object(game.scenes.get_mut(&self.scene).unwrap(), id);
-                    self.select(None);
-                }
-            });
-        });
-        ui.separator();
-        fn tree(
-            ui: &mut egui::Ui,
-            objects: &[AuthoredObject],
-            parent: Option<u64>,
-            depth: usize,
-            selected: &mut Option<u64>,
-        ) {
-            if depth > 64 {
-                return;
-            }
-            for object in objects
-                .iter()
-                .filter(|object| object.object.parent == parent)
-            {
-                ui.horizontal(|ui| {
-                    ui.add_space(depth as f32 * 13.);
-                    let label = format!(
-                        "{} · {}",
-                        object.object.id,
-                        object.prefab.as_deref().unwrap_or("Object")
-                    );
-                    if ui
-                        .selectable_label(*selected == Some(object.object.id), label)
-                        .clicked()
-                    {
-                        *selected = Some(object.object.id);
-                    }
-                });
-                tree(ui, objects, Some(object.object.id), depth + 1, selected);
-            }
-        }
-        let mut selection = self.selected;
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            tree(
-                ui,
-                &game.scenes[&self.scene].objects,
-                None,
-                0,
-                &mut selection,
-            )
-        });
-        self.select(selection);
-        if game != original {
-            document.game = Some(game);
-            true
-        } else {
-            false
-        }
     }
     pub fn inspector_ui(&mut self, ui: &mut egui::Ui, document: &mut GraphDocument) -> bool {
         if document.game.is_none() {
@@ -2292,7 +2207,22 @@ impl GameWorkbench {
             entities: &resolved,
             manifest: &manifest,
         };
-        ui.heading("Inspector");
+        let pending = self.has_inspector_drafts();
+        ui.add_sized(
+            [ui.available_width(), 28.],
+            egui::Label::new(if pending {
+                "Inspector drafts · unapplied"
+            } else {
+                "Inspector drafts · none"
+            })
+            .truncate(),
+        );
+        if ui
+            .add_enabled(pending, egui::Button::new("Discard Inspector drafts"))
+            .clicked()
+        {
+            self.discard_inspector_drafts();
+        }
         if self.selected.is_none() {
             ui.label("Select an object in Scene or Hierarchy.");
         }
@@ -2306,16 +2236,25 @@ impl GameWorkbench {
                 let parents=game.scenes[&self.scene].objects.iter().filter(|object|object.object.id!=id).map(|object|object.object.id).collect::<Vec<_>>();
                 let object=game.scenes.get_mut(&self.scene).unwrap().objects.iter_mut().find(|object|object.object.id==id).unwrap();
                 let prefab=object.prefab.as_ref().and_then(|name|templates.get(name));
-                if self.field_key.as_ref()!=Some(&(self.scene.clone(),id)){
-                    self.component_drafts=entity.components.iter().map(|(name,value)|(name.clone(),schemas.resolve_component(name,value))).collect();
-                    self.advanced=serde_json::to_string_pretty(&json!({"components":object.components,"overrides":object.overrides,"references":object.references})).unwrap_or_default();
-                    self.field_key=Some((self.scene.clone(),id));
-                }
+                let draft_base=entity.components.iter().map(|(name,value)|(name.clone(),schemas.resolve_component(name,value))).collect();
+                let draft_schemas=active.iter().filter_map(|name|schemas.schema(name).map(|schema|(name.clone(),serde_json::to_value(schema).unwrap()))).collect();
+                let raw=serde_json::to_string_pretty(&json!({"components":object.components,"overrides":object.overrides,"references":object.references})).unwrap_or_default();
+                self.inspector_drafts.activate((self.scene.clone(),id),draft_base,draft_schemas,raw,&mut self.component_drafts,&mut self.advanced);
                 ui.add_enabled_ui(!self.play_session,|ui|{
-                    ui.strong(format!("Object {id}"));
-                    for(name,values)in[("Position",&mut object.object.transform.translation),("Rotation (radians)",&mut object.object.transform.rotation),("Scale",&mut object.object.transform.scale)]{
-                        ui.label(name);ui.horizontal(|ui|{for value in values{ui.add(egui::DragValue::new(value).speed(0.05).max_decimals(3));}});
-                    }
+                    ui.label(egui::RichText::new(hierarchy_ui::object_label(object)).size(20.).strong());
+                    ui.small(object.prefab.as_deref().map_or("Local object".into(),|name|format!("Linked template: {name}")));
+                    crate::app::editor_ui::section(ui,"Transform");
+                    ui.scope(|ui|{ui.set_max_width(ui.available_width().min(720.));
+                        for(name,values)in[("Position",&mut object.object.transform.translation),("Rotation (radians)",&mut object.object.transform.rotation),("Scale",&mut object.object.transform.scale)]{
+                            let narrow=ui.available_width()<360.;
+                            if narrow {ui.label(name);}
+                            ui.horizontal(|ui|{
+                                if !narrow{ui.add_sized([112.,28.],egui::Label::new(name));}
+                                let width=((ui.available_width()-16.)/3.).clamp(20.,160.);
+                                for (axis,value) in ["X","Y","Z"].into_iter().zip(values){ui.add_sized([width,28.],egui::DragValue::new(value).speed(0.05).max_decimals(3).prefix(format!("{axis} ")));}
+                            });
+                        }
+                    });
                     egui::ComboBox::from_id_salt("object-parent").selected_text(object.object.parent.map_or("Root".into(),|parent|parent.to_string())).show_ui(ui,|ui|{
                         ui.selectable_value(&mut object.object.parent,None,"Root");for parent in parents{ui.selectable_value(&mut object.object.parent,Some(parent),parent.to_string());}
                     });
@@ -2325,35 +2264,42 @@ impl GameWorkbench {
                     egui::ComboBox::from_id_salt("object-prefab").selected_text(object.prefab.as_deref().unwrap_or("No template")).show_ui(ui,|ui|{
                         ui.selectable_value(&mut object.prefab,None,"No template");for name in templates.keys(){ui.selectable_value(&mut object.prefab,Some(name.clone()),name);}
                     });
-                    if object.prefab!=before{link_template(object,&entity,&templates);self.field_key=None;}
+                    if object.prefab!=before{link_template(object,&entity,&templates);}
                     let visible=self.component_drafts.keys().filter(|name|active.contains(*name)&&schemas.schema(name).is_some()).cloned().collect::<Vec<_>>();
-                    for name in visible{let schema=schemas.schema(&name).unwrap();ui.push_id(&name,|ui|{egui::CollapsingHeader::new(&schema.label).default_open(true).show(ui,|ui|{
+                    for name in visible{let schema=schemas.schema(&name).unwrap();ui.add_space(16.);ui.push_id(&name,|ui|{egui::CollapsingHeader::new(egui::RichText::new(&schema.label).size(16.).strong()).default_open(true).show(ui,|ui|{
+                        ui.small(format!("{} · contract {}",schema.owner_module,schema.version));
+                        ui.small(component_origin(object,prefab,&name));
                         let draft=self.component_drafts.get_mut(&name).unwrap();component_editor(ui,schema,draft,&attached,&fields);let value=draft.clone();
-                        ui.horizontal(|ui|{
-                            if ui.button("Apply fields").clicked(){apply_component_with_defaults(object,prefab,&name,value,Some(&schema.defaults));self.field_key=None;}
+                        ui.horizontal_wrapped(|ui|{
+                            let conflict=self.inspector_drafts.conflict(&name);
+                            if conflict{ui.colored_label(Color32::LIGHT_RED,"Source changed. Discard this draft before editing the new version.");}
+                            if ui.add_enabled(!conflict,egui::Button::new("Apply fields")).clicked(){apply_component_with_defaults(object,prefab,&name,value,Some(&schema.defaults));let accepted=schemas.resolve_component(&name,&component_value(object,prefab,&name));self.inspector_drafts.accept(&name,Some(accepted),&mut self.component_drafts);}
+                            if ui.button("Discard fields").clicked(){let current=entity.components.get(&name).map(|v|schemas.resolve_component(&name,v));self.inspector_drafts.accept(&name,current,&mut self.component_drafts);}
                             if prefab.is_some_and(|prefab|prefab.components.contains_key(&name)){
-                                if ui.button("Inherit defaults").clicked(){reset_component(object,prefab,&name);self.field_key=None;}
-                            }else if ui.button("Remove component").clicked(){reset_component(object,prefab,&name);self.component_drafts.remove(&name);self.field_key=None;}
+                                if ui.button("Inherit defaults").clicked(){reset_component(object,prefab,&name);let accepted=schemas.resolve_component(&name,&component_value(object,prefab,&name));self.inspector_drafts.accept(&name,Some(accepted),&mut self.component_drafts);}
+                            }else if ui.button("Remove component").clicked(){reset_component(object,prefab,&name);self.inspector_drafts.accept(&name,None,&mut self.component_drafts);}
                         });
+                        ui.small(if self.inspector_drafts.changed(&name,&self.component_drafts){"Local draft · not yet applied"}else{"Fields match authored values"});
                     });});}
                     egui::ComboBox::from_id_salt("add-game-component").selected_text("+ Component from active modules").show_ui(ui,|ui|{
                         for name in active{if let Some(schema)=schemas.schema(name)&&!self.component_drafts.contains_key(name)&&ui.button(&schema.label).clicked(){self.component_drafts.insert(name.clone(),schema.defaults.clone());}}
                     });
                     let hidden=entity.components.keys().filter(|name|!active.contains(*name)||schemas.schema(name).is_none()).count();if hidden>0{ui.label(format!("{hidden} inactive or unknown component records preserved; see Advanced"));}
                     ui.collapsing("Advanced: components / overrides / references",|ui|{
+                        if self.inspector_drafts.raw_conflict(){ui.colored_label(Color32::LIGHT_RED,"Authored data changed; discard the raw draft before applying another version.");}
                         ui.add(egui::TextEdit::multiline(&mut self.advanced).code_editor().desired_rows(12).desired_width(f32::INFINITY));
-                        if ui.button("Apply raw JSON").clicked(){match apply_raw_object(object,&self.advanced){Ok(())=>self.field_key=None,Err(error)=>self.error=Some(error)}}
+                        if ui.add_enabled(!self.inspector_drafts.raw_conflict(),egui::Button::new("Apply raw JSON")).clicked(){match apply_raw_object(object,&self.advanced){Ok(())=>{self.inspector_drafts.accept_raw(&self.advanced);},Err(error)=>self.error=Some(error)}}
                     });
                 });
                 if active.contains("mesh")||active.contains("material"){self.asset_ui(ui,&manifest,object,prefab,!self.play_session);}
                 ui.add_enabled_ui(!self.play_session,|ui|{ui.horizontal_wrapped(|ui|{ui.label("New linked template");ui.text_edit_singleline(&mut self.template_name);});});
-                if ui.add_enabled(!self.play_session,egui::Button::new("Create template from selected")).clicked(){match create_template(&mut game,&self.scene,&entity,&self.template_name){Ok(_)=>{self.template_name.clear();self.template_key=None;self.field_key=None;},Err(error)=>self.error=Some(error)}}
+                if ui.add_enabled(!self.play_session,egui::Button::new("Create template from selected")).clicked(){match create_template(&mut game,&self.scene,&entity,&self.template_name){Ok(_)=>{self.template_name.clear();self.template_key=None;},Err(error)=>self.error=Some(error)}}
                 let template_name=game.scenes[&self.scene].objects.iter().find(|object|object.object.id==id).and_then(|object|object.prefab.clone());
                 if let Some(name)=template_name&&let Some(template)=game.prefabs.get(&name){
                     if self.template_key.as_deref()!=Some(&name){self.template_draft=Some(template.clone());self.template_key=Some(name.clone());}
                     ui.collapsing(format!("Linked template source: {name}"),|ui|{ui.add_enabled_ui(!self.play_session,|ui|{
                         if let Some(draft)=&mut self.template_draft{ui.color_edit_button_srgba_unmultiplied(&mut draft.color);let attached=draft.components.keys().cloned().collect::<BTreeSet<_>>();for(component,value)in&mut draft.components{if active.contains(component)&&let Some(schema)=schemas.schema(component){ui.push_id(format!("template-{component}"),|ui|{ui.collapsing(&schema.label,|ui|{*value=schemas.resolve_component(component,value);component_editor(ui,schema,value,&attached,&fields);});});}}}
-                        if ui.button("Apply template defaults to instances").clicked()&&let Some(draft)=&self.template_draft{game.prefabs.insert(name.clone(),draft.clone());self.field_key=None;}
+                        if ui.button("Apply template defaults to instances").clicked()&&let Some(draft)=&self.template_draft{game.prefabs.insert(name.clone(),draft.clone());}
                     });});
                 }
             }
@@ -2631,40 +2577,6 @@ impl GameWorkbench {
         result
     }
 
-    fn custom_ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        document: &GraphDocument,
-        compile_root: Option<&Path>,
-    ) {
-        let ids = document
-            .game
-            .as_ref()
-            .map(game_host::script_ids)
-            .unwrap_or_default()
-            .into_iter()
-            .collect::<BTreeSet<_>>();
-        if ids.is_empty() {
-            return;
-        }
-        if !ids.contains(&self.source_selected) {
-            self.source_selected = ids.first().cloned().unwrap_or_default();
-        }
-        egui::ComboBox::from_id_salt("game-custom-source")
-            .selected_text(&self.source_selected)
-            .show_ui(ui, |ui| {
-                for id in ids {
-                    ui.selectable_value(&mut self.source_selected, id.clone(), id);
-                }
-            });
-        let id = self.source_selected.clone();
-        self.custom_editor_ui(
-            ui,
-            &id,
-            document.custom_sources.get(&id).map(String::as_str),
-            compile_root,
-        );
-    }
     fn asset_ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -2698,7 +2610,7 @@ impl GameWorkbench {
                     attach_resource(object, prefab, &payload.reference, kind)
                 });
             match result {
-                Ok(()) => self.field_key = None,
+                Ok(()) => {}
                 Err(error) => self.error = Some(error),
             }
         }
@@ -2768,12 +2680,19 @@ impl GameWorkbench {
         if self.play_session {
             ui.label("Stop Play before applying a new execution graph.");
         }
-        egui::CollapsingHeader::new("Stages, order and declared resources").show(ui,|ui|{
+        let region = ui.available_rect_before_wrap();
+        let wide = region.width() >= 800.;
+        let sidebar = egui::Rect::from_min_max(
+            region.min,
+            egui::pos2(region.left() + 300., region.bottom()),
+        );
+        let mut controls = |ui: &mut egui::Ui| {
+            egui::CollapsingHeader::new("Stages, order and declared resources").show(ui,|ui|{
             let mut stage_move=None;let mut node_move=None;let mut stage_delete=None;
             for (i,stage) in draft.stages.iter_mut().enumerate(){ui.horizontal(|ui|{ui.add(egui::TextEdit::singleline(&mut stage.name).desired_width(120.));if ui.button("Earlier").clicked(){stage_move=Some((i,false));}
 if ui.button("Later").clicked(){stage_move=Some((i,true));}
 if ui.button("Delete stage").clicked(){stage_delete=Some(i);}});
-                for (j,node) in stage.nodes.iter().enumerate(){ui.horizontal(|ui|{if ui.selectable_label(self.systems.selected.as_deref()==Some(&node.id),format!("{} · {}",node.id,node.module)).clicked(){self.systems.selected=Some(node.id.clone());}
+                for (j,node) in stage.nodes.iter().enumerate(){ui.horizontal(|ui|{if ui.selectable_label(self.systems.selected.as_deref()==Some(&node.id),format!("{} · {}",node.id,node.module)).clicked(){self.systems.select_only(Some(node.id.clone()));}
 if ui.small_button("Earlier").clicked(){node_move=Some((i,j,false));}
 if ui.small_button("Later").clicked(){node_move=Some((i,j,true));}});}
             }
@@ -2789,135 +2708,246 @@ if let Some(i)=stage_delete{draft.stages.remove(i);}
 if ui.button("+ Resource").clicked(){let name=unique_name("resource",draft.resources.iter().map(|r|r.name.as_str()));draft.resources.push(SystemResource{name,data_type:"Value".into(),external:false,initial:Value::Null});}
             ui.label("Initial values, after constraints and all bindings are editable in the graph JSON below.");
         });
-        ui.horizontal_wrapped(|ui| {
-            egui::ComboBox::from_id_salt("system-palette")
-                .selected_text("+ Installed module in last stage")
-                .show_ui(ui, |ui| {
-                    for descriptor in registry.descriptors() {
-                        if ui.button(&descriptor.id).clicked() {
-                            let id = unique_name(
-                                "system",
-                                draft
-                                    .stages
-                                    .iter()
-                                    .flat_map(|s| &s.nodes)
-                                    .map(|n| n.id.as_str()),
-                            );
-                            let bindings = descriptor
-                                .ports
-                                .iter()
-                                .filter_map(|p| {
+            ui.horizontal_wrapped(|ui| {
+                egui::ComboBox::from_id_salt("system-palette")
+                    .selected_text("+ Installed module in last stage")
+                    .show_ui(ui, |ui| {
+                        for descriptor in registry.descriptors() {
+                            if ui.button(&descriptor.id).clicked() {
+                                let id = unique_name(
+                                    "system",
                                     draft
-                                        .resources
+                                        .stages
                                         .iter()
-                                        .find(|r| r.data_type == p.data_type)
-                                        .map(|r| (p.name.clone(), r.name.clone()))
-                                })
-                                .collect();
-                            let node = SystemNode {
-                                id,
-                                module: descriptor.id.clone(),
-                                params: if descriptor.id == "custom.rust.update" {
-                                    json!({"source_id":"game-controller"})
+                                        .flat_map(|s| &s.nodes)
+                                        .map(|n| n.id.as_str()),
+                                );
+                                let bindings = descriptor
+                                    .ports
+                                    .iter()
+                                    .filter_map(|p| {
+                                        draft
+                                            .resources
+                                            .iter()
+                                            .find(|r| r.data_type == p.data_type)
+                                            .map(|r| (p.name.clone(), r.name.clone()))
+                                    })
+                                    .collect();
+                                let node = SystemNode {
+                                    id,
+                                    module: descriptor.id.clone(),
+                                    params: if descriptor.id == "custom.rust.update" {
+                                        json!({"source_id":"game-controller"})
+                                    } else {
+                                        json!({})
+                                    },
+                                    bindings,
+                                    after: vec![],
+                                };
+                                if let Some(stage) = draft.stages.last_mut() {
+                                    stage.nodes.push(node);
                                 } else {
-                                    json!({})
-                                },
-                                bindings,
-                                after: vec![],
-                            };
-                            if let Some(stage) = draft.stages.last_mut() {
-                                stage.nodes.push(node);
-                            } else {
-                                draft.stages.push(SystemStage {
-                                    name: "Stage 1".into(),
-                                    nodes: vec![node],
-                                });
+                                    draft.stages.push(SystemStage {
+                                        name: "Stage 1".into(),
+                                        nodes: vec![node],
+                                    });
+                                }
                             }
+                        }
+                    });
+                if ui.button("Delete selected node").clicked()
+                    && let Some(id) = &self.systems.selected
+                {
+                    for stage in &mut draft.stages {
+                        stage.nodes.retain(|n| &n.id != id);
+                        for node in &mut stage.nodes {
+                            node.after.retain(|a| a != id);
+                        }
+                    }
+                }
+            });
+            if let Some(node) = draft
+                .stages
+                .iter_mut()
+                .flat_map(|s| &mut s.nodes)
+                .find(|n| self.systems.selected.as_deref() == Some(&n.id))
+            {
+                if self.params_id.as_deref() != Some(&node.id) {
+                    self.params = serde_json::to_string(&node.params).unwrap_or_default();
+                    self.params_id = Some(node.id.clone());
+                }
+                ui.horizontal(|ui| {
+                    ui.label(&node.id);
+                    ui.text_edit_singleline(&mut self.params);
+                    if ui.button("Update draft params").clicked() {
+                        match serde_json::from_str(&self.params) {
+                            Ok(v) => node.params = v,
+                            Err(e) => self.error = Some(e.to_string()),
                         }
                     }
                 });
-            if ui.button("Delete selected node").clicked()
-                && let Some(id) = &self.systems.selected
-            {
-                for stage in &mut draft.stages {
-                    stage.nodes.retain(|n| &n.id != id);
-                    for node in &mut stage.nodes {
-                        node.after.retain(|a| a != id);
-                    }
+                for port in registry
+                    .descriptor(&node.module)
+                    .into_iter()
+                    .flat_map(|d| &d.ports)
+                {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{} ({})", port.name, port.data_type));
+                        let binding = node.bindings.entry(port.name.clone()).or_default();
+                        egui::ComboBox::from_id_salt(format!("binding-{}-{}", node.id, port.name))
+                            .selected_text(binding.as_str())
+                            .show_ui(ui, |ui| {
+                                for resource in draft
+                                    .resources
+                                    .iter()
+                                    .filter(|r| r.data_type == port.data_type)
+                                {
+                                    ui.selectable_value(
+                                        binding,
+                                        resource.name.clone(),
+                                        &resource.name,
+                                    );
+                                }
+                            });
+                    });
                 }
             }
-        });
-        if let Some(node) = draft
-            .stages
-            .iter_mut()
-            .flat_map(|s| &mut s.nodes)
-            .find(|n| self.systems.selected.as_deref() == Some(&n.id))
-        {
-            if self.params_id.as_deref() != Some(&node.id) {
-                self.params = serde_json::to_string(&node.params).unwrap_or_default();
-                self.params_id = Some(node.id.clone());
+            if draft != before && !self.graph_text_dirty {
+                self.graph_text = serde_json::to_string_pretty(&draft).unwrap_or_default();
             }
-            ui.horizontal(|ui| {
-                ui.label(&node.id);
-                ui.text_edit_singleline(&mut self.params);
-                if ui.button("Update draft params").clicked() {
-                    match serde_json::from_str(&self.params) {
-                        Ok(v) => node.params = v,
+            ui.collapsing("Text graph: resources / stages / bindings / params", |ui| {
+                if ui
+                    .add(
+                        egui::TextEdit::multiline(&mut self.graph_text)
+                            .code_editor()
+                            .desired_rows(14)
+                            .desired_width(f32::INFINITY),
+                    )
+                    .changed()
+                {
+                    self.graph_text_dirty = true;
+                }
+                if ui.button("Load JSON into draft").clicked() {
+                    match serde_json::from_str::<ExecutionGraph>(&self.graph_text) {
+                        Ok(value) => {
+                            draft = value;
+                            self.graph_text_dirty = false;
+                        }
                         Err(e) => self.error = Some(e.to_string()),
                     }
                 }
             });
-            for port in registry
-                .descriptor(&node.module)
-                .into_iter()
-                .flat_map(|d| &d.ports)
-            {
-                ui.horizontal(|ui| {
-                    ui.label(format!("{} ({})", port.name, port.data_type));
-                    let binding = node.bindings.entry(port.name.clone()).or_default();
-                    egui::ComboBox::from_id_salt(format!("binding-{}-{}", node.id, port.name))
-                        .selected_text(binding.as_str())
-                        .show_ui(ui, |ui| {
-                            for resource in draft
-                                .resources
-                                .iter()
-                                .filter(|r| r.data_type == port.data_type)
-                            {
-                                ui.selectable_value(binding, resource.name.clone(), &resource.name);
-                            }
-                        });
-                });
-            }
+        };
+        if wide {
+            ui.scope_builder(
+                egui::UiBuilder::new()
+                    .id_salt("execution-settings")
+                    .max_rect(sidebar),
+                |ui| {
+                    ui.set_clip_rect(sidebar);
+                    egui::ScrollArea::vertical().show(ui, |ui| controls(ui));
+                },
+            );
+        } else {
+            ui.collapsing("Execution settings and text draft", |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(200.)
+                    .show(ui, |ui| controls(ui));
+            });
         }
-        if draft != before && !self.graph_text_dirty {
-            self.graph_text = serde_json::to_string_pretty(&draft).unwrap_or_default();
-        }
-        ui.collapsing("Text graph: resources / stages / bindings / params", |ui| {
-            if ui
-                .add(
-                    egui::TextEdit::multiline(&mut self.graph_text)
-                        .code_editor()
-                        .desired_rows(14)
-                        .desired_width(f32::INFINITY),
-                )
-                .changed()
-            {
-                self.graph_text_dirty = true;
-            }
-            if ui.button("Load JSON into draft").clicked() {
-                match serde_json::from_str::<ExecutionGraph>(&self.graph_text) {
-                    Ok(value) => {
-                        draft = value;
-                        self.graph_text_dirty = false;
-                    }
-                    Err(e) => self.error = Some(e.to_string()),
-                }
-            }
-        });
         let (nodes, edges) = canvas_data(&draft, &registry, &mut self.positions);
         let mut moved = false;
-        for action in canvas::draw(ui, &mut self.systems, &nodes, &edges) {
+        self.systems.palette = registry
+            .descriptors()
+            .map(|d| (d.id.clone(), d.id.clone()))
+            .collect();
+        self.systems.allow_delete = !self.graph_text_dirty;
+        let canvas_actions = if wide {
+            let canvas = egui::Rect::from_min_max(
+                egui::pos2(sidebar.right() + 16., region.top()),
+                region.max,
+            );
+            ui.scope_builder(
+                egui::UiBuilder::new()
+                    .id_salt("execution-canvas")
+                    .max_rect(canvas),
+                |ui| {
+                    ui.set_clip_rect(canvas);
+                    canvas::draw(ui, &mut self.systems, &nodes, &edges)
+                },
+            )
+            .inner
+        } else {
+            canvas::draw(ui, &mut self.systems, &nodes, &edges)
+        };
+        for action in canvas_actions {
             match action {
+                CanvasAction::Add(module, position) => {
+                    if let Some(descriptor) = registry.descriptor(&module) {
+                        let id = unique_name(
+                            "system",
+                            draft
+                                .stages
+                                .iter()
+                                .flat_map(|s| &s.nodes)
+                                .map(|n| n.id.as_str()),
+                        );
+                        let bindings = descriptor
+                            .ports
+                            .iter()
+                            .filter_map(|p| {
+                                draft
+                                    .resources
+                                    .iter()
+                                    .find(|r| r.data_type == p.data_type)
+                                    .map(|r| (p.name.clone(), r.name.clone()))
+                            })
+                            .collect();
+                        let node = SystemNode {
+                            id: id.clone(),
+                            module: module.clone(),
+                            params: if module == "custom.rust.update" {
+                                json!({"source_id":"game-controller"})
+                            } else {
+                                json!({})
+                            },
+                            bindings,
+                            after: vec![],
+                        };
+                        if let Some(stage) = draft.stages.last_mut() {
+                            stage.nodes.push(node);
+                        } else {
+                            draft.stages.push(SystemStage {
+                                name: "Stage 1".into(),
+                                nodes: vec![node],
+                            });
+                        }
+                        self.positions.insert(id, position);
+                        moved = true;
+                    }
+                }
+                CanvasAction::DeleteSelection {
+                    nodes: selected,
+                    edges: removed,
+                } => {
+                    for i in removed {
+                        if let Some(edge) = edges.get(i)
+                            && let Some(node) = draft
+                                .stages
+                                .iter_mut()
+                                .flat_map(|s| &mut s.nodes)
+                                .find(|n| n.id == edge.to_node)
+                        {
+                            node.bindings.remove(&edge.to_port);
+                        }
+                    }
+                    for stage in &mut draft.stages {
+                        stage.nodes.retain(|n| !selected.contains(&n.id));
+                        for node in &mut stage.nodes {
+                            node.after.retain(|id| !selected.contains(id));
+                        }
+                    }
+                }
                 CanvasAction::Move(id, pos) => {
                     self.positions.insert(id, pos);
                     moved = true;
@@ -2981,7 +3011,6 @@ if ui.button("+ Resource").clicked(){let name=unique_name("resource",draft.resou
             document.game = candidate.game;
             self.graph_draft = None;
             self.graph_text_dirty = false;
-            self.field_key = None;
             self.error = None;
             // The accepted document is the requested configuration. Its old
             // executable hosts remain live until ensure's worker accepts it.
@@ -3025,16 +3054,16 @@ if ui.button("+ Resource").clicked(){let name=unique_name("resource",draft.resou
             Ok(mut host) => {
                 let changed = candidate.game != document.game;
                 document.game = candidate.game;
-                host.services.set_enabled(false);
+                host.set_services_enabled(false);
                 self.preview_host = Some(host);
                 self.preview_document = Some(runtime_document);
                 self.host = None;
                 self.texture = None;
                 self.gpu_texture = Default::default();
                 self.displayed_camera = None;
+                self.displayed_settings.clear();
                 self.graph_draft = None;
                 self.graph_text_dirty = false;
-                self.field_key = None;
                 self.error = None;
                 changed
             }
@@ -3273,6 +3302,7 @@ fn unique_name<'a>(base: &str, existing: impl IntoIterator<Item = &'a str>) -> S
         .find(|name| !names.contains(name.as_str()))
         .unwrap()
 }
+#[cfg(test)]
 fn create_scene(
     game: &mut GameProject,
     source: &str,
@@ -3299,7 +3329,7 @@ fn create_scene(
     game.scenes.insert(id.clone(), scene);
     Ok(id)
 }
-fn next_object_id(scene: &AuthoredScene) -> Result<u64, String> {
+pub(crate) fn next_object_id(scene: &AuthoredScene) -> Result<u64, String> {
     scene
         .objects
         .iter()
@@ -3309,7 +3339,7 @@ fn next_object_id(scene: &AuthoredScene) -> Result<u64, String> {
         .checked_add(1)
         .ok_or_else(|| "Object ID space exhausted".into())
 }
-fn delete_object(scene: &mut AuthoredScene, id: u64) {
+pub(crate) fn delete_object(scene: &mut AuthoredScene, id: u64) {
     let mut removed = BTreeSet::from([id]);
     loop {
         let count = removed.len();
@@ -3376,6 +3406,21 @@ fn component_attachments(object: &AuthoredObject, prefab: Option<&Prefab>) -> BT
         .chain(prefab.into_iter().flat_map(|p| p.components.keys()))
         .cloned()
         .collect()
+}
+fn component_origin(object: &AuthoredObject, prefab: Option<&Prefab>, name: &str) -> &'static str {
+    if !prefab.is_some_and(|p| p.components.contains_key(name)) {
+        return "Local component";
+    }
+    let attachments = component_attachments(object, prefab);
+    let overrides = object.overrides.keys().any(|key| {
+        component_override_owner(key, attachments.iter().map(String::as_str)) == Some(name)
+    });
+    match (object.components.contains_key(name), overrides) {
+        (false, false) => "Inherited from linked template",
+        (true, false) => "Linked template · local component data",
+        (false, true) => "Linked template · local overrides",
+        (true, true) => "Linked template · local data and overrides",
+    }
 }
 fn reset_component(object: &mut AuthoredObject, prefab: Option<&Prefab>, name: &str) {
     let attachments = component_attachments(object, prefab);
@@ -3962,7 +4007,6 @@ mod tests {
             let authored = document.clone();
             workbench.graph_text = "unsaved graph draft".into();
             workbench.graph_text_dirty = true;
-            workbench.source_selected = "archived-selection".into();
             let context = egui::Context::default();
             let render = |workbench: &mut GameWorkbench, document: &mut GraphDocument| {
                 let mut playing = false;
@@ -3993,7 +4037,6 @@ mod tests {
                 || text.contains("Game Custom is not ready")
                 || text == "The garden is not ready"));
             assert!(!workbench.is_play_session());
-            assert_eq!(workbench.source_selected, "archived-selection");
             if worker {
                 assert_eq!(workbench.worker_snapshot.as_ref().unwrap().state.tick, 0);
                 assert!(
@@ -4044,47 +4087,6 @@ mod tests {
             assert!(workbench.graph_text_dirty);
             workbench.stop();
         }
-    }
-
-    #[test]
-    fn game_pane_rust_tools_follow_scheduled_custom_sources_and_preserve_hidden_drafts() {
-        let mut workbench = GameWorkbench::default();
-        workbench.source_selected = "hidden-selection".into();
-        workbench.migration = "unsaved migration".into();
-        workbench.graph_text = "unsaved execution".into();
-        let mut no_custom = module_engine_core::demo_document(WorldKind::Ecs);
-        no_custom.game = Some(module_engine_g1::project());
-        no_custom
-            .custom_sources
-            .insert("orphan".into(), "fn update() {}".into());
-        let authored = no_custom.clone();
-        let context = egui::Context::default();
-        let output = context.run_ui(egui::RawInput::default(), |ui| {
-            workbench.custom_ui(ui, &no_custom, None)
-        });
-        let text = game_pane_text(&output);
-        output.drop_without_applying_deltas();
-        assert!(
-            !text
-                .iter()
-                .any(|text| text == "Apply Rust" || text.contains("Game Custom"))
-        );
-        assert_eq!(workbench.source_selected, "hidden-selection");
-        assert_eq!(workbench.migration, "unsaved migration");
-        assert_eq!(workbench.graph_text, "unsaved execution");
-        assert_eq!(no_custom, authored);
-        let scheduled = native_test_document();
-        assert!(!game_host::script_ids(scheduled.game.as_ref().unwrap()).is_empty());
-        let output = context.run_ui(egui::RawInput::default(), |ui| {
-            workbench.custom_ui(ui, &scheduled, None)
-        });
-        let text = game_pane_text(&output);
-        output.drop_without_applying_deltas();
-        assert!(text.iter().any(|text| text == "Apply Rust"));
-        assert!(
-            text.iter()
-                .any(|text| text.contains("Game Custom is not ready"))
-        );
     }
 
     /// Native host/Play tests exercise silent fixtures on platforms without
@@ -4607,7 +4609,7 @@ pub fn update(ctx: &mut ScriptContext) {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         let host = workbench.host.as_mut().unwrap();
-        host.services.set_enabled(false);
+        host.set_services_enabled(false);
         let frame = host.render(96, 64).unwrap();
         assert_eq!(frame.rgba.len(), 96 * 64 * 4);
         assert!(
@@ -4956,7 +4958,7 @@ pub fn update(ctx: &mut ScriptContext) {
             .ensure(&document, &root, Some(&root), WorldKind::Ecs)
             .unwrap();
         let host = workbench.host.as_mut().unwrap();
-        host.services.set_enabled(false);
+        host.set_services_enabled(false);
         host.camera.yaw = 0.4;
         host.camera.target = [7., 0., 3.];
         host.session
@@ -5358,6 +5360,8 @@ pub fn update(ctx: &mut ScriptContext) {
     fn source_document() -> GraphDocument {
         let mut document = demo_document(WorldKind::Objects);
         document.game = Some(GameProject {
+            player_preferences: None,
+            scene_assets: Default::default(),
             entry_scene: "empty".into(),
             scenes: BTreeMap::from([(
                 "empty".into(),
@@ -5490,6 +5494,230 @@ pub fn update(ctx: &mut ScriptContext) {
         assert!(
             (session.state().world.object(1).unwrap().transform.rotation[1] - 0.05).abs() < 0.00001
         );
+    }
+
+    #[test]
+    fn inspector_component_apply_retains_second_draft_across_object_selection() {
+        struct OtherSystem;
+        impl ExecutableSystem for OtherSystem {
+            fn step(&mut self, _: &mut SystemContext<'_>, _: &mut Value) -> Result<(), String> {
+                Ok(())
+            }
+        }
+        let mut composition = source_composition();
+        let mut other = source_schema();
+        other.id = "example.other".into();
+        for field in &mut other.fields {
+            field.id = field.id.replace("example.stats.", "example.other.");
+            field.scope = PropertyScope::Component {
+                component: "example.other".into(),
+            };
+        }
+        other.label = "Other stats".into();
+        composition
+            .systems
+            .components_mut()
+            .register(other)
+            .unwrap();
+        composition
+            .systems
+            .register(
+                SystemDescriptor {
+                    id: "example.other.system".into(),
+                    state_schema: "other/1".into(),
+                    components: vec!["example.other".into()],
+                    ports: vec![],
+                    requires: vec![],
+                },
+                |_| Ok(Box::new(OtherSystem)),
+            )
+            .unwrap();
+        let mut document = source_document();
+        let game = document.game.as_mut().unwrap();
+        let composition =
+            CompositionContext::new(composition.modules, composition.systems).unwrap();
+        game.execution.stages[0].nodes.push(SystemNode {
+            id: "other".into(),
+            module: "example.other.system".into(),
+            params: json!({}),
+            bindings: BTreeMap::new(),
+            after: vec![],
+        });
+        let object = &mut game.scenes.get_mut("empty").unwrap().objects[0];
+        for name in ["example.stats", "example.other"] {
+            object
+                .components
+                .insert(name.into(), source_schema().defaults);
+        }
+        let mut second = object.clone();
+        second.object.id = 2;
+        game.scenes.get_mut("empty").unwrap().objects.push(second);
+        let mut workbench = GameWorkbench::default();
+        workbench.scene = "empty".into();
+        workbench.select(Some(1));
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|style| style.animation_time = 0.);
+        let frame = |workbench: &mut GameWorkbench, document: &mut GraphDocument, events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(1200., 1800.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    workbench.inspector_ui_with_composition(ui, document, &composition);
+                },
+            )
+        };
+        frame(&mut workbench, &mut document, vec![]).drop_without_applying_deltas();
+        assert!(workbench.error.is_none(), "{:?}", workbench.error);
+        workbench.component_drafts.get_mut("example.other").unwrap()["speed"] = json!(7.);
+        workbench.component_drafts.get_mut("example.stats").unwrap()["speed"] = json!(9.);
+        let output = frame(&mut workbench, &mut document, vec![]);
+        let point = output
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.text() == "Apply fields" => {
+                    Some(t.pos + t.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .unwrap();
+        output.drop_without_applying_deltas();
+        for pressed in [true, false] {
+            frame(
+                &mut workbench,
+                &mut document,
+                vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
+            )
+            .drop_without_applying_deltas();
+        }
+        assert_eq!(
+            document.game.as_ref().unwrap().scenes["empty"].objects[0].components["example.other"]
+                ["speed"],
+            7.
+        );
+        workbench.select(Some(2));
+        frame(&mut workbench, &mut document, vec![]).drop_without_applying_deltas();
+        assert_eq!(workbench.component_drafts["example.stats"]["speed"], 2.);
+        workbench.select(Some(1));
+        frame(&mut workbench, &mut document, vec![]).drop_without_applying_deltas();
+        assert_eq!(workbench.component_drafts["example.stats"]["speed"], 9.);
+        assert!(workbench.has_inspector_drafts());
+        workbench.discard_inspector_drafts();
+        frame(&mut workbench, &mut document, vec![]).drop_without_applying_deltas();
+        assert_eq!(workbench.component_drafts["example.stats"]["speed"], 2.);
+    }
+
+    #[test]
+    fn inspector_transform_axes_stay_inside_narrow_form_instead_of_clipping_z() {
+        let composition = source_composition();
+        for width in [240., 480., 720.] {
+            let mut document = source_document();
+            let mut workbench = GameWorkbench::default();
+            workbench.scene = "empty".into();
+            workbench.select(Some(1));
+            let ctx = egui::Context::default();
+            crate::app::configure_style(&ctx);
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(width, 1800.),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    workbench.inspector_ui_with_composition(ui, &mut document, &composition);
+                },
+            );
+            let axes: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(t)
+                        if ["X ", "Y ", "Z "]
+                            .iter()
+                            .any(|prefix| t.galley.text().starts_with(prefix)) =>
+                    {
+                        Some((
+                            t.galley.text().to_owned(),
+                            egui::Rect::from_min_size(t.pos, t.galley.size()),
+                            shape.clip_rect,
+                        ))
+                    }
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            assert_eq!(
+                axes.len(),
+                9,
+                "Every Transform axis must be rendered at width {width}: {axes:?}"
+            );
+            for (text, bounds, clip) in axes {
+                assert!(
+                    clip.expand(1.).contains_rect(bounds),
+                    "{text} clipped at {width}: {bounds:?}, {clip:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn inspector_origin_uses_exact_owner_and_distinguishes_inheritance_from_local_data() {
+        let mut object = AuthoredObject::new(WorldObject {
+            id: 1,
+            parent: None,
+            transform: Transform::default(),
+            color: [255; 4],
+        });
+        let prefab = Prefab {
+            color: [255; 4],
+            components: BTreeMap::from([
+                ("foo".into(), json!({"value":1})),
+                ("foo.bar".into(), json!({"value":2})),
+            ]),
+        };
+        object.prefab = Some("shared".into());
+        assert_eq!(
+            component_origin(&object, Some(&prefab), "foo"),
+            "Inherited from linked template"
+        );
+        object.overrides.insert("foo.bar.value".into(), json!(3));
+        assert_eq!(
+            component_origin(&object, Some(&prefab), "foo"),
+            "Inherited from linked template"
+        );
+        assert_eq!(
+            component_origin(&object, Some(&prefab), "foo.bar"),
+            "Linked template · local overrides"
+        );
+        object
+            .components
+            .insert("foo".into(), json!({"literal.key":null}));
+        assert_eq!(
+            component_origin(&object, Some(&prefab), "foo"),
+            "Linked template · local component data"
+        );
+        object.overrides.insert("foo.value".into(), json!(4));
+        assert_eq!(
+            component_origin(&object, Some(&prefab), "foo"),
+            "Linked template · local data and overrides"
+        );
+        assert_eq!(component_origin(&object, None, "foo"), "Local component");
     }
 
     #[test]

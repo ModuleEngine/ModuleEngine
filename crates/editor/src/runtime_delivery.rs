@@ -13,6 +13,11 @@ pub fn prepare(document: &GraphDocument, backend: &Path) -> Result<GraphDocument
     if prepared.game.is_some() {
         let authored_execution = prepared.game.as_ref().unwrap().execution.clone();
         let mut runtime_game = crate::host::prepare_game_at(&prepared, backend)?;
+        if runtime_game.player_preferences != prepared.game.as_ref().unwrap().player_preferences {
+            return Err(
+                "Runtime preparation changed the authored player-preferences identity".into(),
+            );
+        }
         let composition = crate::host::composition_at(backend)?;
         let original_contracts = composition.required_contracts(&prepared)?;
         let mut runtime_document = prepared.clone();
@@ -46,6 +51,9 @@ fn service_dependencies(
 ) -> Result<BTreeSet<(String, BTreeSet<String>)>, String> {
     let mut result = BTreeSet::new();
     if let Some(game) = &document.game {
+        if let Some(request) = module_engine_core::player_preferences_service_request(game)? {
+            result.insert((request.id, request.asset_references));
+        }
         for contribution in composition
             .systems
             .active_game_contributions(&game.execution)

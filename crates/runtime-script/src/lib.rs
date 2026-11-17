@@ -53,6 +53,10 @@ pub enum ScriptKind {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ScriptTick {
     pub commands: Vec<ControlCommand>,
+    #[serde(default)]
+    pub setting_requests: Vec<module_engine_core::ScriptSettingRequest>,
+    #[serde(default)]
+    pub script_ui: Vec<module_engine_core::ScriptUiPanel>,
     pub speed: Option<f64>,
     /// Candidate state, not yet accepted by the host's world/render transaction.
     #[serde(default)]
@@ -221,10 +225,12 @@ impl ScriptCompiler {
             return Err(ScriptError::Compile("source exceeds 1 MiB".into()));
         }
         let state_declaration = StateDeclaration::from_source(source)?;
-        let root = self
-            .project_root
-            .canonicalize()
-            .map_err(|e| ScriptError::Setup(e.to_string()))?;
+        let root = self.project_root.canonicalize().map_err(|e| {
+            ScriptError::Setup(format!(
+                "Cannot resolve script SDK root {}: {e}",
+                self.project_root.display()
+            ))
+        })?;
         let core = root.join("crates/engine-core");
         if !core.join("Cargo.toml").exists() {
             return Err(ScriptError::Setup(
@@ -247,7 +253,12 @@ impl ScriptCompiler {
             ));
         }
         let json_version = &json_versions[0].version;
-        fs::create_dir_all(&self.work_dir).map_err(|e| ScriptError::Setup(e.to_string()))?;
+        fs::create_dir_all(&self.work_dir).map_err(|e| {
+            ScriptError::Setup(format!(
+                "Cannot create script workspace {}: {e}",
+                self.work_dir.display()
+            ))
+        })?;
         let name = format!(
             "module_engine_worker_{:x}_{:x}_{:x}",
             std::process::id(),
@@ -1063,9 +1074,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {{
         let mut context: ScriptContext = serde_json::from_value(input.get("context").cloned().ok_or("missing context")?)?;
         context.commands.clear();
         context.emitted_events.clear();
+        context.setting_requests.clear();
+        context.script_ui.clear();
         {invoke}
-        if context.commands.len() > 4096 || context.emitted_events.len() > 4096 {{ return Err("too many commands/events".into()); }}
-        let packet = serde_json::json!({{"request_id":request_id,"sdk":SdkIdentity::current(),"commands":context.commands,"speed":speed,"state":context.state,"events":context.emitted_events}});
+        if context.commands.len() > 4096 || context.emitted_events.len() > 4096 || context.setting_requests.len() > 128 {{ return Err("too many commands/events/settings".into()); }}
+        module_engine_core::validate_script_ui(&context.script_ui)?;
+        let packet = serde_json::json!({{"request_id":request_id,"sdk":SdkIdentity::current(),"commands":context.commands,"setting_requests":context.setting_requests,"script_ui":context.script_ui,"speed":speed,"state":context.state,"events":context.emitted_events}});
         let output = serde_json::to_string(&packet)?;
         if output.len() > 1048576 {{ return Err("output too large".into()); }}
         println!("\n{PACKET_MARKER}{{}}", output);

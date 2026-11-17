@@ -55,10 +55,15 @@ impl Editor {
                     .get("enabled")
                     .and_then(serde_json::Value::as_bool)
                     .unwrap_or(true);
-                if ui.checkbox(&mut enabled, "Pass enabled").changed() {
+                if ui
+                    .checkbox(&mut enabled, "Base pass enabled")
+                    .on_hover_text("This is the authored graph setting. An exposed Project variant or matching condition can override it. Project Settings shows the resolved authored effect; disabling keeps the pass in the graph.")
+                    .changed()
+                {
                     params["enabled"] = serde_json::json!(enabled);
                     changed = true;
                 }
+                ui.label("Disabled keeps the pass. Delete removes it and its exposed controls; Undo restores the whole edit.");
             }
             egui::CollapsingHeader::new("GPU resource contracts").show(ui, |ui| {
                 for spec in manifest.inputs.iter().chain(&manifest.outputs) {
@@ -67,7 +72,7 @@ impl Editor {
                             "{} · {} · {} · {} · samples {}",
                             spec.name, spec.semantic, spec.format, spec.access, spec.samples
                         ))
-                        .size(10.0),
+                        .size(12.0),
                     );
                 }
             });
@@ -76,7 +81,6 @@ impl Editor {
             if let Some(target) = self.graph_mut().nodes.iter_mut().find(|n| n.id == node.id) {
                 target.params = params;
             }
-            self.inspector_id = None;
             self.changed(true);
         }
         if node.module == "gpu.custom" {
@@ -89,7 +93,7 @@ impl Editor {
                     .into();
                 self.tab = Tab::Shader;
             }
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 if ui.button("New Compute template").clicked() {
                     self.set_custom_shader_template(&node.id, false);
                 }
@@ -121,7 +125,6 @@ impl Editor {
             }
             self.current_shader = key;
             self.tab = Tab::Shader;
-            self.inspector_id = None;
             self.changed(true);
         }
     }
@@ -151,7 +154,6 @@ impl Editor {
         }
         self.current_shader = key;
         self.tab = Tab::Shader;
-        self.inspector_id = None;
         self.changed(true);
     }
 
@@ -169,7 +171,7 @@ impl Editor {
                 .cloned()
                 .unwrap_or_default();
         }
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.heading("Custom / HLSL");
             egui::ComboBox::from_id_salt("shader-choice")
                 .selected_text(&self.current_shader)
@@ -178,23 +180,31 @@ impl Editor {
                         ui.selectable_value(&mut self.current_shader, key.clone(), key);
                     }
                 });
-            if ui.button("Apply HLSL").clicked() {
+            if ui
+                .add_enabled(
+                    self.document
+                        .shader_sources
+                        .contains_key(&self.current_shader),
+                    egui::Button::new("Apply HLSL"),
+                )
+                .on_disabled_hover_text("Select an existing HLSL source first.")
+                .clicked()
+            {
                 self.rebuild();
             }
-            if ui.button("Open Vulkan graph").clicked() {
-                self.graph_path.clear();
-                if let Some(id) = self
-                    .document
-                    .root
-                    .nodes
-                    .iter()
-                    .find(|n| n.module == "render.vulkan")
-                    .map(|n| n.id.clone())
-                {
-                    self.engine_actions(vec![CanvasAction::Open(id)]);
-                    self.tab = Tab::Graph;
-                }
-            }
+            let consumers = shader_consumers(&self.document.root, &self.current_shader);
+            ui.add_enabled_ui(!consumers.is_empty(), |ui| {
+                ui.menu_button("Used by", |ui| {
+                    for (path, label) in &consumers {
+                        if ui.button(label).clicked() {
+                            self.graph_path = path.clone();
+                            self.graph_canvas.home();
+                            self.tab = Tab::Graph;
+                            ui.close();
+                        }
+                    }
+                });
+            });
         });
         ui.label("Edit standard HLSL. Resources, stages, and entry points are declared in the selected node's manifest. A compilation error preserves the previous working renderer.");
         if self.preview_builder.is_pending() {
@@ -299,27 +309,19 @@ impl Editor {
 
     pub(super) fn history_panel(&mut self, ui: &mut egui::Ui) {
         ui.heading("Project history");
-        ui.label("History covers the graph, sources, parameters, and layout. Simulation state is not recorded.");
-        ui.horizontal(|ui| {
-            if ui.button("Undo").clicked() {
-                self.undo();
-            }
-            if ui.button("Redo").clicked() {
-                self.redo();
-            }
-            ui.label(format!(
-                "Step {} / {}",
-                self.history.cursor(),
-                self.history.entries().len().saturating_sub(1)
-            ));
-        });
+        ui.label("History covers graph content, sources, parameters and graph positions. Personal workspaces and simulation state are separate.");
+        ui.label(format!(
+            "Step {} / {} · Undo/Redo: Edit menu or Ctrl+Z / Ctrl+Shift+Z",
+            self.history.cursor(),
+            self.history.entries().len().saturating_sub(1)
+        ));
         let home = PathBuf::from(&self.path)
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or_else(|| std::path::Path::new("."))
             .to_path_buf();
         let store = CheckpointStore::new(home.join(".history"));
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.text_edit_singleline(&mut self.checkpoint_label);
             if ui.button("Save checkpoint").clicked() {
                 self.flush_history();
@@ -332,7 +334,7 @@ impl Editor {
         egui::CollapsingHeader::new("Saved versions").show(ui, |ui| match store.list() {
             Ok(checkpoints) => {
                 for entry in checkpoints.iter().rev().take(30) {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.label(format!("{} · {}", entry.id, entry.label));
                         if ui
                             .add_enabled(
@@ -365,15 +367,15 @@ impl Editor {
         });
         ui.separator();
         ui.heading("Compare and merge files");
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label("Common base version");
             ui.text_edit_singleline(&mut self.merge_base);
         });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label("Another contributor's modified file");
             ui.text_edit_singleline(&mut self.merge_theirs);
         });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui.button("Compare with current project").clicked() {
                 match project::read(&PathBuf::from(&self.merge_base))
                     .and_then(|base| diff_documents(&base, &self.document))
@@ -439,7 +441,7 @@ impl Editor {
                                     .map(ToString::to_string)
                                     .unwrap_or_else(|| "Missing".into())
                             ));
-                            ui.horizontal(|ui| {
+                            ui.horizontal_wrapped(|ui| {
                                 if ui.button("Keep current").clicked() {
                                     choice = Some((index, ConflictChoice::Ours));
                                 }
@@ -499,4 +501,43 @@ impl Editor {
             }
         });
     }
+}
+
+/// Existing source references define navigation; opening never rewrites a pass.
+fn shader_consumers(graph: &module_engine_core::Graph, source: &str) -> Vec<(Vec<usize>, String)> {
+    fn walk(
+        graph: &module_engine_core::Graph,
+        source: &str,
+        path: &mut Vec<usize>,
+        labels: &mut Vec<String>,
+        out: &mut Vec<(Vec<usize>, String)>,
+    ) {
+        if graph.nodes.iter().any(|node| {
+            node.params
+                .get("source_id")
+                .and_then(serde_json::Value::as_str)
+                == Some(source)
+                && node.module == "gpu.custom"
+        }) {
+            out.push((path.clone(), labels.join(" / ")));
+        }
+        for (index, node) in graph.nodes.iter().enumerate() {
+            if let Some(sub) = node.subgraph.as_deref() {
+                path.push(index);
+                labels.push(node.label.clone());
+                walk(sub, source, path, labels, out);
+                labels.pop();
+                path.pop();
+            }
+        }
+    }
+    let mut result = vec![];
+    walk(
+        graph,
+        source,
+        &mut vec![],
+        &mut vec!["Root".into()],
+        &mut result,
+    );
+    result
 }

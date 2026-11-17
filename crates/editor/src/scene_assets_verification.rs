@@ -267,7 +267,7 @@ pub fn run(source: &Path, output: &Path) -> Result<Value, String> {
         None,
         WorldKind::Objects,
     )?;
-    ready.services.set_enabled(false);
+    ready.set_services_enabled(false);
     ready.set_detailed_stats(true);
     let player_frame = ready.render(640, 360)?;
     if player_frame.stats.shaded_pixels == 0 {
@@ -430,7 +430,7 @@ fn drag_benchmark(
     // document's other world implementation on every pointer move.
     let authored = host.accepted_document().clone();
     let baseline = authored.clone();
-    host.services.set_enabled(false);
+    host.set_services_enabled(false);
     let cached = host.content.load_model(reference)?;
     let slots: Vec<_> = host
         .slots

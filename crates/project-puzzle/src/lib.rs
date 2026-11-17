@@ -105,6 +105,33 @@ pub fn install(registry: &mut SystemRegistry) -> Result<(), String> {
         },
         |_| Ok(()),
     )?;
+    for (id, label, purpose) in [
+        (
+            "puzzle.turn",
+            "Puzzle turn rules",
+            "Move the pawn and push crates under this example's authored board and turn-limit rules.",
+        ),
+        (
+            "puzzle.result",
+            "Puzzle result rules",
+            "Determine the example's solved or exhausted-turn outcome after the turn step.",
+        ),
+    ] {
+        registry.describe_module(
+            id,
+            module_engine_core::CapabilityMetadata::new(
+                label,
+                purpose,
+                module_engine_core::CapabilityOwner::Project,
+                module_engine_core::CapabilityKind::ExecutableSystem,
+                env!("CARGO_PKG_NAME"),
+            )
+            .configured_by([
+                module_engine_core::CapabilityConfiguration::ExecutionGraph,
+                module_engine_core::CapabilityConfiguration::ComponentFields,
+            ]),
+        )?;
+    }
     registry.register_game_contribution(GameContribution {
         id: "puzzle.presentation".into(),
         activation_modules: BTreeSet::from(["puzzle.turn".into(), "puzzle.result".into()]),
@@ -117,7 +144,11 @@ pub fn install(registry: &mut SystemRegistry) -> Result<(), String> {
         validate_state,
         service_requests: |_| Ok(vec![]),
         diagnostics,
-    })
+    })?;
+    registry.describe_contribution("puzzle.presentation", module_engine_core::CapabilityMetadata::new(
+        "Puzzle host integration", "Supply this puzzle's camera, input adaptation and outcome diagnostics; optional UI is installed separately.",
+        module_engine_core::CapabilityOwner::Project, module_engine_core::CapabilityKind::HostContribution, env!("CARGO_PKG_NAME"),
+    ).configured_by([module_engine_core::CapabilityConfiguration::NativeSource]))
 }
 
 fn initial_camera(project: &GameProject) -> Camera {

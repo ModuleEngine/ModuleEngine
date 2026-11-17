@@ -28,15 +28,19 @@ impl CompositionContext {
                     ));
                 }
             } else {
+                let description = systems.capability_metadata(id);
                 modules.register_module(ModuleDescriptor {
                     id: id.clone(),
-                    label: id.clone(),
-                    description: "Installed source system or component owner".into(),
+                    label: description.map_or_else(|| id.clone(), |m| m.label.clone()),
+                    description: description.map_or_else(|| "Installed source system or component owner; purpose and ownership not described".into(), |m| m.purpose.clone()),
                     inputs: vec![],
                     outputs: vec![],
                     properties: vec![],
                 })?;
                 modules.set_module_version(id, version)?;
+            }
+            if let Some(metadata) = systems.capability_metadata(id) {
+                modules.describe_module(id, metadata.clone())?;
             }
         }
         // A component can be owned by a root world/render source module without
@@ -351,6 +355,8 @@ mod tests {
     fn document(nodes: Vec<SystemNode>) -> GraphDocument {
         let mut document = crate::demo_document(WorldKind::Objects);
         document.game = Some(GameProject {
+            player_preferences: None,
+            scene_assets: Default::default(),
             entry_scene: "empty".into(),
             scenes: BTreeMap::from([("empty".into(), AuthoredScene::default())]),
             prefabs: BTreeMap::new(),

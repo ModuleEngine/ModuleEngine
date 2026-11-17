@@ -94,7 +94,19 @@ pub fn install_audio(registry: &mut HostServiceRegistry) -> Result<(), String> {
         let config: WavConfig = serde_json::from_value(request.config.clone())
             .map_err(|error| format!("Invalid WAV service configuration: {error}"))?;
         Ok(Box::new(WavService::new(config, context)?))
-    })
+    })?;
+    registry.describe_service(
+        WAV_SERVICE_ID,
+        crate::audio_capability_metadata(),
+        module_engine_core::CapabilityFact::known(
+            WAV_PLAYBACK_SUPPORTED,
+            if WAV_PLAYBACK_SUPPORTED {
+                "Native Windows WAV implementation; device/configuration not probed"
+            } else {
+                "Native WAV playback is not implemented on this platform"
+            },
+        ),
+    )
 }
 #[derive(Clone)]
 struct Cue {

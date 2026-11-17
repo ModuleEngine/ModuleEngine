@@ -112,6 +112,8 @@ pub fn build_project(execution: ExecutionGraph) -> GameProject {
     ]);
     second.objects.push(boss);
     GameProject {
+        player_preferences: None,
+        scene_assets: Default::default(),
         entry_scene: "arena".into(),
         scenes: BTreeMap::from([("arena".into(), first), ("boss".into(), second)]),
         prefabs: BTreeMap::from([("small-monster".into(), prefab)]),

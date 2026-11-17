@@ -52,6 +52,68 @@ pub fn install(registry: &mut SystemRegistry) -> Result<(), String> {
     systems::register_arpg_systems(registry);
     install_project_contracts(registry)?;
     registry.register_game_contribution(host_contribution())?;
+    for (id, label, purpose) in [
+        (
+            "game.input",
+            "ARPG player intentions",
+            "Translate player movement and aim into the ARPG's actor intentions.",
+        ),
+        (
+            "game.ai",
+            "ARPG enemy behavior",
+            "Choose pursuit and attack intentions using the ARPG enemy rules.",
+        ),
+        (
+            "game.movement",
+            "ARPG actor movement",
+            "Move ARPG actors and publish previous positions for the collision step.",
+        ),
+        (
+            "game.collision",
+            "ARPG obstacle collision",
+            "Resolve the ARPG actors against its authored obstacles; not a general rigid-body physics service.",
+        ),
+        (
+            "game.combat",
+            "ARPG melee combat",
+            "Apply the game's attack areas, hit timing and damage rules.",
+        ),
+        (
+            "game.health",
+            "ARPG health and outcome",
+            "Apply ARPG health, death and configured victory/defeat rules.",
+        ),
+        (
+            "game.portals",
+            "ARPG scene transitions",
+            "Apply the game's portal conditions and carry selected actors into another scene.",
+        ),
+        (
+            "game.audio",
+            "ARPG sound events",
+            "Translate ARPG gameplay events into game-selected sound cue requests; native playback is a separate service.",
+        ),
+    ] {
+        registry.describe_module(
+            id,
+            CapabilityMetadata::new(
+                label,
+                purpose,
+                CapabilityOwner::Gameplay,
+                CapabilityKind::ExecutableSystem,
+                env!("CARGO_PKG_NAME"),
+            )
+            .configured_by([
+                CapabilityConfiguration::ExecutionGraph,
+                CapabilityConfiguration::ComponentFields,
+                CapabilityConfiguration::NativeSource,
+            ]),
+        )?;
+    }
+    registry.describe_contribution("arpg.presentation", CapabilityMetadata::new(
+        "ARPG host integration", "Adapt the ARPG camera, scene, input, events and optional service requests to a host; UI callbacks are separately compiled.",
+        CapabilityOwner::Gameplay, CapabilityKind::HostContribution, env!("CARGO_PKG_NAME"),
+    ).configured_by([CapabilityConfiguration::NativeSource]))?;
     Ok(())
 }
 

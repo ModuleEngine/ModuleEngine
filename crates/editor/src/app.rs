@@ -20,15 +20,25 @@ use module_engine_script::ScriptKind;
 use module_engine_vulkan::RenderPath;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
+#[path = "area_drag.rs"]
+mod area_drag;
 #[path = "assets_workspace_ui.rs"]
 mod assets_workspace_ui;
 #[path = "dock.rs"]
 mod dock;
+#[path = "editor_ui.rs"]
+pub(crate) mod editor_ui;
 #[path = "editor_workflow.rs"]
 pub(crate) mod editor_workflow;
+#[path = "engine_overview.rs"]
+mod engine_overview;
+#[path = "native_windows.rs"]
+mod native_windows;
+#[path = "node_drafts.rs"]
+mod node_drafts;
 #[path = "panels.rs"]
 mod panels;
 #[path = "panes.rs"]
@@ -37,10 +47,16 @@ mod panes;
 pub(crate) mod performance;
 #[path = "properties.rs"]
 pub(crate) mod properties;
+#[path = "render_settings_ui.rs"]
+mod render_settings_ui;
+#[path = "scene_sources.rs"]
+mod scene_sources;
 #[path = "scene_workspace.rs"]
 mod scene_workspace;
 #[path = "window_navigation.rs"]
 mod window_navigation;
+#[path = "workspaces.rs"]
+mod workspaces;
 use dock::{DockLayout, EditorDescriptor, EditorType, WorkspaceKind};
 use panes::PaneMemory;
 
@@ -67,6 +83,8 @@ pub struct Editor {
     scene_gesture_scene: Option<String>,
     pub document: GraphDocument,
     registry: ModuleRegistry,
+    overview: engine_overview::OverviewCache,
+    overview_navigation: Option<engine_overview::OverviewTarget>,
     runtime: Option<Runtime>,
     diagnostics: Vec<module_engine_core::Diagnostic>,
     runtime_error: Option<String>,
@@ -88,8 +106,7 @@ pub struct Editor {
     code_positions: BTreeMap<String, [f32; 2]>,
     json_draft: String,
     json_dirty: bool,
-    param_draft: String,
-    inspector_id: Option<String>,
+    node_drafts: node_drafts::NodeDrafts,
     playing: bool,
     time: f64,
     camera: Camera,
@@ -114,7 +131,10 @@ pub struct Editor {
     diff_text: String,
     distribution: Option<crate::distribution::Distribution>,
     policy_baseline: GraphDocument,
+    source_files: Result<module_engine_project::ProjectFileState, String>,
+    scene_source_ui: scene_sources::SceneSourceUi,
     workspace: WorkspaceKind,
+    workspaces: workspaces::Workspaces,
     engine_layout: DockLayout,
     project_layout: DockLayout,
     engine_panes: BTreeMap<u64, PaneMemory>,
@@ -133,6 +153,12 @@ pub struct Editor {
     authoring_intent: bool,
     workflow: editor_workflow::Workflow,
     ui_capture: crate::ui_capture::Capture,
+    pending_area_focus: Option<u64>,
+    area_drag: Option<area_drag::AreaDrag>,
+    area_drop_targets: Vec<(u64, egui::Rect)>,
+    area_host_windows: BTreeMap<Option<(String, u64)>, usize>,
+    pending_area_geometry: BTreeSet<(String, u64)>,
+    area_geometry: BTreeMap<(String, u64), native_windows::AreaGeometryTracker>,
     engine_navigation: window_navigation::WindowNavigation,
     project_navigation: window_navigation::WindowNavigation,
     // The palette is a separate pane: its own graph_path must never become
@@ -232,6 +258,23 @@ impl Editor {
     }
     pub fn show_verification_view(&mut self, view: &str) {
         match view {
+            "detached-scene" => {
+                self.workspace = WorkspaceKind::Project;
+                self.reveal_editor(EditorType::Scene);
+                self.camera = crate::scene_view_ui::SceneViewportState::default().camera;
+                if let Some(id) = self.active_window()
+                    && let Err(error) = self.project_layout.detach(id)
+                {
+                    self.status = error;
+                }
+            }
+            "detached" => {
+                self.reveal_editor(EditorType::EngineOverview);
+                if let Err(error) = self.engine_layout.detach(1) {
+                    self.status = error;
+                }
+            }
+            "overview" => self.reveal_editor(EditorType::EngineOverview),
             "render" => self.reveal_editor(EditorType::ModuleGraph),
             "shader" => self.reveal_editor(EditorType::Hlsl),
             "history" => self.reveal_editor(EditorType::History),
@@ -260,6 +303,27 @@ impl Editor {
                         })
                         .map(|entity| entity.object.id);
                     self.game_workbench.select(selected);
+                }
+            }
+            "hierarchy" => {
+                self.workspace = WorkspaceKind::Project;
+                self.reveal_editor(EditorType::Hierarchy);
+            }
+            "scene-files" => {
+                self.workspace = WorkspaceKind::Project;
+                self.reveal_editor(EditorType::Assets);
+                if let Some(pane) = self.active_window()
+                    && let Some(binding) = self
+                        .document
+                        .game
+                        .as_ref()
+                        .and_then(|g| g.scene_assets.values().next())
+                {
+                    self.assets.reveal_source(
+                        (self.workspace_key(), pane),
+                        &binding.id,
+                        &binding.path,
+                    );
                 }
             }
             "assets" => {
@@ -407,7 +471,10 @@ impl Editor {
             },
             None => Scripts::disabled("Distribution/source manifest unavailable".into()),
         };
+        let source_files = module_engine_project::ProjectFileState::observe(&path, &document);
         let mut editor = Self {
+            overview: Default::default(),
+            overview_navigation: None,
             interactive_ui: false,
             game_workbench: {
                 let mut workbench = crate::game_ui::GameWorkbench::default();
@@ -441,8 +508,7 @@ impl Editor {
             state_migration: "{}".into(),
             code_positions: BTreeMap::new(),
             json_dirty: false,
-            param_draft: String::new(),
-            inspector_id: None,
+            node_drafts: Default::default(),
             playing: true,
             time: 0.,
             camera: Camera::default(),
@@ -470,7 +536,10 @@ impl Editor {
             diff_text: String::new(),
             distribution,
             policy_baseline,
+            source_files,
+            scene_source_ui: Default::default(),
             workspace: WorkspaceKind::Project,
+            workspaces: Default::default(),
             engine_layout: DockLayout::default_for(WorkspaceKind::Engine),
             project_layout: DockLayout::default_for(WorkspaceKind::Project),
             engine_panes: BTreeMap::new(),
@@ -492,6 +561,12 @@ impl Editor {
             last_ui_frame: None,
             authoring_intent: false,
             ui_capture: crate::ui_capture::Capture::new(),
+            pending_area_focus: None,
+            area_drag: None,
+            area_drop_targets: vec![],
+            area_host_windows: BTreeMap::new(),
+            pending_area_geometry: BTreeSet::new(),
+            area_geometry: BTreeMap::new(),
             engine_navigation: window_navigation::WindowNavigation::default(),
             project_navigation: window_navigation::WindowNavigation::default(),
             engine_library_graph: None,
@@ -534,6 +609,14 @@ impl Editor {
         ) {
             editor.status = error;
         }
+        let _ = editor.describe_module_panel(100, module_engine_core::CapabilityMetadata::new(
+            "Participating Modules", "Inspect the actual participating module contracts; this panel does not activate them.",
+            module_engine_core::CapabilityOwner::Engine, module_engine_core::CapabilityKind::EditorTool, env!("CARGO_PKG_NAME"),
+        ).configured_by([module_engine_core::CapabilityConfiguration::ModuleTool]));
+        let _ = editor.describe_module_panel(110, module_engine_core::CapabilityMetadata::new(
+            "Crate Garden Level Palette", "Paint this game's board, walls, crates and goals; propose validated authored edits through the existing tool lifecycle.",
+            module_engine_core::CapabilityOwner::Project, module_engine_core::CapabilityKind::EditorTool, "module-engine-g1",
+        ).configured_by([module_engine_core::CapabilityConfiguration::ModuleTool]));
         editor.load_personal_layouts();
         if let Err(error) = editor.scripts.set_asset_root(&editor.project_asset_root()) {
             editor.status = error;
@@ -624,6 +707,7 @@ impl Editor {
     }
 
     fn restore_document(&mut self, document: GraphDocument) {
+        self.overview.invalidate(self.last_tick);
         self.cancel_active_scene_gestures();
         if self.json_dirty || self.game_workbench.has_graph_draft() {
             self.status =
@@ -660,7 +744,6 @@ impl Editor {
         self.code_canvas.pending = None;
         self.program = None;
         self.command_program = None;
-        self.inspector_id = None;
         self.json_dirty = false;
         self.json_draft = serde_json::to_string_pretty(&self.document).unwrap_or_default();
         if !self
@@ -684,6 +767,9 @@ impl Editor {
     }
 
     fn undo(&mut self) {
+        if !self.resolve_node_drafts_before("Undo") {
+            return;
+        }
         self.cancel_active_scene_gestures();
         if self.game_workbench.has_graph_draft() {
             self.status = "Apply or discard the Gameplay Systems draft before Undo".into();
@@ -714,6 +800,9 @@ impl Editor {
     }
 
     fn redo(&mut self) {
+        if !self.resolve_node_drafts_before("Redo") {
+            return;
+        }
         self.cancel_active_scene_gestures();
         if self.game_workbench.has_graph_draft() {
             self.status = "Apply or discard the Gameplay Systems draft before Redo".into();
@@ -740,6 +829,9 @@ impl Editor {
     }
 
     fn switch_gpu_path(&mut self, path: RenderPath) {
+        if !self.resolve_node_drafts_before("replacing modules") {
+            return;
+        }
         if !self.can_author_engine() {
             self.status = "Engine authoring unavailable in this profile/source package".into();
             return;
@@ -906,6 +998,7 @@ impl Editor {
     }
 
     fn changed(&mut self, rebuild: bool) {
+        self.overview.invalidate(self.last_tick);
         if self.document.game.is_some()
             && let Some(active_kind) = self.game_workbench.game_world_kind()
             && let Ok(kind) = crate::game_host::selected_world_kind(&self.document, &self.registry)
@@ -1116,6 +1209,10 @@ impl Editor {
     }
 
     fn apply_json(&mut self) -> bool {
+        if let Err(error) = self.require_resolved_module_tools("applying JSON") {
+            self.status = error;
+            return false;
+        }
         if self.game_workbench.has_graph_draft() {
             self.status = "Apply or discard the Gameplay Systems draft before applying JSON".into();
             return false;
@@ -1167,20 +1264,29 @@ impl Editor {
     }
 
     fn save(&mut self) -> bool {
-        if let Err(error) = self.require_resolved_module_tools("saving") {
-            self.status = error;
-            return false;
-        }
-        if let Err(error) = self.validate_candidate(&self.document, self.can_author_engine()) {
-            self.status = error;
-            return false;
-        }
-        if self.json_dirty && !self.apply_json() {
-            return false;
-        }
-        self.flush_history();
-        match project::save(&PathBuf::from(&self.path), &self.document) {
-            Ok(()) => {
+        let candidate = match self.file_operation_candidate() {
+            Ok(candidate) => candidate,
+            Err(error) => {
+                self.status = error;
+                return false;
+            }
+        };
+        let result = self
+            .source_files
+            .as_ref()
+            .map_err(Clone::clone)
+            .and_then(|state| {
+                project::save_with_source_state(Path::new(&self.path), &candidate, state)
+            });
+        match result {
+            Ok(state) => {
+                // Publication succeeds before pending JSON becomes authored data.
+                if self.json_dirty {
+                    self.apply_validated_json(candidate);
+                }
+                self.flush_history();
+                self.source_files = Ok(state);
+                self.scene_source_ui.external_error = None;
                 self.dirty = false;
                 self.status = format!("Saved: {}", self.path);
                 true
@@ -1207,8 +1313,10 @@ impl Editor {
     }
 
     fn load(&mut self) -> bool {
-        match project::read(&PathBuf::from(&self.path)) {
-            Ok(document) => {
+        match project::read_with_source_state(&PathBuf::from(&self.path)) {
+            Ok(loaded) => {
+                let document = loaded.document;
+                let source_files = loaded.files;
                 let requested = self
                     .distribution
                     .as_ref()
@@ -1251,6 +1359,8 @@ impl Editor {
                 self.distribution = Some(distribution);
                 self.policy_baseline = document.clone();
                 self.document = document;
+                self.source_files = Ok(source_files);
+                self.scene_source_ui = Default::default();
                 self.load_personal_layouts();
                 self.scripts = match self.distribution.as_ref().map(|p| p.compile_root()) {
                     Some(Ok(root)) => Scripts::with_root(root),
@@ -1309,6 +1419,9 @@ impl Editor {
     }
 
     fn switch_world(&mut self, kind: WorldKind) {
+        if !self.resolve_node_drafts_before("replacing modules") {
+            return;
+        }
         if !self.can_author_engine() {
             self.status = "Engine authoring unavailable in this profile/source package".into();
             return;
@@ -1346,6 +1459,9 @@ impl Editor {
     }
 
     fn add_node(&mut self, module: &str) {
+        self.add_node_at(module, None);
+    }
+    fn add_node_at(&mut self, module: &str, position: Option<[f32; 2]>) {
         if !self.can_author_engine() {
             self.status = "Engine authoring unavailable in this profile/source package".into();
             return;
@@ -1423,6 +1539,9 @@ impl Editor {
                 break;
             }
         }
+        if let Some(position) = position {
+            node.position = position;
+        }
         if let Some(canvas) = self.graph_canvas.layout.rect {
             let size = node_size(&node) * self.graph_canvas.zoom;
             let position = Vec2::from(node.position) * self.graph_canvas.zoom;
@@ -1474,7 +1593,6 @@ impl Editor {
             properties::expose_new_gpu_pass(&mut self.document, &id);
         }
         self.graph_canvas.selected = Some(id);
-        self.inspector_id = None;
         self.policy_baseline = self.document.clone();
         self.changed(true);
         self.flush_history();
@@ -1525,9 +1643,12 @@ impl Editor {
         }
         for action in actions {
             match action {
+                CanvasAction::Add(module, position) => self.add_node_at(&module, Some(position)),
+                CanvasAction::DeleteSelection { nodes, edges } => {
+                    self.delete_engine_selection(&nodes, &edges)
+                }
                 CanvasAction::Select(id) => {
                     self.graph_canvas.selected = Some(id);
-                    self.inspector_id = None;
                 }
                 CanvasAction::Move(id, pos) => {
                     if let Some(node) = self.graph_mut().nodes.iter_mut().find(|n| n.id == id) {
@@ -2091,32 +2212,11 @@ impl Editor {
             .collect()
     }
 
-    fn add_node_menu(&mut self, ui: &mut egui::Ui) {
-        ui.menu_button("+ Node", |ui| {
-            ui.add(egui::TextEdit::singleline(&mut self.module_search).hint_text("Search modules"));
-            let choices = self.module_choices(&self.graph_path);
-            egui::ScrollArea::vertical()
-                .max_height(300.)
-                .show(ui, |ui| {
-                    for descriptor in choices {
-                        if ui
-                            .button(&descriptor.label)
-                            .on_hover_text(&descriptor.description)
-                            .clicked()
-                        {
-                            self.add_node(&descriptor.id);
-                            ui.close();
-                        }
-                    }
-                });
-        });
-    }
-
     fn library(&mut self, ui: &mut egui::Ui) {
         ui.heading("Modules");
         ui.label(
             RichText::new("Add a node and connect pins of the same type.")
-                .size(11.0)
+                .size(12.0)
                 .color(Color32::from_rgb(144, 158, 181)),
         );
         let target = self.library_graph_context();
@@ -2133,6 +2233,11 @@ impl Editor {
             .unwrap_or_default();
         let descriptors = self.module_choices(path);
         let gpu_scope = self.is_gpu_graph_scope(path);
+        ui.weak(if gpu_scope {
+            "GPU render pipeline · typed resources"
+        } else {
+            "Root composition · module contracts"
+        });
         egui::ScrollArea::vertical()
             .max_height(if gpu_scope { 360.0 } else { 420.0 })
             .show(ui, |ui| {
@@ -2155,65 +2260,40 @@ impl Editor {
                     ui.add_space(3.0);
                 }
             });
-        ui.separator();
-        ui.label(RichText::new("PIN CONTRACTS").size(10.0).strong());
-        let pins = if gpu_scope {
-            vec![
-                ("Scene3D", "scene geometry"),
-                ("GpuColor", "color texture"),
-                ("GpuNormals", "normal texture"),
-                ("GpuDepth", "depth texture"),
-                ("Frame3D", "completed image"),
-            ]
-        } else {
-            vec![
-                ("World", "world state"),
-                ("Scene3D", "render data"),
-                ("Frame3D", "image"),
-                ("Scalar", "number"),
-            ]
-        };
-        for (kind, meaning) in pins {
-            ui.horizontal(|ui| {
-                ui.colored_label(canvas::type_color(kind), "●");
-                ui.label(RichText::new(kind).monospace().size(11.0));
-            });
-            ui.label(
-                RichText::new(meaning)
-                    .size(10.5)
-                    .color(Color32::from_rgb(136, 150, 172)),
-            );
-        }
-        ui.add_space(14.0);
-        ui.separator();
-        ui.label(RichText::new("SOURCE PROJECT").size(10.0).strong());
-        if ui.button("Export project…").clicked() {
-            self.dispatch_command(editor_workflow::Command::ExportSource, ui.ctx());
-        }
-        ui.label(
-            RichText::new(
-                "Export includes the workspace, documentation, and current project.json.",
-            )
-            .size(10.5)
-            .color(Color32::from_rgb(136, 150, 172)),
-        );
+        ui.collapsing("Pin type reference", |ui| {
+            let pins = if gpu_scope {
+                vec![
+                    ("Scene3D", "scene geometry"),
+                    ("GpuColor", "color texture"),
+                    ("GpuNormals", "normal texture"),
+                    ("GpuDepth", "depth texture"),
+                    ("Frame3D", "completed image"),
+                ]
+            } else {
+                vec![
+                    ("World", "world state"),
+                    ("Scene3D", "render data"),
+                    ("Frame3D", "image"),
+                    ("Scalar", "number"),
+                ]
+            };
+            for (kind, meaning) in pins {
+                ui.horizontal(|ui| {
+                    ui.colored_label(canvas::type_color(kind), "●");
+                    ui.label(RichText::new(kind).monospace().size(12.0));
+                });
+                ui.label(
+                    RichText::new(meaning)
+                        .size(12.0)
+                        .color(Color32::from_rgb(136, 150, 172)),
+                );
+            }
+        });
     }
 
     fn viewport_panel(&mut self, ui: &mut egui::Ui, now: f64) {
         ui.horizontal(|ui| {
-            ui.heading("3D preview");
-            if ui
-                .small_button(if self.playing { "Pause" } else { "Start" })
-                .clicked()
-            {
-                if self.playing {
-                    self.playing = false;
-                } else if let Err(error) = self.require_resolved_module_tools("Play") {
-                    self.status = error;
-                } else {
-                    self.playing = true;
-                }
-            }
+            ui.strong("Legacy 3D preview");
             if ui.small_button("Reset").clicked() {
                 self.runtime = None;
                 self.authored_object_ids.clear();
@@ -2241,7 +2321,7 @@ impl Editor {
                     }
                     ui.label(
                         RichText::new("single renderer")
-                            .size(10.5)
+                            .size(12.0)
                             .color(Color32::from_rgb(137, 153, 175)),
                     );
                 });
@@ -2260,7 +2340,7 @@ impl Editor {
         if let Some(runtime) = &self.runtime {
             ui.label(
                 RichText::new(runtime.backend_name())
-                    .size(10.5)
+                    .size(12.0)
                     .color(Color32::from_rgb(67, 211, 182)),
             );
         }
@@ -2272,11 +2352,11 @@ impl Editor {
                 Color32::from_rgb(245, 134, 129),
                 "New configuration was not applied",
             );
-            ui.label(RichText::new(error).size(10.5));
+            ui.label(RichText::new(error).size(12.0));
         }
         if let Some(error) = &self.runtime_error {
             ui.colored_label(Color32::from_rgb(245, 134, 129), "Preview stopped");
-            ui.label(RichText::new(error).size(10.5));
+            ui.label(RichText::new(error).size(12.0));
         }
         if let Some(runtime) = &self.runtime
             && (runtime.has_pending_presentation()
@@ -2351,19 +2431,22 @@ impl Editor {
         }
         ui.label(
             RichText::new(&self.stats)
-                .size(11.0)
+                .size(12.0)
                 .color(Color32::from_rgb(130, 153, 183)),
         );
         ui.label(
             RichText::new("LMB: orbit · wheel: distance")
-                .size(10.0)
+                .size(12.0)
                 .color(Color32::from_rgb(126, 140, 163)),
         );
     }
 
     fn graph_panel(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if !self.graph_path.is_empty() && ui.button("< Parent graph").clicked() {
+            if !self.graph_path.is_empty()
+                && editor_ui::icon_button(ui, editor_ui::Icon::Back, "Parent graph", true, false)
+                    .clicked()
+            {
                 self.graph_path.pop();
                 self.graph_canvas.home();
                 self.graph_canvas.zoom = 0.82;
@@ -2378,11 +2461,6 @@ impl Editor {
                 .size(17.0)
                 .strong(),
             );
-            if ui.small_button("Center").clicked() {
-                self.graph_canvas.home();
-                self.graph_canvas.zoom = 0.82;
-            }
-            self.add_node_menu(ui);
         });
         if let Some(message) = &self.graph_canvas.message {
             ui.colored_label(Color32::from_rgb(234, 177, 96), message);
@@ -2399,11 +2477,25 @@ impl Editor {
                 to_port: e.to_port.clone(),
             })
             .collect::<Vec<_>>();
+        let search = std::mem::take(&mut self.module_search);
+        self.graph_canvas.palette = self
+            .module_choices(&self.graph_path)
+            .into_iter()
+            .map(|d| (d.id, d.label))
+            .collect();
+        self.module_search = search;
+        self.graph_canvas.allow_delete =
+            self.can_author_engine() && !self.json_dirty && !self.node_drafts.has_pending();
+        self.graph_canvas.delete_reason = self.node_drafts.has_pending().then(|| {
+            "Apply or discard module parameter drafts before deleting nodes or wires.".into()
+        });
         let actions = canvas::draw(ui, &mut self.graph_canvas, &nodes, &edges);
         self.engine_actions(actions);
     }
 
     fn file_panel(&mut self, ui: &mut egui::Ui) {
+        ui.label(egui::RichText::new("Project data — expanded JSON").strong());
+        ui.label("Includes loaded scene bodies for editing. Save writes separate scene files when external storage is enabled.");
         ui.horizontal(|ui| {
             ui.heading("Graph text description");
             if ui.button("Apply file").clicked() {
@@ -2431,21 +2523,39 @@ impl Editor {
     }
 
     fn custom_panel(&mut self, ui: &mut egui::Ui) {
+        let editable_sources = self
+            .document
+            .custom_sources
+            .keys()
+            .filter(|id| self.can_edit_source(id))
+            .cloned()
+            .collect::<Vec<_>>();
+        if editable_sources.is_empty() {
+            ui.heading("Custom / Rust");
+            ui.label("No editable Rust source in this project.");
+            ui.label(if self.can_author_engine() {
+                "Add Custom Rust or Custom update through the Module Blueprint context menu."
+            } else {
+                "Engine-owned sources require a matching Full source package. Project source rights are unchanged."
+            });
+            return;
+        }
+        if !editable_sources.contains(&self.current_source) {
+            self.current_source = editable_sources[0].clone();
+            self.program = None;
+            self.command_program = None;
+            self.code_canvas.selected = None;
+            self.parse_custom();
+            self.restore_code_positions();
+        }
         ui.horizontal_wrapped(|ui| {
             ui.heading("Custom / Rust");
             let previous = self.current_source.clone();
             egui::ComboBox::from_id_salt("source-choice")
                 .selected_text(&self.current_source)
                 .show_ui(ui, |ui| {
-                    for key in self
-                        .document
-                        .custom_sources
-                        .keys()
-                        .filter(|id| self.can_edit_source(id))
-                        .cloned()
-                        .collect::<Vec<_>>()
-                    {
-                        ui.selectable_value(&mut self.current_source, key.clone(), &key);
+                    for key in &editable_sources {
+                        ui.selectable_value(&mut self.current_source, key.clone(), key);
                     }
                 });
             if previous != self.current_source {
@@ -2565,7 +2675,7 @@ impl Editor {
             RichText::new(
                 "One source · the graph edits Rust · unsupported constructs remain as text",
             )
-            .size(11.0)
+            .size(12.0)
             .color(Color32::from_rgb(144, 161, 185)),
         );
         if let Some(error) = &self.source_error {
@@ -2663,6 +2773,9 @@ impl Editor {
                 })
                 .collect();
         }
+        self.code_canvas.allow_delete = false;
+        self.code_canvas.delete_reason=Some("Rust expressions require a valid replacement in Text mode. Unsupported syntax remains an opaque text fragment.".into());
+        self.code_canvas.palette.clear();
         let actions = canvas::draw(ui, &mut self.code_canvas, &nodes, &edges);
         self.code_actions(actions);
     }
@@ -2670,32 +2783,67 @@ impl Editor {
     /// Delete the node and its declared controls as one document/history change.
     /// Settings follow the active viewport renderer, not unrelated graph scopes.
     fn delete_engine_node(&mut self, id: &str) {
-        if !self.can_author_engine() || self.json_dirty {
-            self.status = "Deleting nodes requires an available Engine and no JSON draft".into();
+        self.delete_engine_selection(&[id.into()], &[]);
+    }
+    fn delete_engine_selection(&mut self, nodes: &[String], edges: &[usize]) {
+        if !self.resolve_node_drafts_before("deleting nodes or wires") {
             return;
         }
-        if !self.graph().nodes.iter().any(|node| node.id == id) {
+        if !self.can_author_engine() || self.json_dirty {
+            self.status = "Deleting nodes requires checked Engine sources and no JSON draft".into();
+            return;
+        }
+        let node_ids = nodes
+            .iter()
+            .filter(|id| self.graph().nodes.iter().any(|n| &n.id == *id))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let wires = edges
+            .iter()
+            .filter_map(|i| self.graph().edges.get(*i))
+            .map(|e| {
+                (
+                    e.from_node.clone(),
+                    e.from_port.clone(),
+                    e.to_node.clone(),
+                    e.to_port.clone(),
+                )
+            })
+            .collect::<BTreeSet<_>>();
+        if node_ids.is_empty() && wires.is_empty() {
             return;
         }
         self.flush_history();
         let (old_passes, old_resources) = document_render_targets(&self.document);
-        let restored = module_engine_vulkan::remove_pass_with_bypass(self.graph_mut(), id)
-            .expect("selected node exists");
+        self.graph_mut().edges.retain(|e| {
+            !wires.contains(&(
+                e.from_node.clone(),
+                e.from_port.clone(),
+                e.to_node.clone(),
+                e.to_port.clone(),
+            ))
+        });
+        let mut restored = 0;
+        for id in &node_ids {
+            restored +=
+                module_engine_vulkan::remove_pass_with_bypass(self.graph_mut(), id).unwrap_or(0);
+        }
         let (passes, resources) = document_render_targets(&self.document);
-        let removed_passes = old_passes.difference(&passes).cloned().collect();
-        let removed_resources = old_resources.difference(&resources).cloned().collect();
         let cleanup = module_engine_core::cleanup_removed_render_settings(
             &mut self.document,
-            &removed_passes,
-            &removed_resources,
+            &old_passes.difference(&passes).cloned().collect(),
+            &old_resources.difference(&resources).cloned().collect(),
         );
         self.graph_canvas.selected = None;
         self.graph_canvas.pending = None;
+        self.graph_canvas.selected_nodes.clear();
+        self.graph_canvas.selected_edges.clear();
         self.changed(true);
         self.flush_history();
         self.status = format!(
-            "Node {id} deleted; connections restored: {restored}; settings updated: {}",
-            cleanup.total_changes(),
+            "Selection deleted; nodes: {}; restored connections: {restored}; settings updated: {}",
+            node_ids.len(),
+            cleanup.total_changes()
         );
     }
 
@@ -2712,74 +2860,162 @@ impl Editor {
         else {
             ui.label(
                 RichText::new("Select a node to configure it. Double-click to expand the module.")
-                    .size(11.0)
+                    .size(12.0)
                     .color(Color32::from_rgb(148, 161, 182)),
             );
             return;
         };
         ui.label(RichText::new(&node.label).strong());
-        ui.label(RichText::new(&node.module).monospace().size(10.0));
+        ui.label(RichText::new(&node.module).monospace().size(12.0));
         if let Some(descriptor) = self.registry.descriptor(&node.module) {
-            ui.label(RichText::new(&descriptor.description).size(10.5));
+            ui.label(RichText::new(&descriptor.description).size(12.0));
         }
-        if node.module.starts_with("gpu.") {
-            self.gpu_pass_controls(ui, &node);
-        }
-        ui.horizontal(|ui| {
+        let Some(key) = self.node_draft_key(&node.id) else {
+            return;
+        };
+        let (mut text, pending, conflict) = self.node_drafts.view(&key, &node.module, &node.params);
+        let author = self.can_author_engine();
+        ui.add_enabled_ui(author && !pending, |ui| {
+            if node.module.starts_with("gpu.") {
+                self.gpu_pass_controls(ui, &node);
+            }
+            if node.module == "scalar.value" {
+                let mut value = node
+                    .params
+                    .get("value")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(1.0);
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut value)
+                            .speed(0.02)
+                            .prefix("value = "),
+                    )
+                    .changed()
+                    && let Some(target) =
+                        self.graph_mut().nodes.iter_mut().find(|n| n.id == node.id)
+                {
+                    target.params["value"] = serde_json::json!(value);
+                    self.changed(false);
+                }
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
             if node.subgraph.is_some() && ui.button("Open graph").clicked() {
                 self.engine_actions(vec![CanvasAction::Open(node.id.clone())]);
             }
             if node.module.starts_with("custom.rust") && ui.button("Edit Rust").clicked() {
                 self.engine_actions(vec![CanvasAction::Open(node.id.clone())]);
             }
-            if ui.button("Delete").clicked() {
+            if ui
+                .add_enabled(
+                    author && !self.node_drafts.has_pending(),
+                    egui::Button::new("Delete"),
+                )
+                .clicked()
+            {
                 self.delete_engine_node(&node.id);
             }
         });
-        if node.module == "scalar.value" {
-            let mut value = node
-                .params
-                .get("value")
-                .and_then(serde_json::Value::as_f64)
-                .unwrap_or(1.0);
-            if ui
-                .add(
-                    egui::DragValue::new(&mut value)
-                        .speed(0.02)
-                        .prefix("value = "),
-                )
-                .changed()
-                && let Some(node) = self.graph_mut().nodes.iter_mut().find(|n| n.id == node.id)
-            {
-                node.params["value"] = serde_json::json!(value);
-                self.changed(false);
-            }
-        }
-        if self.inspector_id.as_deref() != Some(&node.id) {
-            self.param_draft = serde_json::to_string_pretty(&node.params).unwrap_or_default();
-            self.inspector_id = Some(node.id.clone());
-        }
         egui::CollapsingHeader::new("Module parameters (JSON)").show(ui, |ui| {
-            ui.add(
-                egui::TextEdit::multiline(&mut self.param_draft)
+            if conflict {
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    "Parameters changed outside this draft. Discard to load current values.",
+                );
+            } else if pending {
+                ui.label(
+                    "Unapplied parameters — retained across views. Apply or Discard before saving.",
+                );
+            }
+            let response = ui.add_enabled(
+                author,
+                egui::TextEdit::multiline(&mut text)
+                    .id_salt(("node-parameters", &key))
                     .font(egui::TextStyle::Monospace)
                     .desired_rows(4)
                     .desired_width(f32::INFINITY),
             );
-            if ui.button("Apply parameters").clicked() {
-                match serde_json::from_str::<serde_json::Value>(&self.param_draft) {
-                    Ok(params) => {
-                        if let Some(target) =
-                            self.graph_mut().nodes.iter_mut().find(|n| n.id == node.id)
-                        {
-                            target.params = params;
-                            self.changed(true);
-                        }
-                    }
-                    Err(error) => self.status = format!("Parameters were not applied: {error}"),
-                }
+            if response.changed() {
+                self.node_drafts
+                    .update(key.clone(), &node.module, &node.params, text);
             }
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add_enabled(author && !conflict, egui::Button::new("Apply parameters"))
+                    .clicked()
+                {
+                    match self.apply_node_parameters(&key) {
+                        Ok(true) => self.status = "Module parameters applied.".into(),
+                        Ok(false) => self.status = "Module parameters are unchanged.".into(),
+                        Err(error) => self.status = error,
+                    }
+                }
+                if ui
+                    .add_enabled(
+                        self.node_drafts.has_pending(),
+                        egui::Button::new("Discard parameters"),
+                    )
+                    .clicked()
+                {
+                    self.node_drafts.discard(&key);
+                }
+            });
         });
+    }
+
+    fn resolve_node_drafts_before(&mut self, operation: &str) -> bool {
+        if self.node_drafts.has_pending() {
+            self.status =
+                format!("Apply or explicitly discard module parameter drafts before {operation}.");
+            false
+        } else {
+            true
+        }
+    }
+    fn node_draft_key(&self, node: &str) -> Option<Vec<String>> {
+        let mut graph = &self.document.root;
+        let mut key = Vec::new();
+        for index in &self.graph_path {
+            let owner = graph.nodes.get(*index)?;
+            key.push(owner.id.clone());
+            graph = owner.subgraph.as_deref()?;
+        }
+        graph.nodes.iter().find(|n| n.id == node)?;
+        key.push(node.into());
+        Some(key)
+    }
+    fn apply_node_parameters(&mut self, key: &[String]) -> Result<bool, String> {
+        fn find<'a>(
+            graph: &'a mut Graph,
+            key: &[String],
+        ) -> Option<&'a mut module_engine_core::Node> {
+            let (first, rest) = key.split_first()?;
+            let node = graph.nodes.iter_mut().find(|n| &n.id == first)?;
+            if rest.is_empty() {
+                Some(node)
+            } else {
+                find(node.subgraph.as_deref_mut()?, rest)
+            }
+        }
+        if !self.can_author_engine() {
+            return Err("Engine authoring requires complete matching sources.".into());
+        }
+        let node = find(&mut self.document.root, key).ok_or(
+            "The draft's module instance is no longer available. Discard the draft explicitly.",
+        )?;
+        let Some(candidate) = self
+            .node_drafts
+            .candidate(key, &node.module, &node.params)?
+        else {
+            return Ok(false);
+        };
+        self.flush_history();
+        find(&mut self.document.root, key).unwrap().params = candidate;
+        self.node_drafts.discard(key);
+        self.changed(true);
+        self.flush_history();
+        Ok(true)
     }
 
     fn code_inspector(&mut self, ui: &mut egui::Ui) {
@@ -2798,7 +3034,7 @@ impl Editor {
                 RichText::new(
                     "Select a numeric node or operator. Changes will appear in the Rust source.",
                 )
-                .size(11.0),
+                .size(12.0),
             );
             return;
         };
@@ -2835,13 +3071,13 @@ impl Editor {
             }
             CodeNodeKind::Opaque { source } => {
                 ui.colored_label(Color32::from_rgb(241, 182, 101), "Text Rust fragment");
-                ui.label(RichText::new(source).monospace().size(11.0));
+                ui.label(RichText::new(source).monospace().size(12.0));
                 ui.label("Edited in text view and preserved in the source.");
             }
             _ => {
                 ui.label(
                     RichText::new("To change an input, connect another f64 output to its pin.")
-                        .size(11.0),
+                        .size(12.0),
                 );
             }
         }
@@ -2858,10 +3094,28 @@ impl Editor {
 }
 
 impl eframe::App for Editor {
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, input: &mut egui::RawInput) {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        // Native focus/minimize events also arrive when eframe skips root UI.
+        if self.area_drag.is_some() {
+            self.update_area_drag(ctx);
+        }
         self.workflow_capture_input(input);
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        #[cfg(windows)]
+        {
+            use eframe::wgpu::rwh::{HasWindowHandle, RawWindowHandle};
+            if let Ok(handle) = _frame.window_handle()
+                && let RawWindowHandle::Win32(handle) = handle.as_raw()
+            {
+                let window = handle.hwnd.get() as usize;
+                if self.area_host_windows.insert(None, window) != Some(window)
+                    && let Err(error) = crate::app_icon::apply_to_window(window)
+                {
+                    eprintln!("Editor icon: {error}");
+                }
+            }
+        }
         self.poll_gpu_presentation();
         // Hidden panes reap submitted producers too. A buffered completion does
         // not keep this timer alive after its fence has completed.
@@ -2883,16 +3137,7 @@ impl eframe::App for Editor {
 }
 
 pub fn configure_style(ctx: &egui::Context) {
-    let mut style = (*ctx.style_of(egui::Theme::Dark)).clone();
-    style.visuals = egui::Visuals::dark();
-    style.visuals.panel_fill = Color32::from_rgb(23, 29, 42);
-    style.visuals.window_fill = Color32::from_rgb(28, 35, 49);
-    style.visuals.selection.bg_fill = Color32::from_rgb(38, 113, 112);
-    style.visuals.widgets.active.bg_fill = Color32::from_rgb(35, 125, 116);
-    style.spacing.item_spacing = Vec2::new(8.0, 7.0);
-    style.spacing.button_padding = Vec2::new(10.0, 6.0);
-    ctx.set_style_of(egui::Theme::Dark, style);
-    ctx.set_theme(egui::ThemePreference::Dark);
+    editor_ui::configure(ctx);
 }
 
 /// Global render settings address the renderer wired to the active viewport.
@@ -3065,6 +3310,47 @@ mod tests {
             sources.path()
         );
         (sources, editor)
+    }
+
+    #[test]
+    fn rust_empty_and_stale_selection_have_real_availability_without_document_edits() {
+        let mut document = demo_document(WorldKind::Objects);
+        document.custom_sources.clear();
+        let (_fixture, mut editor) = isolated_editor(document);
+        let original = editor.document.clone();
+        let ctx = egui::Context::default();
+        let mut labels = Vec::new();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| editor.custom_panel(ui));
+        for shape in &output.shapes {
+            if let egui::Shape::Text(text) = &shape.shape {
+                labels.push(text.galley.text().to_owned());
+            }
+        }
+        output.drop_without_applying_deltas();
+        assert!(
+            labels
+                .iter()
+                .any(|s| s == "No editable Rust source in this project.")
+        );
+        assert!(
+            !labels
+                .iter()
+                .any(|s| s == "Apply Rust" || s == "Custom source is missing")
+        );
+        assert_eq!(editor.document, original);
+        editor
+            .document
+            .custom_sources
+            .insert("real-source".into(), demo_source());
+        editor.current_source = "removed-source".into();
+        let original = editor.document.clone();
+        let cursor = editor.history.cursor();
+        ctx.run_ui(egui::RawInput::default(), |ui| editor.custom_panel(ui))
+            .drop_without_applying_deltas();
+        assert_eq!(editor.current_source, "real-source");
+        assert!(editor.source_error.is_none(), "{:?}", editor.source_error);
+        assert_eq!(editor.document, original);
+        assert_eq!(editor.history.cursor(), cursor);
     }
 
     #[test]
@@ -3247,7 +3533,7 @@ mod tests {
         editor.reconcile_library_graph();
         let ctx = egui::Context::default();
         let output = authoring_frame(&mut editor, &ctx, graph_id, vec![]);
-        let add = text_center(&output, "+ FXAA");
+        let add = text_center(&output, "+ Anti-aliasing (FXAA)");
         output.drop_without_applying_deltas();
         click_authoring(&mut editor, &ctx, graph_id, add);
         let pass = editor.engine_panes[&graph_id]
@@ -3364,7 +3650,7 @@ mod tests {
         editor.delete_engine_node("ao");
         editor.graph_path.clear();
         let output = authoring_frame(&mut editor, &ctx, graph_id, vec![]);
-        let add = text_center(&output, "+ Screen-space AO");
+        let add = text_center(&output, "+ Ambient occlusion (SSAO)");
         output.drop_without_applying_deltas();
         click_authoring(&mut editor, &ctx, graph_id, add);
         let ao = editor.engine_panes[&graph_id]
@@ -3408,7 +3694,9 @@ mod tests {
                     .unwrap()
                     .edges
                     .contains(&make_edge(source, output_pin, target, input_pin)),
-                "{}",
+                "{source}.{output_pin} -> {target}.{input_pin}; from={from:?}; to={to:?}; rect={:?}; pending={:?}; {}",
+                editor.engine_panes[&graph_id].graph_canvas.layout.rect,
+                editor.engine_panes[&graph_id].graph_canvas.pending,
                 editor.status
             );
         }
@@ -3497,7 +3785,7 @@ mod tests {
             .graph_canvas
             .zoom = 0.65;
         let output = authoring_frame(&mut editor, &ctx, graph_id, vec![]);
-        let add = text_center(&output, "+ FXAA");
+        let add = text_center(&output, "+ Anti-aliasing (FXAA)");
         output.drop_without_applying_deltas();
         click_authoring(&mut editor, &ctx, graph_id, add);
         authoring_frame(&mut editor, &ctx, graph_id, vec![]).drop_without_applying_deltas();
@@ -4303,7 +4591,7 @@ mod tests {
             .shapes
             .iter()
             .find_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) if text.galley.text() == "Pass enabled" => {
+                egui::Shape::Text(text) if text.galley.text() == "Base pass enabled" => {
                     Some(text.pos + text.galley.size() * 0.5)
                 }
                 _ => None,
@@ -4755,5 +5043,106 @@ mod tests {
         editor.tick_simulation(1. / 60.);
         assert_eq!(editor.runtime_error.as_deref(), Some("paused latch"));
         assert_eq!(editor.runtime.as_ref().unwrap().snapshot(), before);
+    }
+    #[test]
+    fn mixed_gpu_node_and_wire_deletion_cleans_controls_and_is_one_authored_undo() {
+        let document = crate::host::gpu_document(WorldKind::Objects, RenderPath::Deferred);
+        let mut editor = Editor::new(
+            document,
+            project::source_root().join("unused-mixed-ui-test.json"),
+        );
+        editor.graph_path = vec![
+            editor
+                .document
+                .root
+                .nodes
+                .iter()
+                .position(|n| n.id == "renderer")
+                .unwrap(),
+        ];
+        let original = editor.document.clone();
+        let wire = editor
+            .graph()
+            .edges
+            .iter()
+            .position(|e| e.from_node == "encode")
+            .unwrap();
+        let history = editor.history.entries().len();
+        editor.engine_actions(vec![CanvasAction::DeleteSelection {
+            nodes: vec!["aa".into(), "ao".into()],
+            edges: vec![wire],
+        }]);
+        assert!(
+            !editor
+                .graph()
+                .nodes
+                .iter()
+                .any(|n| n.id == "aa" || n.id == "ao")
+        );
+        assert_eq!(editor.history.entries().len(), history + 1);
+        let after = editor.document.clone();
+        editor.undo();
+        assert_eq!(editor.document, original);
+        editor.redo();
+        assert_eq!(editor.document, after);
+    }
+    #[test]
+    fn context_add_is_one_undo_at_the_requested_position() {
+        let document = demo_document(WorldKind::Objects);
+        let mut editor = Editor::new(
+            document,
+            project::source_root().join("unused-context-add.json"),
+        );
+        let before = editor.document.clone();
+        let history = editor.history.entries().len();
+        editor.engine_actions(vec![CanvasAction::Add(
+            "scalar.value".into(),
+            [2000., 3000.],
+        )]);
+        let id = editor.graph_canvas.selected.clone().unwrap();
+        assert_eq!(
+            editor
+                .graph()
+                .nodes
+                .iter()
+                .find(|n| n.id == id)
+                .unwrap()
+                .position,
+            [2000., 3000.]
+        );
+        assert_eq!(editor.history.entries().len(), history + 1);
+        editor.undo();
+        assert_eq!(editor.document, before);
+    }
+    #[test]
+    fn explicitly_selected_incident_wire_is_not_recreated_by_node_bypass() {
+        let document = crate::host::gpu_document(WorldKind::Objects, RenderPath::Forward);
+        let mut editor = Editor::new(
+            document,
+            project::source_root().join("unused-incident-delete.json"),
+        );
+        editor.graph_path = vec![
+            editor
+                .document
+                .root
+                .nodes
+                .iter()
+                .position(|n| n.id == "renderer")
+                .unwrap(),
+        ];
+        let before = editor.document.clone();
+        let index = editor
+            .graph()
+            .edges
+            .iter()
+            .position(|e| e.from_node == "aa" && e.to_node == "encode")
+            .unwrap();
+        editor.engine_actions(vec![CanvasAction::DeleteSelection {
+            nodes: vec!["aa".into()],
+            edges: vec![index],
+        }]);
+        assert!(!editor.graph().edges.iter().any(|e| e.to_node == "encode"));
+        editor.undo();
+        assert_eq!(editor.document, before);
     }
 }

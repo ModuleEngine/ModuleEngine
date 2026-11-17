@@ -2,6 +2,8 @@
 #[cfg(test)]
 #[path = "compat_tests.rs"]
 mod compat_tests;
+#[path = "player_settings.rs"]
+mod player_settings;
 #[cfg(test)]
 #[path = "presentation_tests.rs"]
 pub(crate) mod presentation_tests;
@@ -15,6 +17,7 @@ use module_engine_host_services::{HostServiceContext, HostServiceRegistry, HostS
 use module_engine_script::{
     CompiledProgramStore, CompiledScript, JobLease, ScriptCompiler, ScriptKind, ScriptTick,
 };
+use player_settings::PlayerSettingsState;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -295,6 +298,29 @@ fn service_requests(
         Ok(result)
     })
 }
+fn preference_requests(
+    game: &GameProject,
+    gameplay: &[HostServiceRequest],
+) -> Result<Vec<HostServiceRequest>, String> {
+    let request = player_preferences_service_request(game)?;
+    if let Some(preference) = &request
+        && gameplay.iter().any(|service| {
+            service.id == preference.id
+                && service.config.get("namespace") == preference.config.get("namespace")
+                && service
+                    .config
+                    .get("slot")
+                    .and_then(Value::as_str)
+                    .unwrap_or("state")
+                    == "player-settings"
+        })
+    {
+        return Err(
+            "Player preferences and gameplay persistence cannot own the same namespace/slot".into(),
+        );
+    }
+    Ok(request.into_iter().collect())
+}
 fn build_session(
     game: GameProject,
     registry: SystemRegistry,
@@ -332,8 +358,10 @@ struct RustSystem {
     root: PathBuf,
     modules: ModuleRegistry,
     overrides: Arc<Mutex<RenderOverrides>>,
+    settings: Arc<Mutex<PlayerSettingsState>>,
+    instance: String,
     pending: Option<ScriptTick>,
-    checkpoint: Option<(Value, RenderOverrides)>,
+    checkpoint: Option<(Value, RenderOverrides, PlayerSettingsState)>,
     input_contributions: Vec<GameContribution>,
 }
 impl ExecutableSystem for RustSystem {
@@ -380,6 +408,19 @@ impl ExecutableSystem for RustSystem {
                 |contribution| contribution.script_input,
             );
         input.input = script_input(ctx.input);
+        input.ui_actions = script_ui_actions(ctx.input, &self.instance);
+        input.settings = self
+            .settings
+            .lock()
+            .map_err(|_| "Player settings poisoned")?
+            .snapshot(
+                &document,
+                ctx.game.time,
+                &*self
+                    .overrides
+                    .lock()
+                    .map_err(|_| "Render controls poisoned")?,
+            )?;
         input.events = ctx
             .events
             .iter()
@@ -430,6 +471,41 @@ impl ExecutableSystem for RustSystem {
             .map_err(|_| "Render control slot poisoned")?;
         let mut candidate = overrides.clone();
         candidate.apply_commands(&render)?;
+        let mut settings = self
+            .settings
+            .lock()
+            .map_err(|_| "Player settings poisoned")?;
+        let old_settings = settings.clone();
+        validate_script_ui(&tick.script_ui)?;
+        let requested = old_settings.stage_request(
+            &document,
+            ctx.game.time,
+            &candidate,
+            &tick.setting_requests,
+            |effective| {
+                let route = self.modules.render_route(&document)?;
+                self.modules
+                    .renderer_adapter(&route.renderer.module)
+                    .ok_or("Missing renderer adapter")?
+                    .validate_controls(route.renderer, &document, effective)
+            },
+        );
+        let (mut candidate_settings, preference_event) = match requested {
+            Ok(candidate) => candidate,
+            Err(error) => {
+                // A stale/unavailable UI choice is recoverable, unlike malformed
+                // world/render packets. Publish only its refusal after this tick commits.
+                let checkpoint = script.state().map_err(|e| e.to_string())?;
+                script.reject_tick(&tick).map_err(|e| e.to_string())?;
+                settings.reject(&tick.setting_requests, &error);
+                self.checkpoint = Some((checkpoint, overrides.clone(), old_settings));
+                self.pending = None;
+                return Ok(());
+            }
+        };
+        candidate_settings
+            .menus
+            .insert(self.instance.clone(), tick.script_ui.clone());
         if !render.is_empty() {
             validate_candidate_controls(&self.modules, &document, &candidate, ctx.game.time)?;
         }
@@ -442,10 +518,18 @@ impl ExecutableSystem for RustSystem {
                     .map_err(|e| format!("Invalid emitted GameEvent: {e}"))
             })
             .collect::<Result<Vec<_>, _>>();
-        let events = events?;
-        self.checkpoint = Some((checkpoint, overrides.clone()));
+        let mut events = events?;
+        if events
+            .iter()
+            .any(|event| event.name == PLAYER_SETTINGS_WRITE_EVENT)
+        {
+            return Err("Custom cannot emit the reserved player settings persistence event".into());
+        }
+        events.extend(preference_event);
+        self.checkpoint = Some((checkpoint, overrides.clone(), old_settings));
         ctx.game.world = candidate_world;
         *overrides = candidate;
+        *settings = candidate_settings;
         *state = tick.state.clone();
         ctx.events.extend(events);
         self.pending = Some(tick);
@@ -472,13 +556,17 @@ impl ExecutableSystem for RustSystem {
         Ok(())
     }
     fn rollback_tick(&mut self) -> Result<(), String> {
-        if let Some((state, overrides)) = self.checkpoint.take() {
+        if let Some((state, overrides, settings)) = self.checkpoint.take() {
             self.slot
                 .lock()
                 .map_err(|_| "Custom slot poisoned")?
                 .migrate_state(state)
                 .map_err(|e| e.to_string())?;
             *self.overrides.lock().map_err(|_| "Render slot poisoned")? = overrides;
+            *self
+                .settings
+                .lock()
+                .map_err(|_| "Player settings poisoned")? = settings;
         } else if let Some(tick) = &self.pending {
             self.slot
                 .lock()
@@ -513,6 +601,23 @@ pub fn bind_game_registry(
     slots: &BTreeMap<String, ScriptSlot>,
     overrides: Arc<Mutex<RenderOverrides>>,
 ) -> Result<SystemRegistry, String> {
+    bind_game_registry_with_settings(
+        document,
+        root,
+        composition,
+        slots,
+        overrides,
+        Arc::default(),
+    )
+}
+fn bind_game_registry_with_settings(
+    document: Arc<Mutex<GraphDocument>>,
+    root: &Path,
+    composition: &CompositionContext,
+    slots: &BTreeMap<String, ScriptSlot>,
+    overrides: Arc<Mutex<RenderOverrides>>,
+    settings: Arc<Mutex<PlayerSettingsState>>,
+) -> Result<SystemRegistry, String> {
     let mut registry = composition.systems.clone();
     if registry.descriptor("custom.rust.update").is_none() {
         if !slots.is_empty() {
@@ -544,6 +649,8 @@ pub fn bind_game_registry(
             root: root.clone(),
             modules: modules.clone(),
             overrides: overrides.clone(),
+            settings: settings.clone(),
+            instance: instance.into(),
             pending: None,
             checkpoint: None,
             input_contributions: input_contributions.clone(),
@@ -648,6 +755,7 @@ struct AuthoredPresentationRequest {
     camera: Camera,
     snapshot: SceneSnapshot,
     controls: RenderOverrides,
+    settings: ScriptSettingsSnapshot,
 }
 
 enum PendingPresentationKind {
@@ -678,7 +786,7 @@ pub(crate) struct PendingPresentationIdentity {
 }
 
 enum CompletedPresentation {
-    Authored(u64, Frame, Camera, u64),
+    Authored(u64, Frame, Camera, u64, ScriptSettingsSnapshot),
     Interpolated(RenderedPresentation),
 }
 
@@ -705,6 +813,8 @@ pub struct GameHost {
     overrides: Arc<Mutex<RenderOverrides>>,
     simulation_started: bool,
     pub services: HostServices,
+    preference_services: HostServices,
+    player_settings: Arc<Mutex<PlayerSettingsState>>,
     render_preparation: Option<RenderPreparation>,
     render_activity: Option<BuildProgress>,
     service_activity: Option<BuildProgress>,
@@ -722,7 +832,8 @@ pub struct GameHost {
     authored_presentation_waiters: VecDeque<u64>,
     last_presented_camera: Option<Camera>,
     last_presented_revision: Option<u64>,
-    ready_authored_presentations: BTreeMap<u64, (Frame, Camera, u64)>,
+    last_presented_settings: ScriptSettingsSnapshot,
+    ready_authored_presentations: BTreeMap<u64, (Frame, Camera, u64, ScriptSettingsSnapshot)>,
 }
 fn next_presentation_revision() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -750,6 +861,58 @@ impl GameHost {
             || json!({}),
             |contribution| (contribution.diagnostics)(self.session.state()),
         )
+    }
+    pub fn player_settings_snapshot(&self) -> Result<ScriptSettingsSnapshot, String> {
+        let raw = self
+            .overrides
+            .lock()
+            .map_err(|_| "Render controls poisoned")?
+            .clone();
+        self.player_settings
+            .lock()
+            .map_err(|_| "Player settings poisoned")?
+            .snapshot(&self.document, self.session.state().time, &raw)
+    }
+    pub fn script_ui_snapshot(&self) -> Result<ScriptUiSnapshot, String> {
+        let settings = self.player_settings_snapshot()?;
+        Ok(self
+            .player_settings
+            .lock()
+            .map_err(|_| "Player settings poisoned")?
+            .menus(&settings))
+    }
+    /// Diagnostic access to the separate preference service owner; no path is invented here.
+    pub fn player_preferences_diagnostics(&self) -> Value {
+        self.preference_services.diagnostics()
+    }
+    pub fn set_services_enabled(&mut self, enabled: bool) {
+        self.services.set_enabled(enabled);
+        self.preference_services.set_enabled(enabled);
+        if let Ok(mut settings) = self.player_settings.lock() {
+            settings.observe_storage(&self.preference_services.diagnostics(), false);
+        }
+    }
+    fn effective_controls(&self, raw: &RenderOverrides) -> Result<RenderOverrides, String> {
+        self.player_settings
+            .lock()
+            .map_err(|_| "Player settings poisoned")?
+            .controls(&self.document, self.session.state().time, raw)
+    }
+    fn consume_services(&mut self, events: &[GameEvent]) {
+        if let Err(error) = self.services.consume(events) {
+            self.record_service_error("step", error);
+        }
+        if let Err(error) = self.preference_services.consume(events) {
+            self.record_service_error("player preferences", error);
+        }
+        if let Ok(mut settings) = self.player_settings.lock() {
+            settings.observe_storage(
+                &self.preference_services.diagnostics(),
+                events
+                    .iter()
+                    .any(|event| event.name == PLAYER_SETTINGS_WRITE_EVENT),
+            );
+        }
     }
     fn follow_camera(&mut self) {
         for contribution in &self.contributions {
@@ -934,13 +1097,15 @@ impl GameHost {
             node.params["__instance_id"] = json!(node.id);
         }
         let overrides = Arc::new(Mutex::new(RenderOverrides::default()));
+        let player_settings = Arc::new(Mutex::new(PlayerSettingsState::default()));
         let live_document = Arc::new(Mutex::new(document.clone()));
-        let registry = bind_game_registry(
+        let registry = bind_game_registry_with_settings(
             live_document.clone(),
             &root,
             &composition,
             &slots,
             overrides.clone(),
+            player_settings.clone(),
         )?;
         let activity = composition.activity(&document)?;
         let asset_paths =
@@ -1034,6 +1199,37 @@ impl GameHost {
             },
             options.services_enabled && renderer.is_some(),
         )?;
+        let preference_requests = preference_requests(session.project(), &requests)?;
+        let preference_services = options.services.build(
+            &preference_requests,
+            &HostServiceContext {
+                asset_root: &root,
+                asset_paths: &asset_paths,
+                retired: retired.clone(),
+            },
+            options.services_enabled && renderer.is_some(),
+        )?;
+        let preference_data = preference_services.initial_module_data()?;
+        player_settings
+            .lock()
+            .map_err(|_| "Player settings poisoned")?
+            .load(
+                &document,
+                preference_data.get(PLAYER_SETTINGS_DATA_KEY),
+                !preference_requests.is_empty() && preference_services.enabled(),
+                &preference_services.diagnostics(),
+            );
+        player_settings
+            .lock()
+            .map_err(|_| "Player settings poisoned")?
+            .validate_loaded(&document, |controls| {
+                let route = composition.modules.render_route(&document)?;
+                composition
+                    .modules
+                    .renderer_adapter(&route.renderer.module)
+                    .ok_or("Missing renderer adapter")?
+                    .validate_controls(route.renderer, &document, controls)
+            })?;
         session.seed_module_data(services.initial_module_data()?)?;
         Ok(Self {
             session,
@@ -1059,6 +1255,8 @@ impl GameHost {
             overrides,
             simulation_started: false,
             services,
+            preference_services,
+            player_settings,
             render_preparation: None,
             render_activity: None,
             service_activity: None,
@@ -1075,6 +1273,7 @@ impl GameHost {
             authored_presentation_waiters: VecDeque::new(),
             last_presented_camera: None,
             last_presented_revision: None,
+            last_presented_settings: BTreeMap::new(),
             ready_authored_presentations: BTreeMap::new(),
         })
     }
@@ -1169,12 +1368,13 @@ impl GameHost {
         {
             node.params["__instance_id"] = json!(node.id);
         }
-        let registry = bind_game_registry(
+        let registry = bind_game_registry_with_settings(
             self.live_document.clone(),
             &self.root,
             &composition,
             &self.slots,
             self.overrides.clone(),
+            self.player_settings.clone(),
         )?;
         // System construction does not initialize or execute Custom. Existing
         // accepted code/state remain in the retained slots until explicit Play.
@@ -1226,6 +1426,46 @@ impl GameHost {
         }
         let requests = service_requests(&self.contributions, session.project())?;
         let old_requests = service_requests(&self.contributions, self.session.project())?;
+        let preferences = preference_requests(session.project(), &requests)?;
+        let old_preferences = preference_requests(self.session.project(), &old_requests)?;
+        let preference_services = if preferences != old_preferences {
+            Some(self.options.services.build(
+                &preferences,
+                &HostServiceContext {
+                    asset_root: &self.root,
+                    asset_paths: &asset_paths,
+                    retired: self.retired.clone(),
+                },
+                self.options.services_enabled
+                    && self.renderer.is_some()
+                    && self.preference_services.enabled(),
+            )?)
+        } else {
+            None
+        };
+        let mut preference_state = self
+            .player_settings
+            .lock()
+            .map_err(|_| "Player settings poisoned")?
+            .clone();
+        if let Some(services) = &preference_services {
+            let data = services.initial_module_data()?;
+            preference_state.load(
+                document,
+                data.get(PLAYER_SETTINGS_DATA_KEY),
+                !preferences.is_empty() && services.enabled(),
+                &services.diagnostics(),
+            );
+            preference_state.validate_loaded(document, |controls| {
+                let route = composition.modules.render_route(document)?;
+                composition
+                    .modules
+                    .renderer_adapter(&route.renderer.module)
+                    .ok_or("Missing renderer adapter")?
+                    .validate_controls(route.renderer, document, controls)
+            })?;
+        }
+        preference_state.reconcile(document);
         let services =
             if requests != old_requests || assets.asset_paths() != old_assets.asset_paths() {
                 let mut services = self.options.services.build(
@@ -1270,6 +1510,13 @@ impl GameHost {
         if let Some(services) = services {
             self.services = services;
         }
+        if let Some(services) = preference_services {
+            self.preference_services = services;
+        }
+        *self
+            .player_settings
+            .lock()
+            .map_err(|_| "Player settings poisoned")? = preference_state;
         self.presentation_revision = next_presentation_revision();
         drop(live);
         self.reset_presentation_history();
@@ -1325,9 +1572,8 @@ impl GameHost {
                 // rejects. Those accepted events still own their effects. A
                 // no-commit error must not replay events retained by an earlier
                 // call (for example when dt validation failed before clearing).
-                if let Err(error) = self.services.consume(self.session.events()) {
-                    self.record_service_error("step", error);
-                }
+                let events = self.session.events().to_vec();
+                self.consume_services(&events);
             }
             return result;
         }
@@ -1351,9 +1597,8 @@ impl GameHost {
             self.presentation_revision = next_presentation_revision();
         }
         self.last_step_ms = started.elapsed().as_secs_f64() * 1000.;
-        if let Err(error) = self.services.consume(self.session.events()) {
-            self.record_service_error("step", error);
-        }
+        let events = self.session.events().to_vec();
+        self.consume_services(&events);
         Ok(ticks)
     }
     /// Restart the whole hosted game, including state held outside GameSession.
@@ -1381,6 +1626,9 @@ impl GameHost {
         drop(slots);
         if let Err(error) = self.services.reset() {
             self.record_service_error("restart", error);
+        }
+        if let Err(error) = self.preference_services.reset() {
+            self.record_service_error("player preferences restart", error);
         }
         self.follow_camera();
         self.last_step_ms = 0.;
@@ -1447,8 +1695,7 @@ impl GameHost {
             .lock()
             .map_err(|_| "Render controls poisoned")?
             .clone();
-        let overrides =
-            effective_render_controls(&self.document, self.session.state().time, &controls)?;
+        let overrides = self.effective_controls(&controls)?;
         let frame = self
             .renderer
             .as_mut()
@@ -1548,6 +1795,9 @@ impl GameHost {
     pub fn last_presented_revision(&self) -> Option<u64> {
         self.last_presented_revision
     }
+    pub fn last_presented_settings(&self) -> &ScriptSettingsSnapshot {
+        &self.last_presented_settings
+    }
 
     fn discard_pending_presentation(&mut self) {
         if let Some(pending) = self.pending_presentation.take()
@@ -1589,7 +1839,13 @@ impl GameHost {
         self.last_render_ms = pending.started.elapsed().as_secs_f64() * 1000.;
         Ok(Some(match pending.kind {
             PendingPresentationKind::Authored { owner, request } => {
-                CompletedPresentation::Authored(owner, frame, request.camera, request.revision)
+                CompletedPresentation::Authored(
+                    owner,
+                    frame,
+                    request.camera,
+                    request.revision,
+                    request.settings,
+                )
             }
             PendingPresentationKind::Interpolated {
                 evaluation,
@@ -1639,11 +1895,11 @@ impl GameHost {
         ) {
             return Ok(());
         }
-        if let Some(CompletedPresentation::Authored(owner, frame, camera, revision)) =
+        if let Some(CompletedPresentation::Authored(owner, frame, camera, revision, settings)) =
             self.poll_pending_presentation()?
         {
             self.ready_authored_presentations
-                .insert(owner, (frame, camera, revision));
+                .insert(owner, (frame, camera, revision, settings));
         }
         Ok(())
     }
@@ -1699,9 +1955,10 @@ impl GameHost {
             Err(_) if completed.is_some() => completed,
             Err(error) => return Err(error),
         };
-        Ok(output.map(|(frame, camera, revision)| {
+        Ok(output.map(|(frame, camera, revision, settings)| {
             self.last_presented_camera = Some(camera);
             self.last_presented_revision = Some(revision);
+            self.last_presented_settings = settings;
             frame
         }))
     }
@@ -1712,7 +1969,7 @@ impl GameHost {
         width: usize,
         height: usize,
         completed: bool,
-    ) -> Result<Option<(Frame, Camera, u64)>, String> {
+    ) -> Result<Option<(Frame, Camera, u64, ScriptSettingsSnapshot)>, String> {
         if self.pending_presentation.is_some() && !completed {
             if !self.has_pending_authored_presentation_for(owner) {
                 self.authored_presentation_waiters.push_back(owner);
@@ -1726,8 +1983,7 @@ impl GameHost {
             .lock()
             .map_err(|_| "Render controls poisoned")?
             .clone();
-        let overrides =
-            effective_render_controls(&self.document, self.session.state().time, &controls)?;
+        let overrides = self.effective_controls(&controls)?;
         let mut persistent = overrides.clone();
         persistent.resource_commands.clear();
         let request = AuthoredPresentationRequest {
@@ -1737,6 +1993,7 @@ impl GameHost {
             camera: self.camera,
             snapshot: snapshot.clone(),
             controls: persistent,
+            settings: self.player_settings_snapshot()?,
         };
         if completed
             && controls.resource_commands.is_empty()
@@ -1784,9 +2041,10 @@ impl GameHost {
                 self.last_render_ms = started.elapsed().as_secs_f64() * 1000.;
                 let camera = request.camera;
                 let revision = request.revision;
+                let settings = request.settings.clone();
                 self.authored_presentation_waiters.pop_front();
                 self.authored_presentation_requests.insert(owner, request);
-                Ok(Some((frame, camera, revision)))
+                Ok(Some((frame, camera, revision, settings)))
             }
         }
     }
@@ -1913,8 +2171,7 @@ impl GameHost {
         let batch_len = controls.resource_commands.len();
         // Authored project control evaluation retains its committed simulation
         // clock. Visual time alone cannot create extra presentation eligibility.
-        let mut persistent =
-            effective_render_controls(&self.document, self.session.state().time, &controls)?;
+        let mut persistent = self.effective_controls(&controls)?;
         let actual_controls = persistent.clone();
         persistent.resource_commands.clear();
         let origin = match &self.presentation_evaluation {
@@ -2062,6 +2319,21 @@ impl GameHost {
         graphics_only_change(&self.composition.modules, &self.document, document)
     }
     fn validate_session_compatibility(&self, document: &GraphDocument) -> Result<(), String> {
+        if self.simulation_started
+            && document
+                .game
+                .as_ref()
+                .and_then(|game| game.player_preferences.as_ref())
+                != self
+                    .document
+                    .game
+                    .as_ref()
+                    .and_then(|game| game.player_preferences.as_ref())
+        {
+            return Err(
+                "Player preferences identity changed; replace the complete host explicitly".into(),
+            );
+        }
         if document.game.as_ref().map(|game| &game.execution)
             != self.document.game.as_ref().map(|game| &game.execution)
         {
@@ -2376,6 +2648,10 @@ impl GameHost {
         self.document = document.clone();
         *live = document.clone();
         *overrides = controls;
+        self.player_settings
+            .lock()
+            .map_err(|_| "Player settings poisoned")?
+            .reconcile(document);
         self.presentation_revision = next_presentation_revision();
         drop(overrides);
         drop(live);
@@ -2389,6 +2665,10 @@ impl GameHost {
             .map_err(|_| "Game configuration poisoned")?;
         self.document = document.clone();
         *live = document.clone();
+        self.player_settings
+            .lock()
+            .map_err(|_| "Player settings poisoned")?
+            .reconcile(document);
         Ok(())
     }
 }

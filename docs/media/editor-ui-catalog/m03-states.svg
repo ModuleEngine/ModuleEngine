@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="1024" viewBox="0 0 1280 1024" role="img" aria-labelledby="title desc">
+<title id="title">M03 / Tools menu / states</title>
+<desc id="desc">Static ModuleEngine editor design proposal. Not a running editor screenshot. See the bilingual catalogue for requirements and actual implementation boundaries.</desc>
+<rect x="0" y="0" width="1280" height="1024" rx="0" fill="#111823" stroke="none" stroke-width="1"/>
+<text x="16" y="30" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="600" fill="#E6EDF5" data-max-width="1248">M03 / Tools menu</text>
+<text x="16" y="54" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="1248">DESIGN PROPOSAL · Illustrative data · Current surface; proposed layout</text>
+<rect x="16" y="80" width="616" height="204" rx="4" fill="#192230" stroke="#91A1B8" stroke-width="1"/>
+<rect x="16" y="80" width="616" height="32" rx="0" fill="#202D3E" stroke="none" stroke-width="1"/>
+<text x="28" y="102" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600" fill="#E6EDF5" data-max-width="592">Ready / normal</text>
+<text x="28" y="140" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">Readable command names, checked state, actual shortcut and availability</text>
+<text x="28" y="160" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">are visible.</text>
+<text x="28" y="266" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="592">Required design behavior · verify in a future implementation</text>
+<rect x="648" y="80" width="616" height="204" rx="4" fill="#192230" stroke="#91A1B8" stroke-width="1"/>
+<rect x="648" y="80" width="616" height="32" rx="0" fill="#202D3E" stroke="none" stroke-width="1"/>
+<text x="660" y="102" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600" fill="#E6EDF5" data-max-width="592">Empty / no selection</text>
+<text x="660" y="140" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">Show a no-match message only for a dynamic/search list; a static menu</text>
+<text x="660" y="160" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">keeps its disabled entries where useful.</text>
+<text x="660" y="266" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="592">Required design behavior · verify in a future implementation</text>
+<rect x="16" y="300" width="616" height="204" rx="4" fill="#192230" stroke="#91A1B8" stroke-width="1"/>
+<rect x="16" y="300" width="616" height="32" rx="0" fill="#202D3E" stroke="none" stroke-width="1"/>
+<text x="28" y="322" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600" fill="#E6EDF5" data-max-width="592">Busy / preparing</text>
+<text x="28" y="360" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">Disable conflicting commands with the operation reason; opening/closing a</text>
+<text x="28" y="380" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">menu never starts that operation.</text>
+<text x="28" y="486" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="592">Required design behavior · verify in a future implementation</text>
+<rect x="648" y="300" width="616" height="204" rx="4" fill="#192230" stroke="#91A1B8" stroke-width="1"/>
+<rect x="648" y="300" width="616" height="32" rx="0" fill="#202D3E" stroke="none" stroke-width="1"/>
+<text x="660" y="322" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600" fill="#E6EDF5" data-max-width="592">Draft / modified</text>
+<text x="660" y="360" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#B6C4D5" data-max-width="592">Not applicable — the menu owns no data draft; the destination command</text>
+<text x="660" y="380" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#B6C4D5" data-max-width="592">resolves applicable drafts.</text>
+<text x="660" y="486" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="592">N/A is explicit, not an unimplemented control.</text>
+<rect x="16" y="520" width="616" height="204" rx="4" fill="#192230" stroke="#91A1B8" stroke-width="1"/>
+<rect x="16" y="520" width="616" height="32" rx="0" fill="#202D3E" stroke="none" stroke-width="1"/>
+<text x="28" y="542" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600" fill="#E6EDF5" data-max-width="592">Error / rejected</text>
+<text x="28" y="580" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">A failed command reports through its owning tool or operation result;</text>
+<text x="28" y="600" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">dismissing the menu never loses the draft.</text>
+<text x="28" y="706" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="592">Required design behavior · verify in a future implementation</text>
+<rect x="648" y="520" width="616" height="204" rx="4" fill="#192230" stroke="#91A1B8" stroke-width="1"/>
+<rect x="648" y="520" width="616" height="32" rx="0" fill="#202D3E" stroke="none" stroke-width="1"/>
+<text x="660" y="542" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600" fill="#E6EDF5" data-max-width="592">Restricted / read-only</text>
+<text x="660" y="580" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">Availability follows the actual command guard; disabled help explains rights</text>
+<text x="660" y="600" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">or unavailable context.</text>
+<text x="660" y="706" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="592">Required design behavior · verify in a future implementation</text>
+<rect x="16" y="740" width="616" height="204" rx="4" fill="#192230" stroke="#91A1B8" stroke-width="1"/>
+<rect x="16" y="740" width="616" height="32" rx="0" fill="#202D3E" stroke="none" stroke-width="1"/>
+<text x="28" y="762" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600" fill="#E6EDF5" data-max-width="592">Missing / stale dependency</text>
+<text x="28" y="800" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">Remove stale dynamic targets or retain a disabled identity with a reason;</text>
+<text x="28" y="820" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">never invoke a recycled ID.</text>
+<text x="28" y="926" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="592">Required design behavior · verify in a future implementation</text>
+<rect x="648" y="740" width="616" height="204" rx="4" fill="#192230" stroke="#91A1B8" stroke-width="1"/>
+<rect x="648" y="740" width="616" height="32" rx="0" fill="#202D3E" stroke="none" stroke-width="1"/>
+<text x="660" y="762" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600" fill="#E6EDF5" data-max-width="592">Narrow / short area</text>
+<text x="660" y="800" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">Clamp to the active OS work area, scroll long lists, preserve keyboard</text>
+<text x="660" y="820" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">focus and submenu access.</text>
+<text x="660" y="926" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="592">Required design behavior · verify in a future implementation</text>
+<text x="16" y="998" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="1248">State cards document local variants. They do not claim real commands, native behavior or performance.</text>
+</svg>

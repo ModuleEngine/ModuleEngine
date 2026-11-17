@@ -6,6 +6,12 @@
 
 Separate **Scene**, **Hierarchy**, **Inspector**, and **Assets** windows are used to arrange an authored scene. The **Game** window runs the game's Play copy; its camera and controls remain game-specific. Windows can be opened from Windows and placed in the editor layout.
 
+Registered mutable `.scene.json` sources appear beside imported resources;
+[scene files](scene-files.md) defines their separate IDs, storage and history.
+Use the scene overflow/File menu for file actions, object search/disclosure for
+navigation, and F2/context Rename for authored object names. The illustration
+below is an earlier authoring layout, not the current Hierarchy composition.
+
 ![Authoring windows, gizmo, and asset browser](media/editor-scene-assets.png)
 
 <a id="расстановка-объектов"></a>
@@ -14,14 +20,21 @@ Separate **Scene**, **Hierarchy**, **Inspector**, and **Assets** windows are use
 
 1. Select the authored scene and an object in Hierarchy or by clicking its geometry in Scene. Hierarchy, Inspector, and Scene share selection.
 2. Select **Move [G]**, **Rotate [R]**, or **Scale [S]** in Scene. Drag the corresponding handle with the mouse.
-3. **World** uses world axes; **Local** uses object axes. **Snap** enables position, angle, or scale increments for the selected tool.
+3. One **World/Local** button switches between world and object axes: the current mode shows a **globe** or **cube**, with named hover/focus help and the next mode in its tooltip. Local mode stays highlighted. **Speed**, beside it, sets camera flight speed. In a separate group, the **magnet (Snap)** enables increments and the **sliders (Snap settings)** opens Move/Rotate/Scale steps. Framing has its own group. Changing axes does not change snapping or camera speed.
 4. Releasing the left button completes one gesture and creates one Undo entry. **Escape** cancels an unfinished gesture. **Ctrl+Z / Ctrl+Y** undo and redo completed changes.
    Save, Open, Undo, and starting Play also cancel an unfinished drag before performing their action; release the handle first to preserve the new position.
 5. Numeric transform values and component fields can be edited in Inspector. Save the authored document with Ctrl+S.
 
 The first version selects one object. Simultaneous group changes and a shared group pivot are deferred. G/R/S/F apply to the active Scene; text fields retain their input.
 
-The Scene camera is free for inspection: **middle button** orbits the view, **Shift + middle button** pans, the **wheel** changes distance, and **F** focuses the selected object. This is personal view state rather than a game-camera change.
+Hold **right mouse button inside Scene**, move the mouse to look around, use **W/S** to fly forward/backward along the view direction and **A/D** to strafe, and **Q/E** to descend/ascend along world Y. Looking turns around the camera's position; it does not orbit the selection. Combined directions have the same speed as a single direction. **RMB + wheel up/down** increases/decreases flight speed (×1.25 per line step; 40 points is one equivalent step). It changes speed, not camera distance, and leaves no zoom tail on release. The adjacent **Speed** field also accepts dragging or typed numbers: default **8**, range **0.1–1000 world units/s**. Each area's speed is saved in its personal layout; older layouts default to 8. Speed remains editable during Play and does not affect game movement. Release RMB or press **Escape** to stop. Losing window/canvas focus, opening a popup, hiding the area or switching documents also ends flight; press RMB again to resume. Start on the canvas, not a toolbar, text field, popup or active object drag. While RMB is held, S moves backward instead of selecting Scale. Flight stays available for inspection during Play without changing the game camera.
+
+**Middle button** still orbits, **Shift + middle button** pans, the **wheel** changes distance, and **F** focuses the selected object. Navigation is personal view state: it creates no scene edits, Undo entries or compilation. Mouse look uses raw motion when available and otherwise pointer movement; this version does not lock/warp the OS cursor. A delayed frame is limited to 0.1 seconds of movement to avoid a large jump.
+
+Configured wheel modifiers for editor zoom/horizontal scrolling remain reserved;
+they do not change Scene camera distance or flight speed.
+
+At image widths below 400 logical points or heights below 160, a compact Scene menu keeps transform tools, axes, snapping and camera speed in separate sections. Otherwise the top groups share a 34-point height and 32-point control row. Their padding is 1 point, group/control gaps are 2, and image inset is 2; Speed is a 96-point field with room for 1000.0 at the unchanged font size. Snap increments remain reachable through their own settings button, independently of World/Local. Numeric menus stay open for text entry as well as dragging; an already-open menu respects Play and disabled-editor restrictions.
 
 Authored edits are made after Stop. Changing Play state does not write killed monsters or the player's position into the source scene.
 

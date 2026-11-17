@@ -31,7 +31,7 @@ fn run() -> Result<(), String> {
         Some("--help" | "-h") => {
             let executable = module_engine_player::package::PLAYER_EXECUTABLE;
             println!(
-                "ModuleEngine standalone Player\n  ./{executable} [--state-root <profile-folder>]\n  ./{executable} --verify-package <package-root> [output-folder]\n  ./{executable} --headless-check <package-root> [output-folder]\n  ./{executable} --benchmark <output-folder> [--state-root <profile-folder>]"
+                "ModuleEngine standalone Player\n  ./{executable} [--state-root <profile-folder>]\n  ./{executable} --verify-package <package-root> [output-folder]\n  ./{executable} --headless-check <package-root> [output-folder]\n  ./{executable} --benchmark <output-folder> [--state-root <profile-folder>]\n  ./{executable} --settings-check <absolute-output-folder> --state-root <profile-folder> [--choose <setting-id> <option-id>] [--deny-save]"
             );
             Ok(())
         }
@@ -57,9 +57,50 @@ fn run() -> Result<(), String> {
             fs::create_dir_all(output).map_err(|error| error.to_string())?;
             benchmark(&own_root()?, output, state_root.as_deref())
         }
+        Some("--settings-check") => settings_check(&own_root()?, &args[1..], state_root.as_deref()),
         None => play(&own_root()?, state_root.as_deref()),
         _ => Err("Unknown Player option; use --help".into()),
     }
+}
+#[cfg(feature = "ui")]
+fn settings_check(root: &Path, args: &[String], state_root: Option<&Path>) -> Result<(), String> {
+    let output = Path::new(
+        args.first()
+            .ok_or("Provide an absolute settings evidence directory")?,
+    );
+    let mut choice = None;
+    let mut deny_save = false;
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--choose" if choice.is_none() => {
+                choice = Some((
+                    args.get(index + 1).ok_or("Provide a setting ID")?.as_str(),
+                    args.get(index + 2).ok_or("Provide an option ID")?.as_str(),
+                ));
+                index += 3;
+            }
+            "--deny-save" if !deny_save => {
+                deny_save = true;
+                index += 1;
+            }
+            _ => return Err("Unknown or duplicate settings diagnostic argument".into()),
+        }
+    }
+    if deny_save && choice.is_none() {
+        return Err("--deny-save requires --choose".into());
+    }
+    let report =
+        module_engine_player::settings_check::run(root, output, state_root, choice, deny_save)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
+    );
+    Ok(())
+}
+#[cfg(not(feature = "ui"))]
+fn settings_check(_: &Path, _: &[String], _: Option<&Path>) -> Result<(), String> {
+    Err("Settings menu diagnostics require the ui feature".into())
 }
 fn take_state_root(args: &mut Vec<String>) -> Result<Option<PathBuf>, String> {
     let mut selected = None;

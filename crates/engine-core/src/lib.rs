@@ -6,6 +6,7 @@
 //! does not interpret arbitrary Rust or silently approximate unsupported routes.
 
 mod backend;
+mod capabilities;
 mod component_schema;
 mod composition;
 mod control;
@@ -18,11 +19,13 @@ mod registry;
 mod render;
 mod runtime;
 mod scenes;
+mod script_settings;
 mod settings;
 mod systems;
 mod world;
 
 pub use backend::*;
+pub use capabilities::*;
 pub use component_schema::*;
 pub use composition::*;
 pub use control::*;
@@ -35,6 +38,7 @@ pub use registry::*;
 pub use render::*;
 pub use runtime::*;
 pub use scenes::*;
+pub use script_settings::*;
 pub use settings::*;
 pub use systems::*;
 pub use world::*;

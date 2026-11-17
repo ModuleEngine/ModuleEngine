@@ -3,6 +3,114 @@ use super::*;
 use module_engine_core::{Comparison, PropertyScope, PropertyType, RuleCondition, VariantRule};
 use serde_json::{Value, json};
 
+#[derive(Clone, Default)]
+struct ProjectSettingsState {
+    section: String,
+    error: Option<String>,
+}
+
+fn project_settings_sections(
+    document: &GraphDocument,
+    registry: &ModuleRegistry,
+    schemas: &[(String, module_engine_core::PropertySchema)],
+) -> Vec<(String, String)> {
+    let mut sections = vec![];
+    if !document.engine.exposure.parameters.is_empty()
+        || !document.engine.exposure.variants.is_empty()
+    {
+        sections.push(("rendering".into(), "Rendering".into()));
+    }
+    let owners = schemas
+        .iter()
+        .map(|(owner, _)| owner)
+        .collect::<BTreeSet<_>>();
+    for owner in owners {
+        let label = registry
+            .descriptor(owner)
+            .map_or(owner.as_str(), |descriptor| descriptor.label.as_str());
+        sections.push((format!("module:{owner}"), label.into()));
+    }
+    sections
+}
+
+fn setting_help(ui: &mut egui::Ui, id: &str, help: &str) {
+    ui.push_id(("setting-help", id), |ui| {
+        ui.menu_button("?", |ui| {
+            ui.set_max_width(320.);
+            ui.label(help);
+        })
+        .response
+        .on_hover_text("About this setting");
+    });
+}
+
+fn setting_row<R>(
+    ui: &mut egui::Ui,
+    id: &str,
+    label: &str,
+    help: &str,
+    control: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let width = ui.available_width();
+    let label_width = (width * 0.4).clamp(80., 160.);
+    let value_width = (width - label_width - 28. - ui.spacing().item_spacing.x * 2.).max(64.);
+    ui.horizontal(|ui| {
+        ui.add_sized(egui::vec2(label_width, 28.), egui::Label::new(label).wrap());
+        let result = ui
+            .allocate_ui_with_layout(
+                egui::vec2(value_width, 28.),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.set_max_width(value_width);
+                    ui.style_mut().spacing.combo_width = value_width;
+                    ui.style_mut().spacing.text_edit_width = value_width;
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                    ui.push_id(("setting-value", id), control).inner
+                },
+            )
+            .inner;
+        setting_help(ui, id, help);
+        result
+    })
+    .inner
+}
+
+fn variant_setting_help(
+    document: &GraphDocument,
+    group: &module_engine_core::VariantGroup,
+) -> String {
+    let targets = group
+        .options
+        .values()
+        .flat_map(|variant| &variant.commands)
+        .filter_map(|command| match command {
+            module_engine_core::RenderCommand::SetEnabled { pass, .. }
+            | module_engine_core::RenderCommand::SetParameter { pass, .. } => Some(pass.as_str()),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    let graph = active_vulkan_node(document).and_then(|node| node.subgraph.as_deref());
+    let mut help = String::new();
+    if graph.is_some_and(|graph| {
+        graph
+            .nodes
+            .iter()
+            .any(|node| targets.contains(node.id.as_str()) && node.module == "gpu.fxaa")
+    }) {
+        help.push_str("Anti-aliasing (AA) smooths jagged edges. FXAA uses the current frame. Off disables the effect while keeping its pass. ");
+    }
+    if graph.is_some_and(|graph| {
+        graph
+            .nodes
+            .iter()
+            .any(|node| targets.contains(node.id.as_str()) && node.module == "gpu.ssao")
+    }) {
+        help.push_str("Ambient occlusion (AO) darkens occluded areas where surfaces are close. ");
+    }
+    help.push_str("Choose an Engine-prepared option. The first matching variant condition overrides this fallback choice; permitted runtime commands can also override it. Save Project with Ctrl+S.");
+    help
+}
+
 fn unused_control_id<T>(values: &BTreeMap<String, T>, base: &str, pass: &str) -> String {
     if !values.contains_key(base) {
         return base.into();
@@ -142,7 +250,7 @@ pub(crate) fn value_editor(
     value: &mut Value,
 ) -> bool {
     ui.push_id(id, |ui| {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label(label);
             match kind {
                 PropertyType::Number { min, max } => {
@@ -298,26 +406,157 @@ impl Editor {
         true
     }
     pub(super) fn project_settings_panel(&mut self, ui: &mut egui::Ui) {
-        ui.heading("General Project Settings");
+        let state_id = ui.make_persistent_id(("project-settings-section", self.path.as_str()));
+        let mut state = ui.ctx().data_mut(|data| {
+            data.get_temp::<ProjectSettingsState>(state_id)
+                .unwrap_or_default()
+        });
+        let schemas =
+            module_engine_core::visible_property_schemas(&self.document, &self.registry, None)
+                .into_iter()
+                .filter(|(_, schema)| {
+                    matches!(schema.scope, PropertyScope::Global | PropertyScope::Module)
+                })
+                .collect::<Vec<_>>();
+        let sections = project_settings_sections(&self.document, &self.registry, &schemas);
+        if !sections.iter().any(|(id, _)| id == &state.section) {
+            state.section = sections
+                .first()
+                .map(|(id, _)| id.clone())
+                .unwrap_or_default();
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.heading("Project Settings");
+            ui.menu_button("Help", |ui| {
+                ui.label("The Engine author defines available controls. Project selects exposed values and prepared variants.");
+                ui.label("Choices change authored settings immediately; the image refreshes after successful preparation. Save Project (Ctrl+S) stores the choice for reopening and export.");
+                self.render_settings_summary(ui, false);
+            });
+        });
+        self.project_settings_feedback(ui, &mut state.error);
         let mut candidate = self.document.clone();
         let mut changed = false;
-        ui.label("Engine-defined ranges and ready variants");
-        for (id, exposed) in &self.document.engine.exposure.parameters {
-            let mut value = candidate
-                .project
-                .parameters
-                .get(id)
-                .unwrap_or(&exposed.default)
-                .clone();
-            if value_editor(ui, id, &exposed.label, &exposed.value_type, &mut value) {
-                match module_engine_core::set_project_parameter(&mut candidate, id, value) {
-                    Ok(()) => changed = true,
-                    Err(error) => self.status = error,
+        if sections.is_empty() {
+            ui.label("No Project settings are exposed by the available capabilities.");
+        } else if ui.available_width() >= 680. {
+            ui.horizontal_top(|ui| {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(160., 0.),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.set_min_width(160.);
+                        for (id, label) in &sections {
+                            ui.selectable_value(&mut state.section, id.clone(), label);
+                        }
+                    },
+                );
+                ui.separator();
+                ui.vertical(|ui| {
+                    ui.set_min_width((ui.available_width() - 8.).max(180.));
+                    changed = self.project_settings_fields(
+                        ui,
+                        &mut candidate,
+                        &schemas,
+                        &sections,
+                        &mut state,
+                    );
+                });
+            });
+        } else {
+            let selector = egui::ComboBox::from_id_salt("settings-section")
+                .selected_text(
+                    sections
+                        .iter()
+                        .find(|(id, _)| id == &state.section)
+                        .map(|(_, label)| label.as_str())
+                        .unwrap_or_default(),
+                )
+                .show_ui(ui, |ui| {
+                    for (id, label) in &sections {
+                        ui.selectable_value(&mut state.section, id.clone(), label);
+                    }
+                })
+                .response
+                .on_hover_text(
+                    "Choose a settings section. When focused, use Up/Down to switch sections.",
+                );
+            if selector.has_focus() && !egui::ComboBox::is_open(ui.ctx(), selector.id) {
+                let current = sections
+                    .iter()
+                    .position(|(id, _)| id == &state.section)
+                    .unwrap_or(0);
+                let direction = ui.input_mut(|input| {
+                    if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
+                        Some(true)
+                    } else if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
+                        Some(false)
+                    } else {
+                        None
+                    }
+                });
+                if let Some(down) = direction {
+                    let next = if down {
+                        (current + 1).min(sections.len() - 1)
+                    } else {
+                        current.saturating_sub(1)
+                    };
+                    state.section = sections[next].0.clone();
+                    // These keys belong to this selector, not egui's spatial
+                    // focus navigation to another field or Editor area.
+                    ui.memory_mut(|memory| memory.move_focus(egui::FocusDirection::None));
+                    selector.request_focus();
                 }
             }
+            changed =
+                self.project_settings_fields(ui, &mut candidate, &schemas, &sections, &mut state);
         }
-        for (id, group) in &self.document.engine.exposure.variants {
-            ui.push_id(id, |ui| {
+        if changed {
+            if self.commit_properties(candidate, false) {
+                state.error = None;
+            } else {
+                state.error = Some(self.status.clone());
+            }
+        }
+        ui.ctx().data_mut(|data| data.insert_temp(state_id, state));
+    }
+
+    fn project_settings_fields(
+        &mut self,
+        ui: &mut egui::Ui,
+        candidate: &mut GraphDocument,
+        schemas: &[(String, module_engine_core::PropertySchema)],
+        sections: &[(String, String)],
+        state: &mut ProjectSettingsState,
+    ) -> bool {
+        let mut changed = false;
+        if let Some((_, label)) = sections.iter().find(|(id, _)| id == &state.section) {
+            ui.heading(label);
+        }
+        if state.section == "rendering" {
+            for (id, exposed) in &self.document.engine.exposure.parameters {
+                let mut value = candidate
+                    .project
+                    .parameters
+                    .get(id)
+                    .unwrap_or(&exposed.default)
+                    .clone();
+                if setting_row(
+                    ui,
+                    id,
+                    &exposed.label,
+                    "Choose a value within the Engine-defined range. Changes apply to authored settings immediately; save with Ctrl+S.",
+                    |ui| value_editor(ui, id, "", &exposed.value_type, &mut value),
+                ) {
+                    match module_engine_core::set_project_parameter(candidate, id, value) {
+                        Ok(()) => changed = true,
+                        Err(error) => {
+                            self.status = error.clone();
+                            state.error = Some(error);
+                        }
+                    }
+                }
+            }
+            for (id, group) in &self.document.engine.exposure.variants {
                 let mut selected = candidate
                     .project
                     .variants
@@ -325,54 +564,89 @@ impl Editor {
                     .unwrap_or(&group.default)
                     .clone();
                 let previous = selected.clone();
-                egui::ComboBox::from_id_salt("ready-variant")
-                    .selected_text(format!("{}: {}", group.label, selected))
-                    .show_ui(ui, |ui| {
-                        for (key, variant) in &group.options {
-                            ui.selectable_value(&mut selected, key.clone(), &variant.label);
-                        }
-                    });
+                setting_row(
+                    ui,
+                    id,
+                    &group.label,
+                    &variant_setting_help(&self.document, group),
+                    |ui| {
+                        egui::ComboBox::from_id_salt(("ready-variant", id))
+                            .width(ui.available_width())
+                            .wrap()
+                            .selected_text(super::render_settings_ui::variant_label(
+                                group, &selected,
+                            ))
+                            .show_ui(ui, |ui| {
+                                for (key, variant) in &group.options {
+                                    ui.selectable_value(&mut selected, key.clone(), &variant.label);
+                                }
+                            });
+                    },
+                );
                 if selected != previous {
-                    match module_engine_core::set_project_variant(&mut candidate, id, &selected) {
+                    match module_engine_core::set_project_variant(candidate, id, &selected) {
                         Ok(()) => changed = true,
-                        Err(error) => self.status = error,
+                        Err(error) => {
+                            self.status = error.clone();
+                            state.error = Some(error);
+                        }
                     }
                 }
-            });
-        }
-        let schemas =
-            module_engine_core::visible_property_schemas(&self.document, &self.registry, None);
-        for (owner, schema) in schemas {
-            let store = match schema.scope {
-                PropertyScope::Global => &mut candidate.properties.active.global,
-                PropertyScope::Module => candidate
-                    .properties
-                    .active
-                    .modules
-                    .entry(owner)
-                    .or_default(),
-                _ => continue,
-            };
-            let mut value = store.get(&schema.id).unwrap_or(&schema.default).clone();
-            if value_editor(
-                ui,
-                &schema.id,
-                &schema.label,
-                &schema.value_type,
-                &mut value,
-            ) {
-                store.insert(schema.id, value);
-                changed = true;
+            }
+        } else {
+            for (owner, schema) in schemas
+                .iter()
+                .filter(|(owner, _)| state.section == format!("module:{owner}"))
+            {
+                let store = match schema.scope {
+                    PropertyScope::Global => &mut candidate.properties.active.global,
+                    PropertyScope::Module => candidate
+                        .properties
+                        .active
+                        .modules
+                        .entry(owner.clone())
+                        .or_default(),
+                    _ => continue,
+                };
+                let mut value = store.get(&schema.id).unwrap_or(&schema.default).clone();
+                if setting_row(
+                    ui,
+                    &schema.id,
+                    &schema.label,
+                    &format!(
+                        "{} contributes this field. Its value must satisfy {:?}.",
+                        owner, schema.value_type
+                    ),
+                    |ui| value_editor(ui, &schema.id, "", &schema.value_type, &mut value),
+                ) {
+                    store.insert(schema.id.clone(), value);
+                    changed = true;
+                }
             }
         }
-        ui.separator();
+        if state.section == "rendering" && !candidate.engine.exposure.variants.is_empty() {
+            egui::CollapsingHeader::new("Variant conditions")
+                .default_open(false)
+                .show(ui, |ui| {
+                    changed |= self.project_settings_conditions(ui, candidate)
+                });
+        }
+        changed
+    }
+
+    fn project_settings_conditions(
+        &self,
+        ui: &mut egui::Ui,
+        candidate: &mut GraphDocument,
+    ) -> bool {
+        let mut changed = false;
         ui.label("Conditions select existing variants; first matching rule per group wins.");
         let groups = self.document.engine.exposure.variants.clone();
         let parameters = self.document.engine.exposure.parameters.clone();
         let mut remove = None;
         for (index, rule) in candidate.project.rules.iter_mut().enumerate() {
             ui.push_id(("rule", index), |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label(format!("Rule {}", index + 1));
                     if ui.small_button("Remove").clicked() {
                         remove = Some(index);
@@ -402,7 +676,7 @@ impl Editor {
                     });
                 let mut time = matches!(rule.condition, RuleCondition::Time { .. });
                 let previous = time;
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.selectable_value(&mut time, true, "Time");
                     ui.selectable_value(&mut time, false, "Parameter");
                 });
@@ -488,12 +762,7 @@ impl Editor {
             });
             changed = true;
         }
-        if self.document.engine.exposure.parameters.is_empty() && groups.is_empty() {
-            ui.label("Engine author has not exposed project controls for this engine.");
-        }
-        if changed {
-            self.commit_properties(candidate, false);
-        }
+        changed
     }
     pub(super) fn object_tree_panel(&mut self, ui: &mut egui::Ui, selected: &mut Option<u64>) {
         ui.heading("Object Tree");
@@ -521,7 +790,7 @@ impl Editor {
             }
             for object in objects.iter().filter(|o| o.parent == parent) {
                 ui.push_id(object.id, |ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.add_space(depth as f32 * 12.0);
                         if ui
                             .selectable_label(
@@ -555,7 +824,7 @@ impl Editor {
         if !*pinned {
             *selected = self.active_object;
         }
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui.button("Use tree selection").clicked() {
                 *selected = self.active_object;
             }
@@ -589,7 +858,7 @@ impl Editor {
                 ("Rotation", &mut object.transform.rotation),
                 ("Scale", &mut object.transform.scale),
             ] {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label(label);
                     for value in values.iter_mut() {
                         world_changed |= ui.add(egui::DragValue::new(value).speed(0.02)).changed();
@@ -597,7 +866,7 @@ impl Editor {
                 });
             }
         });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label("Color");
             for value in &mut object.color {
                 world_changed |= ui.add(egui::DragValue::new(value).range(0..=255)).changed();
@@ -722,10 +991,11 @@ impl Editor {
         ui.heading("Engine Exposure");
         let mut candidate = self.document.clone();
         let mut changed = false;
-        ui.label("Only these definitions are editable from Project settings.");
+        ui.label("Engine authors define passes and the available Project controls. Project authors can change only the exposed values and prepared variants.");
+        self.render_settings_summary(ui, false);
         let mut remove_parameter = None;
         for (id, definition) in &self.document.engine.exposure.parameters {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label(format!("{} ({id})", definition.label));
                 if ui.small_button("Stop exposing").clicked() {
                     remove_parameter = Some(id.clone());
@@ -806,7 +1076,7 @@ impl Editor {
                 ));
                 changed |= ui.text_edit_singleline(&mut parameter.label).changed();
                 if let PropertyType::Number { min, max } = &mut parameter.value_type {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.label("Allowed min / max");
                         changed |= ui.add(egui::DragValue::new(min).speed(0.02)).changed();
                         changed |= ui.add(egui::DragValue::new(max).speed(0.02)).changed();
@@ -929,6 +1199,367 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn compact_settings_editor() -> Editor {
+        let mut document = crate::host::gpu_document(WorldKind::Objects, RenderPath::Forward);
+        crate::host::ensure_authoring_configuration(&mut document);
+        let mut editor = Editor::new(
+            module_engine_core::demo_document(WorldKind::Objects),
+            project::source_root().join("unused-compact-settings.json"),
+        );
+        editor.runtime = None;
+        editor
+            .registry
+            .register_module(module_engine_core::ModuleDescriptor {
+                id: "test.settings".into(),
+                label: "Module options".into(),
+                description: "Settings fixture".into(),
+                inputs: vec![],
+                outputs: vec![],
+                properties: vec![module_engine_core::PropertySchema {
+                    id: "test.settings.enabled".into(),
+                    label: "Enabled".into(),
+                    scope: PropertyScope::Global,
+                    value_type: PropertyType::Boolean,
+                    default: json!(false),
+                    requires_modules: vec![],
+                    requires_components: vec![],
+                }],
+            })
+            .unwrap();
+        document
+            .engine
+            .enabled_modules
+            .insert("test.settings".into());
+        editor.policy_baseline = document.clone();
+        editor.history = SnapshotHistory::new(document.clone(), 200);
+        editor.document = document;
+        editor
+    }
+
+    fn settings_frame(
+        editor: &mut Editor,
+        ctx: &egui::Context,
+        width: f32,
+        pane: &str,
+        events: Vec<egui::Event>,
+    ) -> (egui::FullOutput, egui::Id, egui::Id) {
+        let mut state_id = egui::Id::NULL;
+        let mut selector_id = egui::Id::NULL;
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, 300.),
+                )),
+                focused: true,
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                ui.push_id(pane, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        state_id = ui
+                            .make_persistent_id(("project-settings-section", editor.path.as_str()));
+                        selector_id = ui.make_persistent_id(egui::IdSalt::new("settings-section"));
+                        editor.project_settings_panel(ui);
+                    });
+                });
+            },
+        );
+        (output, state_id, selector_id)
+    }
+
+    fn key(key: egui::Key) -> Vec<egui::Event> {
+        vec![egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        }]
+    }
+
+    fn click(pos: egui::Pos2) -> Vec<egui::Event> {
+        vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            },
+        ]
+    }
+
+    fn text_rect(output: &egui::FullOutput, label: &str) -> egui::Rect {
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == label => {
+                    Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("Missing settings text: {label}"))
+    }
+
+    #[test]
+    fn project_settings_controls_fit_320_360_480_and_wide_without_idle_prose() {
+        let mut editor = compact_settings_editor();
+        let before = editor.document.clone();
+        let history = editor.history.entries().len();
+        for width in [320., 360., 480., 900.] {
+            let ctx = egui::Context::default();
+            super::super::configure_style(&ctx);
+            let (output, _, _) = settings_frame(&mut editor, &ctx, width, "settings", vec![]);
+            for label in [
+                "Help",
+                "Exposure",
+                "Antialiasing",
+                "FXAA",
+                "Tone mapping",
+                "ACES",
+                "?",
+            ] {
+                assert!(
+                    output.shapes.iter().any(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == label => shape
+                            .clip_rect
+                            .contains_rect(egui::Rect::from_min_size(text.pos, text.galley.size())),
+                        _ => false,
+                    }),
+                    "{label} must be fully inside the initial {width}x300 viewport"
+                );
+            }
+            if width >= 680. {
+                let rendering = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == "Rendering" => {
+                            Some(text.pos.x)
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                assert!(
+                    rendering.len() >= 2 && rendering[1] - rendering[0] >= 150.,
+                    "wide pane needs left navigation and right content heading"
+                );
+            }
+            for shape in &output.shapes {
+                if let egui::Shape::Text(text) = &shape.shape {
+                    assert!(!text.galley.text().contains("The Engine author"));
+                    assert!(!text.galley.text().contains("No preparation"));
+                    assert!(!text.galley.text().contains("first matching rule"));
+                }
+            }
+            output.drop_without_applying_deltas();
+        }
+        assert_eq!(editor.document, before);
+        assert_eq!(editor.history.entries().len(), history);
+    }
+
+    #[test]
+    fn narrow_settings_sections_switch_by_keyboard_and_keep_pane_project_state_separate() {
+        let mut editor = compact_settings_editor();
+        let ctx = egui::Context::default();
+        super::super::configure_style(&ctx);
+        let before = editor.document.clone();
+        let history = editor.history.entries().len();
+        let (output, state_id, selector_id) =
+            settings_frame(&mut editor, &ctx, 360., "first", vec![]);
+        output.drop_without_applying_deltas();
+        ctx.memory_mut(|memory| memory.request_focus(selector_id));
+        let (output, _, _) =
+            settings_frame(&mut editor, &ctx, 360., "first", key(egui::Key::ArrowDown));
+        text_rect(&output, "Enabled");
+        assert_eq!(
+            ctx.data_mut(|data| data
+                .get_temp::<ProjectSettingsState>(state_id)
+                .unwrap()
+                .section),
+            "module:test.settings"
+        );
+        output.drop_without_applying_deltas();
+        let (output, second_id, _) = settings_frame(&mut editor, &ctx, 360., "second", vec![]);
+        text_rect(&output, "FXAA");
+        assert_ne!(state_id, second_id);
+        output.drop_without_applying_deltas();
+        editor.path.push_str(".another-project");
+        let (output, next_project_id, _) = settings_frame(&mut editor, &ctx, 360., "first", vec![]);
+        text_rect(&output, "FXAA");
+        assert_ne!(state_id, next_project_id);
+        output.drop_without_applying_deltas();
+        assert_eq!(editor.document, before);
+        assert_eq!(editor.history.entries().len(), history);
+    }
+
+    #[test]
+    fn settings_help_and_conditions_are_opt_in_and_do_not_edit_the_document() {
+        let mut editor = compact_settings_editor();
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|style| style.animation_time = 0.);
+        let before = editor.document.clone();
+        let history = editor.history.entries().len();
+        let (output, _, _) = settings_frame(&mut editor, &ctx, 480., "settings", vec![]);
+        let help = text_rect(&output, "Help").center();
+        output.drop_without_applying_deltas();
+        settings_frame(&mut editor, &ctx, 480., "settings", click(help))
+            .0
+            .drop_without_applying_deltas();
+        let (output, _, _) = settings_frame(&mut editor, &ctx, 480., "settings", vec![]);
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains("The Engine author defines"))));
+        output.drop_without_applying_deltas();
+        settings_frame(&mut editor, &ctx, 480., "settings", key(egui::Key::Escape))
+            .0
+            .drop_without_applying_deltas();
+        let (output, _, _) = settings_frame(&mut editor, &ctx, 480., "settings", vec![]);
+        let conditions = text_rect(&output, "Variant conditions").center();
+        output.drop_without_applying_deltas();
+        settings_frame(&mut editor, &ctx, 480., "settings", click(conditions))
+            .0
+            .drop_without_applying_deltas();
+        assert_eq!(editor.document, before);
+        assert_eq!(editor.history.entries().len(), history);
+    }
+
+    #[test]
+    fn narrow_render_field_supports_keyboard_changes_through_project_commit() {
+        let mut editor = compact_settings_editor();
+        // Keep the real installed composition as the acceptance boundary. The
+        // synthetic module above is useful for navigation, not native commits.
+        editor
+            .document
+            .engine
+            .enabled_modules
+            .remove("test.settings");
+        editor.policy_baseline = editor.document.clone();
+        let graph = editor.document.root.clone();
+        let ctx = egui::Context::default();
+        super::super::configure_style(&ctx);
+        let (output, _, _) = settings_frame(&mut editor, &ctx, 360., "settings", vec![]);
+        let label = text_rect(&output, "Exposure");
+        output.drop_without_applying_deltas();
+        let mut reached = false;
+        for _ in 0..12 {
+            let (output, _, _) =
+                settings_frame(&mut editor, &ctx, 360., "settings", key(egui::Key::Tab));
+            if let Some(response) = ctx
+                .memory(|memory| memory.focused())
+                .and_then(|id| ctx.read_response(id))
+            {
+                reached = response.rect.left() > label.right()
+                    && response.rect.right() < 300.
+                    && (response.rect.center().y - label.center().y).abs() < 18.;
+            }
+            output.drop_without_applying_deltas();
+            if reached {
+                break;
+            }
+        }
+        assert!(reached, "Tab must reach the actual exposed numeric field");
+        settings_frame(
+            &mut editor,
+            &ctx,
+            360.,
+            "settings",
+            vec![egui::Event::Text("1.5".into())],
+        )
+        .0
+        .drop_without_applying_deltas();
+        assert_eq!(
+            editor.document.project.parameters.get("exposure"),
+            Some(&json!(1.5)),
+            "{}",
+            editor.status
+        );
+        assert_eq!(editor.document.root, graph);
+        assert!(
+            editor.history_dirty,
+            "The accepted keyboard change uses normal Project history"
+        );
+    }
+    #[test]
+    fn rejected_project_commit_keeps_the_reason_visible_and_the_document_unchanged() {
+        let mut editor = compact_settings_editor();
+        editor
+            .document
+            .properties
+            .active
+            .global
+            .insert("test.settings.enabled".into(), json!("invalid Boolean"));
+        let before = editor.document.clone();
+        let history = editor.history.entries().len();
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|style| style.animation_time = 0.);
+        let (output, state_id, _) = settings_frame(&mut editor, &ctx, 480., "settings", vec![]);
+        let variant = text_rect(&output, "FXAA").center();
+        output.drop_without_applying_deltas();
+        settings_frame(&mut editor, &ctx, 480., "settings", click(variant))
+            .0
+            .drop_without_applying_deltas();
+        let (output, _, _) = settings_frame(&mut editor, &ctx, 480., "settings", vec![]);
+        let off = text_rect(&output, "Off").center();
+        output.drop_without_applying_deltas();
+        settings_frame(&mut editor, &ctx, 480., "settings", click(off))
+            .0
+            .drop_without_applying_deltas();
+        let error = ctx
+            .data_mut(|data| {
+                data.get_temp::<ProjectSettingsState>(state_id)
+                    .unwrap()
+                    .error
+            })
+            .expect("Rejected commit must retain its diagnostic in this pane");
+        editor.status = "Unrelated operation".into();
+        let (output, _, _) = settings_frame(&mut editor, &ctx, 480., "settings", vec![]);
+        text_rect(&output, error.lines().next().unwrap());
+        text_rect(&output, "Correct the setting or undo the last edit.");
+        output.drop_without_applying_deltas();
+        assert_eq!(editor.document, before);
+        assert_eq!(editor.history.entries().len(), history);
+    }
+
+    #[test]
+    fn settings_sections_hide_unavailable_capabilities_and_preserve_visible_errors() {
+        let mut editor = compact_settings_editor();
+        editor.document.engine.exposure = Default::default();
+        editor.document.engine.enabled_modules.clear();
+        let ctx = egui::Context::default();
+        let before = editor.document.clone();
+        let (output, state_id, _) = settings_frame(&mut editor, &ctx, 480., "settings", vec![]);
+        text_rect(
+            &output,
+            "No Project settings are exposed by the available capabilities.",
+        );
+        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Module options" || text.galley.text() == "Rendering")));
+        output.drop_without_applying_deltas();
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                state_id,
+                ProjectSettingsState {
+                    section: String::new(),
+                    error: Some("Rejected setting: option unavailable".into()),
+                },
+            )
+        });
+        for _ in 0..2 {
+            let (output, _, _) = settings_frame(&mut editor, &ctx, 480., "settings", vec![]);
+            text_rect(&output, "Rejected setting: option unavailable");
+            text_rect(&output, "Correct the setting or undo the last edit.");
+            output.drop_without_applying_deltas();
+        }
+        assert_eq!(editor.document, before);
+    }
 
     #[test]
     fn presets_use_real_passes_and_preserve_authored_variants_and_project_choices() {

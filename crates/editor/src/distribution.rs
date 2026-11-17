@@ -880,8 +880,25 @@ const NATIVE_FILES: &[&str] = &[
     "crates/render-vulkan/src/presentation.rs",
     "crates/render-vulkan/src/retirement.rs",
     "crates/editor/src/source_modules.rs",
+    "crates/editor/src/engine_overview.rs",
+    "crates/editor/src/render_settings_ui.rs",
+    "crates/editor/src/render_settings_verification.rs",
+    "crates/editor/src/player_settings_verification.rs",
+    "crates/engine-core/src/script_settings.rs",
+    "crates/game-host/src/player_settings.rs",
+    "crates/player/src/script_ui.rs",
+    "crates/player/src/settings_check.rs",
+    "crates/editor/src/editor_ui.rs",
+    "crates/editor/src/inspector_drafts.rs",
+    "crates/editor/src/node_drafts.rs",
+    "crates/editor/src/scene_sources.rs",
+    "crates/editor/src/hierarchy_ui.rs",
+    "crates/editor/src/workspaces.rs",
+    "crates/editor/src/native_windows.rs",
     "crates/engine-core/src/component_schema.rs",
     "crates/engine-core/src/composition.rs",
+    "crates/engine-core/src/capabilities.rs",
+    "crates/player/src/capabilities.rs",
     "crates/editor/src/workspace_files.rs",
     "crates/editor/src/native_dialogs.rs",
     "crates/editor/src/editor_workflow.rs",
@@ -947,6 +964,7 @@ const NATIVE_FILES: &[&str] = &[
     "Cargo.toml",
     "Cargo.lock",
     "crates/editor/Cargo.toml",
+    "crates/editor/assets/editor.ico",
     "crates/editor/src/main.rs",
     "crates/editor/src/app.rs",
     "crates/editor/src/host.rs",
@@ -989,6 +1007,7 @@ const NATIVE_FILES: &[&str] = &[
     "crates/project-tools/src/lib.rs",
     "crates/project-tools/src/assets.rs",
     "crates/project-tools/src/asset_workspace.rs",
+    "crates/project-tools/src/scene_files.rs",
     "crates/project-tools/src/history.rs",
     "crates/project-tools/src/merge.rs",
     "assets/gpu/forward.hlsl",
@@ -1007,7 +1026,11 @@ const NATIVE_FILES: &[&str] = &[
 fn native_source_path(path: &str) -> bool {
     matches!(
         path,
-        "Cargo.toml" | "Cargo.lock" | "engine-sdk.json" | "assets/engine-contracts/v0.4.0.json"
+        "Cargo.toml"
+            | "Cargo.lock"
+            | "engine-sdk.json"
+            | "assets/engine-contracts/v0.4.0.json"
+            | "crates/editor/assets/editor.ico"
     ) || (path.starts_with("crates/") && (path.ends_with(".rs") || path.ends_with("Cargo.toml")))
         || path.ends_with(".hlsl")
         || path.ends_with(".hlsli")
@@ -1234,6 +1257,16 @@ mod delivery_tests {
         let doc = crate::host::settings_demo_document(WorldKind::Objects);
         let m = write_full_manifest(&root, &doc).unwrap();
         assert!(inspect_full_sources(&root, &m, &doc).available);
+        let icon = "crates/editor/assets/editor.ico";
+        assert!(m.files.contains_key(icon));
+        assert!(!native_source_path("crates/editor/assets/unrelated.ico"));
+        let icon_bytes = fs::read(root.join(icon)).unwrap();
+        fs::remove_file(root.join(icon)).unwrap();
+        assert!(!inspect_full_sources(&root, &m, &doc).available);
+        fs::write(root.join(icon), icon_bytes).unwrap();
+        let mut omitted = m.clone();
+        omitted.files.remove(icon);
+        assert!(!inspect_full_sources(&root, &omitted, &doc).available);
         // Actual Rust source remains editable after sealing.
         let p = root.join("crates/editor/src/host.rs");
         let original = fs::read(&p).unwrap();
@@ -1258,8 +1291,26 @@ mod delivery_tests {
         fs::write(&p, &original).unwrap();
         for required in [
             "crates/editor/src/source_modules.rs",
+            "crates/editor/src/engine_overview.rs",
+            "crates/editor/src/render_settings_ui.rs",
+            "crates/editor/src/render_settings_verification.rs",
+            "crates/editor/src/player_settings_verification.rs",
+            "crates/engine-core/src/script_settings.rs",
+            "crates/game-host/src/player_settings.rs",
+            "crates/player/src/script_ui.rs",
+            "crates/player/src/settings_check.rs",
+            "crates/editor/src/editor_ui.rs",
+            "crates/editor/src/inspector_drafts.rs",
+            "crates/editor/src/node_drafts.rs",
+            "crates/editor/src/scene_sources.rs",
+            "crates/editor/src/hierarchy_ui.rs",
+            "crates/editor/src/workspaces.rs",
+            "crates/editor/src/native_windows.rs",
+            "crates/project-tools/src/scene_files.rs",
             "crates/engine-core/src/component_schema.rs",
             "crates/engine-core/src/composition.rs",
+            "crates/engine-core/src/capabilities.rs",
+            "crates/player/src/capabilities.rs",
             "crates/engine-core/src/presentation.rs",
             "crates/game-host/src/presentation_tests.rs",
             "crates/game-host/src/game_wait.rs",

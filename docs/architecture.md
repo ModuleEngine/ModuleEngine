@@ -6,6 +6,16 @@
 
 The project stores its architecture, authored scenes, and source code in editable JSON. `ModuleRegistry` describes root world/render modules; `SystemRegistry` installs executable gameplay subsystems. A neutral snapshot separates world storage from rendering, while owned commands and state separate Rust Custom from specific storage implementations and Vulkan.
 
+Technical engine capability, reusable gameplay and concrete game rules have
+different owners. Combat, health, equipment and victory remain gameplay even
+when reusable or registered through shared infrastructure. The accepted
+[composition/editor direction](engine-composition-direction.md) clarifies this
+boundary and graph roles. Current scope is one configurable engine with multiple
+game projects; independent Engine management is deferred.
+[Engine Overview](engine-overview.md) reads the capability inventory and navigates
+to existing tools; it does not add an execution path. The architecture map remains
+planned work.
+
 <a id="пакеты-и-границы"></a>
 
 ## Packages and boundaries
@@ -104,3 +114,8 @@ Merge normalizes ordinary Graph nodes by ID and edges by input. Scene object arr
 More detail: [format](graph-format.md), [module execution](module-execution.md), [scenes](scenes.md), [game editor](editor-game.md), [content](content.md), [Custom state](custom-state.md), [history](history-assets.md).
 
 The precise format 4 contracts, explicit profile publication, migration into a copy, and separate feature-selected Players are described in [Engine profiles](engine-profiles.md). The shared Host does not depend on the editor; Player and the editor install the same source contracts through composition.
+
+Authored scene bodies are hydrated in Core; versioned source IO belongs to
+ProjectTools. [Separate scene files](scene-files.md) define project bindings,
+accepted disk generations, copy independence, source trash/history and the
+embedded Player projection. UI selection never defines runtime ownership.

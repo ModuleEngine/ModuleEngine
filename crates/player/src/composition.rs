@@ -89,10 +89,18 @@ pub fn service_registry() -> Result<HostServiceRegistry, String> {
         let mut services = services;
         match default_state_root() {
             Ok(root) => module_engine_host_services::install_persistence_at(&mut services, root)?,
-            Err(error) => services.register(
-                module_engine_host_services::PERSISTENCE_SERVICE_ID,
-                move |_, _| Err(error.clone()),
-            )?,
+            Err(error) => {
+                let unavailable = module_engine_core::CapabilityFact::known(false, error.clone());
+                services.register(
+                    module_engine_host_services::PERSISTENCE_SERVICE_ID,
+                    move |_, _| Err(error.clone()),
+                )?;
+                services.describe_service(
+                    module_engine_host_services::PERSISTENCE_SERVICE_ID,
+                    module_engine_host_services::persistence_capability_metadata(),
+                    unavailable,
+                )?;
+            }
         }
         services
     };

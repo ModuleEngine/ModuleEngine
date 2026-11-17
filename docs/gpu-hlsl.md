@@ -18,6 +18,13 @@ The renderer executes raster and compute passes on Vulkan. In the editor, DXC co
 | gpu.color_encode | Linear LDR → rgba8unorm/srgb_display. |
 | gpu.custom | Custom raster/compute pass with params.manifest and source_id. |
 
+`gpu.ssao` reconstructs camera-relative world positions from camera-linear depth
+and the shared camera basis. A neighbor contributes only above the receiver's
+tangent plane and within the distance falloff; an unobstructed oblique plane
+must not darken itself. The eight screen offsets and strength remain the narrow
+built-in approximation, not a full physical occlusion model. See the
+[plane/halo regression and delivery](release-042-ssao-verification.md).
+
 <a id="редактирование-в-engine"></a>
 
 ## Editing in Engine

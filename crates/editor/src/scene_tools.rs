@@ -17,8 +17,19 @@ const EPSILON: f32 = 1.0e-6;
 const NEAR: f32 = 0.08;
 const FAR: f32 = 2000.;
 const HANDLE_PIXELS: f32 = 84.;
+pub const DEFAULT_CAMERA_SPEED: f32 = 8.;
+pub const MIN_CAMERA_SPEED: f32 = 0.1;
+pub const MAX_CAMERA_SPEED: f32 = 1000.;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub fn camera_speed(value: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(MIN_CAMERA_SPEED, MAX_CAMERA_SPEED)
+    } else {
+        DEFAULT_CAMERA_SPEED
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Tool {
     #[default]
     Translate,
@@ -46,13 +57,14 @@ impl Axis {
         result
     }
 }
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Space {
     #[default]
     World,
     Local,
 }
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Snap {
     pub enabled: bool,
     /// Translation step in world units along the chosen axis.
@@ -153,6 +165,62 @@ fn camera_basis(camera: Camera, rect: Rect) -> Option<CameraBasis> {
         aspect: rect.aspect_ratio(),
         tangent: (55_f32.to_radians() * 0.5).tan(),
     })
+}
+
+/// Personal Scene flight: look around the eye, then move at the selected speed.
+/// Input is [camera right, world up, camera forward]; distance stays intact.
+/// Clamp elapsed time after a stalled frame and normalize diagonal input.
+pub fn fly_camera(
+    camera: &mut Camera,
+    rect: Rect,
+    look: Vec2,
+    movement: [f32; 3],
+    speed: f32,
+    seconds: f32,
+) {
+    let Some(before) = camera_basis(*camera, rect) else {
+        return;
+    };
+    if look.is_finite() && look != Vec2::ZERO {
+        camera.yaw = if camera.yaw.is_finite() {
+            camera.yaw
+        } else {
+            0.55
+        } - look.x * 0.006;
+        camera.pitch = ((if camera.pitch.is_finite() {
+            camera.pitch
+        } else {
+            0.3
+        }) + look.y * 0.006)
+            .clamp(-1.45, 1.45);
+        let distance = if camera.distance.is_finite() {
+            camera.distance.clamp(0.2, 1000.)
+        } else {
+            8.
+        };
+        camera.distance = distance;
+        let forward = [
+            -camera.yaw.sin() * camera.pitch.cos(),
+            -camera.pitch.sin(),
+            -camera.yaw.cos() * camera.pitch.cos(),
+        ];
+        camera.target = add(before.eye, mul(forward, distance));
+    }
+    if finite(movement) && movement != [0.; 3] && seconds.is_finite() {
+        let Some(basis) = camera_basis(*camera, rect) else {
+            return;
+        };
+        let direction = add(
+            add(mul(basis.right, movement[0]), [0., movement[1], 0.]),
+            mul(basis.forward, movement[2]),
+        );
+        if let Some(direction) = normalize(direction) {
+            camera.target = add(
+                camera.target,
+                mul(direction, camera_speed(speed) * seconds.clamp(0., 0.1)),
+            );
+        }
+    }
 }
 
 /// Project a world point using the renderer's 55-degree perspective camera.
@@ -827,6 +895,84 @@ mod tests {
         }
     }
 
+    #[test]
+    fn flight_turns_at_a_fixed_eye_and_moves_with_frame_independent_diagonal_speed() {
+        let mut view = camera();
+        let eye = camera_basis(view, area()).unwrap().eye;
+        fly_camera(
+            &mut view,
+            area(),
+            Vec2::new(70., -30.),
+            [0.; 3],
+            DEFAULT_CAMERA_SPEED,
+            0.016,
+        );
+        let turned = camera_basis(view, area()).unwrap();
+        for (actual, expected) in turned.eye.into_iter().zip(eye) {
+            close(actual, expected);
+        }
+        close(view.distance, 10.);
+        assert!(view.yaw < 0. && view.pitch < camera().pitch);
+        for hz in [30, 60, 144] {
+            for movement in [Vec2::Y, Vec2::X, Vec2::ONE, -Vec2::Y, -Vec2::X] {
+                let mut view = camera();
+                for _ in 0..hz {
+                    fly_camera(
+                        &mut view,
+                        area(),
+                        Vec2::ZERO,
+                        [movement.x, 0., movement.y],
+                        DEFAULT_CAMERA_SPEED,
+                        1. / hz as f32,
+                    );
+                }
+                close(length(sub(view.target, camera().target)), 8.);
+                let expected = normalize(add(
+                    mul(camera_basis(camera(), area()).unwrap().right, movement.x),
+                    mul(camera_basis(camera(), area()).unwrap().forward, movement.y),
+                ))
+                .unwrap();
+                close(dot(normalize(view.target).unwrap(), expected), 1.);
+            }
+        }
+        let mut view = camera();
+        fly_camera(
+            &mut view,
+            area(),
+            Vec2::ZERO,
+            [0., 0., 1.],
+            DEFAULT_CAMERA_SPEED,
+            20.,
+        );
+        close(length(view.target), 0.8);
+        fly_camera(
+            &mut view,
+            area(),
+            Vec2::new(0., 100000.),
+            [0.; 3],
+            DEFAULT_CAMERA_SPEED,
+            0.,
+        );
+        close(view.pitch, 1.45);
+    }
+    #[test]
+    fn flight_vertical_is_world_aligned_and_combined_axes_keep_selected_speed() {
+        for up in [-1., 1.] {
+            let mut view = camera();
+            fly_camera(&mut view, area(), Vec2::ZERO, [0., up, 0.], 20., 0.1);
+            assert_eq!(view.target, [0., up * 2., 0.]);
+        }
+        for speed in [MIN_CAMERA_SPEED, 8., 24., MAX_CAMERA_SPEED] {
+            for movement in [[1., 1., 1.], [0., -1., 1.], [1., 0., 1.]] {
+                let mut view = camera();
+                fly_camera(&mut view, area(), Vec2::ZERO, movement, speed, 0.05);
+                close(length(view.target), speed * 0.05);
+            }
+        }
+        let mut view = camera();
+        fly_camera(&mut view, area(), Vec2::ZERO, [0., 1., 0.], f32::NAN, 0.1);
+        close(view.target[1], DEFAULT_CAMERA_SPEED * 0.1);
+    }
     #[test]
     fn projection_ray_agree_at_offset_viewport_and_clip_camera_depth() {
         let rect = area();

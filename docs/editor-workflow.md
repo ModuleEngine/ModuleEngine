@@ -19,7 +19,7 @@ Engine-owned labels, help, status, progress, and error messages in Editor, Playe
 ## First Working Route
 
 1. Choose **File → New Project → Empty scene** or **Two arenas example**. In the system dialog, select a new or empty project directory. It may be, for example, in `projects/` or `outputs/` of the installed engine, but not inside the resource library being copied. It will contain `project.json`, resources, and a binding to the installed Engine; after successful creation, the editor switches to the new project.
-2. Open **Windows → Scene**, **Hierarchy**, **Inspector**, and **Assets**. Import glTF/GLB or PNG/JPEG through **File → Import Asset…** or **Import…** in Assets. Drag a model into Scene to create an object; select it by clicking or through Hierarchy, and change its transform with Move/Rotate/Scale handles. Drag a texture onto an object or assign it through Inspector. WAV import adds an audio file for subsequent use by game events. Keep the Game window for Play.
+2. Open **Windows → Authoring → Scene**, **Hierarchy**, **Inspector**, and **Assets**. Import glTF/GLB or PNG/JPEG through **File → Import Asset…** or **Import…** in Assets. Drag a model into Scene to create an object; select it by clicking or through Hierarchy, and change its transform with Move/Rotate/Scale handles. Drag a texture onto an object or assign it through Inspector. WAV import adds an audio file for subsequent use by game events. Keep the Game window for Play.
 3. Press **Ctrl+S**. For a separate copy, choose **File → Save As…**, another directory, and a JSON name. After completion, work continues with the copy. The original stays in place. If an existing destination file is selected, Windows asks for confirmation before replacing it.
 4. Through **File → Open Project…** or **Recent Projects**, reopen the saved JSON. Its scenes, templates, Custom sources, and settings will be read together with resources from that directory.
 5. Run **Tools → Check Project**, then **Tools → Build Windows Player…**. Choose a new or empty build directory. After successful export, launch `Player.exe` from it. Player uses prebuilt Rust workers and SPIR-V; Rust/Cargo/DXC are not needed on the player's machine. Windows GUI presentation uses WGPU/DX12 and requires DX12 support; a project using the Vulkan game renderer additionally needs a compatible Vulkan driver.
@@ -167,17 +167,93 @@ Import reserves a separate new directory for one file set. If copying, dependenc
 
 ## Windows and Personal Layout
 
+The fresh **Engine** layout starts with **Engine Overview**. Existing saved
+layouts are retained. Open **Windows → Composition → Engine Overview** to inspect the current
+project/configuration, source-owned capability groups and editing rights, then
+navigate to a real graph/tool. See the [overview contract](engine-overview.md).
+From the Vulkan renderer's detail, **Open render graph** goes directly inside
+that renderer. The older double-click route below starts in **Module Blueprint**,
+which remains available through Windows.
+
 Selecting an area type through **Windows** searches for it in the current **Engine** or **Project**. If several such areas exist, the most recently used one is activated; if none exist, the active area splits into two adjacent areas and the selected editor opens in the new one. An already open window is not duplicated, and the neighboring area's type is preserved. Clicking an area changes which is active; the active area has a highlighted border.
 
 Available types come from installed active modules and the distribution profile. Engine areas and the Engine tab itself are available only to Full with a complete compatible source inventory. Team stays within Project, permitted parameters, and game Rust; New, Save As, and menus do not unfreeze architecture.
 
 **Scene**, **Hierarchy**, **Inspector**, and **Assets** are available in both layouts. Scene/Hierarchy/Inspector share authored-object selection; each Scene retains its own viewing camera. Each Assets retains its own directory and filters. These windows can sit beside Game; authored edits are made after Stop. See [scene-assets.md](scene-assets.md) for details.
 
-Any area's header can select another available type, split it with **H / V**, or close it with **×**. Engine and Project layouts are independent. **Save Layout** saves personal layouts, **Load Saved Layout** rereads them, and **Reset Layout** resets the current workspace to its initial view. Changes are also saved automatically. Personal settings are in `.user/<full|team>/<engine|project>.json` of the installed package and are outside scenes and document history.
+Use the right-hand vector **Area** menu in any area's header, or RMB on its
+border, for **Split horizontally**, **Split vertically**,
+**Close area · keep neighboring area** and **Move to new window**. Main and
+floating hosts use the same command list and tree renderer. Split, editor choice
+and Area Close act inside the addressed host; these operations do not dock or
+undock it. Closing names and highlights the retained neighbor/group. The last
+main area has disabled Close; hover it for the fallback explanation. That help
+is not a permanent menu paragraph. A floating host's final area can close.
 
-In graphs, **Ctrl + wheel** zooms content under the cursor, including over a node or pin. Graph position compensates for zoom, so the point under the cursor stays in place. Right or middle mouse button pans the view. Only the graph under the cursor is scaled; other windows and interface size stay unchanged. This is a shared handler for module, GPU-pass, Rust, and Gameplay Systems graphs.
+Every floating OS window has its own split tree. Area Close removes only the
+addressed leaf; its same-type siblings retain their IDs, cameras and drafts.
+The OS titlebar × closes that host and all areas currently inside it, leaving
+other hosts and the project open. The host's viewport identity survives closing
+its original first leaf. Closed leaves stay absent after save/restart; Windows
+reopens a missing editor normally, splitting the active area in its own host.
+The document, Undo and Play session remain shared. Complete application dialogs
+in the main window; shortcuts use the same guarded commands. Separate native
+windows are unavailable in an embedded host.
 
-The handler is in `canvas.rs` and uses `InputState::zoom_delta()`: egui already converts Ctrl + wheel into a zoom factor, leaving ordinary scrolling at zero. `canvas::tests` send real wheel events into egui and check both directions over background/node/pin, preservation of the point under the cursor, a neighboring graph, zoom limits, and no response to ordinary scrolling or a disabled area.
+In 0.4.2, drag the unused part of an area's header with LMB to move that leaf
+into a native window. Selectors, menus and resize dividers keep their own input.
+A drag from a multi-area floating host tears off only that leaf. Main and other
+floating leaves are docking targets: the nearest side previews insertion and
+release docks at that side. Release outside targets to leave the leaf floating.
+The moving window goes behind a docking target so it does not cover the preview.
+Escape restores the original arrangement; release LMB before another action.
+Held moves block other editor commands and layout autosave. Closing the origin
+OS host during a move finishes that transaction and closes its current members;
+a leaf already moved to another host survives and Escape cannot revive the
+closed host. Closing an unrelated host removes its leaves from any rollback
+snapshot. Moves preserve pane IDs, view/draft state and authored Undo, and add
+no document history entry. There is no Return command in the current UI: docking
+is an explicit drag operation.
+
+All areas share the type selector, free drag space and right-hand vertical
+three-dot vector **Area** button (hover/accessibility name: Area). Floating hosts
+retain the OS title/name, system × and native edge/corner resize frame, including
+during client-header moves. There is no second client × or File/Edit row. Both
+host kinds show the split tree at ordinary sizes; below 480 logical points wide
+or 240 high, the active area and switcher provide the compact route. Legacy
+personal layouts without a floating `tree` load as the same singleton with its
+ID, editor, position and size. New layouts store the optional host tree; opening
+these with an older binary is not supported. No authored project migration or
+layout reset is required. See [host parity evidence](release-042-area-hosts-verification.md).
+
+Main and floating Editor windows share the original ModuleEngine icon, cached from
+the unchanged seven-size ICO asset; no replacement artwork is drawn.
+On Windows both titlebar and taskbar icon sizes are assigned to each owned host.
+This is a running-window icon; EXE file resources and Player branding are
+unchanged. See the [icon verification scope](release-042-window-icon-verification.md).
+
+The top Engine/Project tabs are protected layout presets, not different engines
+or permission levels. **+** copies the current arrangement under a personal name;
+RMB a custom tab to rename/delete it. **Windows → Workspaces** saves/reloads
+layouts or confirms a reset of just the selected layout. Personal storage stays
+in `.user/<full|team>/`: `engine.json`, `project.json`, and the new
+`workspaces.json` collection. Existing version-1/2 layouts remain readable;
+explicit version-2 legacy types are preserved. Rejected reloads keep the current
+arrangement and block autosave until repair and reload. None of this enters the
+authored project/history. Under 480 logical points wide or 240 high, **Area →
+Focus area** switches the single visible main area without deleting other areas.
+
+In module, GPU, Rust and Gameplay Systems graphs, ordinary **wheel** zooms about
+the pointer; **MMB/RMB drag** pans. A RMB click opens compatible node creation on
+empty space and node actions on a node. **Shift+F10** is the focused-canvas menu
+alternative. Double-click opens an existing expandable node, **F** frames the
+selection or graph, and **Alt+LMB** removes a wire. Shift/Ctrl toggles selection;
+**Delete** removes selected nodes/wires together. Root/GPU deletion cleans up
+render settings and is one authored Undo. Gameplay Systems edits remain a local
+draft until Apply; Rust deletion is unavailable where it would require arbitrary
+syntax reconstruction, with a Text-mode explanation. Text fields/popups/modals
+and area borders own their input first. Ctrl+wheel remains a compatible zoom
+alternative. Navigation, search and selection do not compile or rebuild.
 
 Dragging a node changes its position in the diagram and is saved in the document, history, and export. It must not recreate Game/Scene, the GPU executor, compiled Custom, or game state. For this, `Graph::execution_eq` recursively excludes node coordinates and labels, and for `custom.rust` / `custom.rust.update` also `code_layout` and `code_layout_keys`. All other parameters, connections, order, sources, assets, and scenes continue participating in comparison. Authored-document and background-preview updates use this comparison; ordinary `PartialEq` and serialization still preserve the full layout.
 
@@ -189,7 +265,7 @@ After the fix, 120 input frames were checked for each graph, including 113 actua
 
 ## Building a GPU Graph and Restoring Deleted Passes
 
-In **Engine**, double-click the Vulkan renderer. Add passes through the **+ Node** button above the graph itself or through **Windows → Module Library**. The library supports search by module name and ID; the **Adding to:** line shows the graph and window number that will receive the node. The library follows the last active Module Graph in the current workspace. To choose another graph window, click inside it. Engine and Project contexts are preserved separately; architectural changes require Full with sources.
+In **Engine**, double-click the Vulkan renderer. Add passes through RMB on empty graph space or through **Windows → Composition → Module Library**. The library supports search by module name and ID; the **Adding to:** line shows the graph and window number that will receive the node. The library follows the last active Module Graph in the current workspace. To choose another graph window, click inside it. Engine and Project contexts are preserved separately; architectural changes require Full with sources.
 
 To restore antialiasing, add **FXAA** and connect `tonemap.color → FXAA.color → encode.color`. The last connection replaces the old direct tonemapper-to-encoding connection. To restore **Screen-space AO**, connect HDR color, normals, and depth to its inputs, then its `color` output to the tonemapper. In Forward, color comes from Geometry; in Deferred, from lighting, while normals and depth come from Geometry.
 
@@ -298,3 +374,18 @@ A separate Player check on the same packaged content with 20 enemies at 1920×10
 The UI uses existing check and export commands. Separating the installed engine from the game directory allows saving new projects without copying compiler/backend on every Save As, while still checking which Engine actually serves the project.
 
 In the file service, `save_as` does not overwrite an existing JSON by default. The UI invokes a separate `save_as_confirmed` only after replacement is confirmed in the native dialog; both functions check resources and retain profile restrictions.
+
+## Scene sources and object navigation
+
+**File → Scene** and the current-scene overflow in Hierarchy expose the same
+scene-file actions. Registered scenes also appear in Assets. Use explicit
+conversion for an old inline project; Save alone does not migrate it. Hierarchy
+uses names, search, full-width collapsible rows and F2/context Rename; scene
+file management is no longer a stack of permanent buttons. [The scene-file
+contract](scene-files.md) explains source IDs, Undo/Save As, conflicts and packages.
+
+
+Native window resizing records the actual size for the next session. Reading a
+size or position from the OS does not issue a new size/position command. Explicit
+layout moves, host creation/recreation and monitor/scale changes retain their
+placement route. [Resize feedback evidence and limits](release-042-resize-jitter-verification.md).

@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="900" viewBox="0 0 1280 900" role="img" aria-labelledby="title desc">
+<title id="title">P08 / Inspector / layout</title>
+<desc id="desc">Static ModuleEngine editor design proposal. Not a running editor screenshot. See the bilingual catalogue for requirements and actual implementation boundaries.</desc>
+<rect x="0" y="0" width="1280" height="900" rx="0" fill="#111823" stroke="none" stroke-width="1"/>
+<text x="16" y="30" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="600" fill="#E6EDF5" data-max-width="1248">P08 / Inspector</text>
+<text x="16" y="54" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="1248">DESIGN PROPOSAL · Illustrative data · Current surface; proposed layout</text>
+<rect x="16" y="72" width="1248" height="792" rx="4" fill="#192230" stroke="#334155" stroke-width="1"/>
+<rect x="16" y="72" width="1248" height="32" rx="0" fill="#202D3E" stroke="none" stroke-width="1"/>
+<text x="28" y="93" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="88">File</text>
+<text x="68" y="93" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="88">Edit</text>
+<text x="108" y="93" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="88">Tools</text>
+<text x="160" y="93" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="88">Windows</text>
+<text x="348" y="93" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="64">Engine</text>
+<rect x="432" y="74" width="88" height="28" rx="4" fill="#234D50" stroke="none" stroke-width="1"/>
+<rect x="440" y="100" width="72" height="2" rx="0" fill="#66D6C4" stroke="none" stroke-width="1"/>
+<text x="444" y="93" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="600" fill="#E6EDF5" data-max-width="64">Project</text>
+<text x="540" y="93" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="100">My layout</text>
+<text x="656" y="94" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="400" fill="#E6EDF5" data-max-width="28">+</text>
+<text x="28" y="128" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="600" fill="#E6EDF5" data-max-width="192">Example project</text>
+<text x="228" y="128" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="260">Full · matching source installation</text>
+<rect x="500" y="106" width="32" height="32" rx="4" fill="#28394D" stroke="#91A1B8" stroke-width="1"/>
+<g transform="translate(506.0 112.0) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4 L20 12 L8 20 Z"/></g>
+<rect x="540" y="106" width="32" height="32" rx="4" fill="#192230" stroke="#334155" stroke-width="1"/>
+<g transform="translate(546.0 112.0) scale(0.8333333333333334)" fill="none" stroke="#7B8798" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="1"/></g>
+<line x1="584" y1="112" x2="584" y2="132" stroke="#334155" stroke-width="1"/>
+<rect x="596" y="106" width="32" height="32" rx="4" fill="#28394D" stroke="#91A1B8" stroke-width="1"/>
+<g transform="translate(602.0 112.0) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3 H17 L21 7 V21 H3 Z M7 3 V9 H16 V3 M7 21 V14 H17 V21"/></g>
+<text x="1068" y="128" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="168">Authoring scene</text>
+<rect x="16" y="140" width="1248" height="32" rx="0" fill="#202D3E" stroke="none" stroke-width="1"/>
+<text x="28" y="161" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="600" fill="#E6EDF5" data-max-width="1168">Inspector</text>
+<g transform="translate(1232 146) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9 L12 15 L18 9"/></g>
+<rect x="16" y="840" width="1248" height="24" rx="0" fill="#202D3E" stroke="none" stroke-width="1"/>
+<text x="28" y="857" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="720">Design proposal · example data</text>
+<g transform="translate(52 188) scale(1.0)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 L22 7 V17 L12 22 L2 17 V7 Z M2 7 L12 12 L22 7 M12 12 V22"/></g>
+<text x="88" y="207" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="600" fill="#E6EDF5" data-max-width="620">Hero</text>
+<text x="88" y="232" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="684">Arena 01 / Hero · Object ID 1</text>
+<g transform="translate(744 192) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></g>
+<text x="52" y="267" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="100">Prefab</text>
+<rect x="164" y="248" width="276" height="28" rx="4" fill="#28394D" stroke="#91A1B8" stroke-width="1"/>
+<text x="172" y="267" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="236">Hero template</text>
+<g transform="translate(414 252) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9 L12 15 L18 9"/></g>
+<g data-ui-role="section-heading">
+<text x="76" y="320" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600" fill="#E6EDF5" data-max-width="688">Transform</text>
+<g transform="translate(52 304) scale(0.6666666666666666)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9 L12 15 L18 9"/></g>
+</g>
+<text x="52" y="351" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="100">Position</text>
+<rect x="164" y="332" width="144" height="28" rx="4" fill="#28394D" stroke="#91A1B8" stroke-width="1"/>
+<text x="172" y="351" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="16">X</text>
+<text x="192" y="351" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="108">0.00</text>
+<rect x="316" y="332" width="144" height="28" rx="4" fill="#28394D" stroke="#91A1B8" stroke-width="1"/>
+<text x="324" y="351" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="16">Y</text>
+<text x="344" y="351" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="108">0.00</text>
+<rect x="468" y="332" width="144" height="28" rx="4" fill="#28394D" stroke="#91A1B8" stroke-width="1"/>
+<text x="476" y="351" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="16">Z</text>
+<text x="496" y="351" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="108">5.00</text>
+<text x="52" y="387" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="100">Rotation</text>
+<rect x="164" y="368" width="144" height="28" rx="4" fill="#28394D" stroke="#91A1B8" stroke-width="1"/>
+<text x="172" y="387" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="16">X</text>
+<text x="192" y="387" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="108">0.00</text>
+<rect x="316" y="368" width="144" height="28" rx="4" fill="#28394D" stroke="#91A1B8" stroke-width="1"/>
+<text x="324" y="387" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="16">Y</text>
+<text x="344" y="387" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="108">0.00</text>
+<rect x="468" y="368" width="144" height="28" rx="4" fill="#28394D" stroke="#91A1B8" stroke-width="1"/>
+<text x="476" y="387" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="16">Z</text>
+<text x="496" y="387" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="108">0.00</text>
+<text x="52" y="423" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="100">Scale</text>
+<rect x="164" y="404" width="144" height="28" rx="4" fill="#28394D" stroke="#91A1B8" stroke-width="1"/>
+<text x="172" y="423" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="16">X</text>
+<text x="192" y="423" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="108">1.00</text>
+<rect x="316" y="404" width="144" height="28" rx="4" fill="#28394D" stroke="#91A1B8" stroke-width="1"/>
+<text x="324" y="423" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="16">Y</text>
+<text x="344" y="423" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="108">1.00</text>
+<rect x="468" y="404" width="144" height="28" rx="4" fill="#28394D" stroke="#91A1B8" stroke-width="1"/>
+<text x="476" y="423" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="16">Z</text>
+<text x="496" y="423" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="108">1.00</text>
+<text x="164" y="464" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="608">Rotation in radians · inherited values</text>
+<g data-ui-role="section-heading">
+<text x="76" y="508" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600" fill="#E6EDF5" data-max-width="688">Actor</text>
+<g transform="translate(52 492) scale(0.6666666666666666)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9 L12 15 L18 9"/></g>
+</g>
+<g transform="translate(744 492) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></g>
+<text x="76" y="532" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="696">Gameplay component · local override</text>
+<text x="52" y="563" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="100">Speed</text>
+<rect x="164" y="544" width="144" height="28" rx="4" fill="#28394D" stroke="#91A1B8" stroke-width="1"/>
+<text x="172" y="563" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="128">6.5</text>
+<text x="164" y="592" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="608">Draft · authored value 6.0</text>
+<g data-ui-role="primary-action">
+<rect x="164" y="604" width="172" height="28" rx="4" fill="#66D6C4" stroke="none" stroke-width="1"/>
+<text x="176" y="623" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="600" fill="#0E2224" data-max-width="148">Apply Actor fields</text>
+</g>
+<g data-ui-role="section-heading">
+<text x="76" y="684" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600" fill="#E6EDF5" data-max-width="688">Health</text>
+<g transform="translate(52 668) scale(0.6666666666666666)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9 L12 15 L18 9"/></g>
+</g>
+<g transform="translate(744 668) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></g>
+<text x="52" y="731" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="100">Current</text>
+<rect x="164" y="712" width="144" height="28" rx="4" fill="#28394D" stroke="#91A1B8" stroke-width="1"/>
+<text x="172" y="731" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="128">100</text>
+<text x="164" y="760" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="608">Inherited · no local override</text>
+<text x="60" y="811" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="168">Add component</text>
+<text x="864" y="212" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="600" fill="#B6C4D5" data-max-width="352">AUTHORING SELECTION</text>
+<text x="864" y="252" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600" fill="#E6EDF5" data-max-width="352">One object</text>
+<text x="864" y="284" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#B6C4D5" data-max-width="352">Edits belong to the authored scene.</text>
+<text x="864" y="344" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600" fill="#E6EDF5" data-max-width="352">Component drafts</text>
+<text x="864" y="376" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#B6C4D5" data-max-width="352">Actor has unapplied field edits.</text>
+<text x="864" y="428" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="320">Transform gestures use Undo; component</text>
+<text x="864" y="448" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="320">fields use their own Apply.</text>
+<text x="16" y="886" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="1248">Hierarchy prototype · See editor-ui-hierarchy.md for grouping, emphasis and compact behavior.</text>
+</svg>

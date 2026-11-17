@@ -1,0 +1,185 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1040" viewBox="0 0 1440 1040" role="img" aria-labelledby="title desc">
+<title id="title">ModuleEngine editor anatomy proposal</title><desc id="desc">Static design proposal, not the implemented editor. Named layouts across the top; project identity and icon controls; Scene overlays; recognizable asset folders. Logical dimensions are defined in the linked technical specification.</desc>
+<g font-family="Segoe UI, Arial, sans-serif">
+<rect x="0" y="0" width="1440" height="1040" rx="0" fill="#111823" stroke="none"/>
+<text x="16" y="28" font-size="20" font-weight="600" fill="#E6EDF5">MODULEENGINE / EDITOR DESIGN PROPOSAL</text>
+<text x="16" y="48" font-size="12" font-weight="400" fill="#B6C4D5">14 Nov 2026 · Static anatomy sheet · Illustrative content and states</text>
+<rect x="16" y="60" width="1408" height="808" rx="4" fill="#111823" stroke="#91A1B8"/>
+<rect x="16" y="60" width="1408" height="32" rx="0" fill="#202D3E" stroke="none"/>
+<text x="28" y="81" font-size="14" font-weight="400" fill="#E6EDF5">File</text>
+<text x="68" y="81" font-size="14" font-weight="400" fill="#E6EDF5">Edit</text>
+<text x="108" y="81" font-size="14" font-weight="400" fill="#E6EDF5">Tools</text>
+<text x="160" y="81" font-size="14" font-weight="400" fill="#E6EDF5">Windows</text>
+<rect x="340" y="62" width="100" height="28" rx="0" fill="#192230" stroke="none"/>
+<text x="356" y="81" font-size="14" font-weight="600" fill="#66D6C4">Project</text>
+<text x="464" y="81" font-size="14" font-weight="400" fill="#E6EDF5">Engine</text>
+<text x="564" y="81" font-size="14" font-weight="400" fill="#E6EDF5">My layout</text>
+<text x="674" y="82" font-size="20" font-weight="400" fill="#E6EDF5">+</text>
+<text x="1122" y="81" font-size="12" font-weight="400" fill="#B6C4D5">Workspace = window layout</text>
+<rect x="16" y="92" width="1408" height="36" rx="0" fill="#192230" stroke="none"/>
+<text x="28" y="115" font-size="14" font-weight="600" fill="#E6EDF5">Two arenas</text>
+<text x="118" y="115" font-size="12" font-weight="400" fill="#F1C477">• unsaved</text>
+<text x="206" y="115" font-size="12" font-weight="400" fill="#B6C4D5">Full · source available</text>
+<rect x="470" y="94" width="32" height="32" rx="4" fill="#202D3E" stroke="none"/>
+<g transform="translate(476 100) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4 L20 12 L8 20 Z"/></g>
+<rect x="506" y="94" width="32" height="32" rx="4" fill="#202D3E" stroke="none"/>
+<g transform="translate(512 100) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="1"/></g>
+<line x1="550" y1="100" x2="550" y2="120" stroke="#91A1B8" stroke-width="1"/>
+<rect x="562" y="94" width="32" height="32" rx="4" fill="#202D3E" stroke="none"/>
+<g transform="translate(568 100) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3 H17 L21 7 V21 H3 V3 Z M7 3 V9 H16 V3 M7 21 V14 H17 V21"/></g>
+<text x="614" y="115" font-size="14" font-weight="400" fill="#8ED4A8">Ready</text>
+<text x="1068" y="115" font-size="12" font-weight="400" fill="#B6C4D5">Project path / Open Recent…</text>
+<rect x="16" y="128" width="204" height="516" rx="0" fill="#192230" stroke="none"/>
+<rect x="16" y="128" width="204" height="32" rx="0" fill="#202D3E" stroke="none"/>
+<text x="28" y="149" font-size="14" font-weight="600" fill="#E6EDF5">Hierarchy</text>
+<g transform="translate(192 134) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9 L12 15 L18 9"/></g>
+<text x="28" y="184" font-size="14" font-weight="600" fill="#E6EDF5">▾ Arena</text>
+<rect x="28" y="196" width="180" height="28" rx="0" fill="#234D50" stroke="none"/>
+<text x="44" y="215" font-size="14" font-weight="400" fill="#E6EDF5">Hero</text>
+<text x="44" y="243" font-size="14" font-weight="400" fill="#E6EDF5">Monsters</text>
+<text x="44" y="271" font-size="14" font-weight="400" fill="#E6EDF5">Environment</text>
+<text x="44" y="299" font-size="14" font-weight="400" fill="#E6EDF5">Lights</text>
+<rect x="228" y="128" width="884" height="516" rx="0" fill="#192230" stroke="none"/>
+<rect x="228" y="128" width="884" height="32" rx="0" fill="#202D3E" stroke="none"/>
+<text x="240" y="149" font-size="14" font-weight="600" fill="#E6EDF5">Scene</text>
+<g transform="translate(1084 134) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9 L12 15 L18 9"/></g>
+<rect x="228" y="160" width="884" height="484" rx="0" fill="#111823" stroke="none"/>
+<line x1="242" y1="360" x2="1098" y2="360" stroke="#334155" stroke-width="1"/>
+<line x1="242" y1="390" x2="1098" y2="390" stroke="#334155" stroke-width="1"/>
+<line x1="242" y1="420" x2="1098" y2="420" stroke="#334155" stroke-width="1"/>
+<line x1="242" y1="450" x2="1098" y2="450" stroke="#334155" stroke-width="1"/>
+<line x1="242" y1="480" x2="1098" y2="480" stroke="#334155" stroke-width="1"/>
+<line x1="242" y1="510" x2="1098" y2="510" stroke="#334155" stroke-width="1"/>
+<line x1="242" y1="540" x2="1098" y2="540" stroke="#334155" stroke-width="1"/>
+<line x1="242" y1="570" x2="1098" y2="570" stroke="#334155" stroke-width="1"/>
+<line x1="242" y1="600" x2="1098" y2="600" stroke="#334155" stroke-width="1"/>
+<line x1="242" y1="630" x2="1098" y2="630" stroke="#334155" stroke-width="1"/>
+<line x1="250" y1="350" x2="250" y2="635" stroke="#334155" stroke-width="1"/>
+<line x1="298" y1="350" x2="298" y2="635" stroke="#334155" stroke-width="1"/>
+<line x1="346" y1="350" x2="346" y2="635" stroke="#334155" stroke-width="1"/>
+<line x1="394" y1="350" x2="394" y2="635" stroke="#334155" stroke-width="1"/>
+<line x1="442" y1="350" x2="442" y2="635" stroke="#334155" stroke-width="1"/>
+<line x1="490" y1="350" x2="490" y2="635" stroke="#334155" stroke-width="1"/>
+<line x1="538" y1="350" x2="538" y2="635" stroke="#334155" stroke-width="1"/>
+<line x1="586" y1="350" x2="586" y2="635" stroke="#334155" stroke-width="1"/>
+<line x1="634" y1="350" x2="634" y2="635" stroke="#334155" stroke-width="1"/>
+<line x1="682" y1="350" x2="682" y2="635" stroke="#334155" stroke-width="1"/>
+<line x1="730" y1="350" x2="730" y2="635" stroke="#334155" stroke-width="1"/>
+<line x1="778" y1="350" x2="778" y2="635" stroke="#334155" stroke-width="1"/>
+<line x1="826" y1="350" x2="826" y2="635" stroke="#334155" stroke-width="1"/>
+<line x1="874" y1="350" x2="874" y2="635" stroke="#334155" stroke-width="1"/>
+<line x1="922" y1="350" x2="922" y2="635" stroke="#334155" stroke-width="1"/>
+<line x1="970" y1="350" x2="970" y2="635" stroke="#334155" stroke-width="1"/>
+<line x1="1018" y1="350" x2="1018" y2="635" stroke="#334155" stroke-width="1"/>
+<line x1="1066" y1="350" x2="1066" y2="635" stroke="#334155" stroke-width="1"/>
+<polygon points="396,432 660,340 950,434 686,560" fill="#202D3E" stroke="#91A1B8"/>
+<path d="M606 410 L660 392 L713 411 L713 472 L660 493 L606 472 Z M606 410 L660 431 L713 411 M660 431 V493" fill="#28394D" stroke="#66D6C4" stroke-width="2"/>
+<line x1="660" y1="460" x2="748" y2="460" stroke="#F1C477" stroke-width="2"/>
+<line x1="660" y1="460" x2="660" y2="383" stroke="#8ED4A8" stroke-width="2"/>
+<line x1="660" y1="460" x2="617" y2="499" stroke="#83B5F3" stroke-width="2"/>
+<rect x="236" y="168" width="44" height="124" rx="4" fill="#202D3E" stroke="#91A1B8"/>
+<rect x="240" y="172" width="36" height="36" rx="4" fill="#234D50" stroke="#66D6C4"/>
+<g transform="translate(248 180) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 V22 M2 12 H22 M8 6 L12 2 L16 6 M8 18 L12 22 L16 18 M6 8 L2 12 L6 16 M18 8 L22 12 L18 16"/></g>
+<rect x="240" y="212" width="36" height="36" rx="4" fill="#202D3E" stroke="none"/>
+<g transform="translate(248 220) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11 A8 8 0 1 1 17 6 M20 3 V9 H14"/></g>
+<rect x="240" y="252" width="36" height="36" rx="4" fill="#202D3E" stroke="none"/>
+<g transform="translate(248 260) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21 L20 4 M12 4 H20 V12 M3 13 V21 H11"/></g>
+<rect x="288" y="168" width="128" height="44" rx="4" fill="#202D3E" stroke="#91A1B8"/>
+<text x="300" y="195" font-size="14" font-weight="400" fill="#E6EDF5">World</text>
+<g transform="translate(384 180) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9 L12 15 L18 9"/></g>
+<rect x="424" y="168" width="136" height="44" rx="4" fill="#202D3E" stroke="#91A1B8"/>
+<rect x="428" y="172" width="36" height="36" rx="4" fill="#234D50" stroke="#66D6C4"/>
+<g transform="translate(436 180) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4 V13 A8 8 0 0 0 20 13 V4 H15 V13 A3 3 0 0 1 9 13 V4 Z M4 9 H9 M15 9 H20"/></g>
+<text x="476" y="195" font-size="14" font-weight="400" fill="#E6EDF5">0.5</text>
+<g transform="translate(528 180) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9 L12 15 L18 9"/></g>
+<rect x="1016" y="168" width="88" height="44" rx="4" fill="#202D3E" stroke="#91A1B8"/>
+<rect x="1020" y="172" width="36" height="36" rx="4" fill="#202D3E" stroke="none"/>
+<g transform="translate(1028 180) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9 V3 H9 M15 3 H21 V9 M21 15 V21 H15 M9 21 H3 V15"/></g>
+<rect x="1060" y="172" width="36" height="36" rx="4" fill="#202D3E" stroke="none"/>
+<g transform="translate(1068 180) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></g>
+<text x="292" y="232" font-size="12" font-weight="400" fill="#B6C4D5">8 pt inset · 36 pt tool targets</text>
+<text x="244" y="627" font-size="12" font-weight="400" fill="#B6C4D5">Scene authors the saved world. Game runs its Play copy.</text>
+<rect x="1120" y="128" width="304" height="716" rx="0" fill="#192230" stroke="none"/>
+<rect x="1120" y="128" width="304" height="32" rx="0" fill="#202D3E" stroke="none"/>
+<text x="1132" y="149" font-size="14" font-weight="600" fill="#E6EDF5">Inspector</text>
+<g transform="translate(1396 134) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9 L12 15 L18 9"/></g>
+<text x="1132" y="184" font-size="20" font-weight="600" fill="#E6EDF5">Hero</text>
+<text x="1132" y="208" font-size="12" font-weight="400" fill="#B6C4D5">Selected object</text>
+<text x="1132" y="244" font-size="16" font-weight="600" fill="#E6EDF5">Transform</text>
+<text x="1132" y="280" font-size="12" font-weight="400" fill="#B6C4D5">Position</text>
+<rect x="1132" y="292" width="84" height="28" rx="4" fill="#28394D" stroke="#91A1B8"/>
+<text x="1140" y="311" font-size="14" font-weight="400" fill="#E6EDF5">0.00</text>
+<rect x="1224" y="292" width="84" height="28" rx="4" fill="#28394D" stroke="#91A1B8"/>
+<text x="1232" y="311" font-size="14" font-weight="400" fill="#E6EDF5">0.00</text>
+<rect x="1316" y="292" width="84" height="28" rx="4" fill="#28394D" stroke="#91A1B8"/>
+<text x="1324" y="311" font-size="14" font-weight="400" fill="#E6EDF5">0.00</text>
+<text x="1132" y="344" font-size="12" font-weight="400" fill="#B6C4D5">Rotation</text>
+<rect x="1132" y="356" width="84" height="28" rx="4" fill="#28394D" stroke="#91A1B8"/>
+<text x="1140" y="375" font-size="14" font-weight="400" fill="#E6EDF5">0.00</text>
+<rect x="1224" y="356" width="84" height="28" rx="4" fill="#28394D" stroke="#91A1B8"/>
+<text x="1232" y="375" font-size="14" font-weight="400" fill="#E6EDF5">0.00</text>
+<rect x="1316" y="356" width="84" height="28" rx="4" fill="#28394D" stroke="#91A1B8"/>
+<text x="1324" y="375" font-size="14" font-weight="400" fill="#E6EDF5">0.00</text>
+<text x="1132" y="408" font-size="12" font-weight="400" fill="#B6C4D5">Scale</text>
+<rect x="1132" y="420" width="84" height="28" rx="4" fill="#28394D" stroke="#91A1B8"/>
+<text x="1140" y="439" font-size="14" font-weight="400" fill="#E6EDF5">1.00</text>
+<rect x="1224" y="420" width="84" height="28" rx="4" fill="#28394D" stroke="#91A1B8"/>
+<text x="1232" y="439" font-size="14" font-weight="400" fill="#E6EDF5">1.00</text>
+<rect x="1316" y="420" width="84" height="28" rx="4" fill="#28394D" stroke="#91A1B8"/>
+<text x="1324" y="439" font-size="14" font-weight="400" fill="#E6EDF5">1.00</text>
+<line x1="1132" y1="490" x2="1412" y2="490" stroke="#334155" stroke-width="1"/>
+<text x="1132" y="522" font-size="16" font-weight="600" fill="#E6EDF5">Gameplay components</text>
+<text x="1132" y="550" font-size="12" font-weight="400" fill="#B6C4D5">Owned by this game/package</text>
+<text x="1132" y="586" font-size="12" font-weight="400" fill="#B6C4D5">Actions follow the real selection.</text>
+<text x="1132" y="610" font-size="12" font-weight="400" fill="#B6C4D5">Unavailable actions explain why.</text>
+<rect x="16" y="652" width="1096" height="192" rx="0" fill="#192230" stroke="none"/>
+<rect x="16" y="652" width="1096" height="32" rx="0" fill="#202D3E" stroke="none"/>
+<text x="28" y="673" font-size="14" font-weight="600" fill="#E6EDF5">Assets</text>
+<g transform="translate(1084 658) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9 L12 15 L18 9"/></g>
+<rect x="16" y="684" width="1096" height="32" rx="0" fill="#192230" stroke="none"/>
+<text x="28" y="705" font-size="14" font-weight="400" fill="#E6EDF5">Project  /  assets  /  models</text>
+<text x="706" y="705" font-size="12" font-weight="400" fill="#B6C4D5">Show address     Copy path</text>
+<line x1="212" y1="716" x2="212" y2="844" stroke="#334155" stroke-width="1"/>
+<g transform="translate(28 729) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5 H10 L12 8 H22 V20 H2 Z"/></g>
+<text x="56" y="745" font-size="14" font-weight="400" fill="#E6EDF5">assets</text>
+<g transform="translate(44 765) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5 H10 L12 8 H22 V20 H2 Z"/></g>
+<text x="72" y="781" font-size="14" font-weight="600" fill="#66D6C4">models</text>
+<g transform="translate(44 801) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5 H10 L12 8 H22 V20 H2 Z"/></g>
+<text x="72" y="817" font-size="14" font-weight="400" fill="#E6EDF5">audio</text>
+<g transform="translate(252 736) scale(2)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5 H10 L12 8 H22 V20 H2 Z"/></g>
+<text x="248" y="808" font-size="14" font-weight="400" fill="#E6EDF5">Characters</text>
+<g transform="translate(364 736) scale(2)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5 H10 L12 8 H22 V20 H2 Z"/></g>
+<text x="360" y="808" font-size="14" font-weight="400" fill="#E6EDF5">Environment</text>
+<g transform="translate(476 736) scale(2)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 L22 7 V17 L12 22 L2 17 V7 Z M2 7 L12 12 L22 7 M12 12 V22"/></g>
+<text x="476" y="808" font-size="14" font-weight="400" fill="#E6EDF5">hero.glb</text>
+<text x="688" y="744" font-size="12" font-weight="400" fill="#B6C4D5">Folder shape + hierarchy</text>
+<text x="688" y="768" font-size="12" font-weight="400" fill="#B6C4D5">Tiles / List retain the same asset identity.</text>
+<rect x="16" y="844" width="1408" height="24" rx="0" fill="#202D3E" stroke="none"/>
+<text x="28" y="861" font-size="12" font-weight="400" fill="#B6C4D5">Ready · No active rebuild</text>
+<text x="1162" y="861" font-size="12" font-weight="400" fill="#B6C4D5">Diagnostics / details</text>
+<text x="16" y="900" font-size="16" font-weight="600" fill="#E6EDF5">STANDARD ICON CONTROLS</text>
+<rect x="16" y="916" width="32" height="32" rx="4" fill="#202D3E" stroke="none"/>
+<g transform="translate(22 922) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4 L20 12 L8 20 Z"/></g>
+<rect x="56" y="916" width="32" height="32" rx="4" fill="#202D3E" stroke="none"/>
+<g transform="translate(62 922) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="1"/></g>
+<rect x="96" y="916" width="32" height="32" rx="4" fill="#202D3E" stroke="none"/>
+<g transform="translate(102 922) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3 H17 L21 7 V21 H3 V3 Z M7 3 V9 H16 V3 M7 21 V14 H17 V21"/></g>
+<rect x="152" y="908" width="320" height="88" rx="4" fill="#202D3E" stroke="#91A1B8"/>
+<text x="164" y="932" font-size="14" font-weight="600" fill="#E6EDF5">Save Project · Ctrl+S</text>
+<text x="164" y="956" font-size="12" font-weight="400" fill="#B6C4D5">Save authored changes and supported drafts.</text>
+<text x="164" y="980" font-size="12" font-weight="400" fill="#B6C4D5">Hover and keyboard focus expose help.</text>
+<rect x="536" y="916" width="36" height="36" rx="4" fill="#234D50" stroke="#66D6C4"/>
+<g transform="translate(544 924) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 V22 M2 12 H22 M8 6 L12 2 L16 6 M8 18 L12 22 L16 18 M6 8 L2 12 L6 16 M18 8 L22 12 L18 16"/></g>
+<rect x="580" y="916" width="36" height="36" rx="4" fill="#202D3E" stroke="none"/>
+<g transform="translate(588 924) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11 A8 8 0 1 1 17 6 M20 3 V9 H14"/></g>
+<rect x="624" y="916" width="36" height="36" rx="4" fill="#202D3E" stroke="none"/>
+<g transform="translate(632 924) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21 L20 4 M12 4 H20 V12 M3 13 V21 H11"/></g>
+<rect x="688" y="908" width="320" height="88" rx="4" fill="#202D3E" stroke="#91A1B8"/>
+<text x="700" y="932" font-size="14" font-weight="600" fill="#E6EDF5">Move · G</text>
+<text x="700" y="956" font-size="12" font-weight="400" fill="#B6C4D5">Move the selected object.</text>
+<text x="700" y="980" font-size="12" font-weight="400" fill="#B6C4D5">Selected tool has a persistent indicator.</text>
+<text x="1062" y="930" font-size="14" font-weight="600" fill="#E6EDF5">One coherent vector family</text>
+<text x="1062" y="956" font-size="12" font-weight="400" fill="#B6C4D5">20 pt glyph / 32 or 36 pt target</text>
+<text x="1062" y="980" font-size="12" font-weight="400" fill="#B6C4D5">Domain-specific commands retain text.</text>
+<text x="16" y="1024" font-size="12" font-weight="400" fill="#B6C4D5">Proposal only. No new native UI, persistence, permission or performance acceptance is established by this sheet.</text>
+</g></svg>

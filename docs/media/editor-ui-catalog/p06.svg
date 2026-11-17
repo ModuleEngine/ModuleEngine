@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="900" viewBox="0 0 1280 900" role="img" aria-labelledby="title desc">
+<title id="title">P06 / Scene / layout</title>
+<desc id="desc">Static ModuleEngine editor design proposal. Not a running editor screenshot. See the bilingual catalogue for requirements and actual implementation boundaries.</desc>
+<rect x="0" y="0" width="1280" height="900" rx="0" fill="#111823" stroke="none" stroke-width="1"/>
+<text x="16" y="30" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="600" fill="#E6EDF5" data-max-width="1248">P06 / Scene</text>
+<text x="16" y="54" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="1248">DESIGN PROPOSAL · Illustrative data · Current surface; proposed layout</text>
+<rect x="16" y="72" width="1248" height="792" rx="4" fill="#192230" stroke="#91A1B8" stroke-width="1"/>
+<rect x="16" y="72" width="1248" height="32" rx="0" fill="#202D3E" stroke="none" stroke-width="1"/>
+<text x="28" y="93" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="88">File</text>
+<text x="68" y="93" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="88">Edit</text>
+<text x="108" y="93" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="88">Tools</text>
+<text x="160" y="93" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="88">Windows</text>
+<rect x="336" y="74" width="88" height="28" rx="4" fill="#202D3E" stroke="none" stroke-width="1"/>
+<text x="348" y="93" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="64">Engine</text>
+<rect x="432" y="74" width="88" height="28" rx="4" fill="#234D50" stroke="#66D6C4" stroke-width="1"/>
+<rect x="434" y="100" width="84" height="2" rx="0" fill="#66D6C4" stroke="none" stroke-width="1"/>
+<text x="444" y="93" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="64">Project</text>
+<rect x="528" y="74" width="112" height="28" rx="4" fill="#202D3E" stroke="none" stroke-width="1"/>
+<text x="540" y="93" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="88">My layout</text>
+<text x="656" y="94" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="400" fill="#E6EDF5" data-max-width="28">+</text>
+<rect x="16" y="104" width="1248" height="36" rx="0" fill="#192230" stroke="none" stroke-width="1"/>
+<text x="28" y="128" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="400">Example project · Full · matching sources</text>
+<rect x="500" y="106" width="32" height="32" rx="4" fill="#28394D" stroke="#91A1B8" stroke-width="1"/>
+<g transform="translate(506.0 112.0) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4 L20 12 L8 20 Z"/></g>
+<rect x="540" y="106" width="32" height="32" rx="4" fill="#28394D" stroke="#91A1B8" stroke-width="1"/>
+<g transform="translate(546.0 112.0) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="1"/></g>
+<rect x="580" y="106" width="32" height="32" rx="4" fill="#28394D" stroke="#91A1B8" stroke-width="1"/>
+<g transform="translate(586.0 112.0) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3 H17 L21 7 V21 H3 Z M7 3 V9 H16 V3 M7 21 V14 H17 V21"/></g>
+<text x="936" y="128" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="300">Authored / applied status</text>
+<rect x="16" y="140" width="1248" height="700" rx="4" fill="#192230" stroke="#334155" stroke-width="1"/>
+<rect x="16" y="140" width="1248" height="32" rx="0" fill="#202D3E" stroke="none" stroke-width="1"/>
+<text x="28" y="161" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="600" fill="#E6EDF5" data-max-width="1200">Scene</text>
+<g transform="translate(1236 146) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9 L12 15 L18 9"/></g>
+<rect x="16" y="840" width="1248" height="24" rx="0" fill="#202D3E" stroke="none" stroke-width="1"/>
+<text x="28" y="857" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="1220">Ready area · Proposed interface, not a running editor capture</text>
+<rect x="28" y="228" width="1224" height="584" rx="0" fill="#111823" stroke="#334155" stroke-width="1"/>
+<polygon points="272.8,578.4 591.0400000000001,432.4 1043.92,578.4 701.2,741.92" fill="#202D3E" stroke="#91A1B8"/>
+<rect x="591.0400000000001" y="536.4" width="52" height="64" rx="0" fill="#28394D" stroke="#66D6C4" stroke-width="1"/>
+<rect x="36" y="236" width="44" height="124" rx="4" fill="#202D3E" stroke="#91A1B8" stroke-width="1"/>
+<rect x="40" y="240" width="36" height="36" rx="4" fill="#234D50" stroke="#66D6C4" stroke-width="1"/>
+<g transform="translate(48.0 248.0) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 V22 M2 12 H22 M8 6 L12 2 L16 6 M8 18 L12 22 L16 18 M6 8 L2 12 L6 16 M18 8 L22 12 L18 16"/></g>
+<rect x="42" y="244" width="3" height="28" rx="0" fill="#66D6C4" stroke="none" stroke-width="1"/>
+<rect x="40" y="280" width="36" height="36" rx="4" fill="#28394D" stroke="#91A1B8" stroke-width="1"/>
+<g transform="translate(48.0 288.0) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11 A8 8 0 1 1 17 6 M20 3 V9 H14"/></g>
+<rect x="40" y="320" width="36" height="36" rx="4" fill="#28394D" stroke="#91A1B8" stroke-width="1"/>
+<g transform="translate(48.0 328.0) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21 L20 4 M12 4 H20 V12 M3 13 V21 H11"/></g>
+<rect x="88" y="236" width="112" height="36" rx="4" fill="#28394D" stroke="#91A1B8" stroke-width="1"/>
+<text x="100" y="259.0" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="88">World</text>
+<rect x="208" y="236" width="132" height="36" rx="4" fill="#28394D" stroke="#91A1B8" stroke-width="1"/>
+<text x="220" y="259.0" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="108">Snap 0.5</text>
+<rect x="1204" y="236" width="36" height="36" rx="4" fill="#28394D" stroke="#91A1B8" stroke-width="1"/>
+<g transform="translate(1212.0 244.0) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9 V3 H9 M15 3 H21 V9 M21 15 V21 H15 M9 21 H3 V15"/></g>
+<text x="44" y="792" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="1192">G / R / S tools · F frame · Escape cancels a gesture</text>
+<text x="16" y="886" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="1248">Logical dimensions follow editor-ui-spec.md. Data and controls are illustrative design requirements.</text>
+</svg>

@@ -6,7 +6,8 @@
 /work/rollout-20261017/
 /work/docs-i18n-20261017/
 /scripts/__pycache__/
-/outputs/
+/outputs/*
+!/outputs/moduleengine-roadmap.html
 /exports/
 /.tools/
 /.history/
@@ -38,3 +39,27 @@
 /work/pfDiag[0-9][0-9]/
 /work/editor-diagnostics-tests/
 /work/editor-cyrillic-inventory-raw.txt
+
+# Local implementation probes and acceptance scratch data for the 0.4 editor work.
+# Durable contracts and review summaries are recorded in docs/.
+/work/area-host-parity-042/
+/work/independent-product-audit-20261115/
+/work/native-panes-042/
+/work/release-041/
+/work/release-041-menu/
+/work/release-042/
+/work/resize-jitter-042/
+/work/roadmap-map/
+/work/ssao-042/
+/work/ui-density-042/
+/work/window-icon-042/
+/work/window-icon-original-042/
+/work/*.review-new
+/work/*.review-old
+/work/finalize-hierarchy-scenes-docs.py
+/work/format-hierarchy-scenes.py
+/work/hierarchy-scenes-catalog.py
+/work/hierarchy-scenes-docs.py
+/work/node_drafts.rs
+/work/ui-*.py
+/work/ui-f-node-test.txt

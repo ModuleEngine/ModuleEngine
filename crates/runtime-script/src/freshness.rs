@@ -1082,7 +1082,12 @@ fn audit_sdk_macros(root: &Path, cancel: &AtomicBool) -> Result<(), MissReason> 
             if matches!(name.as_str(), "env" | "option_env") {
                 self.valid &= syn::parse2::<syn::LitStr>(mac.tokens.clone())
                     .ok()
-                    .is_some_and(|literal| literal.value() == "CARGO_PKG_VERSION");
+                    .is_some_and(|literal| {
+                        matches!(
+                            literal.value().as_str(),
+                            "CARGO_PKG_VERSION" | "CARGO_PKG_NAME"
+                        )
+                    });
             } else if matches!(name.as_str(), "include" | "include_str" | "include_bytes") {
                 self.valid &= syn::parse2::<syn::LitStr>(mac.tokens.clone())
                     .ok()
@@ -1983,6 +1988,41 @@ mod tests {
             generated_inputs,
         }
     }
+    #[test]
+    fn sdk_package_name_is_proven_but_unknown_macro_environment_stays_uncacheable() {
+        let f = fixture();
+        let core = f.context.sdk_root.join("crates/engine-core");
+        let source = core.join("src/lib.rs");
+        write(
+            &source,
+            "pub const PACKAGE: &str = env!(\"CARGO_PKG_NAME\");\n",
+        );
+        assert!(audit_sdk_macros(&core, &AtomicBool::new(false)).is_ok());
+        let manifest = core.join("Cargo.toml");
+        assert_eq!(
+            generated_env(
+                OsStr::new("CARGO_PKG_NAME"),
+                "module-engine-core",
+                "0.1.0",
+                &manifest,
+                None,
+                "fixture-native",
+                &f.context.tool.cargo
+            ),
+            Some(Some("module-engine-core".into()))
+        );
+        for unsupported in [
+            "pub const X: &str = env!(\"UNPROVEN_SDK_ENV\");",
+            "pub const X: &str = env!(concat!(\"CARGO_\",\"PKG_NAME\"));",
+        ] {
+            write(&source, unsupported);
+            assert_eq!(
+                audit_sdk_macros(&core, &AtomicBool::new(false)),
+                Err(MissReason::UnsupportedDependency)
+            );
+        }
+    }
+
     #[test]
     fn source_environment_and_restored_mtime_content_choose_correct_keys() {
         let mut f = fixture();

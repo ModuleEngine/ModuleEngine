@@ -77,7 +77,15 @@ pub fn install_persistence_at(
             config,
             context.retired.clone(),
         )?))
-    })
+    })?;
+    registry.describe_service(
+        PERSISTENCE_SERVICE_ID,
+        crate::persistence_capability_metadata(),
+        module_engine_core::CapabilityFact::known(
+            true,
+            "Native JSON persistence implementation; writable root and save data not probed",
+        ),
+    )
 }
 
 struct PersistenceService {

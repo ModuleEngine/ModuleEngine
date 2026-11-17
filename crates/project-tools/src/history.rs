@@ -1,4 +1,6 @@
-use module_engine_core::{GraphDocument, SCHEMA_VERSION};
+use module_engine_core::GraphDocument;
+#[cfg(test)]
+use module_engine_core::SCHEMA_VERSION;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -177,24 +179,7 @@ pub struct MigratedDocument {
 /// Parse the exact current document format without capturing locks or changing
 /// pins. Composition/profile/asset validation remains the caller's next step.
 pub fn read_document_strict(path: &Path) -> Result<GraphDocument, String> {
-    let bytes = fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
-    let value = crate::engine_migration::parse_source(&bytes)
-        .map_err(|error| format!("{}: {error}", path.display()))?;
-    let version = value
-        .get("schema_version")
-        .and_then(serde_json::Value::as_u64)
-        .ok_or("Project needs an integer schema_version")?;
-    if version != u64::from(SCHEMA_VERSION) {
-        if (1..u64::from(SCHEMA_VERSION)).contains(&version) {
-            return Err(format!(
-                "Migration required: document format {version}; expected {SCHEMA_VERSION}. Use explicit migrate-copy"
-            ));
-        }
-        return Err(format!(
-            "Unsupported document format {version}; expected exact format {SCHEMA_VERSION}"
-        ));
-    }
-    serde_json::from_value(value).map_err(|error| format!("{}: {error}", path.display()))
+    Ok(crate::read_project_source(path)?.document)
 }
 
 /// Compatibility name for existing callers. Normal reads are now strict;
@@ -213,6 +198,68 @@ pub fn save_document_with_backup(
     path: &Path,
     document: &GraphDocument,
 ) -> Result<Option<PathBuf>, String> {
+    if document
+        .game
+        .as_ref()
+        .is_some_and(|g| !g.scene_assets.is_empty())
+    {
+        // Observe remains read-only. Explicit first publication owns creation of
+        // missing parents, matching the legacy writer's recursive-new behavior.
+        crate::encode_project_sources(document)?;
+        let parent = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let mut ancestor = std::path::absolute(parent).map_err(|e| e.to_string())?;
+        let mut missing = Vec::new();
+        while !ancestor.exists() {
+            if fs::symlink_metadata(&ancestor).is_ok() {
+                return Err("Project parent is redirected or unavailable".into());
+            }
+            missing.push(ancestor.clone());
+            ancestor = ancestor
+                .parent()
+                .ok_or("Project parent has no existing ancestor")?
+                .to_owned();
+        }
+        let mut created = Vec::new();
+        let result = (|| {
+            for folder in missing.iter().rev() {
+                match fs::create_dir(folder) {
+                    Ok(()) => created.push(folder.clone()),
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::AlreadyExists && folder.is_dir() => {
+                    }
+                    Err(error) => return Err(error.to_string()),
+                }
+            }
+            let state = if path.exists() {
+                crate::read_project_source(path)?.files
+            } else {
+                crate::ProjectFileState::observe(path, document)?
+            };
+            let operation = crate::save_project_with_state(path, document, &state)?;
+            Ok(operation
+                .record
+                .files
+                .iter()
+                .find(|f| f.path == state.project)
+                .and_then(|f| f.before.as_ref())
+                .map(|s| {
+                    path.parent()
+                        .unwrap_or(Path::new("."))
+                        .join(&s.snapshot_path)
+                }))
+        })();
+        if result.is_err() {
+            // Remove only empty directories created by this operation. A journal
+            // or recovery snapshot is retained; never recurse through user data.
+            for folder in created.iter().rev() {
+                let _ = fs::remove_dir(folder);
+            }
+        }
+        return result;
+    }
     let bytes = serde_json::to_vec_pretty(document).map_err(|e| e.to_string())?;
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;

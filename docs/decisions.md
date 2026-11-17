@@ -125,3 +125,49 @@ History requires explicit lifetime/discontinuity boundaries, including a module
 signal for teleports, scene changes and accepted code/configuration replacements.
 Implementation and final native verification belong to P0; this decision alone
 does not close the failed gate. See the [shared Host](shared-game-host.md).
+
+<a id="engine-direction-20261113"></a>
+
+## Accepted engine composition and editor direction — 13 November 2026
+
+The [direction record](engine-composition-direction.md) contains the complete
+agreement and separates current behavior from future work:
+
+- Use a common framework with selected technical modules; keep reusable gameplay
+  and concrete game rules separately owned. Combat/health/equipment remain
+  gameplay regardless of reuse, registration or crate naming.
+- Prioritize that responsibility boundary and the route to understand the
+  Engine's composition, choose a module and configure it.
+- Use an Engine overview as the main entry point, an additional architecture map
+  and focused editable graphs where connections carry meaningful behavior.
+  The retained root route is not a universal engine execution graph.
+- Make Engine configuration/profile, installed package, current game and rights
+  identifiable; distinguish workspace navigation, project opening and Engine
+  replacement. Preserve authored data, personal layouts and Full/Team rules.
+- Require real dependency/ownership/lifecycle contracts and efficient execution;
+  optional modules must not introduce unrelated required settings or behavior.
+
+This documentation does not implement the UI or authorize a runtime/schema
+migration. The subsequent single-engine scope below defers shared Engine
+storage/version adoption and package-selection planning. Overview metadata
+remains an [open decision](engine-composition-direction.md#open-decisions).
+The proposed screen is not a completed implementation; existing acceptance
+reports retain their own sources and scope.
+
+<a id="single-engine-20261113"></a>
+
+## Scope refinement: one configurable engine — 13 November 2026
+
+Work with **one ModuleEngine and multiple game projects** for now. Different
+module sets, render paths and settings are configurations of this engine.
+Engine is the technical-configuration workspace; Project is the selected game's
+workspace. Retain modularity, the technical/gameplay boundary, overview-first
+navigation and focused subsystem graphs.
+
+Defer independent Engine products/documents, their catalogue/selector, shared
+version publication and cross-project update adoption. Those earlier identity
+questions no longer block the next UI work. Existing project-local data,
+profile/contract checks, package bindings and Full/Team rights retain their
+current meaning; this decision does not introduce global settings propagation
+or authorize a migration. The [direction record](engine-composition-direction.md)
+is updated in both languages. This change is documentation only.
