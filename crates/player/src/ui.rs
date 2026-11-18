@@ -21,6 +21,42 @@ const BENCHMARK_WARMUP: usize = 30;
 const BENCHMARK_FRAMES: usize = 120;
 const FRAME_BUDGET_MS: f64 = 1000. / 60.;
 
+#[path = "image_trace.rs"]
+mod image_trace;
+
+fn physical_game_size(rect: Rect, scale: f32, minimized: bool) -> [u32; 2] {
+    if minimized || !rect.is_positive() || !scale.is_finite() || scale <= 0. {
+        return [0, 0];
+    }
+    [
+        (rect.width() * scale).round() as u32,
+        (rect.height() * scale).round() as u32,
+    ]
+}
+
+#[cfg(test)]
+mod physical_size_tests {
+    use super::*;
+    #[test]
+    fn ordinary_canvas_tracks_resize_dpi_and_minimization() {
+        let rect = |w, h| Rect::from_min_size(Pos2::ZERO, Vec2::new(w, h));
+        assert_eq!(
+            physical_game_size(rect(1280., 720.), 1., false),
+            [1280, 720]
+        );
+        assert_eq!(
+            physical_game_size(rect(1280., 720.), 1.5, false),
+            [1920, 1080]
+        );
+        assert_eq!(
+            physical_game_size(rect(900., 720.), 2., false),
+            [1800, 1440]
+        );
+        assert_eq!(physical_game_size(rect(1280., 720.), 1., true), [0, 0]);
+        assert_eq!(physical_game_size(rect(0., 720.), 1., false), [0, 0]);
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BenchmarkArmMode {
     Automatic,
@@ -509,8 +545,11 @@ struct Player {
     gpu_texture: GpuTexture,
     gpu_bridge: Option<Arc<GpuPresentationBridge>>,
     displayed_camera: Option<module_engine_core::Camera>,
+    displayed_settings: module_engine_core::ScriptSettingsSnapshot,
     uploaded: Option<Arc<module_engine_core::Frame>>,
     pending_commands: VecDeque<WorkerCommand>,
+    requested_viewport: Option<[u32; 2]>,
+    image_trace: Option<image_trace::ImageTrace>,
     pending_inputs: VecDeque<GameInput>,
     aim_input: GameInput,
     error: Option<String>,
@@ -518,6 +557,18 @@ struct Player {
     benchmark: Option<NativeBenchmark>,
 }
 impl Player {
+    fn request_viewport(&mut self, size: [u32; 2]) {
+        if self.requested_viewport == Some(size) {
+            return;
+        }
+        self.pending_commands
+            .retain(|command| !matches!(command, WorkerCommand::SetViewport { .. }));
+        self.pending_commands.push_back(WorkerCommand::SetViewport {
+            width: size[0] as usize,
+            height: size[1] as usize,
+        });
+        self.requested_viewport = Some(size);
+    }
     fn new_native(
         host: GameHost,
         cc: &eframe::CreationContext<'_>,
@@ -527,6 +578,16 @@ impl Player {
         let target = bridge.as_ref().map(|bridge| bridge.target());
         let mut player = Self::new_with_target(host, &cc.egui_ctx, benchmark, target);
         player.gpu_bridge = bridge;
+        if let Some(window) = cc.winit_window() {
+            let size: [u32; 2] = window.inner_size().into();
+            player
+                .pending_commands
+                .push_front(WorkerCommand::SetViewport {
+                    width: size[0] as usize,
+                    height: size[1] as usize,
+                });
+            player.requested_viewport = Some(size);
+        }
         Ok(player)
     }
     fn prepare_capture(&mut self) -> Result<(), String> {
@@ -549,7 +610,7 @@ impl Player {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "arpg"))]
     fn new(host: GameHost, ctx: &egui::Context, benchmark: Option<NativeBenchmark>) -> Self {
         Self::new_with_target(host, ctx, benchmark, None)
     }
@@ -574,14 +635,11 @@ impl Player {
             gpu_texture: GpuTexture::default(),
             gpu_bridge: None,
             displayed_camera: None,
+            displayed_settings: Default::default(),
             uploaded: None,
-            pending_commands: VecDeque::from([
-                WorkerCommand::SetViewport {
-                    width: 1920,
-                    height: 1080,
-                },
-                WorkerCommand::SetPlaying(true),
-            ]),
+            pending_commands: VecDeque::from([WorkerCommand::SetPlaying(true)]),
+            requested_viewport: None,
+            image_trace: image_trace::ImageTrace::from_environment(),
             pending_inputs: VecDeque::new(),
             aim_input: GameInput::default(),
             error: None,
@@ -649,7 +707,26 @@ pub fn update_render_diagnostic(
 }
 impl eframe::App for Player {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // eframe skips `ui` for a minimized native window. Suspend render work
+        // here; restoration requests the actual canvas again in `ui`.
+        if ctx.input(|i| i.viewport().minimized == Some(true)) {
+            self.request_viewport([0, 0]);
+            self.dispatch(GameInput::default());
+        }
         self.snapshot = self.worker.latest();
+        if self.requested_viewport == Some([0, 0])
+            && let Some(trace) = &mut self.image_trace
+        {
+            trace.record(
+                Rect::from_min_size(Pos2::ZERO, Vec2::ZERO),
+                ctx.pixels_per_point(),
+                self.requested_viewport,
+                self.uploaded.as_deref(),
+                self.snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.renderer_performance.render_calls),
+            );
+        }
         if let Some(benchmark) = &mut self.benchmark {
             if !benchmark.finished
                 && let Some(reason) = benchmark.watchdog_reason(Instant::now())
@@ -700,6 +777,12 @@ impl eframe::App for Player {
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
                 let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click());
+                let size = physical_game_size(
+                    rect,
+                    ui.ctx().pixels_per_point(),
+                    ui.input(|i| i.viewport().minimized == Some(true)),
+                );
+                self.request_viewport(size);
                 let camera = self
                     .displayed_camera
                     .or_else(|| snapshot.as_ref().map(|s| s.camera))
@@ -710,6 +793,7 @@ impl eframe::App for Player {
                     .map(String::as_str);
                 let mut input = GameInput::default();
                 if !crate::presentations::source_owns_window_controls(presentation)
+                    && !egui::Popup::is_any_open(ui.ctx())
                     && ui.input(|i| i.focused && i.key_pressed(egui::Key::Escape))
                 {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
@@ -742,6 +826,7 @@ impl eframe::App for Player {
                                     observed_at = Some(started);
                                     self.uploaded = Some(Arc::clone(frame));
                                     self.displayed_camera = Some(snapshot.camera);
+                                    self.displayed_settings = snapshot.frame_settings.clone();
                                     fresh_frame = true;
                                 }
                                 Ok(false) => {}
@@ -843,10 +928,21 @@ impl eframe::App for Player {
                         }
                     }
                 }
+                // During an asynchronous resize retain the last good frame's
+                // proportions. Input uses the same image rectangle as pixels.
+                let image_rect = self
+                    .uploaded
+                    .as_ref()
+                    .map(|frame| {
+                        let size = Vec2::new(frame.width as f32, frame.height as f32);
+                        let fit = (rect.width() / size.x).min(rect.height() / size.y);
+                        Rect::from_center_size(rect.center(), size * fit)
+                    })
+                    .unwrap_or(rect);
                 if let Some(texture) = presentation_texture_id(&self.texture, &self.gpu_texture) {
                     ui.painter().image(
                         texture,
-                        rect,
+                        image_rect,
                         Rect::from_min_max(Pos2::ZERO, Pos2::new(1., 1.)),
                         Color32::WHITE,
                     );
@@ -860,7 +956,28 @@ impl eframe::App for Player {
                     );
                 }
                 let hud_started = Instant::now();
+                if let Some(trace) = &mut self.image_trace {
+                    trace.record(
+                        rect,
+                        ui.ctx().pixels_per_point(),
+                        self.requested_viewport,
+                        self.uploaded.as_deref(),
+                        snapshot
+                            .as_ref()
+                            .map(|snapshot| snapshot.renderer_performance.render_calls),
+                    );
+                }
                 if let Some(snapshot) = &snapshot {
+                    let script_ui = crate::script_ui::draw_script_ui(
+                        ui,
+                        rect,
+                        &snapshot.script_ui,
+                        &snapshot.player_settings,
+                        &self.displayed_settings,
+                        // A failed image remains visible in the error overlay;
+                        // a valid menu must still let the player restore a choice.
+                        snapshot.script_ui_error.as_deref(),
+                    );
                     let aim = preview_aim_for(
                         presentation,
                         &snapshot.state,
@@ -885,12 +1002,12 @@ impl eframe::App for Player {
                         &response,
                         InputCollection {
                             id: presentation,
-                            rect,
+                            rect: image_rect,
                             state: &snapshot.state,
                             camera: self.displayed_camera.unwrap_or(snapshot.camera),
                             aim,
                             respect_editor_focus: false,
-                            world_enabled: new_frame,
+                            world_enabled: new_frame && !script_ui.blocks_world,
                         },
                         &status,
                     );
@@ -898,6 +1015,8 @@ impl eframe::App for Player {
                         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                     input = collected.input;
+                    input.actions.extend(script_ui.input.actions);
+                    input.action_values.extend(script_ui.input.action_values);
                     // Slow game code affects simulation speed, not window event
                     // handling. Show that distinction with the measured tick cost.
                     if snapshot.last_step_ms > FRAME_BUDGET_MS || snapshot.backlog_seconds > 0.05 {
@@ -1995,7 +2114,7 @@ mod timing_tests {
         failed.had_error = true;
         failed.window_visible = None;
         active.samples = vec![sample(armed_at), failed];
-        let mut worker = GameWorker::spawn(super::tests::neutral_host(), None);
+        let mut worker = GameWorker::spawn(super::neutral_test_host(), None);
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut snapshot = loop {
             if let Some(snapshot) = worker.latest() {
@@ -2207,72 +2326,73 @@ mod timing_tests {
 #[cfg(all(test, feature = "arpg"))]
 pub use module_engine_arpg::ui::{draw_hud, read_input, screen_point, telegraph_shape};
 
+#[cfg(test)]
+fn neutral_test_host() -> GameHost {
+    use module_engine_core::*;
+    let root = std::env::temp_dir().canonicalize().unwrap();
+    let composition =
+        CompositionContext::new(ModuleRegistry::builtin(), SystemRegistry::builtin()).unwrap();
+    let mut document = demo_document(WorldKind::Ecs);
+    document.custom_sources.clear();
+    document.root.nodes.retain(|node| {
+        matches!(
+            node.id.as_str(),
+            "world" | "extract" | "renderer" | "viewport"
+        )
+    });
+    document
+        .root
+        .edges
+        .retain(|edge| matches!(edge.from_node.as_str(), "world" | "extract" | "renderer"));
+    document.game = Some(GameProject::empty());
+    let profile = module_engine_project::EngineProfile::new(
+        "fixture.player-ui",
+        "1",
+        module_engine_project::EngineBlueprint {
+            root: document.root.clone(),
+            engine: document.engine.clone(),
+            custom_sources: document.custom_sources.clone(),
+            shader_sources: document.shader_sources.clone(),
+            default_execution: document.game.as_ref().unwrap().execution.clone(),
+            available_modules: composition
+                .required_contracts(&document)
+                .unwrap()
+                .module_versions
+                .into_keys()
+                .collect(),
+        },
+    )
+    .unwrap();
+    document.engine_profile = Some(profile.document_value().unwrap());
+    composition
+        .capture_lock(&document, profile.identity, None)
+        .unwrap()
+        .apply_to(&mut document);
+    GameHost::build(
+        document,
+        composition,
+        module_engine_host::HostOptions {
+            asset_root: root,
+            backend_root: None,
+            compile_root: None,
+            render: module_engine_host::RenderMode::Graph,
+            services: module_engine_host_services::HostServiceRegistry::new(),
+            services_enabled: false,
+        },
+        None,
+    )
+    .unwrap()
+}
+
 #[cfg(all(test, feature = "arpg"))]
 mod tests {
     use super::*;
     use module_engine_arpg::{ArpgInput, GameInputExt};
     use module_engine_core::{Camera, GameState};
 
-    pub(super) fn neutral_host() -> GameHost {
-        use module_engine_core::*;
-        let root = std::env::temp_dir().canonicalize().unwrap();
-        let composition =
-            CompositionContext::new(ModuleRegistry::builtin(), SystemRegistry::builtin()).unwrap();
-        let mut document = demo_document(WorldKind::Ecs);
-        document.custom_sources.clear();
-        document.root.nodes.retain(|node| {
-            matches!(
-                node.id.as_str(),
-                "world" | "extract" | "renderer" | "viewport"
-            )
-        });
-        document
-            .root
-            .edges
-            .retain(|edge| matches!(edge.from_node.as_str(), "world" | "extract" | "renderer"));
-        document.game = Some(GameProject::empty());
-        let profile = module_engine_project::EngineProfile::new(
-            "fixture.player-ui",
-            "1",
-            module_engine_project::EngineBlueprint {
-                root: document.root.clone(),
-                engine: document.engine.clone(),
-                custom_sources: document.custom_sources.clone(),
-                shader_sources: document.shader_sources.clone(),
-                default_execution: document.game.as_ref().unwrap().execution.clone(),
-                available_modules: composition
-                    .required_contracts(&document)
-                    .unwrap()
-                    .module_versions
-                    .into_keys()
-                    .collect(),
-            },
-        )
-        .unwrap();
-        document.engine_profile = Some(profile.document_value().unwrap());
-        composition
-            .capture_lock(&document, profile.identity, None)
-            .unwrap()
-            .apply_to(&mut document);
-        GameHost::build(
-            document,
-            composition,
-            module_engine_host::HostOptions {
-                asset_root: root,
-                backend_root: None,
-                compile_root: None,
-                render: module_engine_host::RenderMode::Graph,
-                services: module_engine_host_services::HostServiceRegistry::new(),
-                services_enabled: false,
-            },
-            None,
-        )
-        .unwrap()
-    }
-
     #[test]
     fn player_restart_reaches_paused_full_mailbox_and_cancels_unsent_old_actions() {
-        let host = neutral_host();
+        let host = neutral_test_host();
         let mut player = Player::new(host, &egui::Context::default(), None);
         player.pending_commands.clear(); // The actor starts paused for this fixture.
         let edge = ArpgInput {

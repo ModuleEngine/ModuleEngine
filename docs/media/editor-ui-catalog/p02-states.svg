@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="1024" viewBox="0 0 1280 1024" role="img" aria-labelledby="title desc">
+<title id="title">P02 / Module Blueprint / root graph / states</title>
+<desc id="desc">Static ModuleEngine editor design proposal. Not a running editor screenshot. See the bilingual catalogue for requirements and actual implementation boundaries.</desc>
+<rect x="0" y="0" width="1280" height="1024" rx="0" fill="#111823" stroke="none" stroke-width="1"/>
+<text x="16" y="30" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="600" fill="#E6EDF5" data-max-width="1248">P02 / Module Blueprint / root graph</text>
+<text x="16" y="54" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="1248">DESIGN PROPOSAL · Illustrative data · Current surface; proposed layout</text>
+<rect x="16" y="80" width="616" height="204" rx="4" fill="#192230" stroke="#91A1B8" stroke-width="1"/>
+<rect x="16" y="80" width="616" height="32" rx="0" fill="#202D3E" stroke="none" stroke-width="1"/>
+<text x="28" y="102" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600" fill="#E6EDF5" data-max-width="592">Ready / normal</text>
+<text x="28" y="140" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">The canvas starts directly below the pane header, without repeated</text>
+<text x="28" y="160" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">Add/Open/Frame/Delete buttons. Context actions and gestures target the</text>
+<text x="28" y="180" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">same current graph and existing validated commands.</text>
+<text x="28" y="266" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="592">Required design behavior · verify in a future implementation</text>
+<rect x="648" y="80" width="616" height="204" rx="4" fill="#192230" stroke="#91A1B8" stroke-width="1"/>
+<rect x="648" y="80" width="616" height="32" rx="0" fill="#202D3E" stroke="none" stroke-width="1"/>
+<text x="660" y="102" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600" fill="#E6EDF5" data-max-width="592">Empty / no selection</text>
+<text x="660" y="140" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">Show No nodes with a contextual Right-click to add hint, available scope and</text>
+<text x="660" y="160" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">actual compatible palette. Do not create default nodes merely to fill the</text>
+<text x="660" y="180" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">canvas.</text>
+<text x="660" y="266" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="592">Required design behavior · verify in a future implementation</text>
+<rect x="16" y="300" width="616" height="204" rx="4" fill="#192230" stroke="#91A1B8" stroke-width="1"/>
+<rect x="16" y="300" width="616" height="32" rx="0" fill="#202D3E" stroke="none" stroke-width="1"/>
+<text x="28" y="322" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600" fill="#E6EDF5" data-max-width="592">Busy / preparing</text>
+<text x="28" y="360" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">Show the real pending operation and last-good revision; prevent conflicting</text>
+<text x="28" y="380" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">edits without blocking navigation.</text>
+<text x="28" y="486" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="592">Required design behavior · verify in a future implementation</text>
+<rect x="648" y="300" width="616" height="204" rx="4" fill="#192230" stroke="#91A1B8" stroke-width="1"/>
+<rect x="648" y="300" width="616" height="32" rx="0" fill="#202D3E" stroke="none" stroke-width="1"/>
+<text x="660" y="322" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600" fill="#E6EDF5" data-max-width="592">Draft / modified</text>
+<text x="660" y="360" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">Mark local edits separately from saved/applied data; commit only through</text>
+<text x="660" y="380" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">the existing validated transaction.</text>
+<text x="660" y="486" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="592">Required design behavior · verify in a future implementation</text>
+<rect x="16" y="520" width="616" height="204" rx="4" fill="#192230" stroke="#91A1B8" stroke-width="1"/>
+<rect x="16" y="520" width="616" height="32" rx="0" fill="#202D3E" stroke="none" stroke-width="1"/>
+<text x="28" y="542" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600" fill="#E6EDF5" data-max-width="592">Error / rejected</text>
+<text x="28" y="580" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">Invalid wire/node candidate: show endpoints and exact contract mismatch;</text>
+<text x="28" y="600" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">keep the last-good executable graph.</text>
+<text x="28" y="706" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="592">Required design behavior · verify in a future implementation</text>
+<rect x="648" y="520" width="616" height="204" rx="4" fill="#192230" stroke="#91A1B8" stroke-width="1"/>
+<rect x="648" y="520" width="616" height="32" rx="0" fill="#202D3E" stroke="none" stroke-width="1"/>
+<text x="660" y="542" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600" fill="#E6EDF5" data-max-width="592">Restricted / read-only</text>
+<text x="660" y="580" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">Show the exact Full/Team/source/Play restriction; no workspace tab</text>
+<text x="660" y="600" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">grants permission.</text>
+<text x="660" y="706" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="592">Required design behavior · verify in a future implementation</text>
+<rect x="16" y="740" width="616" height="204" rx="4" fill="#192230" stroke="#91A1B8" stroke-width="1"/>
+<rect x="16" y="740" width="616" height="32" rx="0" fill="#202D3E" stroke="none" stroke-width="1"/>
+<text x="28" y="762" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600" fill="#E6EDF5" data-max-width="592">Missing / stale dependency</text>
+<text x="28" y="800" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">Keep stable IDs and missing references inspectable; never silently replace</text>
+<text x="28" y="820" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">or activate a dependency.</text>
+<text x="28" y="926" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="592">Required design behavior · verify in a future implementation</text>
+<rect x="648" y="740" width="616" height="204" rx="4" fill="#192230" stroke="#91A1B8" stroke-width="1"/>
+<rect x="648" y="740" width="616" height="32" rx="0" fill="#202D3E" stroke="none" stroke-width="1"/>
+<text x="660" y="762" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600" fill="#E6EDF5" data-max-width="592">Narrow / short area</text>
+<text x="660" y="800" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">Stack secondary sections or use explicit overflow; preserve scope, primary</text>
+<text x="660" y="820" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="592">action, error and navigation without shrinking text.</text>
+<text x="660" y="926" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="592">Required design behavior · verify in a future implementation</text>
+<text x="16" y="998" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="1248">State cards document local variants. They do not claim real commands, native behavior or performance.</text>
+</svg>

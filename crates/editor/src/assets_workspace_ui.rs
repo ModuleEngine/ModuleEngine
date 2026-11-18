@@ -94,6 +94,40 @@ pub struct AssetsWorkbench {
     pub error: Option<String>,
 }
 impl AssetsWorkbench {
+    pub(super) fn reveal_source(&mut self, key: (String, u64), id: &str, path: &str) {
+        let browser = self.browsers.entry(key).or_default();
+        browser.selected = Some(id.into());
+        browser.folder = path.rsplit_once('/').map_or("scenes", |v| v.0).into();
+        browser.search.clear();
+        browser.kind_filter = None;
+    }
+
+    pub(super) fn navigation(
+        &self,
+        workspace: &str,
+        id: u64,
+    ) -> Option<crate::assets_ui::BrowserNavigation> {
+        self.browsers
+            .get(&(workspace.into(), id))
+            .map(BrowserState::navigation)
+    }
+    pub(super) fn restore_navigation_if_missing(
+        &mut self,
+        workspace: &str,
+        id: u64,
+        nav: Option<crate::assets_ui::BrowserNavigation>,
+    ) {
+        if let Some(nav) = nav {
+            self.browsers
+                .entry((workspace.into(), id))
+                .or_insert_with(|| {
+                    let mut browser = BrowserState::default();
+                    browser.restore_navigation(nav);
+                    browser
+                });
+        }
+    }
+
     pub fn reset(&mut self) {
         *self = Self::default();
     }
@@ -228,6 +262,7 @@ impl AssetsWorkbench {
                 kind,
                 size: info.bytes,
                 protected: !info.path.starts_with("assets/"),
+                scene_entry: false,
                 preview: None,
                 preview_status: if info.missing {
                     Some("File missing".into())
@@ -245,7 +280,13 @@ impl AssetsWorkbench {
             .filter_map(|record| {
                 record.deleted_asset.map(|(_, entry)| TrashTile {
                     id: record.id,
-                    kind: ui_kind(&module_engine_project::AssetKind::for_path(&entry.path)),
+                    kind: if entry.path.starts_with("scenes/")
+                        && entry.path.ends_with(".scene.json")
+                    {
+                        AssetKind::Scene
+                    } else {
+                        ui_kind(&module_engine_project::AssetKind::for_path(&entry.path))
+                    },
                     path: entry.path,
                     // Durable operation IDs contain a sortable UTC timestamp.
                     deleted_at: "Can be restored".into(),
@@ -642,6 +683,10 @@ impl super::Editor {
                 ui.weak("Indexing assets… The editor remains available.");
             });
         }
+        if let Some(error) = &self.scene_source_ui.external_error {
+            ui.colored_label(egui::Color32::LIGHT_RED, error);
+            ui.label("Reload through File → Open Project, or use Save As to preserve the current authored work separately.");
+        }
         if let Some(error) = &self.assets.error {
             ui.colored_label(egui::Color32::LIGHT_RED, error);
             if ui.button("Retry loading assets").clicked() {
@@ -655,10 +700,43 @@ impl super::Editor {
         } else if self.json_dirty {
             ui.weak("Apply or discard Project File changes before working with assets.");
         }
-        let key = (self.workspace.key().into(), pane_id);
-        let actions = self.assets.browsers.entry(key).or_default().ui(
+        let key = (self.workspace_key(), pane_id);
+        let browser = self.assets.browsers.entry(key).or_default();
+        browser.project_root = Some(canonical.clone());
+        let mut visible_tiles = self.assets.tiles.clone();
+        if let Some(game) = &self.document.game {
+            for (id, binding) in &game.scene_assets {
+                if let Some(scene) = game.scenes.get(id) {
+                    let size = self
+                        .source_files
+                        .as_ref()
+                        .ok()
+                        .and_then(|state| state.source_size(&binding.path))
+                        .unwrap_or(0);
+                    visible_tiles.push(AssetTile {
+                        id: binding.id.clone(),
+                        reference: id.clone(),
+                        path: binding.path.clone(),
+                        kind: AssetKind::Scene,
+                        size,
+                        protected: false,
+                        scene_entry: id == &game.entry_scene,
+                        preview: None,
+                        preview_status: None,
+                        usages: vec![],
+                        metadata: vec![
+                            ("Scene".into(), scene.name.clone()),
+                            ("Source asset ID".into(), binding.id.clone()),
+                            ("Objects".into(), scene.objects.len().to_string()),
+                            ("Storage".into(), "Mutable authored source".into()),
+                        ],
+                    });
+                }
+            }
+        }
+        let actions = browser.ui(
             ui,
-            &self.assets.tiles,
+            &visible_tiles,
             &self.assets.folders,
             &self.assets.trash,
             busy || self.assets.scan.is_some(),

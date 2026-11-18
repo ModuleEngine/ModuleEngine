@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="900" viewBox="0 0 480 900" role="img" aria-labelledby="title desc">
+<title id="title">P09 / Assets / compact area</title>
+<desc id="desc">Static ModuleEngine editor design proposal. Not a running editor screenshot. See the bilingual catalogue for requirements and actual implementation boundaries.</desc>
+<rect x="0" y="0" width="480" height="900" rx="0" fill="#111823" stroke="none" stroke-width="1"/>
+<text x="16" y="30" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="600" fill="#E6EDF5" data-max-width="448">P09 / Assets</text>
+<text x="16" y="54" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="448">DESIGN PROPOSAL · 480-point dock area</text>
+<rect x="16" y="72" width="448" height="792" rx="4" fill="#192230" stroke="#334155" stroke-width="1"/>
+<rect x="16" y="72" width="448" height="32" rx="0" fill="#202D3E" stroke="none" stroke-width="1"/>
+<text x="28" y="93" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="600" fill="#E6EDF5" data-max-width="392">Assets</text>
+<g transform="translate(432 78) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9 L12 15 L18 9"/></g>
+<text x="28" y="128" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="424">Example project · Full source</text>
+<rect x="16" y="840" width="448" height="24" rx="0" fill="#202D3E" stroke="none" stroke-width="1"/>
+<text x="28" y="857" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="424">Area prototype · illustrative data</text>
+<g transform="translate(28 152) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12 H4 M11 5 L4 12 L11 19"/></g>
+<text x="56" y="167" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="188">Back to models</text>
+<rect x="28" y="188" width="424" height="28" rx="4" fill="#28394D" stroke="#91A1B8" stroke-width="1"/>
+<rect x="36" y="192" width="104" height="20" rx="0" fill="#234D50" stroke="none" stroke-width="1"/>
+<text x="36" y="207" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="392">assets/models</text>
+<text x="28" y="244" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="424">Read-only address · show breadcrumbs</text>
+<text x="28" y="293" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="600" fill="#E6EDF5" data-max-width="424">hero.glb</text>
+<text x="28" y="316" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="424">Model · selected asset</text>
+<rect x="28" y="336" width="424" height="172" rx="4" fill="#111823" stroke="none" stroke-width="1"/>
+<path d="M240.0 378.0 l48 24 v52 l-48 24 l-48 -24 v-52 Z M192.0 402.0 l48 24 l48 -24 M240.0 426.0 v52" fill="#202D3E" stroke="#DCE7F4" stroke-width="2"/>
+<text x="40" y="496" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="400">Model preview · schematic</text>
+<text x="28" y="532" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="424">Location</text>
+<text x="28" y="556" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="424">assets/models/hero.glb</text>
+<text x="28" y="608" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="424">Asset reference</text>
+<text x="28" y="632" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#E6EDF5" data-max-width="424">asset://a-hero</text>
+<text x="28" y="668" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="424">Selectable reference</text>
+<line x1="28" y1="708" x2="452" y2="708" stroke="#334155" stroke-width="1"/>
+<text x="36" y="743" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="120">Usages…</text>
+<g transform="translate(28 768) scale(0.8333333333333334)" fill="none" stroke="#DCE7F4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></g>
+<text x="56" y="783" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#E6EDF5" data-max-width="164">Asset actions…</text>
+<text x="16" y="886" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#B6C4D5" data-max-width="448">Proposed area layout · no native UI acceptance.</text>
+</svg>

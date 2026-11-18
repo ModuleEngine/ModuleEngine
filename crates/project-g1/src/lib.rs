@@ -2,6 +2,7 @@
 use module_engine_core::{GameInput, GameState};
 pub use module_engine_game_kit::grid::Cell;
 use module_engine_game_kit::{campaign::Campaign, history::UndoJournal};
+pub use module_engine_game_kit::{library_capabilities, library_package_version};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 

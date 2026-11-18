@@ -6,13 +6,16 @@
 use eframe::egui::{self, Color32, FontId, Pos2, Rect, Sense, Stroke, Vec2};
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum AssetKind {
     Model,
     Texture,
     Audio,
     Shader,
     Other,
+    Scene,
 }
 impl AssetKind {
     pub fn label(self) -> &'static str {
@@ -22,6 +25,7 @@ impl AssetKind {
             Self::Audio => "Audio",
             Self::Shader => "Shader",
             Self::Other => "Other file",
+            Self::Scene => "Scene",
         }
     }
     fn icon(self) -> &'static str {
@@ -31,6 +35,7 @@ impl AssetKind {
             Self::Audio => "WAV",
             Self::Shader => "HLSL",
             Self::Other => "FILE",
+            Self::Scene => "SCENE",
         }
     }
     fn can_preview(self) -> bool {
@@ -47,6 +52,8 @@ pub struct AssetTile {
     pub kind: AssetKind,
     pub size: u64,
     pub protected: bool,
+    /// Source-scene policy, independent of immutable-resource protection.
+    pub scene_entry: bool,
     pub preview: Option<egui::TextureId>,
     pub preview_status: Option<String>,
     pub usages: Vec<String>,
@@ -83,8 +90,22 @@ pub struct TrashTile {
     pub deleted_at: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SceneAssetAction {
+    Open,
+    Duplicate,
+    Rename,
+    Move,
+    Delete,
+    SetEntry,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BrowserAction {
+    Scene {
+        asset: String,
+        action: SceneAssetAction,
+    },
     Import {
         folder: String,
     },
@@ -146,14 +167,29 @@ enum BrowserDialog {
     },
 }
 
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BrowserNavigation {
+    pub folder: String,
+    pub search: String,
+    pub kind_filter: Option<AssetKind>,
+    pub grid: bool,
+    pub selected: Option<String>,
+    pub show_address: bool,
+    pub show_details: bool,
+}
 /// Small local UI state. Asset/project data remains outside the browser.
 pub struct BrowserState {
+    /// Canonical host-supplied location, used only for copying an absolute path.
+    pub project_root: Option<std::path::PathBuf>,
     pub folder: String,
     pub search: String,
     pub kind_filter: Option<AssetKind>,
     pub grid: bool,
     pub selected: Option<String>,
     show_trash: bool,
+    show_address: bool,
+    show_details: bool,
     dialog: Option<BrowserDialog>,
     preview_requests: BTreeSet<String>,
     /// Last frame hit targets, useful for the host's deterministic UI diagnostics.
@@ -162,12 +198,15 @@ pub struct BrowserState {
 impl Default for BrowserState {
     fn default() -> Self {
         Self {
+            project_root: None,
             folder: "assets".into(),
             search: String::new(),
             kind_filter: None,
             grid: true,
             selected: None,
             show_trash: false,
+            show_address: false,
+            show_details: false,
             dialog: None,
             preview_requests: BTreeSet::new(),
             hit_targets: BTreeMap::new(),
@@ -175,6 +214,27 @@ impl Default for BrowserState {
     }
 }
 impl BrowserState {
+    pub fn navigation(&self) -> BrowserNavigation {
+        BrowserNavigation {
+            folder: self.folder.clone(),
+            search: self.search.clone(),
+            kind_filter: self.kind_filter,
+            grid: self.grid,
+            selected: self.selected.clone(),
+            show_address: self.show_address,
+            show_details: self.show_details,
+        }
+    }
+    pub fn restore_navigation(&mut self, nav: BrowserNavigation) {
+        self.folder = nav.folder;
+        self.search = nav.search;
+        self.kind_filter = nav.kind_filter;
+        self.grid = nav.grid;
+        self.selected = nav.selected;
+        self.show_address = nav.show_address;
+        self.show_details = nav.show_details;
+    }
+
     #[cfg(test)]
     pub fn has_dialog(&self) -> bool {
         self.dialog.is_some()
@@ -216,7 +276,8 @@ impl BrowserState {
                     self.show_trash = true;
                 }
                 ui.separator();
-                let import = ui.button("Import…");
+                let source_folder=self.folder=="scenes" || self.folder.starts_with("scenes/");
+                let import = ui.add_enabled(!source_folder,egui::Button::new("Import…")).on_disabled_hover_text("Import models/textures into assets/. Create scene files through File → Scene.");
                 self.hit_targets.insert("import".into(), import.rect);
                 if import.clicked() {
                     actions.push(BrowserAction::Import {
@@ -228,7 +289,8 @@ impl BrowserState {
                     actions.push(BrowserAction::Refresh);
                 }
                 if ui
-                    .add_enabled(!self.show_trash, egui::Button::new("New folder…"))
+                    .add_enabled(!self.show_trash && !source_folder, egui::Button::new("New folder…"))
+                    .on_disabled_hover_text("Move a scene to create a source-scene folder.")
                     .clicked()
                 {
                     self.dialog = Some(BrowserDialog::NewFolder {
@@ -242,12 +304,12 @@ impl BrowserState {
             } else {
                 self.search_ui(ui);
                 self.breadcrumb_ui(ui);
-                let wide = ui.available_width() >= 700.0;
-                let medium = ui.available_width() >= 430.0;
+                let wide = ui.available_width() >= 840.0;
+                let medium = ui.available_width() >= 480.0;
                 let height = ui.available_height().max(80.0);
                 if medium {
                     ui.horizontal_top(|ui| {
-                        let folder_width = if wide { 145.0 } else { 115.0 };
+                        let folder_width = if wide { 200.0 } else { 160.0 };
                         ui.allocate_ui_with_layout(
                             Vec2::new(folder_width, height),
                             egui::Layout::top_down(egui::Align::Min),
@@ -260,7 +322,7 @@ impl BrowserState {
                             },
                         );
                         ui.separator();
-                        let inspector_width = if wide { 210.0 } else { 0.0 };
+                        let inspector_width = if wide { 240.0 } else { 0.0 };
                         let width = (ui.available_width() - inspector_width - 12.0).max(80.0);
                         ui.allocate_ui_with_layout(
                             Vec2::new(width, height),
@@ -271,10 +333,14 @@ impl BrowserState {
                                     ui,
                                     assets,
                                     &folders,
-                                    if wide { height } else { height * 0.58 },
+                                    if wide || !self.show_details {
+                                        height
+                                    } else {
+                                        height * 0.58
+                                    },
                                     &mut actions,
                                 );
-                                if !wide {
+                                if !wide && self.show_details {
                                     ui.separator();
                                     egui::CollapsingHeader::new("Selected asset")
                                         .default_open(true)
@@ -324,12 +390,24 @@ impl BrowserState {
                                 );
                             }
                         });
-                    self.file_list(ui, assets, &folders, height * 0.58, &mut actions);
-                    ui.separator();
-                    egui::ScrollArea::vertical()
-                        .id_salt("asset-details-compact")
-                        .max_height((height * 0.4).max(60.0))
-                        .show(ui, |ui| self.details_ui(ui, assets, &folders, &mut actions));
+                    self.file_list(
+                        ui,
+                        assets,
+                        &folders,
+                        if self.show_details {
+                            height * 0.58
+                        } else {
+                            height
+                        },
+                        &mut actions,
+                    );
+                    if self.show_details {
+                        ui.separator();
+                        egui::ScrollArea::vertical()
+                            .id_salt("asset-details-compact")
+                            .max_height((height * 0.4).max(60.0))
+                            .show(ui, |ui| self.details_ui(ui, assets, &folders, &mut actions));
+                    }
                 }
             }
         });
@@ -355,6 +433,7 @@ impl BrowserState {
                         AssetKind::Audio,
                         AssetKind::Shader,
                         AssetKind::Other,
+                        AssetKind::Scene,
                     ] {
                         ui.selectable_value(&mut self.kind_filter, Some(kind), kind.label());
                     }
@@ -364,22 +443,28 @@ impl BrowserState {
         });
     }
     fn breadcrumb_ui(&mut self, ui: &mut egui::Ui) {
+        use crate::app::editor_ui::{self, Icon};
         let current = self.folder.clone();
+        let compact = ui.available_width() < 840.;
         ui.horizontal_wrapped(|ui| {
-            if ui.small_button("Project").clicked() {
-                self.folder.clear();
+            if editor_ui::icon_button(ui,Icon::Folder,if self.show_address{"Show folder breadcrumbs"}else{"Show selectable folder address"},true,self.show_address).clicked(){self.show_address = !self.show_address;}
+            if self.show_address {
+                let mut address: &str=if current.is_empty(){"."}else{&current};
+                let response=ui.add(egui::TextEdit::singleline(&mut address).desired_width((ui.available_width()-80.).max(80.)));
+                response.clone().on_hover_text("Read-only project-relative folder path. Select and copy; this is not an asset reference.");
+                if response.lost_focus() || ui.input(|i|i.key_pressed(egui::Key::Escape)){self.show_address=false;}
+            } else {
+                if ui.small_button("Project").clicked(){self.folder.clear();}
+                let mut path=String::new();
+                for part in current.split('/').filter(|s|!s.is_empty()) {ui.label("/");if !path.is_empty(){path.push('/');}path.push_str(part);if ui.small_button(part).clicked(){self.folder=path.clone();}}
             }
-            let mut path = String::new();
-            for part in current.split('/').filter(|part| !part.is_empty()) {
-                ui.label("/");
-                if !path.is_empty() {
-                    path.push('/');
-                }
-                path.push_str(part);
-                if ui.small_button(part).clicked() {
-                    self.folder = path.clone();
-                }
-            }
+            let copy=editor_ui::icon_button(ui,Icon::Copy,"Copy folder path relative to project",true,false);
+            if copy.clicked(){ui.ctx().copy_text(if current.is_empty(){".".into()}else{current.clone()});}
+            copy.context_menu(|ui|{
+                if let Some(root)=&self.project_root && ui.button("Copy absolute folder path").clicked(){ui.ctx().copy_text(root.join(&current).display().to_string());ui.close();}
+                ui.label("Folder paths are not asset references.");
+            });
+            if compact {ui.toggle_value(&mut self.show_details,"Details");}
         });
     }
     fn folder_tree(
@@ -395,22 +480,28 @@ impl BrowserState {
                 folder.split('/').count()
             };
             ui.horizontal(|ui| {
-                ui.add_space(((depth.saturating_sub(1) * 9) as f32).min(36.0));
+                ui.add_space(((depth.saturating_sub(1) * 16) as f32).min(64.0));
                 let name = if folder.is_empty() {
                     "Project"
                 } else {
                     folder.rsplit('/').next().unwrap_or(folder)
                 };
-                let response = ui
-                    .selectable_label(self.folder == *folder, name)
-                    .on_hover_text(folder_label(folder));
+                let response = crate::app::editor_ui::type_label(
+                    ui,
+                    crate::app::editor_ui::Icon::Folder,
+                    name,
+                    self.folder == *folder,
+                )
+                .on_hover_text(folder_label(folder));
                 self.hit_targets
                     .insert(format!("folder:{folder}"), response.rect);
                 if response.clicked() {
                     self.folder = folder.clone();
                 }
-                if ui.is_enabled() && folder_is_writable(folder) {
-                    if let Some(payload) = response.dnd_hover_payload::<AssetDrag>() {
+                if ui.is_enabled() {
+                    if let Some(payload) = response.dnd_hover_payload::<AssetDrag>()
+                        && accepts_drop(folder, payload.kind)
+                    {
                         ui.painter().rect_stroke(
                             response.rect,
                             2.0,
@@ -423,7 +514,9 @@ impl BrowserState {
                             folder_label(folder)
                         ));
                     }
-                    if let Some(payload) = response.dnd_release_payload::<AssetDrag>() {
+                    if let Some(payload) = response.dnd_release_payload::<AssetDrag>()
+                        && accepts_drop(folder, payload.kind)
+                    {
                         actions.push(BrowserAction::Move {
                             id: payload.id.clone(),
                             folder: folder.clone(),
@@ -457,12 +550,12 @@ impl BrowserState {
                     if self.grid {
                         ui.horizontal_wrapped(|ui| {
                             for folder in &children {
-                                self.child_folder(ui, folder, actions);
+                                self.child_folder(ui, folder, height < 240., actions);
                             }
                         });
                     } else {
                         for folder in &children {
-                            self.child_folder(ui, folder, actions);
+                            self.child_folder(ui, folder, height < 240., actions);
                         }
                     }
                 }
@@ -486,21 +579,71 @@ impl BrowserState {
                 }
             });
     }
-    fn child_folder(&mut self, ui: &mut egui::Ui, folder: &str, actions: &mut Vec<BrowserAction>) {
-        let response = ui
-            .selectable_label(
-                false,
-                format!("[Folder] {}", folder.rsplit('/').next().unwrap_or(folder)),
+    fn child_folder(
+        &mut self,
+        ui: &mut egui::Ui,
+        folder: &str,
+        compact: bool,
+        actions: &mut Vec<BrowserAction>,
+    ) {
+        use crate::app::editor_ui::{self, Icon};
+        let name = folder.rsplit('/').next().unwrap_or(folder);
+        let response = if self.grid && !compact {
+            let (rect, response) = ui.allocate_exact_size(Vec2::splat(96.), Sense::click());
+            if response.hovered() {
+                ui.painter().rect_filled(rect, 4, editor_ui::RAISED);
+            }
+            editor_ui::paint_icon(
+                ui.painter(),
+                Rect::from_center_size(rect.center_top() + Vec2::new(0., 30.), Vec2::splat(48.)),
+                Icon::Folder,
+                Color32::from_rgb(241, 196, 119),
+            );
+            let mut job = egui::text::LayoutJob::simple_singleline(
+                name.into(),
+                FontId::proportional(14.),
+                editor_ui::TEXT,
+            );
+            job.wrap.max_width = 88.;
+            job.wrap.max_rows = 2;
+            job.wrap.break_anywhere = true;
+            let galley = ui.painter().layout_job(job);
+            ui.painter().galley(
+                rect.left_top() + Vec2::new(4., 58.),
+                galley,
+                editor_ui::TEXT,
+            );
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::Button,
+                    ui.is_enabled(),
+                    format!("Open folder {name}"),
+                )
+            });
+            response
+        } else if self.grid {
+            let width = (name.chars().count() as f32 * 8. + 40.).clamp(72., 180.);
+            ui.allocate_ui_with_layout(
+                Vec2::new(width, 28.),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.set_width(width);
+                    editor_ui::type_label(ui, Icon::Folder, name, false)
+                },
             )
-            .on_hover_text("Open folder; drag a file here to move it");
+            .inner
+        } else {
+            editor_ui::type_label(ui, Icon::Folder, name, false)
+        }
+        .on_hover_text("Open folder; drag a file here to move it");
         self.hit_targets
             .insert(format!("folder-content:{folder}"), response.rect);
         if response.clicked() {
             self.folder = folder.into();
         }
         if ui.is_enabled()
-            && folder_is_writable(folder)
             && let Some(payload) = response.dnd_release_payload::<AssetDrag>()
+            && accepts_drop(folder, payload.kind)
         {
             actions.push(BrowserAction::Move {
                 id: payload.id.clone(),
@@ -521,7 +664,11 @@ impl BrowserState {
         folder_match
             && (search.is_empty()
                 || asset.path.to_lowercase().contains(&search)
-                || asset.id.to_lowercase().contains(&search))
+                || asset.id.to_lowercase().contains(&search)
+                || (asset.kind == AssetKind::Scene
+                    && asset.metadata.iter().any(|(key, value)| {
+                        key == "Scene" && value.to_lowercase().contains(&search)
+                    })))
     }
     fn tile(&mut self, ui: &mut egui::Ui, asset: &AssetTile, actions: &mut Vec<BrowserAction>) {
         let width = ui.available_width().clamp(64.0, 105.0);
@@ -559,7 +706,7 @@ impl BrowserState {
         ui.painter().text(
             Pos2::new(rect.left() + 7.0, rect.top() + 103.0),
             egui::Align2::LEFT_TOP,
-            format_size(asset.size),
+            asset_size(asset),
             FontId::proportional(11.0),
             ui.visuals().weak_text_color(),
         );
@@ -574,7 +721,7 @@ impl BrowserState {
             "{}  {}    {}",
             asset.kind.icon(),
             asset.name(),
-            format_size(asset.size)
+            asset_size(asset)
         );
         let response = ui.add(
             egui::Button::new(label)
@@ -597,7 +744,7 @@ impl BrowserState {
             "{}\n{} · {}\n{}",
             asset.path,
             asset.kind.label(),
-            format_size(asset.size),
+            asset_size(asset),
             match asset.kind {
                 AssetKind::Model =>
                     "Drag into Scene to create an object. Replace its model in Inspector.",
@@ -606,6 +753,12 @@ impl BrowserState {
                 _ => "Select a file to view details and usages.",
             }
         ));
+        if response.double_clicked() && asset.kind == AssetKind::Scene {
+            actions.push(BrowserAction::Scene {
+                asset: asset.id.clone(),
+                action: SceneAssetAction::Open,
+            });
+        }
         if response.clicked() {
             self.selected = Some(asset.id.clone());
             actions.push(BrowserAction::Select {
@@ -623,7 +776,7 @@ impl BrowserState {
                 self.request_preview(asset, actions);
                 ui.close();
             }
-            self.file_commands(ui, asset, true);
+            self.file_commands(ui, asset, true, actions);
         });
     }
     fn request_preview(&mut self, asset: &AssetTile, actions: &mut Vec<BrowserAction>) {
@@ -641,7 +794,52 @@ impl BrowserState {
             });
         }
     }
-    fn file_commands(&mut self, ui: &mut egui::Ui, asset: &AssetTile, popup: bool) {
+    fn file_commands(
+        &mut self,
+        ui: &mut egui::Ui,
+        asset: &AssetTile,
+        popup: bool,
+        actions: &mut Vec<BrowserAction>,
+    ) {
+        if asset.kind == AssetKind::Scene {
+            for (label, action) in [
+                ("Open scene", SceneAssetAction::Open),
+                ("Duplicate scene…", SceneAssetAction::Duplicate),
+                ("Rename scene…", SceneAssetAction::Rename),
+                ("Move scene file…", SceneAssetAction::Move),
+                ("Delete scene…", SceneAssetAction::Delete),
+                ("Set as entry scene", SceneAssetAction::SetEntry),
+            ] {
+                let entry_action = asset.scene_entry
+                    && matches!(
+                        action,
+                        SceneAssetAction::Delete | SceneAssetAction::SetEntry
+                    );
+                let enabled =
+                    (!asset.protected || matches!(action, SceneAssetAction::Open)) && !entry_action;
+                let response = ui
+                    .add_enabled(enabled, egui::Button::new(label))
+                    .on_disabled_hover_text(if entry_action {
+                        "This is the entry scene. Choose another entry scene before deleting it."
+                    } else {
+                        "This source is protected."
+                    });
+                self.hit_targets
+                    .insert(format!("scene-action:{action:?}"), response.rect);
+                if response.clicked() {
+                    actions.push(BrowserAction::Scene {
+                        asset: asset.id.clone(),
+                        action,
+                    });
+                    if popup {
+                        ui.close();
+                    }
+                }
+            }
+            ui.weak("Entry and game-owned scene references are checked before changes.");
+            return;
+        }
+
         let rename = ui.add_enabled(!asset.protected, egui::Button::new("Rename…"));
         self.hit_targets.insert("rename".into(), rename.rect);
         if rename.clicked() {
@@ -726,18 +924,30 @@ impl BrowserState {
             }
         }
         ui.label(&asset.path);
-        ui.label(format_size(asset.size));
+        ui.label(asset_size(asset));
         for (name, value) in &asset.metadata {
             ui.label(format!("{name}: {value}"));
         }
-        egui::CollapsingHeader::new("Asset reference").show(ui, |ui| {
+        egui::CollapsingHeader::new(if asset.kind == AssetKind::Scene {
+            "Scene ID"
+        } else {
+            "Asset reference"
+        })
+        .show(ui, |ui| {
             ui.add(egui::Label::new(&asset.reference).selectable(true).wrap());
-            if ui.small_button("Copy reference").clicked() {
+            if ui
+                .small_button(if asset.kind == AssetKind::Scene {
+                    "Copy scene ID"
+                } else {
+                    "Copy reference"
+                })
+                .clicked()
+            {
                 ui.ctx().copy_text(asset.reference.clone());
             }
         });
         ui.separator();
-        self.file_commands(ui, asset, false);
+        self.file_commands(ui, asset, false, actions);
     }
     fn trash_ui(
         &mut self,
@@ -1020,6 +1230,13 @@ fn parent(path: &str) -> &str {
 fn folder_label(folder: &str) -> &str {
     if folder.is_empty() { "Project" } else { folder }
 }
+fn accepts_drop(folder: &str, kind: AssetKind) -> bool {
+    if kind == AssetKind::Scene {
+        folder == "scenes" || folder.starts_with("scenes/")
+    } else {
+        folder_is_writable(folder)
+    }
+}
 fn folder_is_writable(folder: &str) -> bool {
     folder == "assets" || folder.starts_with("assets/")
 }
@@ -1061,6 +1278,13 @@ fn abbreviated(text: &str, limit: usize) -> String {
         )
     }
 }
+fn asset_size(asset: &AssetTile) -> String {
+    if asset.kind == AssetKind::Scene && asset.size == 0 {
+        "Not saved".into()
+    } else {
+        format_size(asset.size)
+    }
+}
 fn format_size(size: u64) -> String {
     if size >= 1024 * 1024 {
         format!("{:.1} MB", size as f64 / (1024.0 * 1024.0))
@@ -1083,10 +1307,54 @@ mod tests {
             kind,
             size: 256,
             protected: false,
+            scene_entry: false,
             preview: None,
             preview_status: None,
             usages: vec![],
             metadata: vec![],
+        }
+    }
+    #[test]
+    fn scene_entry_disables_delete_and_redundant_set_entry_but_keeps_rename() {
+        for entry in [false, true] {
+            let ctx = egui::Context::default();
+            let mut browser = BrowserState::default();
+            let mut asset = tile("scene-source", "scenes/arena.scene.json", AssetKind::Scene);
+            asset.scene_entry = entry;
+            let mut draw = |events| {
+                let mut actions = vec![];
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(480., 480.))),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| browser.file_commands(ui, &asset, false, &mut actions),
+                )
+                .drop_without_applying_deltas();
+                (actions, browser.hit_targets.clone())
+            };
+            for action in [
+                SceneAssetAction::Delete,
+                SceneAssetAction::SetEntry,
+                SceneAssetAction::Rename,
+            ] {
+                let (_, targets) = draw(vec![]);
+                let pos = targets[&format!("scene-action:{action:?}")].center();
+                let (actions, _) = draw(click(pos));
+                let expected = !(entry
+                    && matches!(
+                        action,
+                        SceneAssetAction::Delete | SceneAssetAction::SetEntry
+                    ));
+                assert_eq!(
+                    actions.contains(&BrowserAction::Scene {
+                        asset: asset.id.clone(),
+                        action
+                    }),
+                    expected
+                );
+            }
         }
     }
     fn frame(
@@ -1320,6 +1588,48 @@ mod tests {
         );
         let center = state.hit_targets["asset:a"].center();
         assert!(screen.contains(center));
+        let details = output
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.text() == "Details" => {
+                    Some(t.pos + t.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .expect("Compact browser exposes Details");
+        output.drop_without_applying_deltas();
+        for pressed in [true, false] {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events: vec![
+                        egui::Event::PointerMoved(details),
+                        egui::Event::PointerButton {
+                            pos: details,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ui| {
+                    state.ui(ui, &assets, &[], &[], false);
+                },
+            )
+            .drop_without_applying_deltas();
+        }
+        assert!(state.show_details);
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                ..Default::default()
+            },
+            |ui| {
+                state.ui(ui, &assets, &[], &[], false);
+            },
+        );
         let visible_name_count = output
             .shapes
             .iter()
@@ -1334,11 +1644,11 @@ mod tests {
                 }
             })
             .count();
+        output.drop_without_applying_deltas();
         assert_eq!(
             visible_name_count, 2,
-            "tile and selected details should remain visible"
+            "tile and selected details should remain visible after Details"
         );
-        output.drop_without_applying_deltas();
     }
     #[test]
     fn short_wide_grid_keeps_full_tiles_visible_beside_three_compact_folder_buttons() {

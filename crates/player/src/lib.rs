@@ -1,4 +1,5 @@
 //! Source-composed standalone Player, independent of the Editor application.
+pub mod capabilities;
 mod composition;
 pub mod native_features;
 pub mod package;
@@ -8,6 +9,10 @@ pub mod source_modules;
 pub mod gpu_presentation;
 #[cfg(feature = "ui")]
 pub mod presentations;
+#[cfg(feature = "ui")]
+pub mod script_ui;
+#[cfg(feature = "ui")]
+pub mod settings_check;
 #[cfg(feature = "ui")]
 pub mod ui;
 

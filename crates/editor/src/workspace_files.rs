@@ -325,9 +325,10 @@ fn save_as_impl(
         collect_resources(document, &source_root, &distribution.package_root)?
     };
     check_roots(&source_root, destination_root, &files)?;
+    let authored = module_engine_project::externalize_scenes(document, true)?;
     publish(
         destination,
-        document.clone(),
+        authored,
         files,
         distribution,
         overwrite_confirmed,
@@ -919,6 +920,10 @@ fn publish(
     distribution: &Distribution,
     overwrite_confirmed: bool,
 ) -> Result<SavedProject, String> {
+    // New/copy/migrate-copy is an explicit authored delivery. Ordinary Save
+    // retains inline storage until the user chooses conversion.
+    let document = module_engine_project::externalize_scenes(&document, false)?;
+    distribution.validate_document(&document)?;
     let root = destination.parent().ok_or("Destination has no folder")?;
     let name = destination
         .file_name()
@@ -936,7 +941,8 @@ fn publish(
     };
     let binding = ProjectEngineBinding::from_distribution(distribution)?;
     let binding_bytes = serde_json::to_vec_pretty(&binding).map_err(|e| e.to_string())?;
-    let bytes = serde_json::to_vec_pretty(&document).map_err(|e| e.to_string())?;
+    let (bytes, scene_files) = module_engine_project::encode_project_sources(&document)?;
+    let output_paths: Vec<_> = files.keys().chain(scene_files.keys()).cloned().collect();
     let existing_binding = project_binding_path(&destination)?;
     let binding_name = existing_binding
         .file_name()
@@ -974,6 +980,24 @@ fn publish(
                 .map_err(|e| e.to_string())?
     {
         return Err("Destination is another engine package; choose a project folder".into());
+    }
+    for (relative, contents) in &scene_files {
+        if files.contains_key(relative) {
+            return Err(format!(
+                "Authored scene conflicts with immutable resource: {relative}"
+            ));
+        }
+        let target = root.join(relative);
+        if target.exists()
+            && (!target.is_file() || fs::read(&target).map_err(|e| e.to_string())? != *contents)
+        {
+            return Err(format!(
+                "Destination already contains another authored scene: {relative}"
+            ));
+        }
+        if !absolute_path(target.parent().ok_or("Scene has no parent")?)?.starts_with(root) {
+            return Err(format!("Destination scene leaves project: {relative}"));
+        }
     }
     for (relative, source) in &files {
         if relative == &name.to_string_lossy()
@@ -1032,6 +1056,11 @@ fn publish(
                 return Err(format!("Resource changed during copy: {relative}"));
             }
         }
+        for (relative, contents) in &scene_files {
+            let target = stage.join(relative);
+            fs::create_dir_all(target.parent().unwrap()).map_err(|e| e.to_string())?;
+            write_new(&target, contents)?;
+        }
         if !files.is_empty() {
             AssetManifest::from_value(&document.asset_manifest)?.verify(&stage)?;
         }
@@ -1047,7 +1076,7 @@ fn publish(
         let mut created_directories = vec![];
         let mut replaced = vec![];
         let commit = (|| {
-            for relative in files.keys() {
+            for relative in &output_paths {
                 let target = root.join(relative);
                 if target.exists() {
                     if !absolute_path(&target)?.starts_with(root)
@@ -1207,6 +1236,48 @@ mod tests {
             assert!(!capability.can_author_engine());
         }
         (sources, capability)
+    }
+    fn assert_source_copy(saved: &SavedProject, expected: &GraphDocument) {
+        let loaded = crate::project::read(&saved.path).unwrap();
+        assert!(
+            loaded == saved.document,
+            "Reloaded external DTO differs from returned copy"
+        );
+        let mut authored = saved.document.clone();
+        if let Some(original) = &expected.game {
+            let copy = authored.game.as_mut().expect("Copied game missing");
+            assert!(
+                !copy.scene_assets.is_empty(),
+                "Explicit copies must externalize scenes"
+            );
+            assert!(copy.scene_assets.keys().eq(original.scenes.keys()));
+            let mut ids = std::collections::BTreeSet::new();
+            for (id, binding) in &copy.scene_assets {
+                assert!(ids.insert(&binding.id));
+                if let Some(old) = original.scene_assets.get(id) {
+                    assert_eq!(binding.id, old.id);
+                }
+                let path = saved.path.parent().unwrap().join(&binding.path);
+                let raw: serde_json::Value =
+                    serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+                assert_eq!(raw["scene_asset_version"], 1);
+                assert_eq!(raw["scene_id"], id.as_str());
+                assert_eq!(raw["asset_id"], binding.id);
+            }
+            // Only this explicitly added storage metadata differs. Every other
+            // field, scene body, stable ID, unknown/null payload and pin is exact.
+            copy.scene_assets = original.scene_assets.clone();
+        }
+        assert!(
+            authored == *expected,
+            "Copy changed authored content beyond scene storage metadata"
+        );
+        let raw: serde_json::Value =
+            serde_json::from_slice(&fs::read(&saved.path).unwrap()).unwrap();
+        if expected.game.is_some() {
+            assert_eq!(raw["scene_storage_version"], 1);
+            assert!(raw.pointer("/game/scenes").is_none());
+        }
     }
     #[test]
     fn g1_template_requires_compatible_inheritance_or_explicit_source_profile_selection() {
@@ -1451,8 +1522,7 @@ mod tests {
                 &capability,
             )
             .unwrap();
-            assert_eq!(saved.document, document);
-            assert_eq!(crate::project::read(&saved.path).unwrap(), document);
+            assert_source_copy(&saved, &document);
             assert_eq!(fs::read(&json).unwrap(), original);
             assert_eq!(
                 fs::read(
@@ -1551,10 +1621,7 @@ mod tests {
             &rebound,
         )
         .unwrap();
-        assert_eq!(
-            crate::project::read(&saved.path).unwrap(),
-            migrated.document
-        );
+        assert_source_copy(&saved, &migrated.document);
         assert_eq!(fs::read(&json).unwrap(), original);
         assert_eq!(fs::read(&binding).unwrap(), original_binding);
         for target in [&migrated.path, &saved.path] {
@@ -1716,8 +1783,7 @@ mod tests {
             &distribution,
         )
         .unwrap();
-        assert_eq!(saved.document, document);
-        assert_eq!(crate::project::read(&saved.path).unwrap(), document);
+        assert_source_copy(&saved, &document);
         assert_eq!(fs::read(source.join("project.json")).unwrap(), original);
         assert_eq!(
             fs::read(target.join("assets/unassigned/later.txt")).unwrap(),
@@ -1858,7 +1924,7 @@ mod tests {
             &distribution,
         )
         .unwrap();
-        assert_eq!(crate::project::read(&copy.path).unwrap(), document);
+        assert_source_copy(&copy, &document);
         assert_eq!(fs::read(&source).unwrap(), original_bytes);
         cleanup(&root);
     }
@@ -1880,7 +1946,7 @@ mod tests {
             fs::read(root.join("old.json")).unwrap(),
             b"old authored bytes"
         );
-        assert_eq!(crate::project::read(&saved.path).unwrap(), document);
+        assert_source_copy(&saved, &document);
         assert!(
             save_as(
                 &root.join("old.json"),
@@ -1891,6 +1957,129 @@ mod tests {
             .is_err()
         );
         cleanup(&root);
+    }
+    #[test]
+    fn dirty_external_scene_copy_is_independent_in_same_and_different_folders() {
+        for same_folder in [true, false] {
+            let root = fixture();
+            let source = root.join("original.json");
+            let original = module_engine_project::externalize_scenes(&document(), false).unwrap();
+            let (_sources, full) = distribution(&original, DistributionProfile::Full);
+            module_engine_project::save_document_with_backup(&source, &original).unwrap();
+            let before_project = fs::read(&source).unwrap();
+            let originals: std::collections::BTreeMap<_, _> = original
+                .game
+                .as_ref()
+                .unwrap()
+                .scene_assets
+                .values()
+                .map(|b| (b.path.clone(), fs::read(root.join(&b.path)).unwrap()))
+                .collect();
+            let mut dirty = original.clone();
+            let entry = dirty.game.as_ref().unwrap().entry_scene.clone();
+            dirty
+                .game
+                .as_mut()
+                .unwrap()
+                .scenes
+                .get_mut(&entry)
+                .unwrap()
+                .objects[0]
+                .name = module_engine_core::AuthoredName::Text("Unsaved scene edit".into());
+            let target = if same_folder {
+                root.join("copied.json")
+            } else {
+                root.join("another/copied.json")
+            };
+            let saved = save_as(&source, &target, &dirty, &full).unwrap();
+            assert_source_copy(&saved, &dirty);
+            let copy = saved.document.game.as_ref().unwrap();
+            let old = original.game.as_ref().unwrap();
+            for id in old.scenes.keys() {
+                assert_eq!(copy.scene_assets[id].id, old.scene_assets[id].id);
+                if same_folder {
+                    assert_ne!(copy.scene_assets[id].path, old.scene_assets[id].path);
+                }
+            }
+            let mut edited = saved.document.clone();
+            edited
+                .game
+                .as_mut()
+                .unwrap()
+                .scenes
+                .get_mut(&entry)
+                .unwrap()
+                .objects[0]
+                .name = module_engine_core::AuthoredName::Text("Edited copy only".into());
+            let state = module_engine_project::read_project_source(&saved.path)
+                .unwrap()
+                .files;
+            module_engine_project::save_project_with_state(&saved.path, &edited, &state).unwrap();
+            assert_eq!(fs::read(&source).unwrap(), before_project);
+            for (path, bytes) in originals {
+                assert_eq!(fs::read(root.join(path)).unwrap(), bytes);
+            }
+            assert!(crate::project::read(&source).unwrap() == original);
+            assert!(crate::project::read(&saved.path).unwrap() == edited);
+            let previous_bytes = fs::read(&saved.path).unwrap();
+            let previous_sources: Vec<_> = edited
+                .game
+                .as_ref()
+                .unwrap()
+                .scene_assets
+                .values()
+                .map(|b| {
+                    (
+                        b.path.clone(),
+                        fs::read(saved.path.parent().unwrap().join(&b.path)).unwrap(),
+                    )
+                })
+                .collect();
+            let mut repeated = edited.clone();
+            repeated
+                .game
+                .as_mut()
+                .unwrap()
+                .scenes
+                .get_mut(&entry)
+                .unwrap()
+                .objects[0]
+                .name = module_engine_core::AuthoredName::Text("Repeated confirmed copy".into());
+            let again = save_as_confirmed(&source, &saved.path, &repeated, &full).unwrap();
+            assert_source_copy(&again, &repeated);
+            for (id, binding) in &edited.game.as_ref().unwrap().scene_assets {
+                let next = &again.document.game.as_ref().unwrap().scene_assets[id];
+                assert_eq!(next.id, binding.id);
+                assert_ne!(next.path, binding.path);
+            }
+            for (path, bytes) in previous_sources {
+                assert_eq!(
+                    fs::read(saved.path.parent().unwrap().join(path)).unwrap(),
+                    bytes
+                );
+            }
+            let backup = fs::read_dir(saved.path.parent().unwrap())
+                .unwrap()
+                .map(|e| e.unwrap().path())
+                .find(|p| {
+                    p.is_file()
+                        && p.file_name()
+                            .unwrap()
+                            .to_string_lossy()
+                            .starts_with("copied.json.backup-")
+                        && fs::read(p).unwrap() == previous_bytes
+                })
+                .expect("Exact previous DTO backup");
+            assert!(
+                module_engine_project::read_project_source(&backup)
+                    .unwrap()
+                    .document
+                    == edited,
+                "Backed-up DTO must still hydrate its own unchanged scenes"
+            );
+            assert!(crate::project::read(&source).unwrap() == original);
+            cleanup(&root);
+        }
     }
     #[test]
     fn save_as_keeps_an_in_progress_disconnected_author_graph() {
@@ -1912,7 +2101,7 @@ mod tests {
                 .any(|diagnostic| diagnostic.severity == module_engine_core::Severity::Error)
         );
         let saved = save_as(&source, &root.join("draft.json"), &draft, &distribution).unwrap();
-        assert_eq!(crate::project::read(&saved.path).unwrap(), draft);
+        assert_source_copy(&saved, &draft);
         assert_eq!(fs::read(&source).unwrap(), original_bytes);
         cleanup(&root);
     }
@@ -2023,7 +2212,7 @@ mod tests {
         assert!(save_as(&source.join("source.json"), &path, &document, &full).is_err());
         let saved =
             save_as_confirmed(&source.join("source.json"), &path, &document, &full).unwrap();
-        assert_eq!(crate::project::read(&saved.path).unwrap(), document);
+        assert_source_copy(&saved, &document);
         assert_eq!(
             fs::read(source.join("source.json")).unwrap(),
             b"original source bytes"
@@ -2378,7 +2567,7 @@ mod tests {
                 &context,
             )
             .unwrap();
-            assert_eq!(saved.document, document);
+            assert_source_copy(&saved, &document);
             let target = saved.path.parent().unwrap();
             for file in ["model.gltf", "model.bin", "checker.png"] {
                 assert_eq!(

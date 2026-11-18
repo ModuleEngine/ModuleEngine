@@ -6,7 +6,10 @@ use crate::game_host::{
 };
 use crate::game_wait::{DeadlineWait, WakeSignal};
 use module_engine_core::RendererPerformance;
-use module_engine_core::{Camera, Frame, GameInput, GameState, GraphDocument, WorldKind};
+use module_engine_core::{
+    Camera, Frame, GameInput, GameState, GraphDocument, ScriptSettingsSnapshot, ScriptUiSnapshot,
+    WorldKind,
+};
 use module_engine_script::CompiledScript;
 use serde_json::Value;
 use std::{
@@ -316,6 +319,11 @@ pub struct GameSnapshot {
     pub frame_revision: Option<u64>,
     pub frame_completed_at: Option<Instant>,
     pub frame_presentation: Option<FramePresentation>,
+    /// Settings used by the retained completed frame, not the newest tick.
+    pub frame_settings: ScriptSettingsSnapshot,
+    pub player_settings: ScriptSettingsSnapshot,
+    pub script_ui: ScriptUiSnapshot,
+    pub script_ui_error: Option<String>,
     pub deadline_wait_strategy: &'static str,
     pub deadline_wait_error: Option<String>,
     pub presentation_revision: u64,
@@ -616,6 +624,11 @@ struct Actor {
     frame_revision: Option<u64>,
     frame_completed_at: Option<Instant>,
     frame_presentation: Option<FramePresentation>,
+    frame_settings: ScriptSettingsSnapshot,
+    pending_frame_settings: Option<ScriptSettingsSnapshot>,
+    player_settings: ScriptSettingsSnapshot,
+    script_ui: ScriptUiSnapshot,
+    script_ui_error: Option<String>,
     attempted_revision: Option<u64>,
     rendered_camera: Option<Camera>,
     rendered_size: Option<[usize; 2]>,
@@ -662,6 +675,11 @@ impl Actor {
             frame_revision: None,
             frame_completed_at: None,
             frame_presentation: None,
+            frame_settings: Default::default(),
+            pending_frame_settings: None,
+            player_settings: Default::default(),
+            script_ui: Default::default(),
+            script_ui_error: None,
             attempted_revision: None,
             rendered_camera: None,
             rendered_size: None,
@@ -1238,6 +1256,14 @@ impl Actor {
             playing,
         );
         let render_deadline = self.next_render;
+        let settings = match self.host.player_settings_snapshot() {
+            Ok(settings) => settings,
+            Err(error) => {
+                let changed = self.render_error.as_ref() != Some(&error);
+                self.render_error = Some(error);
+                return changed;
+            }
+        };
         let result = self
             .presentation_target
             .as_ref()
@@ -1247,6 +1273,7 @@ impl Actor {
             .and_then(|()| self.host.try_render_interpolated(width, height, alpha));
         if self.host.has_pending_presentation() {
             self.pending_render_deadline = Some(render_deadline);
+            self.pending_frame_settings = Some(settings.clone());
         }
         self.next_render = Some(next_presentation_deadline(
             self.next_render,
@@ -1255,7 +1282,7 @@ impl Actor {
         ));
         match result {
             Ok(Some(rendered)) => {
-                if let Err(error) = self.accept_rendered(rendered) {
+                if let Err(error) = self.accept_rendered(rendered, settings) {
                     self.render_error = Some(error);
                 } else if self.presentation_phase.armed.is_some() {
                     self.rephase_after_successful_publication(render_deadline, Instant::now());
@@ -1283,7 +1310,11 @@ impl Actor {
         match self.host.poll_interpolated_presentation() {
             Ok(Some(rendered)) => {
                 let deadline = self.pending_render_deadline.take().flatten();
-                if let Err(error) = self.accept_rendered(rendered) {
+                let settings = self.pending_frame_settings.take();
+                let accepted = settings
+                    .ok_or_else(|| "Completed frame has no settings provenance".to_owned())
+                    .and_then(|settings| self.accept_rendered(rendered, settings));
+                if let Err(error) = accepted {
                     self.presentation_phase.pending = None;
                     self.render_error = Some(error);
                 } else if self.presentation_phase.armed.is_some() {
@@ -1292,10 +1323,16 @@ impl Actor {
                 }
                 true
             }
-            Ok(None) => false,
+            Ok(None) => {
+                if !self.host.has_pending_presentation() {
+                    self.pending_frame_settings = None;
+                }
+                false
+            }
             Err(error) => {
                 self.presentation_phase.pending = None;
                 self.pending_render_deadline = None;
+                self.pending_frame_settings = None;
                 let changed = self.render_error.as_ref() != Some(&error);
                 self.render_error = Some(error);
                 changed
@@ -1369,7 +1406,11 @@ impl Actor {
         }
     }
 
-    fn accept_rendered(&mut self, rendered: RenderedPresentation) -> Result<(), String> {
+    fn accept_rendered(
+        &mut self,
+        rendered: RenderedPresentation,
+        settings: ScriptSettingsSnapshot,
+    ) -> Result<(), String> {
         let completed = Instant::now();
         let serial = self
             .frame_presentation
@@ -1388,11 +1429,24 @@ impl Actor {
             provenance: rendered.provenance,
         });
         self.frame = Some(rendered.frame);
+        self.frame_settings = settings;
         self.render_error = None;
         Ok(())
     }
 
     fn publish(&mut self) {
+        match self.host.player_settings_snapshot().and_then(|settings| {
+            self.host
+                .script_ui_snapshot()
+                .map(|menus| (settings, menus))
+        }) {
+            Ok((settings, menus)) => {
+                self.player_settings = settings;
+                self.script_ui = menus;
+                self.script_ui_error = None;
+            }
+            Err(error) => self.script_ui_error = Some(error),
+        }
         let wait_state = (self.deadline_wait.strategy(), self.deadline_wait.error());
         let custom = self
             .host
@@ -1456,6 +1510,10 @@ impl Actor {
             frame_revision: self.frame_revision,
             frame_completed_at: self.frame_completed_at,
             frame_presentation: self.frame_presentation.clone(),
+            frame_settings: self.frame_settings.clone(),
+            player_settings: self.player_settings.clone(),
+            script_ui: self.script_ui.clone(),
+            script_ui_error: self.script_ui_error.clone(),
             deadline_wait_strategy: wait_state.0,
             deadline_wait_error: wait_state.1.clone(),
             presentation_revision: self.host.presentation_revision(),
@@ -1534,7 +1592,7 @@ mod tests {
 
     #[test]
     fn pending_gpu_completion_publishes_original_inputs_and_keeps_the_next_submit_turn() {
-        let (host, draws, _temp) = crate::game_host::presentation_tests::gpu_host();
+        let (host, draws, _temp) = crate::game_host::presentation_tests::gpu_settings_host();
         let mut actor = actor_with_host(host);
         let camera = actor.host.camera;
         let revision = actor.host.presentation_revision();
@@ -1542,6 +1600,15 @@ mod tests {
         assert!(!actor.render_if_due());
         assert!(actor.host.has_pending_presentation());
         assert!(actor.frame.is_none());
+        // Use the real runtime preference staging/validation path. Authored
+        // sync_document intentionally discards old pending presentations.
+        crate::game_host::presentation_tests::request_gpu_setting(&mut actor.host, "off").unwrap();
+        assert_eq!(
+            actor.host.player_settings_snapshot().unwrap()["edge-mode"]
+                .selected
+                .as_deref(),
+            Some("off")
+        );
         actor.host.camera.yaw += 0.5;
         actor.host.step(FIXED_DT, &GameInput::default()).unwrap();
         let committed = actor.host.session.state().clone();
@@ -1569,6 +1636,11 @@ mod tests {
         assert_ne!(metadata.source_revision, actor.host.presentation_revision());
         assert_eq!(actor.frame_revision, Some(revision));
         assert_eq!(
+            actor.frame_settings["edge-mode"].selected.as_deref(),
+            Some("on"),
+            "Completed pixels retain their submitted settings, even after a newer choice is accepted"
+        );
+        assert_eq!(
             actor.next_render,
             Some(due),
             "polling must preserve the submit grid"
@@ -1587,6 +1659,15 @@ mod tests {
             metadata.serial + 1
         );
         assert_eq!(actor.frame_tick, Some(1));
+        assert_eq!(
+            actor.frame_settings["edge-mode"].selected.as_deref(),
+            Some("off")
+        );
+        assert_eq!(
+            draws.lock().unwrap().edge_modes,
+            vec![Some(true), Some(false)],
+            "Published setting tags match the controls admitted with the two delayed frames"
+        );
     }
 
     #[test]
@@ -1649,7 +1730,9 @@ mod tests {
                 .unwrap()
                 .unwrap();
             assert_eq!(rendered.provenance.current_tick, 0);
-            actor.accept_rendered(rendered).unwrap();
+            actor
+                .accept_rendered(rendered, actor.host.player_settings_snapshot().unwrap())
+                .unwrap();
             let frame = actor.frame.clone().unwrap();
             let metadata = serde_json::to_value(&actor.frame_presentation).unwrap();
             let state = actor.host.session.state().clone();
@@ -2059,7 +2142,9 @@ mod tests {
                 .poll_interpolated_presentation()
                 .unwrap()
                 .unwrap();
-            actor.accept_rendered(rendered).unwrap();
+            actor
+                .accept_rendered(rendered, actor.host.player_settings_snapshot().unwrap())
+                .unwrap();
             let completed = actor.frame_completed_at.unwrap();
             let metadata = serde_json::to_value(&actor.frame_presentation).unwrap();
             actor.clock = completed;
@@ -2341,7 +2426,9 @@ mod tests {
             .try_render_interpolated(160, 100, 0.25)
             .unwrap()
             .unwrap();
-        actor.accept_rendered(rendered).unwrap();
+        actor
+            .accept_rendered(rendered, actor.host.player_settings_snapshot().unwrap())
+            .unwrap();
         let frame = actor.frame.clone().unwrap();
         let metadata = serde_json::to_value(&actor.frame_presentation).unwrap();
         let camera = actor.host.camera;
@@ -2563,7 +2650,9 @@ mod tests {
             .try_render_interpolated(160, 100, 0.25)
             .unwrap()
             .unwrap();
-        actor.accept_rendered(first).unwrap();
+        actor
+            .accept_rendered(first, actor.host.player_settings_snapshot().unwrap())
+            .unwrap();
         let first_frame = actor.frame.clone().unwrap();
         let first_metadata = actor.frame_presentation.clone().unwrap();
         let first_completed = actor.frame_completed_at.unwrap();
@@ -2572,7 +2661,9 @@ mod tests {
             .try_render_interpolated(160, 100, 0.75)
             .unwrap()
             .unwrap();
-        actor.accept_rendered(second).unwrap();
+        actor
+            .accept_rendered(second, actor.host.player_settings_snapshot().unwrap())
+            .unwrap();
         let second_metadata = actor.frame_presentation.clone().unwrap();
         assert!(!Arc::ptr_eq(&first_frame, actor.frame.as_ref().unwrap()));
         assert_ne!(first_frame.rgba, actor.frame.as_ref().unwrap().rgba);

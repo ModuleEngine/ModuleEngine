@@ -40,6 +40,7 @@ pub fn run(
         }
     }
     let project_bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
+    let personal_root = crate::ui_capture::diagnostic_personal_root()?;
     std::fs::create_dir_all(folder).map_err(|error| error.to_string())?;
     let folder = folder.canonicalize().map_err(|error| error.to_string())?;
     let outcome = Arc::new(Mutex::new(None));
@@ -61,7 +62,7 @@ pub fn run(
                 document.clone(),
                 path.clone(),
                 distribution,
-                None,
+                personal_root,
                 bridge,
             );
             editor.workspace = WorkspaceKind::Engine;
@@ -134,6 +135,7 @@ pub fn run(
                 stop_immediate_owner_released: false,
                 errors: BTreeSet::new(),
                 finished: false,
+                native_focused: false,
                 physical_size,
                 monitor_pixels,
                 refresh_millihertz,
@@ -175,6 +177,7 @@ fn fixed_layout() -> dock::DockLayout {
             }),
         },
         next_id: 6,
+        detached: vec![],
     }
 }
 
@@ -286,6 +289,7 @@ struct NativeEditorBenchmark {
     stop_immediate_owner_released: bool,
     errors: BTreeSet<String>,
     finished: bool,
+    native_focused: bool,
     physical_size: Box<dyn Fn() -> Option<[u32; 2]>>,
     monitor_pixels: Option<[u32; 2]>,
     refresh_millihertz: Option<u32>,
@@ -459,7 +463,11 @@ impl NativeEditorBenchmark {
                 "visible_frames":samples.iter().filter(|sample|sample.visible == Some(true)).count()
             })
         }).collect();
-        let report = serde_json::json!({
+        let activities = self.editor.preparation_activities().iter().map(|activity| serde_json::json!({
+            "title": activity.title, "detail": activity.detail, "state":format!("{:?}",activity.state),
+            "elapsed_ms":activity.elapsed.as_secs_f64()*1000., "error":activity.error
+        })).collect::<Vec<_>>();
+        let mut report = serde_json::json!({
             "schema_version":1,"kind":"native-editor-graph-pan","complete":complete,"measurements_valid":measurements_valid,
             "document_name":self.original.name,"project_path":self.project_path,"project_saved":false,
             "document_unchanged":document_unchanged,"document_execution_unchanged":execution_unchanged,
@@ -494,8 +502,11 @@ impl NativeEditorBenchmark {
             "vulkan_device":self.editor.game_workbench.game_snapshot().map(|snapshot|snapshot.device.clone()),
             "errors":self.errors,"interrupted":interrupted,"elapsed_seconds":self.started.elapsed().as_secs_f64(),
             "phase_summaries":summaries,"frames":self.samples,
+            "scripted_egui_input_focus":true,
+            "native_focus_scope":"focused_frames records native RawInput focus before the harness supplies focus for its synthetic pointer stream; no external physical input claim",
             "measurement_scope":"editor_handler_ms times the real Editor::ui call, all open native editor panes and completed-frame texture enqueue. Game simulation and Game Vulkan rendering run on their persistent worker; the independent authored Scene viewport still renders on demand. Frame interval is Editor callback start-to-start, including previous egui texture upload/draw, present/vsync and scheduling. framework_cpu_ms is eframe previous-frame CPU, including GUI rendering but excluding vsync waiting. No headless/FPS substitute or display scanout timing. Only actual middle-button pointer moves that changed graph pan are sampled; preparation, warmup and drag acquisition are excluded. Last render durations/texture presence are diagnostics, not proof of one fresh GPU render per sample."
         });
+        report["preparation_activities"] = serde_json::json!(activities);
         let result = serde_json::to_vec_pretty(&report).map_err(|error|error.to_string())
             .and_then(|bytes|std::fs::write(self.folder.join("report.json"),bytes).map_err(|error|error.to_string()))
             .and_then(|()|if measurements_valid { Ok(()) } else { Err(interrupted.unwrap_or("Native Editor benchmark reported incomplete/invalid measurements; inspect report.json").into()) });
@@ -521,6 +532,10 @@ impl App for NativeEditorBenchmark {
     fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
         // Ignore external clicks/keys during this scripted diagnostic so no
         // project commands, text edits or layout changes can be triggered.
+        self.native_focused = input.focused;
+        // The diagnostic injects only its own canvas input, including its focus.
+        // Preserve OS focus separately; synthetic focus is never reported as OS focus.
+        input.focused = true;
         input.events.clear();
         self.input_step = false;
         self.input_phase = None;
@@ -693,7 +708,7 @@ impl App for NativeEditorBenchmark {
                     framework_cpu_ms: None,
                     pan_before: before,
                     pan_after: after,
-                    focused: ui.input(|input| input.focused),
+                    focused: self.native_focused,
                     visible: ui.input(|input| input.viewport().visible()),
                     game_time: self
                         .editor

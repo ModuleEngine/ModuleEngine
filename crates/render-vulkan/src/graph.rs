@@ -296,18 +296,73 @@ pub fn remove_pass_with_bypass(graph: &mut Graph, id: &str) -> Option<usize> {
 }
 pub fn module_descriptors() -> Vec<ModuleDescriptor> {
     let mut result = Vec::new();
-    for (id, label) in [
-        ("gpu.forward", "Vulkan Forward"),
-        ("gpu.gbuffer", "Vulkan G-buffer"),
-        ("gpu.deferred", "Deferred lighting"),
-        ("gpu.depth_normal", "Depth and normals"),
-        ("gpu.ssao", "Screen-space AO"),
-        ("gpu.tonemap", "Tone mapping"),
-        ("gpu.fxaa", "FXAA"),
-        ("gpu.color_encode", "sRGB encoding"),
+    for (id, label, purpose) in [
+        (
+            "gpu.forward",
+            "Vulkan Forward",
+            "Rasterize scene geometry with lighting directly into a high-dynamic-range color image.",
+        ),
+        (
+            "gpu.gbuffer",
+            "Vulkan G-buffer",
+            "Rasterize scene material, normal and depth data for deferred lighting.",
+        ),
+        (
+            "gpu.deferred",
+            "Deferred lighting",
+            "Calculate lighting from the G-buffer produced by the geometry pass.",
+        ),
+        (
+            "gpu.depth_normal",
+            "Depth and normals",
+            "Rasterize depth and normals for image effects that need scene geometry information.",
+        ),
+        (
+            "gpu.ssao",
+            "Ambient occlusion (SSAO)",
+            "Use screen-space depth and normals to darken occluded areas of the color image.",
+        ),
+        (
+            "gpu.tonemap",
+            "Tone mapping",
+            "Map high-dynamic-range lighting into the display range using the selected tone curve.",
+        ),
+        (
+            "gpu.fxaa",
+            "Anti-aliasing (FXAA)",
+            "Smooth jagged image edges using only the current frame; no motion vectors or frame history.",
+        ),
+        (
+            "gpu.color_encode",
+            "sRGB encoding",
+            "Encode linear color for display; this is separate from lighting and tone mapping.",
+        ),
     ] {
         let m = builtin_manifest(id).unwrap();
-        result.push(ModuleDescriptor{id:id.into(),label:label.into(),description:"Native Vulkan GPU pass; resource format/semantic/access validated before activation.".into(),inputs:m.inputs.iter().map(|s|PortDescriptor{name:s.name.clone(),data_type:port_type(s).into(),required:true}).collect(),outputs:m.outputs.iter().map(|s|PortDescriptor{name:s.name.clone(),data_type:port_type(s).into(),required:false}).collect(),properties:vec![]});
+        result.push(ModuleDescriptor {
+            id: id.into(),
+            label: label.into(),
+            description: purpose.into(),
+            inputs: m
+                .inputs
+                .iter()
+                .map(|s| PortDescriptor {
+                    name: s.name.clone(),
+                    data_type: port_type(s).into(),
+                    required: true,
+                })
+                .collect(),
+            outputs: m
+                .outputs
+                .iter()
+                .map(|s| PortDescriptor {
+                    name: s.name.clone(),
+                    data_type: port_type(s).into(),
+                    required: false,
+                })
+                .collect(),
+            properties: vec![],
+        });
     }
     result.push(ModuleDescriptor{id:"gpu.custom".into(),label:"Custom HLSL".into(),description:"Independent compute or raster pass. Named resources and optional scene vertex input are declared in params.manifest.".into(),inputs:vec![],outputs:vec![],properties:vec![]});
     result

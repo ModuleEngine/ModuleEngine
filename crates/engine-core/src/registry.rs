@@ -67,6 +67,7 @@ pub struct ModuleRegistry {
     renderer_factories: BTreeMap<String, RendererFactory>,
     renderer_adapters: BTreeMap<String, Arc<dyn RendererAdapter>>,
     versions: BTreeMap<String, String>,
+    capability_metadata: BTreeMap<String, crate::CapabilityMetadata>,
 }
 
 impl Default for ModuleRegistry {
@@ -85,6 +86,7 @@ impl ModuleRegistry {
             renderer_factories: BTreeMap::new(),
             renderer_adapters: BTreeMap::new(),
             versions: BTreeMap::new(),
+            capability_metadata: BTreeMap::new(),
         };
         for descriptor in [
             module(
@@ -216,6 +218,104 @@ impl ModuleRegistry {
                 .entry(descriptor.id.clone())
                 .or_insert_with(|| env!("CARGO_PKG_VERSION").into());
         }
+        use crate::{
+            CapabilityConfiguration as Route, CapabilityKind as Kind, CapabilityOwner as Owner,
+        };
+        for (id, owner, kind, routes) in [
+            (
+                "scene.extract",
+                Owner::Engine,
+                Kind::SourceContract,
+                vec![Route::RootGraph],
+            ),
+            (
+                "render.software3d",
+                Owner::Engine,
+                Kind::Renderer,
+                vec![Route::RootGraph],
+            ),
+            (
+                "render.rasterize",
+                Owner::Engine,
+                Kind::RenderPass,
+                vec![Route::RootGraph],
+            ),
+            (
+                "viewport.output",
+                Owner::Engine,
+                Kind::SourceContract,
+                vec![Route::RootGraph],
+            ),
+            (
+                "scalar.value",
+                Owner::Engine,
+                Kind::SourceContract,
+                vec![Route::RootGraph],
+            ),
+            (
+                "clock.time",
+                Owner::Engine,
+                Kind::SourceContract,
+                vec![Route::RootGraph],
+            ),
+            (
+                "custom.rust",
+                Owner::Engine,
+                Kind::SourceContract,
+                vec![Route::RootGraph, Route::RustSource],
+            ),
+            (
+                "interface.input",
+                Owner::Engine,
+                Kind::SourceContract,
+                vec![Route::RootGraph, Route::RenderGraph],
+            ),
+            (
+                "interface.output",
+                Owner::Engine,
+                Kind::SourceContract,
+                vec![Route::RootGraph, Route::RenderGraph],
+            ),
+            (
+                "custom.rust.update",
+                Owner::Engine,
+                Kind::ExecutableSystem,
+                vec![Route::RootGraph, Route::ExecutionGraph, Route::RustSource],
+            ),
+            (
+                "game.motion",
+                Owner::Project,
+                Kind::ComponentData,
+                vec![Route::ComponentFields],
+            ),
+            (
+                "world.objects",
+                Owner::Engine,
+                Kind::WorldStorage,
+                vec![Route::RootGraph],
+            ),
+            (
+                "world.ecs",
+                Owner::Engine,
+                Kind::WorldStorage,
+                vec![Route::RootGraph],
+            ),
+        ] {
+            let descriptor = registry
+                .descriptor(id)
+                .expect("Installed built-in contract");
+            let metadata = crate::CapabilityMetadata::new(
+                &descriptor.label,
+                &descriptor.description,
+                owner,
+                kind,
+                env!("CARGO_PKG_NAME"),
+            )
+            .configured_by(routes);
+            registry
+                .describe_module(id, metadata)
+                .expect("Consistent built-in source metadata");
+        }
         registry
     }
 
@@ -231,6 +331,19 @@ impl ModuleRegistry {
 
     pub fn module_version(&self, id: &str) -> Option<&str> {
         self.versions.get(id).map(String::as_str)
+    }
+    pub fn describe_module(
+        &mut self,
+        id: &str,
+        metadata: crate::CapabilityMetadata,
+    ) -> Result<(), String> {
+        if self.descriptor(id).is_none() {
+            return Err(format!("Cannot describe uninstalled source module '{id}'"));
+        }
+        crate::capabilities::describe_capability(&mut self.capability_metadata, id, metadata)
+    }
+    pub fn capability_metadata(&self, id: &str) -> Option<&crate::CapabilityMetadata> {
+        self.capability_metadata.get(id)
     }
     pub fn set_module_version(&mut self, id: &str, version: &str) -> Result<(), String> {
         if self.descriptor(id).is_none() || version.trim().is_empty() {

@@ -1,0 +1,4 @@
+interface:
+  display_name: "ModuleEngine UI Review"
+  short_description: "Review ModuleEngine editor usability and behavior"
+  default_prompt: "Use $moduleengine-ui-review to check this ModuleEngine editor change against its task, UI baseline and actual evidence."

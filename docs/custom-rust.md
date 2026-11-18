@@ -63,6 +63,53 @@ Parameters and enabled remain in RenderOverrides; clear/copy apply to one frame.
 
 In Team, only the preauthorized gameplay Update source is editable; scalar speed and shaders belong to the frozen Engine. Text may be erroneous and saved for repair, but the key set and bindings do not change.
 
+<a id="script-settings-menu"></a>
+
+## Settings and author-owned game menus
+
+In the GameHost `game.execution` Update route, `ctx.setting(setting_id)` returns an optional `ScriptSettingSnapshot`. The stable setting ID is an exposed variant-group ID, not a render-pass ID. `options` contains current `ScriptSettingOption { id, label }` entries; enumerate it to build a custom option list. `selected: Option<String>` is the effective option, with `None` for ambiguous runtime controls. `source` is `local`, `project`, `runtime` or `mixed`; `project` includes defaults and conditions. `persistence.enabled/saved/error` and `rejection` distinguish durability from a refused request. The legacy root Runtime does not fabricate these GameHost capabilities.
+
+`ctx.request_setting(setting_id, option_id)` queues a `ScriptSettingRequest` and returns a local validation result. The host revalidates the complete candidate against current settings and renderer contracts before accepting it; a successful helper call is not proof of a committed frame or durable save. See [precedence and local profiles](settings.md#player-menu-preferences).
+
+The author may emit `ScriptUiPanel` values through `ctx.script_ui`. Panels have a stable `id`, authored `title`, logical-point `position` relative to the Game viewport, `width`, and ordered `Text`/`Choice` items. A Choice binds to a setting ID and the native renderer reads its current allowed options and selection from the host; the script does not send a stale selected value or duplicate the option list. The author controls the menu's content and placement. For example, an authorized gameplay Update can bind the configured anti-aliasing setting:
+
+~~~rust
+use module_engine_core::{ScriptUiItem, ScriptUiPanel};
+
+fn update(ctx: &mut ScriptContext) {
+    const SETTING: &str = "antialiasing";
+    if ctx.setting(SETTING).is_none() {
+        return;
+    }
+    let choice = ctx.ui_action("edge-choice")
+        .and_then(|value| value.as_str()).map(str::to_owned);
+    let problem = choice.and_then(|option| {
+        ctx.request_setting(SETTING, &option).err()
+    });
+    let mut items = vec![ScriptUiItem::Choice {
+        id: "edge-choice".into(),
+        label: "Anti-aliasing".into(),
+        setting: SETTING.into(),
+    }];
+    if let Some(text) = problem {
+        items.push(ScriptUiItem::Text { text });
+    }
+    ctx.script_ui.push(ScriptUiPanel {
+        id: "graphics-menu".into(),
+        title: "Graphics".into(),
+        position: [16., 16.],
+        width: 320.,
+        items,
+    });
+}
+~~~
+
+`ctx.ui_action(control_id)` reads the chosen option ID as a JSON string for this Custom **instance**. Native actions use `script_ui_action_key(instance, control)` rather than splitting IDs on punctuation. Panel IDs are unique within an instance, and control IDs are unique across that instance's panels; different instances may reuse IDs. Emit panels each accepted invocation to keep them visible; an empty output clears that instance's menu. Limits are 16 panels, 128 items and 128 setting requests per invocation, within the existing bounded packet contract.
+
+Menu interaction owns its pointer, popup and keyboard input rather than forwarding a click into the game world. Removed/unbindable settings hide their controls. The menu reports **Applying** when accepted and displayed-frame selections differ, **Refused** for an invalid request, and **Not saved / works until exit** for an accepted choice whose storage failed. Clicking the current option can retry persistence. A malformed menu candidate preserves the previous accepted description; the UI can keep it disabled with its error instead of accepting new input from the rejected packet.
+
+These fields are part of the exact SDK data/API identity **`module-engine-data-api/v3`**. `engine-sdk.json`, linked Core, workers, prebuilt metadata and Engine/Player locks must agree. A v2 worker/package is not silently treated as v3 merely because some JSON fields have defaults; use the explicit compatible rebuild/contract-update route. This identity is not a stable Rust ABI promise.
+
 <a id="визуальные-scalar-выражения"></a>
 
 ## Visual Scalar Expressions

@@ -21,6 +21,25 @@ After each observation, update or discard the hypothesis. When repeated edits pr
 
 ## Fix and verify
 
+For native egui header drags, record ordered raw primary press/move/release
+positions. In pinned egui 0.36.2, hit-testing uses the batch's final pointer;
+`Response::drag_started` alone misses a fast press-on-header/move-out batch.
+Keep the exact press origin, movement threshold and release ownership; test
+same-batch release/out-and-back, menu/divider exclusion and stale focus/hidden
+headers. Clone raw events before querying other Context state: nesting Context
+access inside `ctx.input` can deadlock. `ViewportBuilder::active` changes recreate
+the native window in this version; keep it stable and send explicit Focus only
+when appropriate. Capture/focus-loss cancellation must not refocus the editor or
+queue child Focus while LMB remains held. A Computer Use drag endpoint outside
+the source screenshot may be rejected by the tool; distinguish that limit from
+the application's docking result.
+
+A fixed-delay native screenshot may show only Preparing while Custom compiles.
+Use the explicit readiness-aware capture mode with its existing deadline, and
+verify actual displayed frame dimensions/readiness. A successful process exit
+or a screenshot of preparation is not a completed Scene image check.
+
+
 For Windows AppContainer fixtures, TEMP can permit file creation but reject rename
 or junction operations. Before changing atomic-publication code, compare a tiny
 write/rename probe in that TEMP with the same probe in a new owned `work/` directory.
@@ -28,6 +47,17 @@ If the filesystem probe reproduces the failure, retain the failed evidence and
 move only the disposable fixture to `work/`; do not redirect production user data
 or weaken its publication guarantees. A passing workspace fixture does not prove
 that an arbitrary user-selected destination is writable.
+
+Early parallel Custom setup can encounter `Access is denied` even inside an
+owned workspace under Windows AppContainer. Before changing synchronization,
+record the exact IO operation/path and compare a small std-only concurrent
+`create_dir_all`/`canonicalize` probe in fresh owned directories. When authorized,
+compare the same executable outside the container; retain its SHA, invocation,
+permission mode and both logs. A failure without engine code establishes an
+environment-associated failure, not the original compiler's exact syscall.
+Do not add production retries/serialization or weaken ownership checks to hide
+it. Run affected native checks in an authorized normal environment and record
+the distinction; an outside pass does not certify sandbox behavior.
 
 When UI callbacks are fast but distinct game frames are slow, compare callback,
 producer-completion and UI-observed frame intervals, then inspect presentation

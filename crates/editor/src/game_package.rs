@@ -406,6 +406,9 @@ fn select_player_assets(document: &mut GraphDocument, backend: &Path) -> Result<
     };
     let mut references = crate::host::component_asset_references(document, backend)?;
     let mut requests = vec![];
+    if let Some(request) = module_engine_core::player_preferences_service_request(game)? {
+        requests.push(request);
+    }
     for contribution in composition
         .systems
         .active_game_contributions(&game.execution)
@@ -711,7 +714,15 @@ fn export_into_staging(
     fs::copy(player, destination.join(PLAYER_EXECUTABLE)).map_err(|e| e.to_string())?;
     fs::write(
         destination.join("project.json"),
-        serde_json::to_vec_pretty(document).map_err(|e| e.to_string())?,
+        serde_json::to_vec_pretty(&{
+            // Player consumes a sealed hydrated projection, not editable sources.
+            let mut runtime = document.clone();
+            if let Some(game) = &mut runtime.game {
+                game.scene_assets.clear();
+            }
+            runtime
+        })
+        .map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
     fs::write(destination.join("README.txt"),format!("ModuleEngine standalone Player\nLaunch ./{PLAYER_EXECUTABLE}. Rust, Cargo, DXC and engine sources are not required.\nNative platform: {}. Packages are not cross-platform binaries.\nSelected native features: {}\nR restarts; Escape closes. Gameplay controls are shown by the selected project.\nAn installed compatible GPU driver is required for GPU rendering; Linux GUI also requires a working Wayland or X11 session and the system runtime libraries used by this native build.\n",native_platform(),features.iter().cloned().collect::<Vec<_>>().join(", "))).map_err(|e|e.to_string())?;

@@ -10,6 +10,22 @@ or Two Arenas. Gameplay packages supply their pure contributions through the
 selected schedule. The editor's `game_host` module only resolves application
 policy and forwards construction.
 
+<a id="player-settings"></a>
+
+## Script settings, menus and preference ownership
+
+GameHost resolves one `ScriptSettingsSnapshot` from the current Project variants/conditions, raw render controls and accepted local choices. The same resolver supplies Custom input, menu snapshots and actual rendering: local choices override their group's rules and raw commands, while untouched groups keep the previous precedence. Unsupported/shared-target recipes are not bindable; an ambiguous effective value is `selected: None`, not a fabricated preset. `ScriptContext::request_setting` is a convenience check, not the publication boundary. A candidate with setting requests is renderer-validated even if it contains no raw RenderCommands. A refused request preserves this system's accepted state, controls, choices and menu and publishes its refusal separately; it does not write a preference. Other accepted systems in the tick remain governed by the existing transaction contract.
+
+Accepted `ScriptUiPanel` descriptions are owned by their Custom execution-node instance. Only that instance receives its `ui_actions`; IDs containing punctuation do not alias. The host validates descriptions and keeps the previous menu on a malformed candidate. Removed/unbindable settings are filtered from Choice items. Applications render the description with current accepted settings, and retain a separate setting snapshot with the frame actually published. Pending/failed preparation cannot make a latest menu selection certify retained old pixels; a mismatch is **Applying**. Presentation and storage status are separate.
+
+`GameProject.player_preferences: Option<PlayerPreferencesConfig>` explicitly opts in with a stable namespace. Host uses a separate `persistence.json` owner with slot `player-settings`, data key `module-engine.player-settings`, version 1, and reserved write event `module-engine.player-settings.save`. Gameplay persistence cannot claim the same namespace/slot, and Custom cannot forge the reserved event. The optional native persistence feature and selected service remain authoritative. Registration alone performs no filesystem work; disabled services, including isolated previews, do not read/write player saves.
+
+The application chooses a writable local-user root. Standalone defaults use an absolute `LOCALAPPDATA` or `XDG_DATA_HOME` with `ModuleEngine/profiles`, otherwise absolute `HOME/.local/share/ModuleEngine/profiles`; there is no package/current-directory fallback. `--state-root <absolute-profile-folder>` isolates a profile. Namespace and slot are encoded beneath that root, so moving a package does not change the game identity. Authored and sealed distributed files remain separate from these preferences.
+
+On load, valid stored option IDs become local choices; unavailable options fall back to current valid Project resolution with a reason, while unknown payload entries are retained. Malformed/incompatible saves use the service's read-only policy and are not silently replaced. Accepted choices stage a persistence event after validation. A write failure keeps the accepted session choice and records `persistence.saved:false` plus an error; it does not turn an accepted choice into a refusal. Retrying the current option can retry that write. The previous saved data and the persistence service's existing atomic-publication/recovery guarantees remain authoritative. Examples and menu/API limits are in [Custom Rust](custom-rust.md#script-settings-menu) and [settings](settings.md#player-menu-preferences).
+
+The new ScriptContext requests/menu/status fields require exact SDK data/API identity `module-engine-data-api/v3` across linked Core, worker probe/packets, prebuilt metadata and Engine/Player locks. The existing strict mismatch rejection is retained; v2 artifacts require an explicit compatible rebuild/contract update rather than implicit acceptance. This changes the data/API boundary, not a promise of Rust ABI compatibility.
+
 ## Authored data and runtime preparation
 
 Normal Host construction prepares a runtime clone with

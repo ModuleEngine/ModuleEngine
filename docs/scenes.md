@@ -4,8 +4,10 @@
 
 `GraphDocument.game` is optional. Existing graph-only files load with no game.
 When present it contains a `GameProject`: named scenes, entry scene, named linked
-templates, audio cue paths and the authored execution graph. The normal project
-file saves these values alongside graph nodes, Rust sources and shaders.
+templates, audio cue paths and the authored execution graph. Core always holds
+complete scene bodies. New authored projects store each body in a [separate
+scene file](scene-files.md); project metadata retains stable source bindings.
+Existing inline projects remain inline until explicit conversion.
 
 ## Object identity and data
 
@@ -111,3 +113,6 @@ and executor lifecycle flags cannot be rolled back.
 This is synchronous scene replacement with a permitted short loading pause. It
 does not yet stream scene chunks or save game progress to disk. Authoring data and
 gameplay persistence are separate responsibilities.
+
+`AuthoredObject.name` is optional author-facing metadata. Absent, null and text
+are preserved independently; IDs, references and runtime WorldObject are unchanged.

@@ -1,0 +1,2778 @@
+{
+  "schema_version": 1,
+  "stage": "2A",
+  "status": "implemented_with_documented_verification_limits",
+  "catalogue": "ui-catalog/catalog.json",
+  "entries": [
+    {
+      "id": "P01",
+      "label": {
+        "en": "Engine Overview",
+        "ru": "Обзор Engine"
+      },
+      "sources": [
+        "crates/editor/src/engine_overview.rs::engine_overview_panel",
+        "crates/editor/src/dock.rs::EditorType"
+      ],
+      "coverage": {
+        "editor_type": "EngineOverview"
+      },
+      "tasks": [
+        "2A.5"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Engine preset; Windows → Composition → Engine Overview; opening reuses a matching area.",
+        "ru": "Раскладка Engine; Windows → Composition → Engine Overview; открытие использует подходящую область."
+      },
+      "editing_rights": {
+        "en": "Current tool requires Engine authoring/source availability; a retained unavailable area shows a reason, not unlocked Team access.",
+        "ru": "Нынешний инструмент требует прав Engine/исходников; сохранённая недоступная область показывает причину, не открывает доступ Team."
+      },
+      "command_routes": [
+        "Open render graph",
+        "Show renderer node",
+        "Source details",
+        "Refresh evidence"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "P02",
+      "label": {
+        "en": "Module Blueprint / root graph",
+        "ru": "Module Blueprint / корневой граф"
+      },
+      "sources": [
+        "crates/editor/src/panes.rs::module_graph_area",
+        "crates/editor/src/app.rs::graph_panel"
+      ],
+      "coverage": {
+        "editor_type": "ModuleGraph"
+      },
+      "tasks": [
+        "2A.11",
+        "2A.12"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Windows → Module Blueprint; Overview opens the actual selected root scope.",
+        "ru": "Windows → Module Blueprint; Overview открывает настоящий выбранный корневой граф."
+      },
+      "editing_rights": {
+        "en": "Full with matching complete sources; existing source and candidate validation remain authoritative.",
+        "ru": "Full с полными совпадающими исходниками; действуют проверки исходников и кандидатов."
+      },
+      "command_routes": [
+        "Add node",
+        "Open subgraph",
+        "Frame graph",
+        "Delete selection"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "P03",
+      "label": {
+        "en": "Module Library",
+        "ru": "Библиотека модулей"
+      },
+      "sources": [
+        "crates/editor/src/app.rs::library",
+        "crates/editor/src/app.rs::library_graph_context"
+      ],
+      "coverage": {
+        "editor_type": "ModuleLibrary"
+      },
+      "tasks": [
+        "2A.12"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Windows → Module Library; Add Node and RMB use the same scope-aware catalogue.",
+        "ru": "Windows → Module Library; Add Node и ПКМ используют тот же каталог по области."
+      },
+      "editing_rights": {
+        "en": "Real graph scope, installed descriptors and Full/Team/source rules; no global bypass list.",
+        "ru": "Настоящая область графа, установленные описания и Full/Team/исходники; без глобального списка в обход прав."
+      },
+      "command_routes": [
+        "Search nodes",
+        "Choose target",
+        "Add selected node"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "P04",
+      "label": {
+        "en": "Engine Exposure",
+        "ru": "Разрешения Project в Engine"
+      },
+      "sources": [
+        "crates/editor/src/properties.rs::engine_settings_panel",
+        "docs/settings.md"
+      ],
+      "coverage": {
+        "editor_type": "EngineSettings"
+      },
+      "tasks": [
+        "2A.15"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Overview configuration route or Windows → Engine Exposure.",
+        "ru": "Переход настройки из Overview или Windows → Engine Exposure."
+      },
+      "editing_rights": {
+        "en": "Full and complete matching sources only; Project cannot add architecture or widen its own exposure.",
+        "ru": "Только Full и полные совпадающие исходники; Project не добавляет архитектуру и не расширяет собственные разрешения."
+      },
+      "command_routes": [
+        "Expose parameter",
+        "Stop exposing",
+        "Configure variant set"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "P05",
+      "label": {
+        "en": "Project Settings",
+        "ru": "Настройки Project"
+      },
+      "sources": [
+        "crates/editor/src/properties.rs::project_settings_panel",
+        "docs/settings.md"
+      ],
+      "coverage": {
+        "editor_type": "ProjectSettings"
+      },
+      "tasks": [
+        "2A.15"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Tools → Project Settings or Windows → Project Settings.",
+        "ru": "Tools → Project Settings или Windows → Project Settings."
+      },
+      "editing_rights": {
+        "en": "Only Engine-exposed controls and participating owner schemas; same rules apply to scripts.",
+        "ru": "Только разрешённые Engine элементы и схемы участвующих владельцев; скрипты подчиняются тем же правилам."
+      },
+      "command_routes": [
+        "Edit value",
+        "Choose allowed variant",
+        "Add rule",
+        "Remove rule"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "P06",
+      "label": {
+        "en": "Scene",
+        "ru": "Авторская сцена"
+      },
+      "sources": [
+        "crates/editor/src/scene_workspace.rs::scene_panel",
+        "crates/editor/src/scene_view_ui.rs::SceneViewportState"
+      ],
+      "coverage": {
+        "editor_type": "Scene"
+      },
+      "tasks": [
+        "2A.13"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Windows → Scene; initial Project layout.",
+        "ru": "Windows → Scene; начальная раскладка Project."
+      },
+      "editing_rights": {
+        "en": "Current scene authoring guards, one-object selection and Play lock; viewing does not grant editing.",
+        "ru": "Действующие проверки авторской сцены, один выбранный объект и блокировка Play; просмотр не выдаёт права."
+      },
+      "command_routes": [
+        "Move",
+        "Rotate",
+        "Scale",
+        "Frame Selection",
+        "Snap"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "P07",
+      "label": {
+        "en": "Hierarchy",
+        "ru": "Иерархия сцены"
+      },
+      "sources": [
+        "crates/editor/src/scene_workspace.rs::scene_hierarchy_panel",
+        "crates/editor/src/hierarchy_ui.rs::hierarchy_ui",
+        "crates/editor/src/scene_sources.rs::draw_scene_source_dialog"
+      ],
+      "coverage": {
+        "editor_type": "Hierarchy"
+      },
+      "tasks": [
+        "2A.13"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Windows → Hierarchy; shares the selected object with Scene and Inspector.",
+        "ru": "Windows → Hierarchy; общий выбор с Scene и Inspector."
+      },
+      "editing_rights": {
+        "en": "Authoring/Play validation, stable scene/object IDs and parent-cycle checks.",
+        "ru": "Авторские/Play-проверки, стабильные ID сцен/объектов, запрет циклов родителей."
+      },
+      "command_routes": [
+        "Scene file menu",
+        "Search objects",
+        "Add object",
+        "Rename object (F2)",
+        "Delete object (Delete)"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "P08",
+      "label": {
+        "en": "Inspector",
+        "ru": "Инспектор авторского объекта"
+      },
+      "sources": [
+        "crates/editor/src/game_ui.rs::inspector_ui_with_composition",
+        "docs/component-schemas.md"
+      ],
+      "coverage": {
+        "editor_type": "Inspector"
+      },
+      "tasks": [
+        "2A.4",
+        "2A.6"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Windows → Inspector; selection comes from Scene/Hierarchy or a deliberate pinned view.",
+        "ru": "Windows → Inspector; выбор из Scene/Hierarchy либо явно закреплённого вида."
+      },
+      "editing_rights": {
+        "en": "Component owner/schema/SDK pins, active composition and Play restrictions; no-op Apply creates no override.",
+        "ru": "Pins владельца/схемы/SDK, активный состав и Play; Apply без правок не создаёт override."
+      },
+      "command_routes": [
+        "Apply Actor fields",
+        "Component actions",
+        "Add component",
+        "Inherit defaults",
+        "Remove component"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "P09",
+      "label": {
+        "en": "Assets",
+        "ru": "Ресурсы"
+      },
+      "sources": [
+        "crates/editor/src/assets_workspace_ui.rs::assets_panel",
+        "crates/editor/src/assets_ui.rs::BrowserState"
+      ],
+      "coverage": {
+        "editor_type": "Assets"
+      },
+      "tasks": [
+        "2A.7"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Windows → Assets; initial Project layout; Trash is subview V03.",
+        "ru": "Windows → Assets; начальная раскладка Project; корзина — V03."
+      },
+      "editing_rights": {
+        "en": "Project asset roots, stable IDs, importer support, protected files and save/reference transaction guards.",
+        "ru": "Корни ресурсов проекта, стабильные ID, поддержка импорта, защищённые файлы, сохранение/транзакции ссылок."
+      },
+      "command_routes": [
+        "Import Asset",
+        "New folder",
+        "Refresh",
+        "Tiles",
+        "List",
+        "Show address",
+        "Copy path"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "P10",
+      "label": {
+        "en": "Game",
+        "ru": "Запуск игры"
+      },
+      "sources": [
+        "crates/editor/src/app.rs::game_scene_panel",
+        "crates/editor/src/game_ui.rs::scene_ui"
+      ],
+      "coverage": {
+        "editor_type": "Game"
+      },
+      "tasks": [
+        "2A.14"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Windows → Game; global Play and local controls operate the same session.",
+        "ru": "Windows → Game; общий Play и локальные элементы управляют одной сессией."
+      },
+      "editing_rights": {
+        "en": "Existing GameHost preparation, source/compiled logic capabilities and bounded worker/input contracts.",
+        "ru": "Существующие подготовка GameHost, права исходников/скомпилированной логики, ограниченные worker/input-контракты."
+      },
+      "command_routes": [
+        "Focus game"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "P11",
+      "label": {
+        "en": "Gameplay Systems",
+        "ru": "Игровые системы"
+      },
+      "sources": [
+        "crates/editor/src/app.rs::game_systems_panel",
+        "crates/editor/src/game_ui.rs::systems_ui",
+        "docs/module-execution.md"
+      ],
+      "coverage": {
+        "editor_type": "GameSystems"
+      },
+      "tasks": [
+        "2A.15"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Windows → Gameplay Systems; Overview opens a real system node when available.",
+        "ru": "Windows → Gameplay Systems; Overview открывает настоящую ноду системы, если доступна."
+      },
+      "editing_rights": {
+        "en": "Current Engine-authoring gate and frozen Team schedule apply even to gameplay-owned systems; Stop Play before schedule Apply.",
+        "ru": "Действуют права Engine и замороженное расписание Team даже для игровых систем; перед Apply остановить Play."
+      },
+      "command_routes": [
+        "Add stage",
+        "Add system",
+        "Bind resource",
+        "Apply schedule",
+        "Discard draft"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "P12",
+      "label": {
+        "en": "Custom / Rust — side by side",
+        "ru": "Custom / Rust — рядом"
+      },
+      "sources": [
+        "crates/editor/src/panes.rs::rust_area",
+        "crates/editor/src/app.rs::custom_panel",
+        "crates/editor/src/game_ui.rs::custom_editor_ui",
+        "docs/custom-rust.md"
+      ],
+      "coverage": {
+        "editor_type": "RustCustom"
+      },
+      "tasks": [
+        "2A.15"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Windows → Custom / Rust; source picker and Text/Graph/Side by side select local views (V07/V08).",
+        "ru": "Windows → Custom / Rust; выбор исходника и Text/Graph/Side by side меняют вид (V07/V08)."
+      },
+      "editing_rights": {
+        "en": "Use can_edit_source and the real game/non-game slot policies; not all Rust editing is inferred to require Full.",
+        "ru": "Использовать can_edit_source и настоящие правила game/non-game слотов; не объявлять весь Rust доступным только Full."
+      },
+      "command_routes": [
+        "Choose source",
+        "Text",
+        "Graph",
+        "Side by side",
+        "Apply Rust",
+        "Open state recovery"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "P13",
+      "label": {
+        "en": "Custom / HLSL",
+        "ru": "Custom / HLSL"
+      },
+      "sources": [
+        "crates/editor/src/panels.rs::shader_panel",
+        "crates/editor/src/panels.rs::gpu_pass_controls",
+        "docs/gpu-hlsl.md"
+      ],
+      "coverage": {
+        "editor_type": "Hlsl"
+      },
+      "tasks": [
+        "2A.15"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Windows → Custom / HLSL or GPU node → Edit HLSL; Open Vulkan graph returns to that pass.",
+        "ru": "Windows → Custom / HLSL либо GPU-нода → Edit HLSL; Open Vulkan graph возвращает к проходу."
+      },
+      "editing_rights": {
+        "en": "Full/source and selected pass/manifest checks; no arbitrary new API/backend is implied by the text editor.",
+        "ru": "Full/исходники и проверки прохода/manifest; редактор текста не добавляет произвольный API/backend."
+      },
+      "command_routes": [
+        "Choose shader",
+        "Apply HLSL",
+        "Open Vulkan graph",
+        "New Compute template",
+        "New Scene template"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "P14",
+      "label": {
+        "en": "Project File",
+        "ru": "Текст проекта"
+      },
+      "sources": [
+        "crates/editor/src/app.rs::file_panel",
+        "docs/graph-format.md"
+      ],
+      "coverage": {
+        "editor_type": "ProjectFile"
+      },
+      "tasks": [
+        "2A.15"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Windows → Project File.",
+        "ru": "Windows → Project File."
+      },
+      "editing_rights": {
+        "en": "Existing Engine/source gate; raw text is not a bypass for Team or pinned schema checks.",
+        "ru": "Действующие права Engine/исходников; текст не обходит Team и pins схем."
+      },
+      "command_routes": [
+        "Apply file",
+        "Discard draft"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "P15",
+      "label": {
+        "en": "History / Merge",
+        "ru": "История / слияние"
+      },
+      "sources": [
+        "crates/editor/src/panels.rs::history_panel",
+        "docs/history-assets.md"
+      ],
+      "coverage": {
+        "editor_type": "History"
+      },
+      "tasks": [
+        "2A.15"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Edit → History / Merge or Windows → History / Merge; V04 details conflicts.",
+        "ru": "Edit → History / Merge или Windows → History / Merge; конфликты — V04."
+      },
+      "editing_rights": {
+        "en": "Existing restore/merge validation, asset restoration and source/Team rules; simulation state is not authored history.",
+        "ru": "Проверки восстановления/слияния, ресурсов и Full/Team; симуляция не является авторской историей."
+      },
+      "command_routes": [
+        "Undo",
+        "Redo",
+        "Save checkpoint",
+        "Restore",
+        "Compare",
+        "Prepare merge"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "P16",
+      "label": {
+        "en": "Diagnostics",
+        "ru": "Диагностика"
+      },
+      "sources": [
+        "crates/editor/src/panes.rs::diagnostics_panel",
+        "crates/editor/src/activity.rs::draw_activity"
+      ],
+      "coverage": {
+        "editor_type": "Diagnostics"
+      },
+      "tasks": [
+        "2A.15"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Tools → Diagnostics, Windows → Diagnostics or an operation-status link.",
+        "ru": "Tools → Diagnostics, Windows → Diagnostics или ссылка статуса операции."
+      },
+      "editing_rights": {
+        "en": "Read actual available diagnostics; retain rights for any navigation and do not compile merely to inspect.",
+        "ru": "Читать доступные данные; переходы соблюдают права, просмотр не компилирует."
+      },
+      "command_routes": [
+        "Filter diagnostics",
+        "Copy details",
+        "Open relevant tool"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "P17",
+      "label": {
+        "en": "3D Viewport — legacy preview",
+        "ru": "3D Viewport — старый preview"
+      },
+      "sources": [
+        "crates/editor/src/app.rs::viewport_panel",
+        "crates/editor/src/app.rs::switch_world",
+        "crates/editor/src/app.rs::switch_gpu_path",
+        "crates/editor/src/editor_workflow.rs::draw_workflow_toolbar"
+      ],
+      "coverage": {
+        "editor_type": "Viewport"
+      },
+      "tasks": [
+        "2A.14"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Current Engine windows/type selector; proposed grouping under legacy/diagnostics, without changing serialized IDs.",
+        "ru": "Нынешние окна Engine/переключатель; предлагается legacy/diagnostics без изменения сериализованных ID."
+      },
+      "editing_rights": {
+        "en": "Current Engine/source restrictions; starting this preview is not starting the authored Game.",
+        "ru": "Нынешние ограничения Engine/исходников; запуск preview не запускает авторскую Game."
+      },
+      "command_routes": [
+        "Reset preview",
+        "Open configuration"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "P18",
+      "label": {
+        "en": "Object Tree — legacy runtime",
+        "ru": "Object Tree — старый runtime"
+      },
+      "sources": [
+        "crates/editor/src/properties.rs::object_tree_panel"
+      ],
+      "coverage": {
+        "editor_type": "ObjectTree"
+      },
+      "tasks": [
+        "2A.14"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Current Engine window list; legacy grouping is a design proposal, IDs remain.",
+        "ru": "Нынешний список окон Engine; группировка legacy предложена, ID сохраняются."
+      },
+      "editing_rights": {
+        "en": "Current Engine/source checks and resolved runtime object identity.",
+        "ru": "Нынешние права Engine/исходников и разрешённая идентичность runtime-объекта."
+      },
+      "command_routes": [
+        "Select runtime object",
+        "Open legacy properties"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "P19",
+      "label": {
+        "en": "Object / Components — legacy properties",
+        "ru": "Object / Components — старые свойства"
+      },
+      "sources": [
+        "crates/editor/src/properties.rs::object_inspector_panel",
+        "docs/settings.md"
+      ],
+      "coverage": {
+        "editor_type": "ObjectInspector"
+      },
+      "tasks": [
+        "2A.14"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Current Engine window list; selected object from legacy Object Tree or explicit pin.",
+        "ru": "Нынешний список Engine; выбор из старого Object Tree либо явное закрепление."
+      },
+      "editing_rights": {
+        "en": "Current Full/source gate plus exposed PropertySchema applicability and startup persistence constraints.",
+        "ru": "Нынешние права Full/исходников, применимость PropertySchema и ограничения сохранения startup."
+      },
+      "command_routes": [
+        "Select object",
+        "Pin selection",
+        "Edit exposed field"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "P20",
+      "label": {
+        "en": "Participating Modules — panel 100",
+        "ru": "Participating Modules — панель 100"
+      },
+      "sources": [
+        "crates/editor/src/app.rs::register_module_panel",
+        "crates/editor/src/panes.rs::participating_modules_panel",
+        "crates/engine-core/src/settings.rs::motion_property_module"
+      ],
+      "coverage": {
+        "module_panel_id": 100
+      },
+      "tasks": [
+        "2A.15"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Windows / area selector when panel 100 and its scene.extract owner are available.",
+        "ru": "Windows / выбор области при доступности панели 100 и владельца scene.extract."
+      },
+      "editing_rights": {
+        "en": "Registration, installed owner, canonical participation and engine_only=false checks; availability can be unknown.",
+        "ru": "Регистрация, установленный владелец, настоящее участие и engine_only=false; доступность бывает неизвестна."
+      },
+      "command_routes": [],
+      "presentation_owner": "Registered module tool",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "P21",
+      "label": {
+        "en": "Crate Garden Level Palette — tool 110",
+        "ru": "Палитра уровней Crate Garden — инструмент 110"
+      },
+      "sources": [
+        "crates/editor/src/app.rs::register_stateful_module_tool",
+        "crates/project-g1/src/grid_ui.rs::draw_tool",
+        "docs/game-ui-tools.md"
+      ],
+      "coverage": {
+        "module_panel_id": 110
+      },
+      "tasks": [
+        "2A.15"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Available module tool 110 for participating g1.rules; it is Project-owned, not core engine mechanics.",
+        "ru": "Инструмент 110 при участии g1.rules; принадлежит Project, не механикам ядра."
+      },
+      "editing_rights": {
+        "en": "Owner participation, no conflicting JSON/schedule/scene gesture and Stop Play before Apply; independent per-tool state.",
+        "ru": "Участие владельца, нет конфликтов JSON/расписания/жеста Scene, Stop Play до Apply; отдельное состояние инструмента."
+      },
+      "command_routes": [
+        "Choose garden",
+        "Paint cells",
+        "Apply level",
+        "Discard draft"
+      ],
+      "presentation_owner": "Registered module tool",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "P22",
+      "label": {
+        "en": "Extension panel contract",
+        "ru": "Контракт панели расширения"
+      },
+      "sources": [
+        "crates/editor/src/panes.rs::ModulePanelRegistration",
+        "crates/editor/src/panes.rs::module_extension_panel",
+        "docs/game-ui-tools.md"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.15"
+      ],
+      "status": "contract_only",
+      "note": "Registered real tools only; no invented future plugin.",
+      "evidence": [],
+      "entrypoint": {
+        "en": "A real source registration contributes Windows/type-selector metadata; unavailable registrations retain only an explanatory fallback.",
+        "ru": "Настоящая регистрация добавляет метаданные Windows/селектору; недоступная сохраняет только объясняющую замену."
+      },
+      "editing_rights": {
+        "en": "Installed owner, actual participation, engine_only and current authoring guards; no callback invocation for missing owners.",
+        "ru": "Установленный владелец, участие, engine_only и проверки; без callback отсутствующего владельца."
+      },
+      "command_routes": [
+        "Supported module action",
+        "Apply draft",
+        "Discard draft"
+      ],
+      "presentation_owner": "Registered module tool",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "V01",
+      "label": {
+        "en": "GPU rendering graph",
+        "ru": "GPU-граф рендера"
+      },
+      "sources": [
+        "crates/render-vulkan/src/graph.rs::default_graph",
+        "crates/editor/src/app.rs::is_gpu_graph_scope",
+        "docs/gpu-hlsl.md"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.11",
+        "2A.12"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Open the renderer subgraph in Module Blueprint or Overview → rendering graph; it is not another EditorType.",
+        "ru": "Открыть подграф рендера в Module Blueprint/Overview; это не новый EditorType."
+      },
+      "editing_rights": {
+        "en": "Full/source, installed GPU descriptors and real PassManifest format/semantic/extent/sample compatibility.",
+        "ru": "Full/исходники, установленные GPU-описания и совместимость PassManifest по format/semantic/extent/samples."
+      },
+      "command_routes": [
+        "Add GPU pass",
+        "Inspect resource",
+        "Open HLSL",
+        "Delete selection",
+        "Review preset"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "V02",
+      "label": {
+        "en": "Rendering configuration route",
+        "ru": "Маршрут настройки рендера"
+      },
+      "sources": [
+        "docs/editor-clarity-plan.md",
+        "crates/editor/src/properties.rs::project_settings_panel",
+        "crates/editor/src/properties.rs::engine_settings_panel"
+      ],
+      "coverage": {},
+      "tasks": [
+        "3"
+      ],
+      "status": "deferred",
+      "note": "Missing rendering semantics belong to stage 3; 2A styles existing controls only.",
+      "evidence": [],
+      "entrypoint": {
+        "en": "Proposed Overview → Rendering details; delegates changes to the same graph/settings commands.",
+        "ru": "Предложенный Overview → Rendering; изменения вызывают те же команды графа/настроек."
+      },
+      "editing_rights": {
+        "en": "Architecture/exposure requires Full; Project chooses only current permitted values and variants.",
+        "ru": "Архитектура/разрешения требуют Full; Project выбирает только разрешённые значения/варианты."
+      },
+      "command_routes": [
+        "Open rendering graph",
+        "Edit exposure",
+        "Choose permitted AA",
+        "Review preset"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "V03",
+      "label": {
+        "en": "Assets / Trash",
+        "ru": "Assets / корзина"
+      },
+      "sources": [
+        "crates/editor/src/assets_ui.rs::TrashTile",
+        "crates/editor/src/assets_workspace_ui.rs::assets_panel",
+        "docs/asset-workspace-api.md"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.7"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Assets → Trash; return preserves the asset browsing location.",
+        "ru": "Assets → Trash; возврат сохраняет папку просмотра."
+      },
+      "editing_rights": {
+        "en": "Only the project-owned trash service and supported Restore command; no invented permanent-delete/Empty Trash feature.",
+        "ru": "Только корзина проекта и поддержанный Restore; без вымышленных permanent-delete/Empty Trash."
+      },
+      "command_routes": [
+        "Restore selected",
+        "Back to Assets"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "V04",
+      "label": {
+        "en": "Merge conflict workspace",
+        "ru": "Разрешение конфликтов слияния"
+      },
+      "sources": [
+        "crates/editor/src/panels.rs::history_panel",
+        "crates/project-tools/src/merge.rs",
+        "docs/history-assets.md"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.15"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "History / Merge → Prepare merge → selected conflict.",
+        "ru": "History / Merge → Prepare merge → выбранный конфликт."
+      },
+      "editing_rights": {
+        "en": "Same source/asset validation as document restore; unresolved conflict output is not a runnable accepted project.",
+        "ru": "Те же проверки исходников/ресурсов, что при восстановлении; файл с конфликтами не рабочий принятый проект."
+      },
+      "command_routes": [
+        "Keep current",
+        "Take other",
+        "Use base",
+        "Apply merged project",
+        "Save result with conflicts"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "V05",
+      "label": {
+        "en": "Module node inspector",
+        "ru": "Инспектор ноды модуля"
+      },
+      "sources": [
+        "crates/editor/src/app.rs::node_inspector",
+        "crates/editor/src/panels.rs::gpu_pass_controls"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.12"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Select a node in Module Blueprint; embedded side inspector, not the authored object Inspector.",
+        "ru": "Выбрать ноду Module Blueprint; встроенный inspector, не Inspector объекта."
+      },
+      "editing_rights": {
+        "en": "Selected graph/node identity, Full/source and parameter/manifest validator.",
+        "ru": "Идентичность графа/ноды, Full/исходники и проверка параметров/manifest."
+      },
+      "command_routes": [
+        "Edit parameter",
+        "Inspect port",
+        "Open HLSL",
+        "Apply params"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "V06",
+      "label": {
+        "en": "Rust visual-node inspector",
+        "ru": "Инспектор визуальной ноды Rust"
+      },
+      "sources": [
+        "crates/editor/src/app.rs::code_inspector",
+        "crates/editor/src/panels.rs::command_inspector"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.12"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Select a node in the Rust visual graph; the source/slot stays visible.",
+        "ru": "Выбрать ноду графа Rust; исходник/слот видим."
+      },
+      "editing_rights": {
+        "en": "Actual supported parser node and current source policy, never arbitrary full-language AST editing.",
+        "ru": "Настоящая поддержанная нода парсера и правила исходника, не произвольный AST всего языка."
+      },
+      "command_routes": [
+        "Edit supported value",
+        "Open fragment as text"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "V07",
+      "label": {
+        "en": "Rust / Text mode",
+        "ru": "Rust / текстовый режим"
+      },
+      "sources": [
+        "crates/editor/src/app.rs::code_text",
+        "docs/custom-rust.md"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.15"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Custom / Rust → Text; P12 and V08 are other views of the same source.",
+        "ru": "Custom / Rust → Text; P12/V08 — виды того же исходника."
+      },
+      "editing_rights": {
+        "en": "The selected source’s actual editing and state-application policy.",
+        "ru": "Настоящие правила выбранного исходника и применения состояния."
+      },
+      "command_routes": [
+        "Graph",
+        "Side by side",
+        "Apply Rust"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "V08",
+      "label": {
+        "en": "Rust / Graph mode",
+        "ru": "Rust / графовый режим"
+      },
+      "sources": [
+        "crates/editor/src/app.rs::code_graph",
+        "docs/custom-rust.md"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.15"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Custom / Rust → Graph; selecting a visual node opens V06.",
+        "ru": "Custom / Rust → Graph; выбор ноды открывает V06."
+      },
+      "editing_rights": {
+        "en": "Real parser coverage and source/slot availability; graphs are not a replacement game scheduler.",
+        "ru": "Настоящее покрытие парсера и доступность исходника/слота; граф не заменяет игровое расписание."
+      },
+      "command_routes": [
+        "Text",
+        "Side by side",
+        "Inspect node",
+        "Open text fragment"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "V09",
+      "label": {
+        "en": "Custom state recovery",
+        "ru": "Восстановление состояния Custom"
+      },
+      "sources": [
+        "crates/editor/src/app.rs::custom_panel",
+        "crates/editor/src/game_ui.rs::custom_editor_ui",
+        "docs/custom-state.md"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.15"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Rejected Custom candidate → Apply with state reset or Explicit state migration (JSON); embedded in Rust. Game instances use the separate Explicit Game state migration (JSON) worker route.",
+        "ru": "Отклонённый Custom → Apply with state reset либо Explicit state migration (JSON); встроено в Rust. Экземпляры Game используют отдельный путь worker Explicit Game state migration (JSON)."
+      },
+      "editing_rights": {
+        "en": "Candidate must match current source/slot; actual game/non-game reset and migration support are separate.",
+        "ru": "Кандидат совпадает с текущим исходником/слотом; поддержка reset/migration Game и root различается."
+      },
+      "command_routes": [
+        "Keep working version",
+        "Apply with state reset",
+        "Apply with migrated state"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "V10",
+      "label": {
+        "en": "Architecture map",
+        "ru": "Карта архитектуры"
+      },
+      "sources": [
+        "docs/editor-clarity-plan.md",
+        "docs/engine-composition-direction.md",
+        "docs/engine-capabilities.md"
+      ],
+      "coverage": {},
+      "tasks": [
+        "6"
+      ],
+      "status": "deferred",
+      "note": "Architecture map belongs to stage 6.",
+      "evidence": [],
+      "entrypoint": {
+        "en": "Proposed later stage 6 → Architecture map; no current EditorType registration is claimed.",
+        "ru": "Предложенный этап 6 → Architecture map; нынешней регистрации EditorType нет."
+      },
+      "editing_rights": {
+        "en": "Read-only baseline; actual navigation respects tool/source rights and owner evidence.",
+        "ru": "База только для чтения; переходы соблюдают права инструментов/исходников и данные владельцев."
+      },
+      "command_routes": [
+        "Inspect relationship",
+        "Open capability details"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "S01",
+      "label": {
+        "en": "Main editor shell and workspaces",
+        "ru": "Каркас редактора и раскладки"
+      },
+      "sources": [
+        "crates/editor/src/panes.rs::draw_workspaces",
+        "crates/editor/src/editor_workflow.rs::draw_workflow_toolbar",
+        "docs/editor-clarity-plan.md"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.3",
+        "2A.8"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Main native editor window.",
+        "ru": "Главное нативное окно редактора."
+      },
+      "editing_rights": {
+        "en": "Full/Team/source rights are independent of Engine/Project/custom layout names.",
+        "ru": "Full/Team/исходники независимы от Engine/Project/названия личной раскладки."
+      },
+      "command_routes": [
+        "File",
+        "Edit",
+        "Tools",
+        "Windows",
+        "Add workspace",
+        "Play",
+        "Stop",
+        "Save Project"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "S02",
+      "label": {
+        "en": "Secondary native editor window",
+        "ru": "Дополнительное нативное окно"
+      },
+      "sources": [
+        "docs/editor-clarity-plan.md",
+        "docs/editor-ui-spec.md",
+        "crates/editor/src/panes.rs::PaneSnapshot"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.10"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Proposed border/header → Move to New Window; Return to Main Window restores a valid main-layout slot.",
+        "ru": "Предложенные граница/заголовок → Move to New Window; Return to Main Window возвращает в допустимое место."
+      },
+      "editing_rights": {
+        "en": "Same project and rights as the main window; this is a queued capability, not an implemented egui floating panel.",
+        "ru": "Тот же проект/права; это отложенная функция, не реализованная плавающая панель egui."
+      },
+      "command_routes": [
+        "Return to Main Window",
+        "Close secondary window"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "N01",
+      "label": {
+        "en": "Open project file",
+        "ru": "Открытие проекта"
+      },
+      "sources": [
+        "crates/editor/src/native_dialogs.rs::open_project",
+        "crates/editor/src/editor_workflow.rs::start_dialog",
+        "docs/editor-workflow.md"
+      ],
+      "coverage": {
+        "native_purpose": "Open",
+        "native_api": "open_project"
+      },
+      "tasks": [
+        "2A.16"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "OS-owned picker purpose/adapter; unsupported platforms remain explicit.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "File/Tools/Assets command → native picker worker; contextual title/filter/directory.",
+        "ru": "Команда File/Tools/Assets → фоновый системный диалог с контекстным заголовком/фильтром/папкой."
+      },
+      "editing_rights": {
+        "en": "Current command guards plus OS filesystem permissions; native implementation currently Windows only.",
+        "ru": "Проверки команды и файловые права ОС; нынешние нативные диалоги только Windows."
+      },
+      "command_routes": [
+        "Confirm OS selection",
+        "Cancel"
+      ],
+      "presentation_owner": "Native editor / OS adapter",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "N02",
+      "label": {
+        "en": "Save Project As",
+        "ru": "Сохранение проекта как"
+      },
+      "sources": [
+        "crates/editor/src/native_dialogs.rs::save_project",
+        "crates/editor/src/editor_workflow.rs::start_dialog",
+        "docs/editor-workflow.md"
+      ],
+      "coverage": {
+        "native_purpose": "SaveAs",
+        "native_api": "save_project"
+      },
+      "tasks": [
+        "2A.16"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "OS-owned picker purpose/adapter; unsupported platforms remain explicit.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "File/Tools/Assets command → native picker worker; contextual title/filter/directory.",
+        "ru": "Команда File/Tools/Assets → фоновый системный диалог с контекстным заголовком/фильтром/папкой."
+      },
+      "editing_rights": {
+        "en": "Current command guards plus OS filesystem permissions; native implementation currently Windows only.",
+        "ru": "Проверки команды и файловые права ОС; нынешние нативные диалоги только Windows."
+      },
+      "command_routes": [
+        "Confirm OS selection",
+        "Cancel"
+      ],
+      "presentation_owner": "Native editor / OS adapter",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "N03",
+      "label": {
+        "en": "New project destination",
+        "ru": "Папка нового проекта"
+      },
+      "sources": [
+        "crates/editor/src/native_dialogs.rs::pick_folder",
+        "crates/editor/src/editor_workflow.rs::start_dialog",
+        "docs/editor-workflow.md"
+      ],
+      "coverage": {
+        "native_purpose": "New",
+        "native_api": "pick_folder"
+      },
+      "tasks": [
+        "2A.16"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "OS-owned picker purpose/adapter; unsupported platforms remain explicit.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "File/Tools/Assets command → native picker worker; contextual title/filter/directory.",
+        "ru": "Команда File/Tools/Assets → фоновый системный диалог с контекстным заголовком/фильтром/папкой."
+      },
+      "editing_rights": {
+        "en": "Current command guards plus OS filesystem permissions; native implementation currently Windows only.",
+        "ru": "Проверки команды и файловые права ОС; нынешние нативные диалоги только Windows."
+      },
+      "command_routes": [
+        "Confirm OS selection",
+        "Cancel"
+      ],
+      "presentation_owner": "Native editor / OS adapter",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "N04",
+      "label": {
+        "en": "Windows Player destination",
+        "ru": "Папка Windows Player"
+      },
+      "sources": [
+        "crates/editor/src/native_dialogs.rs::pick_folder",
+        "crates/editor/src/editor_workflow.rs::start_dialog",
+        "docs/editor-workflow.md"
+      ],
+      "coverage": {
+        "native_purpose": "ExportPlayer",
+        "native_api": "pick_folder"
+      },
+      "tasks": [
+        "2A.16"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "OS-owned picker purpose/adapter; unsupported platforms remain explicit.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "File/Tools/Assets command → native picker worker; contextual title/filter/directory.",
+        "ru": "Команда File/Tools/Assets → фоновый системный диалог с контекстным заголовком/фильтром/папкой."
+      },
+      "editing_rights": {
+        "en": "Current command guards plus OS filesystem permissions; native implementation currently Windows only.",
+        "ru": "Проверки команды и файловые права ОС; нынешние нативные диалоги только Windows."
+      },
+      "command_routes": [
+        "Confirm OS selection",
+        "Cancel"
+      ],
+      "presentation_owner": "Native editor / OS adapter",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "N05",
+      "label": {
+        "en": "Team editor destination",
+        "ru": "Папка редактора Team"
+      },
+      "sources": [
+        "crates/editor/src/native_dialogs.rs::pick_folder",
+        "crates/editor/src/editor_workflow.rs::start_dialog",
+        "docs/editor-workflow.md"
+      ],
+      "coverage": {
+        "native_purpose": "ExportTeam",
+        "native_api": "pick_folder"
+      },
+      "tasks": [
+        "2A.16"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "OS-owned picker purpose/adapter; unsupported platforms remain explicit.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "File/Tools/Assets command → native picker worker; contextual title/filter/directory.",
+        "ru": "Команда File/Tools/Assets → фоновый системный диалог с контекстным заголовком/фильтром/папкой."
+      },
+      "editing_rights": {
+        "en": "Current command guards plus OS filesystem permissions; native implementation currently Windows only.",
+        "ru": "Проверки команды и файловые права ОС; нынешние нативные диалоги только Windows."
+      },
+      "command_routes": [
+        "Confirm OS selection",
+        "Cancel"
+      ],
+      "presentation_owner": "Native editor / OS adapter",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "N06",
+      "label": {
+        "en": "Full source destination",
+        "ru": "Папка полных исходников"
+      },
+      "sources": [
+        "crates/editor/src/native_dialogs.rs::pick_folder",
+        "crates/editor/src/editor_workflow.rs::start_dialog",
+        "docs/editor-workflow.md"
+      ],
+      "coverage": {
+        "native_purpose": "ExportSource",
+        "native_api": "pick_folder"
+      },
+      "tasks": [
+        "2A.16"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "OS-owned picker purpose/adapter; unsupported platforms remain explicit.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "File/Tools/Assets command → native picker worker; contextual title/filter/directory.",
+        "ru": "Команда File/Tools/Assets → фоновый системный диалог с контекстным заголовком/фильтром/папкой."
+      },
+      "editing_rights": {
+        "en": "Current command guards plus OS filesystem permissions; native implementation currently Windows only.",
+        "ru": "Проверки команды и файловые права ОС; нынешние нативные диалоги только Windows."
+      },
+      "command_routes": [
+        "Confirm OS selection",
+        "Cancel"
+      ],
+      "presentation_owner": "Native editor / OS adapter",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "N07",
+      "label": {
+        "en": "Import asset file",
+        "ru": "Выбор импортируемого ресурса"
+      },
+      "sources": [
+        "crates/editor/src/native_dialogs.rs::import_asset",
+        "crates/editor/src/editor_workflow.rs::perform_asset_action",
+        "docs/editor-workflow.md"
+      ],
+      "coverage": {
+        "native_purpose": "Import",
+        "native_api": "import_asset"
+      },
+      "tasks": [
+        "2A.16"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "OS-owned picker purpose/adapter; unsupported platforms remain explicit.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "File/Tools/Assets command → native picker worker; contextual title/filter/directory.",
+        "ru": "Команда File/Tools/Assets → фоновый системный диалог с контекстным заголовком/фильтром/папкой."
+      },
+      "editing_rights": {
+        "en": "Current command guards plus OS filesystem permissions; native implementation currently Windows only.",
+        "ru": "Проверки команды и файловые права ОС; нынешние нативные диалоги только Windows."
+      },
+      "command_routes": [
+        "Confirm OS selection",
+        "Cancel"
+      ],
+      "presentation_owner": "Native editor / OS adapter",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "N08",
+      "label": {
+        "en": "OS overwrite confirmation",
+        "ru": "Системное подтверждение перезаписи"
+      },
+      "sources": [
+        "crates/editor/src/native_dialogs.rs::save_project",
+        "crates/editor/src/workspace_files.rs::save_as_confirmed"
+      ],
+      "coverage": {
+        "os_confirmation": "overwrite"
+      },
+      "tasks": [
+        "2A.16"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "OS-owned picker purpose/adapter; unsupported platforms remain explicit.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Nested inside native Save As when its provider detects an existing file.",
+        "ru": "Внутри системного Save As при существующем файле."
+      },
+      "editing_rights": {
+        "en": "OS-owned confirmation and language; app rechecks destination/asset/binding safety after selection.",
+        "ru": "Подтверждение/язык ОС; приложение перепроверяет цель/ресурсы/привязки после выбора."
+      },
+      "command_routes": [
+        "Confirm overwrite in OS dialog",
+        "Cancel"
+      ],
+      "presentation_owner": "Native editor / OS adapter",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "D01",
+      "label": {
+        "en": "Unsaved changes / draft resolution",
+        "ru": "Несохранённые изменения / черновики"
+      },
+      "sources": [
+        "crates/editor/src/editor_workflow.rs::draw_workflow_modals",
+        "crates/editor/src/panes.rs::module_tool_draft_resolutions_ui"
+      ],
+      "coverage": {
+        "app_modal": "unsaved-project"
+      },
+      "tasks": [
+        "2A.16"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Open/New/Quit/Check/export/file commands when the existing save guard requires it.",
+        "ru": "Open/New/Quit/Check/экспорт/файловая команда, когда этого требует save guard."
+      },
+      "editing_rights": {
+        "en": "Existing action-specific guard; asset operations cannot use a discard/unsaved-version bypass.",
+        "ru": "Проверка зависит от действия; операции ресурсов не обходятся отказом от сохранения."
+      },
+      "command_routes": [
+        "Save and continue",
+        "Use saved version / Don’t save when permitted",
+        "Cancel",
+        "Discard module draft"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "D02",
+      "label": {
+        "en": "Operation result / report",
+        "ru": "Результат / отчёт операции"
+      },
+      "sources": [
+        "crates/editor/src/editor_workflow.rs::draw_workflow_modals",
+        "crates/editor/src/activity.rs::draw_activity"
+      ],
+      "coverage": {
+        "app_modal": "operation-report"
+      },
+      "tasks": [
+        "2A.16"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Tools → Last operation report or operation feedback; not every informational event needs a modal.",
+        "ru": "Tools → Last operation report либо обратная связь; не каждое сообщение требует модального окна."
+      },
+      "editing_rights": {
+        "en": "Read-only result; any linked retry/open action retains its own real rights/validation.",
+        "ru": "Результат только для чтения; повтор/переход соблюдает свои права/проверки."
+      },
+      "command_routes": [
+        "Copy details",
+        "Close",
+        "Open relevant tool when supported"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "D03",
+      "label": {
+        "en": "New folder",
+        "ru": "Новая папка"
+      },
+      "sources": [
+        "crates/editor/src/assets_ui.rs::BrowserDialog",
+        "crates/editor/src/assets_ui.rs::dialog_ui",
+        "docs/asset-workspace-api.md"
+      ],
+      "coverage": {
+        "asset_dialog": "NewFolder"
+      },
+      "tasks": [
+        "2A.16"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Assets toolbar/context/detail action for the selected stable asset ID.",
+        "ru": "Панель/контекст/подробности Assets выбранного стабильного ID."
+      },
+      "editing_rights": {
+        "en": "Actual asset protection, owner root, busy lock and saved reference-transaction rules.",
+        "ru": "Настоящая защита ресурса, корень владельца, busy-блокировка и сохранённые транзакции ссылок."
+      },
+      "command_routes": [
+        "Create",
+        "Cancel"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "D04",
+      "label": {
+        "en": "Rename asset",
+        "ru": "Переименование ресурса"
+      },
+      "sources": [
+        "crates/editor/src/assets_ui.rs::BrowserDialog",
+        "crates/editor/src/assets_ui.rs::dialog_ui",
+        "docs/asset-workspace-api.md"
+      ],
+      "coverage": {
+        "asset_dialog": "Rename"
+      },
+      "tasks": [
+        "2A.16"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Assets toolbar/context/detail action for the selected stable asset ID.",
+        "ru": "Панель/контекст/подробности Assets выбранного стабильного ID."
+      },
+      "editing_rights": {
+        "en": "Actual asset protection, owner root, busy lock and saved reference-transaction rules.",
+        "ru": "Настоящая защита ресурса, корень владельца, busy-блокировка и сохранённые транзакции ссылок."
+      },
+      "command_routes": [
+        "Rename",
+        "Cancel"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "D05",
+      "label": {
+        "en": "Move asset",
+        "ru": "Перенос ресурса"
+      },
+      "sources": [
+        "crates/editor/src/assets_ui.rs::BrowserDialog",
+        "crates/editor/src/assets_ui.rs::dialog_ui",
+        "docs/asset-workspace-api.md"
+      ],
+      "coverage": {
+        "asset_dialog": "Move"
+      },
+      "tasks": [
+        "2A.16"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Assets toolbar/context/detail action for the selected stable asset ID.",
+        "ru": "Панель/контекст/подробности Assets выбранного стабильного ID."
+      },
+      "editing_rights": {
+        "en": "Actual asset protection, owner root, busy lock and saved reference-transaction rules.",
+        "ru": "Настоящая защита ресурса, корень владельца, busy-блокировка и сохранённые транзакции ссылок."
+      },
+      "command_routes": [
+        "Move",
+        "Cancel"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "D06",
+      "label": {
+        "en": "Delete asset / resolve usages",
+        "ru": "Удаление ресурса / разрешение использований"
+      },
+      "sources": [
+        "crates/editor/src/assets_ui.rs::BrowserDialog",
+        "crates/editor/src/assets_ui.rs::dialog_ui",
+        "docs/asset-workspace-api.md"
+      ],
+      "coverage": {
+        "asset_dialog": "Delete"
+      },
+      "tasks": [
+        "2A.16"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Assets toolbar/context/detail action for the selected stable asset ID.",
+        "ru": "Панель/контекст/подробности Assets выбранного стабильного ID."
+      },
+      "editing_rights": {
+        "en": "Actual asset protection, owner root, busy lock and saved reference-transaction rules.",
+        "ru": "Настоящая защита ресурса, корень владельца, busy-блокировка и сохранённые транзакции ссылок."
+      },
+      "command_routes": [
+        "Move to trash",
+        "Cancel"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "D07",
+      "label": {
+        "en": "Asset usages",
+        "ru": "Использования ресурса"
+      },
+      "sources": [
+        "crates/editor/src/assets_ui.rs::BrowserDialog",
+        "crates/editor/src/assets_ui.rs::dialog_ui",
+        "docs/asset-workspace-api.md"
+      ],
+      "coverage": {
+        "asset_dialog": "Usages"
+      },
+      "tasks": [
+        "2A.16"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Assets toolbar/context/detail action for the selected stable asset ID.",
+        "ru": "Панель/контекст/подробности Assets выбранного стабильного ID."
+      },
+      "editing_rights": {
+        "en": "Actual asset protection, owner root, busy lock and saved reference-transaction rules.",
+        "ru": "Настоящая защита ресурса, корень владельца, busy-блокировка и сохранённые транзакции ссылок."
+      },
+      "command_routes": [
+        "Close"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "D08",
+      "label": {
+        "en": "Create workspace",
+        "ru": "Создание раскладки"
+      },
+      "sources": [
+        "docs/editor-clarity-plan.md",
+        "crates/editor/src/panes.rs::PersonalLayout"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.8"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Proposed top workspace +.",
+        "ru": "Предложенная кнопка + верхних вкладок."
+      },
+      "editing_rights": {
+        "en": "Presets and editor types obey existing source/Team availability.",
+        "ru": "Пресеты/типы окон соблюдают доступность исходников/Team."
+      },
+      "command_routes": [
+        "Create workspace",
+        "Cancel"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "D09",
+      "label": {
+        "en": "Rename workspace",
+        "ru": "Переименование раскладки"
+      },
+      "sources": [
+        "docs/editor-clarity-plan.md",
+        "crates/editor/src/panes.rs::PersonalLayout"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.8"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Proposed custom workspace RMB → Rename.",
+        "ru": "Предложенная ПКМ своей раскладки → Rename."
+      },
+      "editing_rights": {
+        "en": "Custom layouts only in this baseline; Engine/Project preset identity is preserved.",
+        "ru": "В базе только личные раскладки; идентичность пресетов Engine/Project сохраняется."
+      },
+      "command_routes": [
+        "Rename workspace",
+        "Cancel"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "D10",
+      "label": {
+        "en": "Delete custom workspace",
+        "ru": "Удаление личной раскладки"
+      },
+      "sources": [
+        "docs/editor-clarity-plan.md",
+        "crates/editor/src/panes.rs::PersonalLayout"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.8"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Proposed custom workspace RMB → Delete; preset reset uses the same guard family with its own scope label.",
+        "ru": "Предложенная ПКМ личной раскладки → Delete; сброс пресета использует ту же защиту с отдельной подписью области."
+      },
+      "editing_rights": {
+        "en": "Never remove the last usable workspace or delete authored project data; rights still apply to fallback panes.",
+        "ru": "Не удалять последнюю рабочую раскладку/авторские данные; fallback соблюдает права."
+      },
+      "command_routes": [
+        "Delete custom workspace",
+        "Cancel"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "D11",
+      "label": {
+        "en": "Review render-preset replacement",
+        "ru": "Проверка замены пресета рендера"
+      },
+      "sources": [
+        "crates/editor/src/app.rs::switch_gpu_path",
+        "docs/editor-ui-design.md"
+      ],
+      "coverage": {},
+      "tasks": [
+        "3"
+      ],
+      "status": "deferred",
+      "note": "Missing rendering semantics belong to stage 3; 2A styles existing controls only.",
+      "evidence": [],
+      "entrypoint": {
+        "en": "Proposed Rendering/graph → Review preset; legacy preview navigates here instead of view-like architecture toggles.",
+        "ru": "Предложенные Rendering/граф → Review preset; старый preview ведёт сюда вместо похожих на вид переключателей."
+      },
+      "editing_rights": {
+        "en": "Full/source and actual candidate validation; this does not widen Project-exposed choices.",
+        "ru": "Full/исходники и проверка кандидата; разрешённые Project-варианты не расширяются."
+      },
+      "command_routes": [
+        "Apply replacement",
+        "Cancel"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "D12",
+      "label": {
+        "en": "Reset selected layout",
+        "ru": "Сброс выбранной раскладки"
+      },
+      "sources": [
+        "crates/editor/src/editor_workflow.rs::Command",
+        "docs/editor-clarity-plan.md"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.8"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Windows / workspace menu → Reset Layout; confirmation is proposed, the reset command already exists.",
+        "ru": "Windows / меню раскладки → Reset Layout; подтверждение предложено, команда уже есть."
+      },
+      "editing_rights": {
+        "en": "Reset only the selected layout to available editor types; no source/Team rights change.",
+        "ru": "Сброс только выбранной раскладки к доступным типам; права исходников/Team не меняются."
+      },
+      "command_routes": [
+        "Reset this layout",
+        "Cancel"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "M01",
+      "label": {
+        "en": "File menu and submenus",
+        "ru": "File и подменю"
+      },
+      "sources": [
+        "crates/editor/src/editor_workflow.rs::draw_workflow_toolbar",
+        "docs/editor-ui-spec.md"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.3",
+        "2A.8"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "File",
+        "ru": "Верхнее File и его подменю"
+      },
+      "editing_rights": {
+        "en": "Actual source/Team, selected scope and command guards remain authoritative.",
+        "ru": "Действуют исходники/Team, выбранная область и проверки команд."
+      },
+      "command_routes": [
+        "New Project >",
+        "Templates >",
+        "Open Project…",
+        "Recent Projects >",
+        "Save Project",
+        "Save As…",
+        "Import Asset…",
+        "Export >",
+        "Exit"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "M02",
+      "label": {
+        "en": "Edit menu",
+        "ru": "Меню Edit"
+      },
+      "sources": [
+        "crates/editor/src/editor_workflow.rs::draw_workflow_toolbar",
+        "docs/editor-ui-spec.md"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.3",
+        "2A.8"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Edit",
+        "ru": "Верхнее Edit"
+      },
+      "editing_rights": {
+        "en": "Actual source/Team, selected scope and command guards remain authoritative.",
+        "ru": "Действуют исходники/Team, выбранная область и проверки команд."
+      },
+      "command_routes": [
+        "Undo project",
+        "Redo project",
+        "History / Merge"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "M03",
+      "label": {
+        "en": "Tools menu",
+        "ru": "Меню Tools"
+      },
+      "sources": [
+        "crates/editor/src/editor_workflow.rs::draw_workflow_toolbar",
+        "docs/editor-ui-spec.md"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.3",
+        "2A.8"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Tools",
+        "ru": "Верхнее Tools"
+      },
+      "editing_rights": {
+        "en": "Actual source/Team, selected scope and command guards remain authoritative.",
+        "ru": "Действуют исходники/Team, выбранная область и проверки команд."
+      },
+      "command_routes": [
+        "Check Project",
+        "Publish Engine profile / update contracts",
+        "Build Windows Player…",
+        "Diagnostics",
+        "Project Settings",
+        "Last operation report"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "M04",
+      "label": {
+        "en": "Windows menu",
+        "ru": "Меню Windows"
+      },
+      "sources": [
+        "crates/editor/src/editor_workflow.rs::draw_workflow_toolbar",
+        "docs/editor-ui-spec.md"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.3",
+        "2A.8"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Windows",
+        "ru": "Верхнее Windows"
+      },
+      "editing_rights": {
+        "en": "Actual source/Team, selected scope and command guards remain authoritative.",
+        "ru": "Действуют исходники/Team, выбранная область и проверки команд."
+      },
+      "command_routes": [
+        "Scene and objects >",
+        "Resources >",
+        "Gameplay >",
+        "Engine >",
+        "Code and files >",
+        "Diagnostics / legacy >",
+        "Module tools >",
+        "Layout >"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "M05",
+      "label": {
+        "en": "Workspace context menu",
+        "ru": "Меню рабочей раскладки"
+      },
+      "sources": [
+        "docs/editor-clarity-plan.md",
+        "docs/editor-ui-spec.md"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.8"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Workspace tab RMB",
+        "ru": "ПКМ вкладки раскладки"
+      },
+      "editing_rights": {
+        "en": "Actual source/Team, selected scope and command guards remain authoritative.",
+        "ru": "Действуют исходники/Team, выбранная область и проверки команд."
+      },
+      "command_routes": [
+        "Duplicate current…",
+        "Rename…",
+        "Delete…",
+        "Reset Layout…"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "M06",
+      "label": {
+        "en": "Area-border menu",
+        "ru": "Меню границы областей"
+      },
+      "sources": [
+        "docs/editor-clarity-plan.md",
+        "docs/editor-ui-spec.md"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.9"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Area border RMB / header menu",
+        "ru": "ПКМ границы областей / меню заголовка"
+      },
+      "editing_rights": {
+        "en": "Actual source/Team, selected scope and command guards remain authoritative.",
+        "ru": "Действуют исходники/Team, выбранная область и проверки команд."
+      },
+      "command_routes": [
+        "Split Vertically — Left/Right",
+        "Split Horizontally — Top/Bottom",
+        "Join — keep selected neighbor",
+        "Move to New Window",
+        "Return to Main Window"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "M07",
+      "label": {
+        "en": "Graph Add Node search",
+        "ru": "Поиск добавляемой ноды"
+      },
+      "sources": [
+        "crates/editor/src/canvas.rs::draw",
+        "docs/editor-ui-spec.md"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.11"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Graph background RMB click, or Menu key/Shift+F10 with canvas focus and no node target (proposed keyboard route). Root Blueprint has no persistent + Node button.",
+        "ru": "Щелчок ПКМ фона, либо клавиша меню/Shift+F10 при фокусе холста без цели-ноды (предлагаемый клавиатурный путь). В root Blueprint нет постоянной кнопки + Node."
+      },
+      "editing_rights": {
+        "en": "Actual source/Team, selected scope and command guards remain authoritative.",
+        "ru": "Действуют исходники/Team, выбранная область и проверки команд."
+      },
+      "command_routes": [
+        "Search nodes",
+        "Scope",
+        "Compatible categories",
+        "Create selected"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "M08",
+      "label": {
+        "en": "Node actions menu",
+        "ru": "Действия ноды"
+      },
+      "sources": [
+        "docs/editor-clarity-plan.md",
+        "docs/editor-ui-spec.md"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.11"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Node RMB click without drag, or Menu key/Shift+F10 on a focused node target (proposed keyboard route).",
+        "ru": "ПКМ ноды без перетаскивания, либо клавиша меню/Shift+F10 для сфокусированной цели-ноды (предлагаемый клавиатурный путь)."
+      },
+      "editing_rights": {
+        "en": "Actual source/Team, selected scope and command guards remain authoritative.",
+        "ru": "Действуют исходники/Team, выбранная область и проверки команд."
+      },
+      "command_routes": [
+        "Open subgraph",
+        "Edit parameters",
+        "Edit HLSL",
+        "Delete selected",
+        "Frame graph"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "M09",
+      "label": {
+        "en": "Asset context menu",
+        "ru": "Контекстное меню ресурса"
+      },
+      "sources": [
+        "crates/editor/src/assets_ui.rs::file_commands",
+        "docs/editor-ui-spec.md"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.7"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Asset tile/list RMB",
+        "ru": "ПКМ плитки/строки ресурса"
+      },
+      "editing_rights": {
+        "en": "Actual source/Team, selected scope and command guards remain authoritative.",
+        "ru": "Действуют исходники/Team, выбранная область и проверки команд."
+      },
+      "command_routes": [
+        "Preview",
+        "Rename…",
+        "Move…",
+        "Move to trash…",
+        "Usages…"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "M10",
+      "label": {
+        "en": "Area editor-type selector",
+        "ru": "Выбор типа редактора области"
+      },
+      "sources": [
+        "crates/editor/src/dock.rs::EditorType",
+        "docs/editor-ui-spec.md"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.9"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Pane header type control",
+        "ru": "Выбор типа в заголовке области"
+      },
+      "editing_rights": {
+        "en": "Actual source/Team, selected scope and command guards remain authoritative.",
+        "ru": "Действуют исходники/Team, выбранная область и проверки команд."
+      },
+      "command_routes": [
+        "Scene and resources",
+        "Engine tools",
+        "Legacy root tools",
+        "Module panels"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "M11",
+      "label": {
+        "en": "Scene tool options",
+        "ru": "Настройки инструментов Scene"
+      },
+      "sources": [
+        "crates/editor/src/scene_view_ui.rs::SceneViewportState",
+        "docs/editor-ui-spec.md"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.13"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "World/Local, Snap step or overlay overflow",
+        "ru": "World/Local, шаг Snap или меню переполнения overlay"
+      },
+      "editing_rights": {
+        "en": "Actual source/Team, selected scope and command guards remain authoritative.",
+        "ru": "Действуют исходники/Team, выбранная область и проверки команд."
+      },
+      "command_routes": [
+        "Coordinate space",
+        "Snap enabled",
+        "Move / rotate / scale steps",
+        "Frame Selection",
+        "Active tool"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "C01",
+      "label": {
+        "en": "Schema-driven property fields",
+        "ru": "Поля по схемам"
+      },
+      "sources": [
+        "crates/engine-core/src/settings.rs::PropertyType",
+        "crates/editor/src/properties.rs::value_editor",
+        "docs/component-schemas.md"
+      ],
+      "coverage": {
+        "property_types": [
+          "Number",
+          "Boolean",
+          "Enum",
+          "Text",
+          "ObjectReference",
+          "AssetReference"
+        ]
+      },
+      "tasks": [
+        "2A.2",
+        "2A.6"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Project/Engine settings, applicable object fields and component inspectors.",
+        "ru": "Настройки Project/Engine, подходящие свойства объектов и inspector компонентов."
+      },
+      "editing_rights": {
+        "en": "Exact owner/schema/SDK pins, scope, type/bounds and exposed capability; field visibility follows actual composition.",
+        "ru": "Точные owner/schema/SDK pins, область, тип/границы и разрешение; видимость по настоящему составу."
+      },
+      "command_routes": [
+        "Edit value",
+        "Choose enum",
+        "Clear optional reference",
+        "Use inherited/default value"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "C02",
+      "label": {
+        "en": "Object/asset reference pickers",
+        "ru": "Выбор ссылок на объекты/ресурсы"
+      },
+      "sources": [
+        "crates/editor/src/game_ui.rs::reference_editor",
+        "crates/editor/src/properties.rs::value_editor",
+        "docs/asset-workspace-api.md"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.6"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Source-owned reference field, asset details, replacement or drag/drop target.",
+        "ru": "Поле ссылки схемы, подробности ресурса, замена или drag/drop."
+      },
+      "editing_rights": {
+        "en": "Object candidates satisfy required components in the resolved scene; asset candidates satisfy kind/extension and dependency checks.",
+        "ru": "Объекты удовлетворяют компонентам разрешённой сцены; ресурсы — виду/расширению и зависимостям."
+      },
+      "command_routes": [
+        "Choose compatible object",
+        "Choose compatible asset",
+        "Clear optional value"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "C03",
+      "label": {
+        "en": "Icon / pin help and feedback",
+        "ru": "Справка и обратная связь иконок/пинов"
+      },
+      "sources": [
+        "docs/editor-ui-spec.md",
+        "crates/editor/src/app.rs::graph_connection_error",
+        "crates/editor/src/activity.rs::draw_activity"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.2",
+        "2A.12"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Hover or keyboard focus on icons/pins; selected mismatch or operation status exposes persistent critical details.",
+        "ru": "Наведение/клавиатурный фокус на иконке/пине; ошибка/статус дают постоянные важные подробности."
+      },
+      "editing_rights": {
+        "en": "Help reads actual command/port state and cannot itself invoke, activate or widen a capability.",
+        "ru": "Справка читает состояние команды/порта, не вызывает/включает/расширяет возможность."
+      },
+      "command_routes": [
+        "Show control help",
+        "Inspect connection mismatch",
+        "Open diagnostics"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "C04",
+      "label": {
+        "en": "Transforms, colour and standard controls",
+        "ru": "Трансформации, цвет и стандартные элементы"
+      },
+      "sources": [
+        "crates/editor/src/game_ui.rs::inspector_ui_with_composition",
+        "crates/editor/src/scene_tools.rs",
+        "docs/editor-ui-spec.md"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.2",
+        "2A.13"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Inspector and compatible legacy properties; standard controls throughout the editor.",
+        "ru": "Inspector/подходящие старые свойства; общие элементы по редактору."
+      },
+      "editing_rights": {
+        "en": "Actual field type/ranges and renderer/material support; a colour popup is not a new PropertyType variant or transparent-material feature.",
+        "ru": "Настоящий тип/границы и поддержка рендера/материала; popup цвета не новый PropertyType и не прозрачные материалы."
+      },
+      "command_routes": [
+        "Edit transform",
+        "Choose stored colour",
+        "Expand section",
+        "Select list item"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "V11",
+      "label": {
+        "en": "GPU graph / Deferred example",
+        "ru": "GPU-граф / пример Deferred"
+      },
+      "sources": [
+        "crates/render-vulkan/src/graph.rs::default_graph",
+        "docs/gpu-hlsl.md"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.11"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Same GPU subgraph editor as V01, with the actual selected Deferred configuration.",
+        "ru": "Тот же редактор GPU-подграфа V01 с выбранной конфигурацией Deferred."
+      },
+      "editing_rights": {
+        "en": "The same Full/source/resource-contract rules; a preset is not a harmless view toggle.",
+        "ru": "Те же Full/исходники/ресурсы; пресет не безобидный переключатель вида."
+      },
+      "command_routes": [
+        "Inspect pass",
+        "Inspect resource",
+        "Open HLSL",
+        "Review preset"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "V12",
+      "label": {
+        "en": "Rust / scalar graph example",
+        "ru": "Rust / пример scalar-графа"
+      },
+      "sources": [
+        "crates/editor/src/app.rs::code_graph",
+        "crates/editor/src/scalar.rs",
+        "docs/custom-rust.md"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.15"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Custom / Rust → compatible scalar source → Graph or Side by side.",
+        "ru": "Custom / Rust → совместимый scalar-исходник → Graph или Side by side."
+      },
+      "editing_rights": {
+        "en": "Real parser subset and slot contract only; this is not arbitrary Rust structural editing.",
+        "ru": "Только настоящее подмножество парсера/контракт слота, не структурная правка всего Rust."
+      },
+      "command_routes": [
+        "Open text",
+        "Inspect expression",
+        "Apply Rust"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "V13",
+      "label": {
+        "en": "Gameplay execution JSON",
+        "ru": "JSON игрового расписания"
+      },
+      "sources": [
+        "crates/editor/src/game_ui.rs::systems_ui",
+        "docs/module-execution.md"
+      ],
+      "coverage": {},
+      "tasks": [
+        "2A.15"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "Existing tool/command; preserve owner, rights and data contract.",
+      "evidence": [
+        "editor-ui-rollout.md"
+      ],
+      "entrypoint": {
+        "en": "Gameplay Systems → advanced execution JSON; return to the same visual draft.",
+        "ru": "Gameplay Systems → расширенный execution JSON; возврат к тому же графовому черновику."
+      },
+      "editing_rights": {
+        "en": "Frozen Team schedule, Full/source and Stop-Play requirements remain; raw JSON is not a bypass.",
+        "ru": "Замороженное расписание Team, Full/исходники и Stop Play сохраняются; JSON не обход."
+      },
+      "command_routes": [
+        "Apply schedule",
+        "Discard draft",
+        "Return to graph"
+      ],
+      "presentation_owner": "Native editor",
+      "semantic_owner_rule": "Resolve Engine/Gameplay/Project ownership from the selected source descriptor; a workspace name grants no permissions."
+    },
+    {
+      "id": "D13",
+      "label": {
+        "en": "Scene source operation",
+        "ru": "Операция с исходником сцены"
+      },
+      "sources": [
+        "crates/editor/src/scene_sources.rs::draw_scene_source_dialog",
+        "docs/scene-files.md"
+      ],
+      "coverage": {
+        "scene_dialog": "New/Duplicate/Rename/Move/Delete/Convert"
+      },
+      "tasks": [
+        "2A.13 follow-up"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "See scene-files.md for actual source/file lifecycle and verification limits.",
+      "evidence": [
+        "scene-files.md"
+      ],
+      "entrypoint": {
+        "en": "File → Scene, Hierarchy scene overflow or registered scene actions in Assets.",
+        "ru": "File → Scene, меню текущей сцены в Hierarchy или действия зарегистрированной сцены в Assets."
+      },
+      "editing_rights": {
+        "en": "Stop Play; validated authored document and unresolved-draft guards. Workspace names grant no rights.",
+        "ru": "Stop Play; проверенный авторский документ и защита неразрешённых черновиков. Имя раскладки не даёт прав."
+      },
+      "command_routes": [
+        "Move",
+        "Cancel"
+      ]
+    },
+    {
+      "id": "D14",
+      "label": {
+        "en": "Rename object",
+        "ru": "Переименование объекта"
+      },
+      "sources": [
+        "crates/editor/src/scene_sources.rs::draw_scene_source_dialog",
+        "docs/scene-files.md"
+      ],
+      "coverage": {
+        "scene_dialog": "RenameObject"
+      },
+      "tasks": [
+        "2A.13 follow-up"
+      ],
+      "status": "implemented_bounded_verification",
+      "note": "See scene-files.md for actual source/file lifecycle and verification limits.",
+      "evidence": [
+        "scene-files.md"
+      ],
+      "entrypoint": {
+        "en": "Hierarchy F2 or object context Rename.",
+        "ru": "F2 в Hierarchy или контекстный Rename объекта."
+      },
+      "editing_rights": {
+        "en": "Stop Play; validated authored document and unresolved-draft guards. Workspace names grant no rights.",
+        "ru": "Stop Play; проверенный авторский документ и защита неразрешённых черновиков. Имя раскладки не даёт прав."
+      },
+      "command_routes": [
+        "Rename",
+        "Cancel"
+      ]
+    }
+  ],
+  "verification": {
+    "record": "editor-ui-rollout.md",
+    "code_snapshot": "source-f23.json",
+    "windows_editor_tests": {
+      "passed": 295,
+      "failed": 0,
+      "ignored_in_default_set": 6,
+      "explicit_applicable_ignored_passed": 5
+    },
+    "physical_dpi_tested": [
+      96
+    ],
+    "ui_zoom_tested": [
+      1,
+      1.5,
+      2
+    ],
+    "limitations": [
+      "Physical150/200% and mixed monitors unavailable on this setup.",
+      "No external foreground input/native picker selection certification.",
+      "WSLg software Vulkan is not hardware Linux certification.",
+      "Shared regression/native evidence is not every native state of every catalogue row."
+    ]
+  }
+}

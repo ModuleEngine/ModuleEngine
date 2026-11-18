@@ -245,9 +245,43 @@ pub struct SystemRegistry {
     project_contracts: BTreeMap<String, (ProjectValidator, ProjectPreparer)>,
     game_contributions: BTreeMap<String, crate::GameContribution>,
     pose_projections: BTreeMap<String, crate::GamePoseProjection>,
+    capability_metadata: BTreeMap<String, crate::CapabilityMetadata>,
+    contribution_metadata: BTreeMap<String, crate::CapabilityMetadata>,
 }
 
 impl SystemRegistry {
+    pub fn describe_module(
+        &mut self,
+        id: &str,
+        metadata: crate::CapabilityMetadata,
+    ) -> Result<(), String> {
+        if !self.installed_versions.contains_key(id) {
+            return Err(format!(
+                "Cannot describe uninstalled system/schema owner '{id}'"
+            ));
+        }
+        crate::capabilities::describe_capability(&mut self.capability_metadata, id, metadata)
+    }
+    pub fn capability_metadata(&self, id: &str) -> Option<&crate::CapabilityMetadata> {
+        self.capability_metadata.get(id)
+    }
+    pub fn describe_contribution(
+        &mut self,
+        id: &str,
+        metadata: crate::CapabilityMetadata,
+    ) -> Result<(), String> {
+        if !self.game_contributions.contains_key(id)
+            || metadata.kind != crate::CapabilityKind::HostContribution
+        {
+            return Err(format!(
+                "Cannot describe uninstalled host contribution '{id}'"
+            ));
+        }
+        crate::capabilities::describe_capability(&mut self.contribution_metadata, id, metadata)
+    }
+    pub fn contribution_metadata(&self, id: &str) -> Option<&crate::CapabilityMetadata> {
+        self.contribution_metadata.get(id)
+    }
     pub fn register_project_contract<V, P>(
         &mut self,
         owner: &str,
@@ -1038,6 +1072,8 @@ mod tests {
     use serde_json::json;
     fn empty_project() -> crate::GameProject {
         crate::GameProject {
+            player_preferences: None,
+            scene_assets: Default::default(),
             entry_scene: "empty".into(),
             scenes: BTreeMap::from([("empty".into(), crate::AuthoredScene::default())]),
             prefabs: BTreeMap::new(),

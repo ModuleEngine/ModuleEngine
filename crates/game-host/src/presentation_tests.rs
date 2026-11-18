@@ -405,6 +405,7 @@ pub(crate) struct GpuDraws {
     cpu_calls: usize,
     pub(crate) attempts: usize,
     completed: Vec<(Camera, Vec<RenderResourceCommand>)>,
+    pub(crate) edge_modes: Vec<Option<bool>>,
     lease_drops: Arc<std::sync::atomic::AtomicUsize>,
     enqueue_after_success: Option<(Arc<Mutex<RenderOverrides>>, RenderResourceCommand)>,
     pub(crate) delayed: bool,
@@ -465,6 +466,7 @@ impl FrameRenderer for GpuRecorder {
         draws
             .completed
             .push((camera, controls.resource_commands.clone()));
+        draws.edge_modes.push(controls.enabled.get("edge").copied());
         let serial = draws.completed.len() as u64;
         let drops = draws.lease_drops.clone();
         let enqueue = draws.enqueue_after_success.take();
@@ -525,6 +527,585 @@ pub(crate) fn gpu_host() -> (
     host.set_presentation_target(Some(Arc::new(FixturePresentationTarget(1))))
         .unwrap();
     (host, draws, temp)
+}
+
+/// This test adapter accepts only the one persistent control it declares.
+/// The original gpu_host and builtin software adapter retain their restrictions.
+struct GpuSettingsAdapter;
+impl RendererAdapter for GpuSettingsAdapter {
+    fn control_targets(
+        &self,
+        _: &Node,
+        _: &GraphDocument,
+    ) -> Result<Option<RenderControlTargets>, String> {
+        Ok(Some(RenderControlTargets {
+            controls: BTreeSet::from(["edge".into()]),
+            resources: BTreeSet::new(),
+        }))
+    }
+    fn validate_controls(
+        &self,
+        _: &Node,
+        _: &GraphDocument,
+        controls: &RenderOverrides,
+    ) -> Result<(), String> {
+        if !controls.parameters.is_empty()
+            || !controls.resource_commands.is_empty()
+            || controls.enabled.keys().any(|id| id != "edge")
+        {
+            return Err(
+                "GPU settings fixture accepts only the declared edge enabled control".into(),
+            );
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn gpu_settings_host() -> (
+    GameHost,
+    Arc<Mutex<GpuDraws>>,
+    module_engine_script::TestArtifactGuard,
+) {
+    let (base, _, temp) = host();
+    let mut composition = base.composition.clone();
+    let mut document = base.accepted_document().clone();
+    let renderer = document
+        .root
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == "renderer")
+        .unwrap();
+    let mut descriptor = composition
+        .modules
+        .descriptor(&renderer.module)
+        .unwrap()
+        .clone();
+    descriptor.id = "render.fixture_gpu_settings".into();
+    descriptor.label = "GPU settings lease fixture".into();
+    renderer.module = descriptor.id.clone();
+    let draws = Arc::new(Mutex::new(GpuDraws::default()));
+    let factory_draws = draws.clone();
+    composition
+        .modules
+        .register_renderer_with_adapter(descriptor, GpuSettingsAdapter, move |_, _| {
+            Ok(Box::new(GpuRecorder(factory_draws.clone())))
+        })
+        .unwrap();
+    composition
+        .modules
+        .set_module_version("render.fixture_gpu_settings", "1")
+        .unwrap();
+    document.engine.exposure.variants.insert(
+        "edge-mode".into(),
+        VariantGroup {
+            label: "Edge mode".into(),
+            default: "on".into(),
+            options: [true, false]
+                .into_iter()
+                .map(|enabled| {
+                    (
+                        if enabled { "on" } else { "off" }.into(),
+                        ReadyVariant {
+                            label: if enabled { "Smooth" } else { "Sharp" }.into(),
+                            commands: vec![RenderCommand::SetEnabled {
+                                pass: "edge".into(),
+                                enabled,
+                            }],
+                        },
+                    )
+                })
+                .collect(),
+        },
+    );
+    composition
+        .capture_lock(
+            &document,
+            ProfileIdentity::from_payload("fixture.gpu-settings", "1", &json!({})).unwrap(),
+            Some(SdkIdentity::current()),
+        )
+        .unwrap()
+        .apply_to(&mut document);
+    let mut host = GameHost::build(
+        document,
+        composition,
+        HostOptions {
+            asset_root: temp.path().into(),
+            backend_root: None,
+            compile_root: None,
+            render: RenderMode::Graph,
+            services: HostServiceRegistry::new(),
+            services_enabled: false,
+        },
+        None,
+    )
+    .unwrap();
+    host.set_presentation_target(Some(Arc::new(FixturePresentationTarget(1))))
+        .unwrap();
+    (host, draws, temp)
+}
+
+/// Exercise the production preference staging/full-adapter validator without
+/// compiling a Custom worker. This is not authored-document synchronization.
+pub(crate) fn request_gpu_setting(host: &mut GameHost, option: &str) -> Result<(), String> {
+    let document = host.accepted_document().clone();
+    let raw = host
+        .overrides
+        .lock()
+        .map_err(|_| "Fixture controls poisoned")?
+        .clone();
+    let mut state = host
+        .player_settings
+        .lock()
+        .map_err(|_| "Fixture preferences poisoned")?;
+    let (candidate, event) = state.stage_request(
+        &document,
+        host.session.state().time,
+        &raw,
+        &[ScriptSettingRequest {
+            setting: "edge-mode".into(),
+            option: option.into(),
+        }],
+        |controls| {
+            let route = host.composition.modules.render_route(&document)?;
+            host.composition
+                .modules
+                .renderer_adapter(&route.renderer.module)
+                .ok_or("Fixture adapter missing")?
+                .validate_controls(route.renderer, &document, controls)
+        },
+    )?;
+    assert!(
+        event.is_none(),
+        "This nonpersistent fixture must not emit a save request"
+    );
+    *state = candidate;
+    Ok(())
+}
+
+struct RejectSettingsTick(Arc<AtomicBool>);
+impl ExecutableSystem for RejectSettingsTick {
+    fn step(&mut self, _: &mut SystemContext<'_>, _: &mut Value) -> Result<(), String> {
+        Ok(())
+    }
+    fn validate_tick(&mut self) -> Result<(), String> {
+        if self.0.load(Ordering::Acquire) {
+            Err("Injected later settings transaction rejection".into())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Actual compiled IPC, two independent instances of the same source and a
+/// source-registered final validator; the renderer is only a CPU lease marker.
+fn compiled_settings_host() -> (
+    GameHost,
+    Arc<AtomicBool>,
+    PathBuf,
+    module_engine_script::TestArtifactGuard,
+) {
+    let (base, _, temp) = gpu_settings_host();
+    let mut composition = base.composition.clone();
+    composition
+        .systems
+        .register(
+            SystemDescriptor {
+                id: "custom.rust.update".into(),
+                state_schema: "owned-rust-state-v1".into(),
+                components: vec![],
+                requires: vec![],
+                ports: [
+                    ("world", "GameWorld", ResourceAccess::ReadWrite),
+                    ("input", "GameInput", ResourceAccess::Read),
+                    ("events", "GameEvents", ResourceAccess::ReadWrite),
+                ]
+                .into_iter()
+                .map(|(name, data_type, access)| SystemPort {
+                    name: name.into(),
+                    data_type: data_type.into(),
+                    access,
+                })
+                .collect(),
+            },
+            |_| Err("Custom needs a Host-bound compiled instance".into()),
+        )
+        .unwrap();
+    let reject = Arc::new(AtomicBool::new(false));
+    let final_reject = reject.clone();
+    composition
+        .systems
+        .register(
+            SystemDescriptor {
+                id: "fixture.reject_settings".into(),
+                state_schema: "fixture.reject_settings/1".into(),
+                components: vec![],
+                ports: vec![],
+                requires: vec![],
+            },
+            move |_| Ok(Box::new(RejectSettingsTick(final_reject.clone()))),
+        )
+        .unwrap();
+    // Rebuild the merged catalog after installing test systems. Strict activity
+    // and lock capture consult the root module catalog, not only system factories.
+    let composition = CompositionContext::new(composition.modules, composition.systems).unwrap();
+    let mut document = base.accepted_document().clone();
+    document.engine.initialized = true;
+    document.project.rules.push(VariantRule {
+        group: "edge-mode".into(),
+        variant: "on".into(),
+        condition: RuleCondition::Time {
+            op: Comparison::GreaterOrEqual,
+            value: 0.,
+        },
+    });
+    let game = document.game.as_mut().unwrap();
+    game.player_preferences = Some(PlayerPreferencesConfig {
+        namespace: "org.moduleengine.fixture.custom-settings".into(),
+    });
+    game.execution = ExecutionGraph {
+        resources: [
+            ("world", "GameWorld", Value::Null),
+            ("input", "GameInput", Value::Null),
+            ("events", "GameEvents", json!([])),
+        ]
+        .into_iter()
+        .map(|(name, data_type, initial)| SystemResource {
+            name: name.into(),
+            data_type: data_type.into(),
+            external: true,
+            initial,
+        })
+        .collect(),
+        stages: vec![SystemStage {
+            name: "Custom preference transaction".into(),
+            nodes: vec![
+                SystemNode {
+                    id: "menu-a".into(),
+                    module: "custom.rust.update".into(),
+                    params: json!({"source_id":"shared-menu"}),
+                    bindings: BTreeMap::from([
+                        ("world".into(), "world".into()),
+                        ("input".into(), "input".into()),
+                        ("events".into(), "events".into()),
+                    ]),
+                    after: vec![],
+                },
+                SystemNode {
+                    id: "menu-b".into(),
+                    module: "custom.rust.update".into(),
+                    params: json!({"source_id":"shared-menu"}),
+                    bindings: BTreeMap::from([
+                        ("world".into(), "world".into()),
+                        ("input".into(), "input".into()),
+                        ("events".into(), "events".into()),
+                    ]),
+                    after: vec!["menu-a".into()],
+                },
+                SystemNode {
+                    id: "reject".into(),
+                    module: "fixture.reject_settings".into(),
+                    params: json!({}),
+                    bindings: BTreeMap::new(),
+                    after: vec!["menu-b".into()],
+                },
+            ],
+        }],
+    };
+    document.custom_sources.insert("shared-menu".into(),r#"// module-engine-state: {"schema":"settings.ipc.v1","initial":{"ticks":0,"last":"","label":""}}
+use module_engine_core::{ScriptUiItem, ScriptUiPanel};
+fn update(ctx: &mut ScriptContext) {
+    ctx.state["ticks"] = serde_json::json!(ctx.state["ticks"].as_u64().unwrap() + 1);
+    // This legacy raw command and the authored condition both demand On.
+    if ctx.setting("edge-mode").is_some() {
+        ctx.enable_render_pass("edge", true);
+    }
+    // Hidden test input models an untrusted/stale worker packet; no visible
+    // menu item or delivered sample offers this deliberately invalid action.
+    if let Some(packet) = ctx.ui_action("forged-choice").cloned() {
+        ctx.setting_requests.push(serde_json::from_value(packet).unwrap());
+        ctx.state["last"] = serde_json::json!("forged");
+    }
+    if ctx.setting("edge-mode").is_none() { return; }
+    if let Some(option) = ctx.ui_action("choice").and_then(|value| value.as_str()).map(str::to_owned) {
+        let label = ctx.setting("edge-mode").unwrap().options.iter()
+            .find(|allowed| allowed.id == option).unwrap().label.clone();
+        ctx.request_setting("edge-mode", &option).unwrap();
+        ctx.state["last"] = serde_json::json!(option);
+        ctx.state["label"] = serde_json::json!(label);
+    }
+    ctx.script_ui.push(ScriptUiPanel {
+        id: "menu".into(), title: "Author menu".into(), position: [16., 16.], width: 240.,
+        items: vec![ScriptUiItem::Text {text: format!("Tick {}", ctx.state["ticks"])},
+            ScriptUiItem::Choice {id:"choice".into(),label:"Edges".into(),setting:"edge-mode".into()}],
+    });
+}
+"#.into());
+    composition
+        .capture_lock(
+            &document,
+            ProfileIdentity::from_payload("fixture.compiled-settings", "1", &json!({})).unwrap(),
+            Some(SdkIdentity::current()),
+        )
+        .unwrap()
+        .apply_to(&mut document);
+    let profile = temp.path().join("profile");
+    let mut services = HostServiceRegistry::new();
+    module_engine_host_services::install_persistence_at(&mut services, profile.clone()).unwrap();
+    let root = super::test_support::workspace_root();
+    let host = GameHost::build(
+        document,
+        composition,
+        HostOptions {
+            asset_root: temp.path().into(),
+            backend_root: Some(root.clone()),
+            compile_root: Some(root),
+            render: RenderMode::Graph,
+            services,
+            services_enabled: true,
+        },
+        None,
+    )
+    .unwrap();
+    (host, reject, profile, temp)
+}
+
+fn menu_choice(instance: &str, option: &str) -> GameInput {
+    let key = script_ui_action_key(instance, "choice");
+    GameInput {
+        actions: BTreeSet::from([key.clone()]),
+        action_values: BTreeMap::from([(key, json!(option))]),
+        ..Default::default()
+    }
+}
+fn preference_save(profile: &Path) -> PathBuf {
+    let namespace = std::fs::read_dir(profile)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.is_dir())
+        .unwrap();
+    let files = std::fs::read_dir(namespace)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        files.len(),
+        1,
+        "The isolated test profile owns exactly one preference save"
+    );
+    files[0].clone()
+}
+
+#[test]
+#[ignore = "Actual native Custom compilation and IPC; run sequentially"]
+fn compiled_settings_menu_scopes_instances_and_local_choice_overrides_rules_and_raw_controls() {
+    let (mut host, _, profile, _temp) = compiled_settings_host();
+    let authored = host.accepted_document().clone();
+    host.step_budget(1. / 60., &GameInput::default(), 1)
+        .unwrap();
+    assert_eq!(
+        host.player_settings_snapshot().unwrap()["edge-mode"]
+            .selected
+            .as_deref(),
+        Some("on")
+    );
+    assert!(
+        !profile.exists(),
+        "No explicit choice means no preference save or directory"
+    );
+    host.step_budget(1. / 60., &menu_choice("menu-a", "off"), 1)
+        .unwrap();
+    let selected = host.player_settings_snapshot().unwrap();
+    assert_eq!(selected["edge-mode"].selected.as_deref(), Some("off"));
+    assert_eq!(selected["edge-mode"].source, "local");
+    assert!(selected["edge-mode"].persistence.saved);
+    assert!(host.overrides.lock().unwrap().enabled["edge"]);
+    assert!(
+        !host
+            .effective_controls(&host.overrides.lock().unwrap())
+            .unwrap()
+            .enabled["edge"]
+    );
+    let a = host.slots["menu-a"].lock().unwrap().state().unwrap();
+    let b = host.slots["menu-b"].lock().unwrap().state().unwrap();
+    assert_eq!(a["last"], json!("off"));
+    assert_eq!(a["label"], json!("Sharp"));
+    assert_eq!(b["last"], json!(""));
+    assert_eq!(b["label"], json!(""));
+    assert_eq!(a["ticks"], json!(2));
+    assert_eq!(b["ticks"], json!(2));
+    let menus = host.script_ui_snapshot().unwrap();
+    assert_eq!(menus.len(), 2);
+    assert_eq!(menus["menu-a"][0].id, menus["menu-b"][0].id);
+    let saved: Value =
+        serde_json::from_slice(&std::fs::read(preference_save(&profile)).unwrap()).unwrap();
+    assert_eq!(saved["data"]["variants"]["edge-mode"], json!("off"));
+    assert_eq!(
+        host.player_preferences_diagnostics()["persistence.json"]["writes"],
+        json!(1)
+    );
+    assert_eq!(host.accepted_document(), &authored);
+    drop(host);
+}
+
+#[test]
+#[ignore = "Actual native Custom compilation and IPC; run sequentially"]
+fn compiled_settings_later_rejection_rolls_back_preferences_menus_worker_states_and_save() {
+    let (mut host, reject, profile, _temp) = compiled_settings_host();
+    host.step_budget(1. / 60., &GameInput::default(), 1)
+        .unwrap();
+    host.step_budget(1. / 60., &menu_choice("menu-a", "off"), 1)
+        .unwrap();
+    let file = preference_save(&profile);
+    let bytes = std::fs::read(&file).unwrap();
+    let world = host.session.state().clone();
+    let settings = host.player_settings_snapshot().unwrap();
+    let menus = host.script_ui_snapshot().unwrap();
+    let a = host.slots["menu-a"].lock().unwrap().state().unwrap();
+    let b = host.slots["menu-b"].lock().unwrap().state().unwrap();
+    let raw = host.overrides.lock().unwrap().clone();
+    reject.store(true, Ordering::Release);
+    assert!(
+        host.step_budget(1. / 60., &menu_choice("menu-a", "on"), 1)
+            .is_err()
+    );
+    assert_eq!(host.session.state(), &world);
+    assert_eq!(host.player_settings_snapshot().unwrap(), settings);
+    assert_eq!(host.script_ui_snapshot().unwrap(), menus);
+    assert_eq!(host.slots["menu-a"].lock().unwrap().state().unwrap(), a);
+    assert_eq!(host.slots["menu-b"].lock().unwrap().state().unwrap(), b);
+    assert_eq!(*host.overrides.lock().unwrap(), raw);
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
+    assert_eq!(
+        host.player_preferences_diagnostics()["persistence.json"]["writes"],
+        json!(1)
+    );
+    reject.store(false, Ordering::Release);
+    assert_eq!(
+        host.step_budget(0., &menu_choice("menu-a", "on"), 1)
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        host.player_settings_snapshot().unwrap()["edge-mode"]
+            .selected
+            .as_deref(),
+        Some("on")
+    );
+    assert_eq!(
+        host.slots["menu-a"].lock().unwrap().state().unwrap()["ticks"],
+        json!(3)
+    );
+    let saved: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(saved["data"]["variants"]["edge-mode"], json!("on"));
+    assert_eq!(
+        host.player_preferences_diagnostics()["persistence.json"]["writes"],
+        json!(2)
+    );
+    drop(host);
+}
+
+#[test]
+#[ignore = "Actual native Custom compilation and IPC; run sequentially"]
+fn compiled_settings_invalid_and_stale_requests_preserve_last_good_and_removed_binding_hides() {
+    let (mut host, _, profile, _temp) = compiled_settings_host();
+    host.step_budget(1. / 60., &GameInput::default(), 1)
+        .unwrap();
+    host.step_budget(1. / 60., &menu_choice("menu-a", "off"), 1)
+        .unwrap();
+    let file = preference_save(&profile);
+    let bytes = std::fs::read(&file).unwrap();
+    let a = host.slots["menu-a"].lock().unwrap().state().unwrap();
+    let menu = host.script_ui_snapshot().unwrap()["menu-a"].clone();
+    let forged = |setting: &str, option: &str| {
+        let key = script_ui_action_key("menu-a", "forged-choice");
+        GameInput {
+            actions: BTreeSet::from([key.clone()]),
+            action_values: BTreeMap::from([(key, json!({"setting":setting,"option":option}))]),
+            ..Default::default()
+        }
+    };
+    assert_eq!(
+        host.step_budget(1. / 60., &forged("edge-mode", "missing"), 1)
+            .unwrap(),
+        1
+    );
+    let settings = host.player_settings_snapshot().unwrap();
+    assert_eq!(settings["edge-mode"].selected.as_deref(), Some("off"));
+    assert!(
+        settings["edge-mode"]
+            .rejection
+            .as_deref()
+            .unwrap()
+            .contains("unavailable")
+    );
+    assert!(settings["edge-mode"].persistence.saved);
+    assert_eq!(host.slots["menu-a"].lock().unwrap().state().unwrap(), a);
+    assert_eq!(host.script_ui_snapshot().unwrap()["menu-a"], menu);
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
+    assert_eq!(
+        host.player_preferences_diagnostics()["persistence.json"]["writes"],
+        json!(1)
+    );
+
+    let mut document = host.accepted_document().clone();
+    document
+        .engine
+        .exposure
+        .variants
+        .get_mut("edge-mode")
+        .unwrap()
+        .options
+        .remove("off");
+    host.sync_document(&document).unwrap();
+    let current = host.player_settings_snapshot().unwrap();
+    assert_eq!(current["edge-mode"].selected.as_deref(), Some("on"));
+    assert_eq!(current["edge-mode"].options.len(), 1);
+    assert_eq!(current["edge-mode"].options[0].id, "on");
+    assert_eq!(
+        host.step_budget(1. / 60., &forged("edge-mode", "off"), 1)
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        host.player_settings_snapshot().unwrap()["edge-mode"]
+            .selected
+            .as_deref(),
+        Some("on")
+    );
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
+
+    document.engine.exposure.variants.remove("edge-mode");
+    document.project.variants.remove("edge-mode");
+    document
+        .project
+        .rules
+        .retain(|rule| rule.group != "edge-mode");
+    host.sync_document(&document).unwrap();
+    assert!(host.player_settings_snapshot().unwrap().is_empty());
+    assert!(
+        host.script_ui_snapshot()
+            .unwrap()
+            .values()
+            .flatten()
+            .flat_map(|panel| &panel.items)
+            .all(|item| !matches!(item, ScriptUiItem::Choice { .. }))
+    );
+    assert_eq!(
+        host.step_budget(1. / 60., &forged("edge-mode", "on"), 1)
+            .unwrap(),
+        1
+    );
+    assert!(host.player_settings.lock().unwrap().rejection["edge-mode"].contains("unavailable"));
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
+    assert_eq!(
+        host.player_preferences_diagnostics()["persistence.json"]["writes"],
+        json!(1)
+    );
+    drop(host);
 }
 
 fn completed_evaluation(host: &GameHost) -> Value {

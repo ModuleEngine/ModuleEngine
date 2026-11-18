@@ -69,6 +69,10 @@ pub fn draw_activity(ui: &mut egui::Ui, activities: &[ActivitySnapshot]) -> bool
         header.toggle();
     }
     header.body(|ui| {
+        // Only the collapsed summary is compact; expanded diagnostics retain
+        // ordinary readable rows and the Copy error action's full hit target.
+        let ordinary_spacing = ui.ctx().style_of(ui.ctx().theme()).spacing.clone();
+        *ui.spacing_mut() = ordinary_spacing;
         egui::ScrollArea::vertical()
             .id_salt("activity-details")
             .max_height(220.0)

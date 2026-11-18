@@ -126,7 +126,8 @@ The editor binds `record` to one shared-history boundary. Undo calls `record.und
 
 Directory creation does not change JSON: its `before == after`. Ordinary `SnapshotHistory::record`, which discards equal documents, is therefore unsuitable for such a boundary. Shared history must explicitly retain a file record even with identical JSON. Import removes/restores its files but does not recursively remove remaining empty import directories.
 
-The service itself does not save the open game JSON or manage the unsaved-changes prompt. The editor first finishes saving the current project, then invokes the operation and saves the new document. If the second save fails, it uses the record to roll back files. On-disk records make it possible to establish what changed and restore bytes; this API does not claim to implement automatic recovery after a crash midway through a combined file/JSON save.
+Without a source context, the legacy service does not save the open game JSON
+or manage the unsaved-changes prompt. The editor first finishes saving the current project, then invokes the operation and saves the new document. If the second save fails, it uses the record to roll back files. On-disk records make it possible to establish what changed and restore bytes; this API does not claim to implement automatic recovery after a crash midway through a combined file/JSON save.
 
 File replacement first writes and flushes a temporary file, then replaces the original directory entry through rename. The source is not deleted in advance. If adopting a fresh import cannot write snapshots or `record.json`, only the marked log created by that attempt is removed; the calling workflow separately removes its new import directory. Logs of ordinary file operations are preserved for recovery if rollback fails.
 
@@ -149,3 +150,26 @@ cargo test -p module-engine-project asset_workspace
 cargo test -p module-engine-content stable_ids
 cargo test -p module-engine-core stable_asset_paths
 ```
+
+## Mutable scene-source transactions
+
+`with_project_source(ProjectFileState)` attaches the accepted project/scene
+file generation. Resource operations that update a scene reference then publish
+resource changes, source scene bodies and project metadata in one rollback unit,
+with the project DTO last. `AssetOperation.source_files` returns the next accepted
+generation only on success; Editor adopts it and does not perform a second Save.
+Folder creation/import records without a combined source generation retain the
+legacy guarded save-and-rollback path described above.
+
+`edit_scene_source` and its create/move/delete/restore routes manage registered
+mutable sources outside `assets/`. They never add scene bodies to the immutable
+resource manifest. Their source asset IDs and logical scene IDs have separate
+roles; ordinary resource references remain `asset://...`. See [scene files](scene-files.md)
+for exact versions, ownership/path checks, raw-byte preservation and copy rules.
+
+Raw `AssetOperationRecord` Undo/Redo checks literal snapshot generations. Editor's
+`replay_project_operation` additionally rebuilds mutable source writes from the
+target hydrated history and the current accepted disk generation, so our later
+Save is not mistaken for an external edit. History/Refresh must never replace
+that accepted generation. Durable snapshots support rollback, not automatic
+recovery or process-crash atomicity for a multi-file publication.

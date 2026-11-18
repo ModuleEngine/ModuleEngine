@@ -118,17 +118,19 @@ impl Editor {
         Ok(())
     }
     pub(super) fn scene_hierarchy_panel(&mut self, ui: &mut egui::Ui) {
-        self.game_context();
-        let mut candidate = self.document.clone();
-        let old_scene = self.game_workbench.scene.clone();
-        if self.game_workbench.hierarchy_ui(ui, &mut candidate)
-            && let Err(error) = self.commit_scene_document(candidate, "Hierarchy changed")
+        if let Some(game) = &self.document.game {
+            self.game_workbench.normalize_selection(game);
+        }
+        let previous_selection = self.scene_selection();
+        let action = self.game_workbench.hierarchy_ui(ui, &self.document);
+        if previous_selection != self.scene_selection() {
+            self.cancel_active_scene_gestures();
+        }
+        if let Some(action) = action
+            && let Err(error) = self.apply_hierarchy_action(action, ui.ctx())
         {
             self.game_workbench.error = Some(error.clone());
             self.status = error;
-        }
-        if self.game_workbench.scene != old_scene {
-            self.cancel_active_scene_gestures();
         }
         if let Some(error) = &self.game_workbench.error {
             ui.colored_label(egui::Color32::LIGHT_RED, error);

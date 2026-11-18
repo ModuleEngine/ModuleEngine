@@ -295,12 +295,37 @@ impl CandidateArtifacts {
         package: &str,
         fixture: Option<Arc<TestArtifacts>>,
     ) -> Result<Self, String> {
-        fs::create_dir_all(work).map_err(|error| error.to_string())?;
-        let parent = work.canonicalize().map_err(|error| error.to_string())?;
+        fs::create_dir_all(work).map_err(|error| {
+            format!(
+                "Cannot create script candidate workspace {}: {error}",
+                work.display()
+            )
+        })?;
+        let parent = work.canonicalize().map_err(|error| {
+            format!(
+                "Cannot resolve script candidate workspace {}: {error}",
+                work.display()
+            )
+        })?;
         let directory = parent.join(package);
-        fs::create_dir(&directory).map_err(|error| error.to_string())?;
-        fs::create_dir_all(target).map_err(|error| error.to_string())?;
-        let target = target.canonicalize().map_err(|error| error.to_string())?;
+        fs::create_dir(&directory).map_err(|error| {
+            format!(
+                "Cannot create script candidate {}: {error}",
+                directory.display()
+            )
+        })?;
+        fs::create_dir_all(target).map_err(|error| {
+            format!(
+                "Cannot create script build target {}: {error}",
+                target.display()
+            )
+        })?;
+        let target = target.canonicalize().map_err(|error| {
+            format!(
+                "Cannot resolve script build target {}: {error}",
+                target.display()
+            )
+        })?;
         let this = Self {
             directory,
             parent,

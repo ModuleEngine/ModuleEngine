@@ -17,12 +17,13 @@ import zlib
 import review_snapshot
 import verify
 
-VIEWS = ("render", "shader", "history", "engine", "settings", "game", "scene", "assets", "systems", "custom")
+VIEWS = ("detached-scene", "detached", "overview", "render", "shader", "history", "engine", "settings", "game", "scene", "hierarchy", "scene-files", "assets", "systems", "custom")
 MENUS = ("File", "Edit", "Tools", "Windows")
 WORKFLOW_FLAGS = ("new_templates_preserve_engine", "copy_retains_author_document", "unassigned_asset_copied",
                   "windows_reuses_current_workspace", "exported_player_pixels_equal", "original_project_unchanged")
 ENV_KEYS = ("MODULE_ENGINE_GUI_BACKEND", "MODULE_ENGINE_WINDOW_SYSTEM", "MODULE_ENGINE_DIAGNOSTIC_USER_ROOT",
             "MODULE_ENGINE_UI_SCREENSHOT_TO", "MODULE_ENGINE_CAPTURE_VIEW", "MODULE_ENGINE_CAPTURE_MENU",
+            "MODULE_ENGINE_CAPTURE_SIZE", "MODULE_ENGINE_CAPTURE_ZOOM", "MODULE_ENGINE_UI_SETTLE_MS",
             "TEMP", "TMP", "TMPDIR", "DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_TYPE", "WGPU_BACKEND")
 LIMITS = ("Source inventory does not prove the supplied executable was built from these sources. "
           "Native screenshots are application readbacks, not DWM/compositor or foreground input evidence. "
@@ -157,7 +158,7 @@ def graphics_evidence(log, system, requested_window):
 def environment(temp, personal, window):
     env = os.environ.copy()  # Retain normal DLL/loader, wrapper and Cargo environment.
     removed = sorted(key for key in env if key == "EFRAME_SCREENSHOT_TO" or key.startswith("MODULE_ENGINE_CAPTURE_")
-                     or key in ("MODULE_ENGINE_UI_SCREENSHOT_TO", "MODULE_ENGINE_SHOW_CUSTOM"))
+                     or key in ("MODULE_ENGINE_UI_SCREENSHOT_TO", "MODULE_ENGINE_UI_SETTLE_MS", "MODULE_ENGINE_SHOW_CUSTOM"))
     for key in removed:
         env.pop(key)
     env.update(TEMP=str(temp), TMP=str(temp), TMPDIR=str(temp), MODULE_ENGINE_GUI_BACKEND="wgpu",
@@ -228,6 +229,7 @@ class Runner:
             if capture.exists():
                 raise DiagnosticError("Native capture path already exists")
             env = dict(self.env, MODULE_ENGINE_UI_SCREENSHOT_TO=str(capture), MODULE_ENGINE_CAPTURE_VIEW=self.args.view)
+            env.update(MODULE_ENGINE_CAPTURE_SIZE=self.args.size, MODULE_ENGINE_CAPTURE_ZOOM=str(self.args.zoom), MODULE_ENGINE_UI_SETTLE_MS=str(self.args.settle_ms))
             if self.args.menu:
                 env["MODULE_ENGINE_CAPTURE_MENU"] = self.args.menu
             record = self.command([self.args.editor, self.fixture], env)
@@ -241,6 +243,9 @@ def parser():
     result.add_argument("--scenario", choices=("capture", "workflow", "both"), default="capture")
     result.add_argument("--view", choices=VIEWS, default="scene")
     result.add_argument("--menu", choices=MENUS)
+    result.add_argument("--size", default="1580x940", help="Physical client pixels for native capture: WIDTHxHEIGHT")
+    result.add_argument("--zoom", type=float, default=1.0, help="Diagnostic egui UI zoom, not a change to OS DPI")
+    result.add_argument("--settle-ms", type=int, default=400, help="Bounded animation settling time after layout frames")
     result.add_argument("--window-system", choices=("auto", "x11", "wayland"), default="auto")
     result.add_argument("--timeout", type=float, default=180)
     result.add_argument("--output-root", type=Path)
@@ -257,6 +262,10 @@ def main(argv=None, root=None, executor=None, snapshotter=None):
             raise DiagnosticError("--editor must be an absolute native executable path")
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             raise DiagnosticError("--timeout must be positive and finite")
+        dimensions = re.fullmatch(r"(\d+)x(\d+)", args.size)
+        if (not dimensions or not 320 <= int(dimensions[1]) <= 3840 or not 240 <= int(dimensions[2]) <= 2160
+                or not math.isfinite(args.zoom) or not 0.5 <= args.zoom <= 3 or not 0 <= args.settle_ms <= 10000):
+            raise DiagnosticError("Invalid or excessive capture geometry")
         arch = {"amd64": "x86_64", "arm64": "aarch64"}.get(platform.machine().lower(), platform.machine().lower())
         args.editor = verify.validate_executable(args.editor, args.editor.parent, arch + ("-pc-windows-msvc" if verify.PLATFORM == "windows" else "-unknown-linux-gnu"))
         output_base = contained(root / "outputs", root)
@@ -269,7 +278,7 @@ def main(argv=None, root=None, executor=None, snapshotter=None):
                   "platform": verify.PLATFORM, "scenario": args.scenario, "view": args.view, "menu": args.menu,
                   "window_system": args.window_system, "timeout_seconds": args.timeout,
                   "editor": {"path": str(args.editor), "sha256": verify.digest(args.editor)},
-                  "window_request": {"inner_size": [1580, 940], "minimum_inner_size": [1100, 720]},
+                  "window_request": {"physical_client_size": [int(dimensions[1]), int(dimensions[2])], "minimum_inner_size_logical": [320, 240], "diagnostic_ui_zoom": args.zoom, "settle_ms": args.settle_ms, "scope": "UI zoom exercises logical layout at real native rendering; it does not change OS DPI or establish mixed-monitor DPI behavior"},
                   "commands": [], "captures": [], "errors": [], "limits": LIMITS}
         try:
             with verify.run_lease(root / "work/verification/launcher.lock"):

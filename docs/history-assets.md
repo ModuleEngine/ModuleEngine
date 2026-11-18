@@ -66,7 +66,13 @@ The scoped exporter takes asset_root and package_root separately: registered res
 Team export preserves the ready build, allowed gameplay and .sdk Core, removing the inactive archive/unused authored fragments. Backend pins lock Engine HLSL/includes and DXC, leaving ordinary game assets outside the immutable backend inventory. [Distribution](distribution.md) explains the source manifest, profiles and SDK.
 Export requires a new or empty folder outside every copied tree: crates/docs/examples/assets/scripts/tools/.sdk/.user/.tools. An incomplete result remains on error for diagnostics; retry requires a new folder or one explicitly cleared by the user. Source files are not deleted.
 
-Saving existing JSON creates a unique .backup-* copy of the original bytes; loading schema 1/2 migrates only in memory. Missing module_versions are filled with installed-registry versions on write/export. A conflicting pin is preserved and produces compatibility diagnostics; the exporter does not fix it by selecting another version.
+Normal Open rejects legacy schemas; **Migrate copy** explicitly converts versions
+1–3 into a separate current-schema project. Current projects can use [external
+scene files](scene-files.md). File transactions check the accepted project root,
+filename and byte generation before publication; an external edit cannot be
+silently accepted by Save or Undo. Checkpoints contain hydrated scene bodies;
+they do not reset that disk generation. Snapshot backups and explicit Save As
+metadata backups preserve their original bytes. Missing module_versions are filled with installed-registry versions on write/export. A conflicting pin is preserved and produces compatibility diagnostics; the exporter does not fix it by selecting another version.
 
 <a id="инструменты-и-восстановление"></a>
 

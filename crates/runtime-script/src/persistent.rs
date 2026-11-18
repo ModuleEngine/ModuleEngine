@@ -303,6 +303,8 @@ impl CompiledScript {
         context.state_schema = self.state_declaration.schema.clone();
         context.commands.clear();
         context.emitted_events.clear();
+        context.setting_requests.clear();
+        context.script_ui.clear();
         if instance.worker.is_none() {
             instance.worker = Some(Worker::start(&self.executable, &self.working_dir)?);
         }
@@ -335,6 +337,20 @@ impl CompiledScript {
                 let speed = value.get("speed").and_then(Value::as_f64);
                 let tick = ScriptTick {
                     commands,
+                    setting_requests: serde_json::from_value(
+                        value
+                            .get("setting_requests")
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::json!([])),
+                    )
+                    .map_err(|e| ScriptError::Packet(e.to_string()))?,
+                    script_ui: serde_json::from_value(
+                        value
+                            .get("script_ui")
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::json!([])),
+                    )
+                    .map_err(|e| ScriptError::Packet(e.to_string()))?,
                     speed,
                     state,
                     events,
@@ -342,11 +358,16 @@ impl CompiledScript {
                     program_id: instance.program_id,
                     revision: instance.revision,
                 };
-                if tick.commands.len() > 4096 || tick.events.len() > 4096 {
+                if tick.commands.len() > 4096
+                    || tick.events.len() > 4096
+                    || tick.setting_requests.len() > 128
+                {
                     return Err(ScriptError::Packet(
                         "output exceeds 4096 commands/events".into(),
                     ));
                 }
+                module_engine_core::validate_script_ui(&tick.script_ui)
+                    .map_err(ScriptError::Packet)?;
                 if self.kind == ScriptKind::Speed && tick.speed.is_none() {
                     return Err(ScriptError::Packet(
                         "speed function returned a nonfinite value".into(),

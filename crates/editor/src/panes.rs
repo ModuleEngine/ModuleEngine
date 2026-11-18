@@ -40,6 +40,7 @@ pub struct ModulePanelRegistration {
     pub engine_only: bool,
     pub factory: ModulePanelFactory,
     pub tool: Option<ModuleToolCallback>,
+    pub metadata: module_engine_core::CapabilityMetadata,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -57,6 +58,12 @@ pub struct PaneSnapshot {
     pub camera: Camera,
     pub object: Option<u64>,
     pub object_pinned: bool,
+    pub overview: super::engine_overview::OverviewPane,
+    pub scene_tool: crate::scene_tools::Tool,
+    pub scene_space: crate::scene_tools::Space,
+    pub scene_snap: crate::scene_tools::Snap,
+    pub scene_camera_speed: f32,
+    pub assets: Option<crate::assets_ui::BrowserNavigation>,
 }
 impl Default for PaneSnapshot {
     fn default() -> Self {
@@ -74,10 +81,17 @@ impl Default for PaneSnapshot {
             camera: Camera::default(),
             object: None,
             object_pinned: false,
+            overview: Default::default(),
+            scene_tool: Default::default(),
+            scene_space: Default::default(),
+            scene_snap: Default::default(),
+            scene_camera_speed: crate::scene_tools::DEFAULT_CAMERA_SPEED,
+            assets: None,
         }
     }
 }
 pub struct PaneMemory {
+    pub overview: super::engine_overview::OverviewPane,
     pub scene_view: crate::scene_view_ui::SceneViewportState,
     pub snapshot: PaneSnapshot,
     pub graph_path: Vec<usize>,
@@ -95,8 +109,6 @@ pub struct PaneMemory {
     pub gpu_texture: module_engine_player::gpu_presentation::GpuTexture,
     pub last_render: f64,
     pub stats: String,
-    pub param_draft: String,
-    pub inspector_id: Option<String>,
     pub parsed_source: Option<String>,
     pub parsed_kind: Option<bool>,
     pub module_search: String,
@@ -105,11 +117,11 @@ impl PaneMemory {
     pub fn new(snapshot: PaneSnapshot, document: &GraphDocument) -> Self {
         let mut graph_canvas = CanvasState::new("module-graph");
         graph_canvas.pan = Vec2::from(snapshot.graph_pan);
-        graph_canvas.zoom = snapshot.graph_zoom.clamp(0.45, 1.65);
+        graph_canvas.zoom = snapshot.graph_zoom.clamp(0.25, 2.5);
         graph_canvas.selected = snapshot.graph_selected.clone();
         let mut code_canvas = CanvasState::new("code-graph");
         code_canvas.pan = Vec2::from(snapshot.code_pan);
-        code_canvas.zoom = snapshot.code_zoom.clamp(0.45, 1.65);
+        code_canvas.zoom = snapshot.code_zoom.clamp(0.25, 2.5);
         code_canvas.selected = snapshot.code_selected.clone();
         let mut graph = &document.root;
         let mut graph_path = vec![];
@@ -124,8 +136,13 @@ impl PaneMemory {
             graph_path.push(index);
             graph = graph.nodes[index].subgraph.as_deref().unwrap();
         }
-        let scene_view = crate::scene_view_ui::SceneViewportState::with_camera(snapshot.camera);
+        let mut scene_view = crate::scene_view_ui::SceneViewportState::with_camera(snapshot.camera);
+        scene_view.tool = snapshot.scene_tool;
+        scene_view.space = snapshot.scene_space;
+        scene_view.snap = snapshot.scene_snap;
+        scene_view.camera_speed = crate::scene_tools::camera_speed(snapshot.scene_camera_speed);
         Self {
+            overview: snapshot.overview.clone(),
             scene_view,
             graph_path,
             graph_canvas,
@@ -143,8 +160,6 @@ impl PaneMemory {
             gpu_texture: Default::default(),
             last_render: -1.,
             stats: String::new(),
-            param_draft: String::new(),
-            inspector_id: None,
             parsed_source: None,
             parsed_kind: None,
             module_search: String::new(),
@@ -184,8 +199,6 @@ impl PaneMemory {
             gpu_texture,
             last_render,
             stats,
-            param_draft,
-            inspector_id,
             module_search
         );
     }
@@ -213,6 +226,12 @@ impl PaneMemory {
         self.snapshot.shader = self.current_shader.clone();
         self.snapshot.custom_view = self.custom_view;
         self.snapshot.camera = self.camera;
+        self.snapshot.overview = self.overview.clone();
+        self.snapshot.scene_tool = self.scene_view.tool;
+        self.snapshot.scene_space = self.scene_view.space;
+        self.snapshot.scene_snap = self.scene_view.snap;
+        self.snapshot.scene_camera_speed =
+            crate::scene_tools::camera_speed(self.scene_view.camera_speed);
         self.snapshot.clone()
     }
 }
@@ -224,6 +243,9 @@ struct PersonalLayout {
     panes: BTreeMap<u64, PaneSnapshot>,
 }
 fn migrate_project_layout(layout: &mut DockLayout, old_version: bool) {
+    if !old_version {
+        return;
+    }
     if old_version && layout.panes().len() == 1 && layout.panes()[0].1 == EditorType::Game {
         *layout = DockLayout::default_for(WorkspaceKind::Project);
         return;
@@ -246,11 +268,39 @@ fn migrate_project_layout(layout: &mut DockLayout, old_version: bool) {
     }
     walk(&mut layout.root);
 }
+pub(super) fn validate_pane_snapshot(pane: &PaneSnapshot) -> Result<(), String> {
+    if !pane
+        .graph_pan
+        .iter()
+        .chain(&pane.code_pan)
+        .chain(&pane.camera.target)
+        .all(|v| v.is_finite())
+        || ![
+            pane.graph_zoom,
+            pane.code_zoom,
+            pane.camera.yaw,
+            pane.camera.pitch,
+            pane.camera.distance,
+            pane.scene_snap.translation,
+            pane.scene_snap.rotation_degrees,
+            pane.scene_snap.scale,
+            pane.scene_camera_speed,
+        ]
+        .iter()
+        .all(|v| v.is_finite())
+    {
+        return Err("Personal pane navigation must be finite".into());
+    }
+    Ok(())
+}
 pub fn load(
     path: &Path,
     workspace: WorkspaceKind,
     document: &GraphDocument,
 ) -> Result<(DockLayout, BTreeMap<u64, PaneMemory>), String> {
+    if path.exists() && !path.is_file() {
+        return Err("Personal layout path is not a file".into());
+    }
     if !path.is_file() {
         let layout = DockLayout::default_for(workspace);
         return Ok((layout, BTreeMap::new()));
@@ -266,24 +316,7 @@ pub fn load(
         migrate_project_layout(&mut saved.layout, saved.version == 1);
     }
     for pane in saved.panes.values() {
-        if !pane
-            .graph_pan
-            .iter()
-            .chain(&pane.code_pan)
-            .chain(&pane.camera.target)
-            .all(|v| v.is_finite())
-            || ![
-                pane.graph_zoom,
-                pane.code_zoom,
-                pane.camera.yaw,
-                pane.camera.pitch,
-                pane.camera.distance,
-            ]
-            .iter()
-            .all(|v| v.is_finite())
-        {
-            return Err("Personal pane navigation must be finite".into());
-        }
+        validate_pane_snapshot(pane)?;
     }
     let active: BTreeMap<_, _> = saved.layout.panes().into_iter().collect();
     let panes = saved
@@ -353,8 +386,53 @@ impl Editor {
             engine_only,
             factory,
             tool: None,
+            metadata: module_engine_core::CapabilityMetadata::unknown(
+                label,
+                "Registered editor panel; its source has not described purpose and ownership",
+                module_engine_core::CapabilityKind::EditorTool,
+            ),
         });
+        self.overview.invalidate(self.last_tick);
         Ok(())
+    }
+    pub fn describe_module_panel(
+        &mut self,
+        id: u32,
+        metadata: module_engine_core::CapabilityMetadata,
+    ) -> Result<(), String> {
+        metadata.validate()?;
+        let panel = self
+            .panel_registry
+            .iter_mut()
+            .find(|p| p.id == id)
+            .ok_or("Editor panel is not registered")?;
+        if metadata.kind != module_engine_core::CapabilityKind::EditorTool {
+            return Err("Editor panel metadata must describe an editor tool".into());
+        }
+        panel.metadata = metadata;
+        self.overview.invalidate(self.last_tick);
+        Ok(())
+    }
+    /// Inspection only: does not invoke a panel/tool callback or allocate tool state.
+    pub fn module_panel_capabilities(&self) -> Vec<module_engine_core::CapabilityRecord> {
+        use module_engine_core::*;
+        let owners = self.active_module_owners();
+        self.panel_registry.iter().map(|panel| {
+            let owner_installed = self.registry.descriptor(&panel.module).is_some();
+            let participation = match &owners {
+                Ok(owners) => CapabilityFact::known(owners.contains(&panel.module), "Registered panel owner's canonical authored participation; not an open pane or running callback"),
+                Err(error) => CapabilityFact::unknown(error),
+            };
+            let available = if !owner_installed || (panel.engine_only && !self.can_author_engine()) {
+                CapabilityFact::known(false, "Installed panel owner and existing Engine editing permission checks")
+            } else { participation.clone() };
+            CapabilityRecord {
+                id: format!("editor.panel.{}", panel.id), metadata: panel.metadata.clone(), installed: true,
+                version: None, available, participation,
+                dependencies: std::collections::BTreeSet::from([CapabilityDependency {kind: CapabilityDependencyKind::ActiveModule, id: panel.module.clone()}]),
+                provided_components: Default::default(), consumed_components: Default::default(),
+            }
+        }).collect()
     }
     // Public source-extension seam; selected packages may install no tools.
     #[allow(dead_code)]
@@ -397,9 +475,26 @@ impl Editor {
     }
 
     pub(super) fn has_module_tool_drafts(&self) -> bool {
-        self.module_tool_states.values().any(|state| state.dirty)
+        self.node_drafts.has_pending() || self.module_tool_states.values().any(|state| state.dirty)
     }
     pub(super) fn require_resolved_module_tools(&self, operation: &str) -> Result<(), String> {
+        if self.scene_source_ui.active() {
+            return Err(format!(
+                "Finish or cancel the scene dialog before {operation}"
+            ));
+        }
+
+        if self.node_drafts.has_pending() {
+            return Err(format!(
+                "Apply or explicitly discard module parameter drafts before {operation}: {}. Drafts are not included in the saved project.",
+                self.node_drafts.pending_labels().join(", ")
+            ));
+        }
+        if self.game_workbench.has_inspector_drafts() {
+            return Err(format!(
+                "Apply or explicitly discard Inspector drafts before {operation}. Drafts are not included in the saved project."
+            ));
+        }
         let labels = self
             .module_tool_states
             .values()
@@ -426,6 +521,10 @@ impl Editor {
         }
     }
     pub(super) fn adopt_module_tool_document(&mut self) {
+        self.node_drafts.clear();
+        self.game_workbench.discard_inspector_drafts();
+        self.overview = Default::default();
+        self.overview_navigation = None;
         self.module_document_instance = next_tool_identity();
         for state in self.module_tool_states.values_mut() {
             state.context.document_instance = self.module_document_instance;
@@ -434,6 +533,27 @@ impl Editor {
         }
     }
     pub(super) fn module_tool_draft_resolutions_ui(&mut self, ui: &mut egui::Ui) {
+        let labels = self.node_drafts.pending_labels();
+        if !labels.is_empty() {
+            ui.label("Module parameter drafts need Apply or explicit Discard. Cancel to return to the node inspector.");
+            egui::ScrollArea::vertical()
+                .id_salt("node-draft-list")
+                .max_height(120.)
+                .show(ui, |ui| {
+                    for label in labels {
+                        ui.label(label);
+                    }
+                });
+            if ui.button("Discard all module parameter drafts").clicked() {
+                self.node_drafts.clear();
+            }
+        }
+        if self.game_workbench.has_inspector_drafts() {
+            ui.label("Inspector drafts need component Apply or explicit Discard. Cancel to return to Inspector.");
+            if ui.button("Discard all Inspector drafts").clicked() {
+                self.game_workbench.discard_inspector_drafts();
+            }
+        }
         let pending = self
             .module_tool_states
             .iter()
@@ -584,6 +704,7 @@ impl Editor {
         candidate: &GraphDocument,
         engine: bool,
     ) -> Result<(), String> {
+        module_engine_project::validate_scene_sources(candidate)?;
         if engine && !self.can_author_engine() {
             return Err("Engine editor unavailable: Full profile and complete matching source manifest are required".into());
         }
@@ -634,7 +755,7 @@ impl Editor {
         );
         available
     }
-    fn personal_path(&self, workspace: WorkspaceKind) -> PathBuf {
+    pub(super) fn personal_path(&self, workspace: WorkspaceKind) -> PathBuf {
         if let Some(root) = &self.diagnostic_personal_root {
             let profile = match self.distribution.as_ref().map(|d| d.profile) {
                 Some(crate::distribution::DistributionProfile::Full) => "full",
@@ -671,43 +792,62 @@ impl Editor {
         }
     }
     pub(super) fn load_personal_layouts(&mut self) {
-        for workspace in [WorkspaceKind::Engine, WorkspaceKind::Project] {
-            let available = self.available_editors_for(workspace);
-            match load(&self.personal_path(workspace), workspace, &self.document) {
-                Ok((mut layout, views)) => {
-                    layout.restrict(&available);
-                    match workspace {
-                        WorkspaceKind::Engine => {
-                            self.engine_layout = layout;
-                            self.engine_panes = views;
-                        }
-                        WorkspaceKind::Project => {
-                            self.project_layout = layout;
-                            self.project_panes = views;
-                        }
-                    }
+        let staged = (|| {
+            let engine = load(
+                &self.personal_path(WorkspaceKind::Engine),
+                WorkspaceKind::Engine,
+                &self.document,
+            )?;
+            let project = load(
+                &self.personal_path(WorkspaceKind::Project),
+                WorkspaceKind::Project,
+                &self.document,
+            )?;
+            let named = self.read_named_workspace_storage()?;
+            Ok::<_, String>((engine, project, named))
+        })();
+        match staged {
+            Ok((engine, project, named)) => {
+                self.unmount_custom_workspace();
+                (self.engine_layout, self.engine_panes) = engine;
+                (self.project_layout, self.project_panes) = project;
+                if let Err(error) = self.adopt_named_workspaces(named) {
+                    self.status = error;
                 }
-                Err(error) => self.status = format!("Personal layout ignored: {error}"),
+            }
+            Err(error) => {
+                self.block_workspace_save(error.clone());
+                self.status = format!("Personal layouts preserved; reload rejected: {error}");
             }
         }
     }
     pub(super) fn save_personal_layouts(&mut self) {
+        if self.area_drag.is_some() {
+            return;
+        }
+        if let Some(error) = self.workspace_storage_error() {
+            self.status =
+                format!("Layout save blocked; repair the file and reload saved layouts: {error}");
+            return;
+        }
         let engine = self.personal_path(WorkspaceKind::Engine);
         let project = self.personal_path(WorkspaceKind::Project);
-        let result = save(
-            &engine,
-            &self.engine_layout,
-            &mut self.engine_panes,
-            &self.document,
-        )
-        .and_then(|_| {
-            save(
-                &project,
-                &self.project_layout,
-                &mut self.project_panes,
-                &self.document,
-            )
-        });
+        let result = self
+            .with_default_workspace_storage(|editor| {
+                save(
+                    &engine,
+                    &editor.engine_layout,
+                    &mut editor.engine_panes,
+                    &editor.document,
+                )?;
+                save(
+                    &project,
+                    &editor.project_layout,
+                    &mut editor.project_panes,
+                    &editor.document,
+                )
+            })
+            .and_then(|_| self.save_named_workspaces());
         match result {
             Ok(()) => self.personal_dirty = false,
             Err(error) => self.status = format!("Personal layout: {error}"),
@@ -808,8 +948,200 @@ impl Editor {
         self.personal_dirty = true;
     }
 
+    pub(super) fn draw_editor_area(
+        &mut self,
+        ui: &mut egui::Ui,
+        area: &super::dock::PaneRect,
+        available: &[EditorDescriptor],
+        now: f64,
+    ) {
+        if area.rect.width() < 20.0 || area.rect.height() < 20.0 {
+            return;
+        }
+        let mut memory = match self.workspace {
+            WorkspaceKind::Engine => self.engine_panes.remove(&area.id),
+            WorkspaceKind::Project => self.project_panes.remove(&area.id),
+        }
+        .unwrap_or_else(|| {
+            let mut snapshot = PaneSnapshot::default();
+            if area.editor == EditorType::Scene {
+                snapshot.camera = crate::scene_view_ui::SceneViewportState::default().camera;
+            }
+            PaneMemory::new(snapshot, &self.document)
+        });
+        memory.rebind_scope(&self.document);
+        if area.editor == EditorType::Assets {
+            self.assets.restore_navigation_if_missing(
+                &self.workspace_key(),
+                area.id,
+                memory.snapshot.assets.clone(),
+            );
+        }
+        let before = serde_json::to_value(memory.snapshot(&self.document)).ok();
+        memory.swap(self);
+        let allowed = self.can_edit_source(&self.current_source);
+        if !allowed
+            || !self
+                .document
+                .custom_sources
+                .contains_key(&self.current_source)
+        {
+            self.current_source = self
+                .document
+                .custom_sources
+                .keys()
+                .find(|id| self.can_edit_source(id))
+                .cloned()
+                .unwrap_or_default();
+            self.program = None;
+            self.command_program = None;
+            self.source_error = None;
+        }
+        if area.editor == EditorType::RustCustom
+            && (memory.parsed_source.as_ref()
+                != self.document.custom_sources.get(&self.current_source)
+                || memory.parsed_kind != Some(self.is_update_source())
+                || (self.program.is_none()
+                    && self.command_program.is_none()
+                    && self.source_error.is_none()))
+        {
+            self.parse_custom();
+            self.restore_code_positions();
+        }
+        let previous_tab = match area.editor {
+            EditorType::ModuleGraph => Tab::Graph,
+            EditorType::RustCustom => Tab::Custom,
+            EditorType::Hlsl => Tab::Shader,
+            EditorType::ProjectFile => Tab::File,
+            EditorType::History => Tab::History,
+            _ => self.tab,
+        };
+        self.tab = previous_tab;
+        self.authoring_intent = area.editor.requires_engine()
+            || (area.editor == EditorType::RustCustom
+                && self.can_author_engine()
+                && !self.distribution.as_ref().is_some_and(|p| {
+                    p.can_edit_custom_source(&self.current_source, &self.document)
+                }));
+        let mut selected = memory.snapshot.object;
+        let mut pinned = memory.snapshot.object_pinned;
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .id_salt(("pane", area.id))
+                .max_rect(area.rect),
+            |ui| {
+                ui.set_clip_rect(area.rect.intersect(area.area_rect));
+                if !available.iter().any(|d|d.editor==area.editor) {
+                    ui.label("This editor is unavailable for the current sources, modules or distribution.");
+                    ui.label("The saved area is preserved. Choose another editor from its header.");
+                    return;
+                }
+                let engine = available
+                    .iter()
+                    .find(|e| e.editor == area.editor)
+                    .is_some_and(|d| d.requires_engine);
+                if engine && !self.can_author_engine() {
+                    ui.label("Engine authoring unavailable");
+                    return;
+                }
+                ui.add_enabled_ui(
+                    !self.json_dirty || area.editor == EditorType::ProjectFile,
+                    |ui| match area.editor {
+                        EditorType::Viewport => self.viewport_panel(ui, now),
+                        EditorType::Game => self.game_scene_panel(ui),
+                        EditorType::Scene => {
+                            memory.scene_view.camera = self.camera;
+                            self.scene_panel(ui, &mut memory.scene_view);
+                            self.camera = memory.scene_view.camera;
+                        }
+                        EditorType::Hierarchy => self.scene_hierarchy_panel(ui),
+                        EditorType::Inspector => self.scene_inspector_panel(ui),
+                        EditorType::Assets => self.assets_panel(ui, area.id),
+                        EditorType::GameSystems => self.game_systems_panel(ui),
+                        EditorType::ObjectTree => {
+                            self.object_tree_panel(ui, &mut selected)
+                        }
+                        EditorType::ObjectInspector => self.object_inspector_panel(
+                            ui,
+                            &mut selected,
+                            &mut pinned,
+                        ),
+                        EditorType::ProjectSettings => {
+                            egui::ScrollArea::vertical()
+                                .show(ui, |ui| self.project_settings_panel(ui))
+                                .inner
+                        }
+                        EditorType::EngineSettings => {
+                            egui::ScrollArea::vertical()
+                                .show(ui, |ui| self.engine_settings_panel(ui))
+                                .inner
+                        }
+                        EditorType::EngineOverview => {
+                            self.engine_overview_panel(ui, &mut memory.overview)
+                        }
+                        EditorType::ModuleGraph => self.module_graph_area(ui),
+                        EditorType::RustCustom => self.rust_area(ui),
+                        EditorType::Hlsl => self.shader_panel(ui),
+                        EditorType::ProjectFile => self.file_panel(ui),
+                        EditorType::History => {egui::ScrollArea::vertical().show(ui,|ui|self.history_panel(ui));},
+                        EditorType::ModuleLibrary => {egui::ScrollArea::vertical().show(ui,|ui|self.library(ui));},
+                        EditorType::Diagnostics => {egui::ScrollArea::vertical().show(ui,|ui|self.diagnostics_panel(ui));},
+                        EditorType::Extension(id) => {
+                            self.module_extension_panel(ui, id);
+                        }
+                    },
+                );
+            },
+        );
+        self.finish_tab_change(previous_tab);
+        if self.tab != previous_tab {
+            let editor = match self.tab {
+                Tab::Graph => EditorType::ModuleGraph,
+                Tab::Custom => EditorType::RustCustom,
+                Tab::Shader => EditorType::Hlsl,
+                Tab::File => EditorType::ProjectFile,
+                Tab::History => EditorType::History,
+            };
+            if !editor.requires_engine() || self.can_author_engine() {
+                match self.workspace {
+                    WorkspaceKind::Engine => self.engine_layout.choose(area.id, editor),
+                    WorkspaceKind::Project => self.project_layout.choose(area.id, editor),
+                };
+                self.personal_dirty = true;
+            }
+        }
+        if area.editor == EditorType::RustCustom {
+            memory.parsed_source = self
+                .document
+                .custom_sources
+                .get(&self.current_source)
+                .cloned();
+            memory.parsed_kind = Some(self.is_update_source());
+        }
+        self.authoring_intent = false;
+        if area.editor == EditorType::Assets {
+            memory.snapshot.assets = self.assets.navigation(&self.workspace_key(), area.id);
+        }
+        memory.swap(self);
+        memory.snapshot.object = selected;
+        memory.snapshot.object_pinned = pinned;
+        self.personal_dirty |= before != serde_json::to_value(memory.snapshot(&self.document)).ok();
+        match self.workspace {
+            WorkspaceKind::Engine => {
+                self.engine_panes.insert(area.id, memory);
+            }
+            WorkspaceKind::Project => {
+                self.project_panes.insert(area.id, memory);
+            }
+        }
+    }
+
     pub(super) fn draw_workspaces(&mut self, ui: &mut egui::Ui) {
+        if self.area_drag.is_some() {
+            ui.disable();
+        }
         let ctx = ui.ctx().clone();
+        self.clamp_main_window_once(&ctx);
         let now = ctx.input(|i| i.time);
         let frame = ctx.cumulative_frame_nr();
         if self.last_ui_frame != Some(frame) {
@@ -831,19 +1163,23 @@ impl Editor {
         if !self.can_author_engine() {
             self.workspace = WorkspaceKind::Project;
         }
+        self.reconcile_workspace_selection();
         egui::Panel::top("workspaces")
             .resizable(false)
             .frame(
                 egui::Frame::new()
                     .fill(Color32::from_rgb(21, 27, 39))
-                    .inner_margin(8),
+                    .inner_margin(egui::Margin::symmetric(8, 0)),
             )
             .show(ui, |ui| self.draw_workflow_toolbar(ui));
         egui::Panel::bottom("work-status")
             .resizable(false)
+            .frame(super::editor_ui::status_frame())
             .show(ui, |ui| {
+                ui.spacing_mut().interact_size.y = 16.;
+                super::editor_ui::compact_spacing(ui);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(&self.status).size(11.0));
+                    ui.label(RichText::new(&self.status).size(12.0));
                     if let Some(runtime) = &self.runtime {
                         ui.label(format!("t={:.2} · {}", self.time, runtime.backend_name()));
                     }
@@ -853,7 +1189,10 @@ impl Editor {
         if !activities.is_empty() {
             egui::Panel::bottom("preparation-status")
                 .resizable(false)
+                .frame(super::editor_ui::status_frame())
                 .show(ui, |ui| {
+                    ui.spacing_mut().interact_size.y = 16.;
+                    super::editor_ui::compact_spacing(ui);
                     crate::activity::draw_activity(ui, &activities);
                 });
         }
@@ -869,11 +1208,12 @@ impl Editor {
                 if self.workflow.blocks_document_edits() {
                     ui.disable();
                 }
-                ui.push_id(self.workspace.key(), |ui| {
+                ui.push_id(self.workspace_key(), |ui| {
                     let response = self.draw_window_dock(ui, &available);
                     self.reconcile_library_graph();
                     self.personal_dirty |= response.changed;
                     if response.changed {
+                        self.cancel_active_scene_gestures();
                         let ids = match self.workspace {
                             WorkspaceKind::Engine => self.engine_layout.panes(),
                             WorkspaceKind::Project => self.project_layout.panes(),
@@ -890,180 +1230,22 @@ impl Editor {
                             }
                         };
                     }
+                    let dividers = response.divider_input;
                     for area in response.panes {
-                        if area.rect.width() < 20.0 || area.rect.height() < 20.0 {
-                            continue;
-                        }
-                        let mut memory = match self.workspace {
-                            WorkspaceKind::Engine => self.engine_panes.remove(&area.id),
-                            WorkspaceKind::Project => self.project_panes.remove(&area.id),
-                        }
-                        .unwrap_or_else(|| {
-                            let mut snapshot = PaneSnapshot::default();
-                            if area.editor == EditorType::Scene {
-                                snapshot.camera =
-                                    crate::scene_view_ui::SceneViewportState::default().camera;
-                            }
-                            PaneMemory::new(snapshot, &self.document)
-                        });
-                        memory.rebind_scope(&self.document);
-                        let before = serde_json::to_value(memory.snapshot(&self.document)).ok();
-                        memory.swap(self);
-                        let allowed = self.can_edit_source(&self.current_source);
-                        if !allowed
-                            || !self
-                                .document
-                                .custom_sources
-                                .contains_key(&self.current_source)
-                        {
-                            self.current_source = self
-                                .document
-                                .custom_sources
-                                .keys()
-                                .find(|id| self.can_edit_source(id))
-                                .cloned()
-                                .unwrap_or_default();
-                            self.program = None;
-                            self.command_program = None;
-                            self.source_error = None;
-                        }
-                        if area.editor == EditorType::RustCustom
-                            && (memory.parsed_source.as_ref()
-                                != self.document.custom_sources.get(&self.current_source)
-                                || memory.parsed_kind != Some(self.is_update_source())
-                                || (self.program.is_none()
-                                    && self.command_program.is_none()
-                                    && self.source_error.is_none()))
-                        {
-                            self.parse_custom();
-                            self.restore_code_positions();
-                        }
-                        let previous_tab = match area.editor {
-                            EditorType::ModuleGraph => Tab::Graph,
-                            EditorType::RustCustom => Tab::Custom,
-                            EditorType::Hlsl => Tab::Shader,
-                            EditorType::ProjectFile => Tab::File,
-                            EditorType::History => Tab::History,
-                            _ => self.tab,
-                        };
-                        self.tab = previous_tab;
-                        self.authoring_intent = area.editor.requires_engine()
-                            || (area.editor == EditorType::RustCustom
-                                && self.can_author_engine()
-                                && !self.distribution.as_ref().is_some_and(|p| {
-                                    p.can_edit_custom_source(&self.current_source, &self.document)
-                                }));
-                        let mut selected = memory.snapshot.object;
-                        let mut pinned = memory.snapshot.object_pinned;
-                        ui.scope_builder(
-                            egui::UiBuilder::new()
-                                .id_salt(("pane", area.id))
-                                .max_rect(area.rect),
-                            |ui| {
-                                ui.set_clip_rect(area.rect.intersect(area.area_rect));
-                                let engine = available
-                                    .iter()
-                                    .find(|e| e.editor == area.editor)
-                                    .is_some_and(|d| d.requires_engine);
-                                if engine && !self.can_author_engine() {
-                                    ui.label("Engine authoring unavailable");
-                                    return;
-                                }
-                                ui.add_enabled_ui(
-                                    !self.json_dirty || area.editor == EditorType::ProjectFile,
-                                    |ui| match area.editor {
-                                        EditorType::Viewport => self.viewport_panel(ui, now),
-                                        EditorType::Game => self.game_scene_panel(ui),
-                                        EditorType::Scene => {
-                                            memory.scene_view.camera = self.camera;
-                                            self.scene_panel(ui, &mut memory.scene_view);
-                                            self.camera = memory.scene_view.camera;
-                                        }
-                                        EditorType::Hierarchy => self.scene_hierarchy_panel(ui),
-                                        EditorType::Inspector => self.scene_inspector_panel(ui),
-                                        EditorType::Assets => self.assets_panel(ui, area.id),
-                                        EditorType::GameSystems => self.game_systems_panel(ui),
-                                        EditorType::ObjectTree => {
-                                            self.object_tree_panel(ui, &mut selected)
-                                        }
-                                        EditorType::ObjectInspector => self.object_inspector_panel(
-                                            ui,
-                                            &mut selected,
-                                            &mut pinned,
-                                        ),
-                                        EditorType::ProjectSettings => {
-                                            egui::ScrollArea::vertical()
-                                                .show(ui, |ui| self.project_settings_panel(ui))
-                                                .inner
-                                        }
-                                        EditorType::EngineSettings => {
-                                            egui::ScrollArea::vertical()
-                                                .show(ui, |ui| self.engine_settings_panel(ui))
-                                                .inner
-                                        }
-                                        EditorType::ModuleGraph => self.module_graph_area(ui),
-                                        EditorType::RustCustom => self.rust_area(ui),
-                                        EditorType::Hlsl => self.shader_panel(ui),
-                                        EditorType::ProjectFile => self.file_panel(ui),
-                                        EditorType::History => self.history_panel(ui),
-                                        EditorType::ModuleLibrary => self.library(ui),
-                                        EditorType::Diagnostics => self.diagnostics_panel(ui),
-                                        EditorType::Extension(id) => {
-                                            self.module_extension_panel(ui, id);
-                                        }
-                                    },
-                                );
-                            },
-                        );
-                        self.finish_tab_change(previous_tab);
-                        if self.tab != previous_tab {
-                            let editor = match self.tab {
-                                Tab::Graph => EditorType::ModuleGraph,
-                                Tab::Custom => EditorType::RustCustom,
-                                Tab::Shader => EditorType::Hlsl,
-                                Tab::File => EditorType::ProjectFile,
-                                Tab::History => EditorType::History,
-                            };
-                            if !editor.requires_engine() || self.can_author_engine() {
-                                match self.workspace {
-                                    WorkspaceKind::Engine => {
-                                        self.engine_layout.choose(area.id, editor)
-                                    }
-                                    WorkspaceKind::Project => {
-                                        self.project_layout.choose(area.id, editor)
-                                    }
-                                };
-                                self.personal_dirty = true;
-                            }
-                        }
-                        if area.editor == EditorType::RustCustom {
-                            memory.parsed_source = self
-                                .document
-                                .custom_sources
-                                .get(&self.current_source)
-                                .cloned();
-                            memory.parsed_kind = Some(self.is_update_source());
-                        }
-                        self.authoring_intent = false;
-                        memory.swap(self);
-                        memory.snapshot.object = selected;
-                        memory.snapshot.object_pinned = pinned;
-                        self.personal_dirty |=
-                            before != serde_json::to_value(memory.snapshot(&self.document)).ok();
-                        match self.workspace {
-                            WorkspaceKind::Engine => {
-                                self.engine_panes.insert(area.id, memory);
-                            }
-                            WorkspaceKind::Project => {
-                                self.project_panes.insert(area.id, memory);
-                            }
-                        }
+                        self.draw_editor_area(ui, &area, &available, now);
+                    }
+                    dividers.finish(ui);
+                    for id in response.detach_panes {
+                        self.detach_editor_area(id, &ctx);
                     }
                 });
             });
+        self.update_area_drag(&ctx);
+        self.draw_detached_areas(&ctx, &available);
+        self.apply_overview_navigation();
         self.game_workbench.finish_ui_frame();
         self.draw_workflow_modals(&ctx);
-        if self.personal_dirty && now - self.personal_save_time > 1.0 {
+        if self.area_drag.is_none() && self.personal_dirty && now - self.personal_save_time > 1.0 {
             self.personal_save_time = now;
             self.save_personal_layouts();
         }
@@ -1194,6 +1376,12 @@ impl Editor {
             camera: self.camera,
             object: self.active_object,
             object_pinned: false,
+            overview: Default::default(),
+            scene_tool: Default::default(),
+            scene_space: Default::default(),
+            scene_snap: Default::default(),
+            scene_camera_speed: crate::scene_tools::DEFAULT_CAMERA_SPEED,
+            assets: None,
         };
         let memory = PaneMemory::new(snapshot, &self.document);
         match self.workspace {
@@ -1207,34 +1395,61 @@ impl Editor {
     }
     fn module_graph_area(&mut self, ui: &mut egui::Ui) {
         let rect = ui.available_rect_before_wrap();
-        let width = (rect.width() * 0.72)
-            .max(120.0)
-            .min((rect.width() - 170.0).max(120.0));
-        let graph =
-            egui::Rect::from_min_max(rect.min, egui::pos2(rect.left() + width, rect.bottom()));
+        if rect.width() < 700. {
+            let key = ui.make_persistent_id("compact-node-inspector");
+            let mut detail = ui.ctx().data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut detail, false, "Graph");
+                ui.selectable_value(&mut detail, true, "Selected node");
+            });
+            ui.ctx().data_mut(|d| d.insert_temp(key, detail));
+            if detail {
+                egui::ScrollArea::vertical().show(ui, |ui| self.node_inspector(ui));
+            } else {
+                self.graph_panel(ui);
+            }
+            return;
+        }
+        let side = (rect.width() * 0.28).clamp(240., 360.);
+        let graph = egui::Rect::from_min_max(
+            rect.min,
+            egui::pos2(rect.right() - side - 16., rect.bottom()),
+        );
         let inspector =
-            egui::Rect::from_min_max(egui::pos2(graph.right() + 8.0, rect.top()), rect.max);
+            egui::Rect::from_min_max(egui::pos2(graph.right() + 16., rect.top()), rect.max);
         ui.scope_builder(
             egui::UiBuilder::new()
                 .id_salt("module-canvas")
                 .max_rect(graph),
+            |ui| self.graph_panel(ui),
+        );
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .id_salt("module-inspector")
+                .max_rect(inspector),
             |ui| {
-                self.graph_panel(ui);
+                ui.set_clip_rect(inspector);
+                egui::ScrollArea::vertical().show(ui, |ui| self.node_inspector(ui));
             },
         );
-        if inspector.width() > 80.0 {
-            ui.scope_builder(
-                egui::UiBuilder::new()
-                    .id_salt("module-inspector")
-                    .max_rect(inspector),
-                |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| self.node_inspector(ui));
-                },
-            );
-        }
     }
     fn rust_area(&mut self, ui: &mut egui::Ui) {
         let rect = ui.available_rect_before_wrap();
+        if rect.width() < 700. {
+            let key = ui.make_persistent_id("compact-rust-inspector");
+            let mut detail = ui.ctx().data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut detail, false, "Source / graph");
+                ui.selectable_value(&mut detail, true, "Selected expression");
+            });
+            ui.ctx().data_mut(|d| d.insert_temp(key, detail));
+            if detail {
+                egui::ScrollArea::vertical().show(ui, |ui| self.code_inspector(ui));
+            } else {
+                self.custom_panel(ui);
+            }
+            return;
+        }
         let side = (rect.width() * 0.22).clamp(150.0, 260.0);
         let main = egui::Rect::from_min_max(
             rect.min,
@@ -1291,9 +1506,146 @@ pub fn participating_modules_panel(
 mod tests {
     use super::*;
 
+    #[test]
+    fn personal_camera_speeds_roundtrip_independently_and_legacy_layouts_default() {
+        let document = crate::game_host::demo_document();
+        let before = serde_json::to_value(&document).unwrap();
+        let mut layout = DockLayout::single(EditorType::Scene);
+        let second = layout
+            .split(1, super::super::dock::Axis::Horizontal)
+            .unwrap();
+        let mut first_memory = PaneMemory::new(PaneSnapshot::default(), &document);
+        first_memory.scene_view.camera_speed = 32.5;
+        first_memory.scene_view.space = crate::scene_tools::Space::Local;
+        let mut other_memory = PaneMemory::new(PaneSnapshot::default(), &document);
+        other_memory.scene_view.camera_speed = 1.5;
+        let mut memories = BTreeMap::from([(1, first_memory), (second, other_memory)]);
+        let path = std::env::temp_dir().join(format!(
+            "scene-speed-layout-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        save(&path, &layout, &mut memories, &document).unwrap();
+        let (restored, panes) = load(&path, WorkspaceKind::Project, &document).unwrap();
+        assert_eq!(restored, layout);
+        assert_eq!(panes[&1].scene_view.camera_speed, 32.5);
+        assert_eq!(panes[&second].scene_view.camera_speed, 1.5);
+        let mut legacy: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        for pane in legacy["panes"].as_object_mut().unwrap().values_mut() {
+            pane.as_object_mut().unwrap().remove("scene_camera_speed");
+        }
+        std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        let (_, panes) = load(&path, WorkspaceKind::Project, &document).unwrap();
+        assert_eq!(
+            panes[&1].scene_view.camera_speed,
+            crate::scene_tools::DEFAULT_CAMERA_SPEED
+        );
+        assert_eq!(
+            panes[&second].scene_view.camera_speed,
+            crate::scene_tools::DEFAULT_CAMERA_SPEED
+        );
+        assert_eq!(panes[&1].scene_view.space, crate::scene_tools::Space::Local);
+        assert_eq!(serde_json::to_value(&document).unwrap(), before);
+        assert!(
+            validate_pane_snapshot(&PaneSnapshot {
+                scene_camera_speed: f32::NAN,
+                ..Default::default()
+            })
+            .is_err()
+        );
+        assert_eq!(
+            PaneMemory::new(
+                PaneSnapshot {
+                    scene_camera_speed: -3.,
+                    ..Default::default()
+                },
+                &document
+            )
+            .scene_view
+            .camera_speed,
+            crate::scene_tools::MIN_CAMERA_SPEED
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn capability_inventory_for_registered_panels_never_calls_tools_or_changes_authoring() {
+        use module_engine_core::*;
+        let mut document = module_tool_document();
+        document.root.nodes.retain(|n| {
+            !matches!(
+                n.module.as_str(),
+                "custom.rust" | "clock.time" | "scalar.value"
+            )
+        });
+        let ids: BTreeSet<_> = document.root.nodes.iter().map(|n| n.id.clone()).collect();
+        document
+            .root
+            .edges
+            .retain(|e| ids.contains(&e.from_node) && ids.contains(&e.to_node));
+        document.custom_sources.clear();
+        host::ensure_authoring_configuration(&mut document);
+        let fixture = full_source_fixture(&document);
+        let mut editor = Editor::new(
+            document,
+            fixture.path().join("unused-capability-inventory.json"),
+        );
+        editor
+            .register_module_panel(
+                706,
+                "scene.extract",
+                "Foreign source panel",
+                false,
+                |_, _, _| panic!("Inventory must not call a panel factory"),
+            )
+            .unwrap();
+        let before = serde_json::to_vec(&editor.document).unwrap();
+        let records = editor.module_panel_capabilities();
+        assert_eq!(records, editor.module_panel_capabilities());
+        let built_in = records.iter().find(|r| r.id == "editor.panel.100").unwrap();
+        assert_eq!(built_in.metadata.owner, CapabilityOwner::Engine);
+        let game_tool = records.iter().find(|r| r.id == "editor.panel.110").unwrap();
+        assert_eq!(game_tool.metadata.owner, CapabilityOwner::Project);
+        assert_eq!(game_tool.participation.value, Some(false));
+        assert_eq!(game_tool.available.value, Some(false));
+        let foreign = records.iter().find(|r| r.id == "editor.panel.706").unwrap();
+        assert_eq!(foreign.metadata.owner, CapabilityOwner::Unknown);
+        assert_eq!(foreign.participation.value, Some(true));
+        assert_eq!(serde_json::to_vec(&editor.document).unwrap(), before);
+        editor
+            .document
+            .game
+            .as_mut()
+            .unwrap()
+            .execution
+            .stages
+            .push(SystemStage {
+                name: "Unknown".into(),
+                nodes: vec![SystemNode {
+                    id: "missing".into(),
+                    module: "foreign.uninstalled".into(),
+                    params: serde_json::Value::Null,
+                    bindings: Default::default(),
+                    after: vec![],
+                }],
+            });
+        assert!(
+            editor
+                .module_panel_capabilities()
+                .iter()
+                .all(|r| r.participation.value.is_none())
+        );
+    }
+
     fn module_tool_document() -> GraphDocument {
         let mut document = demo_document(WorldKind::Objects);
         document.game = Some(module_engine_core::GameProject {
+            player_preferences: None,
+            scene_assets: Default::default(),
             entry_scene: "independent".into(),
             scenes: [(
                 "independent".into(),
@@ -1503,6 +1855,7 @@ mod tests {
                 ..Default::default()
             },
             |ui| {
+                editor.draw_workflow_toolbar(ui);
                 if engine {
                     editor.viewport_panel(ui, 0.);
                 } else {
@@ -1510,7 +1863,7 @@ mod tests {
                 }
             },
         );
-        let text = output
+        let mut text: Vec<(String, egui::Pos2)> = output
             .shapes
             .iter()
             .filter_map(|shape| match &shape.shape {
@@ -1521,6 +1874,9 @@ mod tests {
                 _ => None,
             })
             .collect();
+        if let Some(rect) = editor.workflow.command_targets.get("PlayPause") {
+            text.push(("Session control".into(), rect.center()));
+        }
         output.drop_without_applying_deltas();
         text
     }
@@ -1599,7 +1955,8 @@ mod tests {
             "guarded operations never publish a file"
         );
         for engine in [false, true] {
-            let label = if engine { "Start" } else { "Play" };
+            let label = "Session control";
+            play_test_frame(&mut editor, &context, engine, vec![]);
             let at = play_test_frame(&mut editor, &context, engine, vec![])
                 .into_iter()
                 .find(|(text, _)| text == label)
@@ -1633,9 +1990,12 @@ mod tests {
             assert!(!editor.playing && !editor.game_workbench.is_play_session());
             assert!(
                 editor
-                    .status
-                    .contains("Apply or discard module tool drafts")
+                    .workflow_report_text()
+                    .contains("Apply or discard module tool drafts"),
+                "engine={engine}, status={}",
+                editor.status
             );
+            tool_test_click(&mut editor, &context, None, "Close");
         }
         editor.playing = true; // Defensive guard for a legacy/direct start path.
         editor.tick_simulation(1. / 60.);
@@ -2847,7 +3207,7 @@ mod editor_choice_regression {
     use super::*;
 
     #[test]
-    fn rust_toolbar_remains_separate_from_inspector_in_narrow_panes() {
+    fn rust_toolbar_and_compact_inspector_remain_reachable_without_overlapping() {
         let document = crate::game_host::demo_document();
         let (_sources, mut editor) = super::super::tests::isolated_editor(document);
         editor.preview_builder = PreviewBuilder::new();
@@ -2856,49 +3216,76 @@ mod editor_choice_regression {
         editor.custom_view = CustomView::Both;
         editor.parse_custom();
         editor.game_workbench.set_deferred_preparation(true);
-        assert!(editor.command_program.is_some());
         let before = editor.document.clone();
+        let help = "Select a command parameter: number, string, or flag. A visual edit changes Rust and starts candidate compilation.";
         for width in [440., 560., 800.] {
             let ctx = egui::Context::default();
-            let output = ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        Vec2::new(width, 600.),
-                    )),
-                    ..Default::default()
-                },
-                |ui| editor.rust_area(ui),
-            );
-            let text_rect = |label: &str| {
-                output
+            super::super::editor_ui::configure(&ctx);
+            let mut frame = |events| {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            Vec2::new(width, 600.),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| editor.rust_area(ui),
+                );
+                let text = output
                     .shapes
                     .iter()
-                    .find_map(|shape| match &shape.shape {
-                        egui::Shape::Text(text) if text.galley.text() == label => {
-                            Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
-                        }
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(t) => Some((
+                            t.galley.text().to_owned(),
+                            egui::Rect::from_min_size(t.pos, t.galley.size()),
+                        )),
                         _ => None,
                     })
-                    .unwrap_or_else(|| panic!("missing text at pane width {width}: {label}"))
+                    .collect::<Vec<_>>();
+                output.drop_without_applying_deltas();
+                text
             };
-            let help = text_rect(
-                "Select a command parameter: number, string, or flag. A visual edit changes Rust and starts candidate compilation.",
-            );
-            for label in [
-                "Custom / Rust",
-                "game-controller",
-                "Text",
-                "Graph",
-                "Side by side",
-            ] {
-                let control = text_rect(label);
-                assert!(
-                    control.right() <= help.left(),
-                    "{label} overlaps the inspector column at pane width {width}: {control:?}, {help:?}"
-                );
+            let text = frame(vec![]);
+            if width < 700. {
+                assert!(!text.iter().any(|(label, _)| label == help));
+                let at = text
+                    .iter()
+                    .find(|(label, _)| label == "Selected expression")
+                    .unwrap()
+                    .1
+                    .center();
+                for pressed in [true, false] {
+                    frame(vec![
+                        egui::Event::PointerMoved(at),
+                        egui::Event::PointerButton {
+                            pos: at,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ]);
+                }
+                let text = frame(vec![]);
+                assert!(text.iter().any(|(label, _)| label == help));
+                assert!(!text.iter().any(|(label, _)| label == "Custom / Rust"));
+            } else {
+                let inspector = text.iter().find(|(label, _)| label == help).unwrap().1;
+                for label in [
+                    "Custom / Rust",
+                    "game-controller",
+                    "Text",
+                    "Graph",
+                    "Side by side",
+                ] {
+                    let control = text.iter().find(|(text, _)| text == label).unwrap().1;
+                    assert!(
+                        control.right() <= inspector.left(),
+                        "{label} overlaps at {width}"
+                    );
+                }
             }
-            output.drop_without_applying_deltas();
         }
         assert_eq!(editor.document, before);
     }

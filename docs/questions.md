@@ -6,8 +6,13 @@
 
 Decisions accepted for 0.2/0.3/0.4 are recorded in [decisions.md](decisions.md); the game-stage scope is in [next-stage.md](next-stage.md). Scenes, static content, persistent Custom, and Windows Player are already implemented with the documented limitations. This list concerns further development.
 
+The [current single-engine scope](engine-composition-direction.md#deferred)
+defers independent Engine catalogues, switching, shared-version storage and
+cross-project update adoption. They are not prerequisites for the next UI work.
+
 | Question | What the decision changes |
 | --- | --- |
+| Which overview, map navigation and module-settings layout best supports the first route while retaining existing layouts and rights? | Stage 2 and later UI design. Stage 1 now supplies the [source metadata/evidence contract](engine-capabilities.md); no universal graphical executor or permission change is presumed. |
 | Which tasks should next receive a full visual Rust representation: control flow, functions/types, or collection handling? | The priority of the next subset and test examples. For now, unknown fragments remain editable text. |
 | How should ASTs be matched after ambiguous code movement, copying, and renaming? | Rules for preserving manual layouts and persistent IDs. The current reparse may reset them. |
 | Which graphics backend is needed after Vulkan, and what limitations of the portable renderer API are acceptable? | Portability of shaders, resources, and commands. |

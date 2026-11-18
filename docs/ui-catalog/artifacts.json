@@ -1,0 +1,1365 @@
+{
+  "schema_version": 1,
+  "surfaces": 74,
+  "artifacts": [
+    {
+      "id": "P01",
+      "kind": "layout",
+      "file": "p01.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 53,
+      "sha256": "e2a43b819cf90b33f9b67bd3e74897ac9da61e346e69ff9a1faa2702a7c5b3b9"
+    },
+    {
+      "id": "P01",
+      "kind": "states",
+      "file": "p01-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 38,
+      "sha256": "650ddc225a24026aef0b1d8a5ab5279b903b3468218c52051cb8b874c646ac49"
+    },
+    {
+      "id": "P01",
+      "kind": "compact",
+      "file": "p01-compact.svg",
+      "width": 480,
+      "height": 900,
+      "text_nodes": 29,
+      "sha256": "593d25dfc1d30822b800dd56129c79181185cd833dbdd41d0527c086461e9618"
+    },
+    {
+      "id": "P02",
+      "kind": "layout",
+      "file": "p02.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 24,
+      "sha256": "95281aa04f5b8f01080f146eda8e08ead378433df056e1916a93ac2b1374ef0c"
+    },
+    {
+      "id": "P02",
+      "kind": "states",
+      "file": "p02-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 37,
+      "sha256": "ffd69ad0a44799e11248d3c27e93443e352b31a09fea896b28adf8e115a57236"
+    },
+    {
+      "id": "P03",
+      "kind": "layout",
+      "file": "p03.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 40,
+      "sha256": "01808a8e2c4fa5b64836a3721150466de9f23faa7239e4b2f2994404445feb62"
+    },
+    {
+      "id": "P03",
+      "kind": "states",
+      "file": "p03-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "2a17725210c5354fbac0c8427d2e5915de2be8ddcd313da0ad977e546354afe8"
+    },
+    {
+      "id": "P04",
+      "kind": "layout",
+      "file": "p04.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 34,
+      "sha256": "2b665f45d82f5ce563286f9a10cc9a5acc8f29255f0bc48d84b6b18ce94c546c"
+    },
+    {
+      "id": "P04",
+      "kind": "states",
+      "file": "p04-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "df92365b5130661fbdf5e92d7d869dafcbab8c0df42abd4fb59f68211785e52e"
+    },
+    {
+      "id": "P05",
+      "kind": "layout",
+      "file": "p05.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 29,
+      "sha256": "c710b9480768a5c4534b2548fd7c7e8bd17998c48341a419c45335d882ed9c7c"
+    },
+    {
+      "id": "P05",
+      "kind": "states",
+      "file": "p05-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "7a0b4792df1ce8b87ca1719fd9c346d43d97362ffbf88e4ef0ce48702dc3d98f"
+    },
+    {
+      "id": "P06",
+      "kind": "layout",
+      "file": "p06.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 18,
+      "sha256": "b54b12c0074bb0d66d791001f67c020eb428724ee87b369452a9c96032592375"
+    },
+    {
+      "id": "P06",
+      "kind": "states",
+      "file": "p06-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "bbb033fd2beef41d8b6c7e8ce893ab674dea1a9556991a49289aee3079bda995"
+    },
+    {
+      "id": "P07",
+      "kind": "layout",
+      "file": "p07.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 33,
+      "sha256": "3c2d385c5a94c0a770be2311457303eed3b05c6dee9b3f64b399be896916f973"
+    },
+    {
+      "id": "P07",
+      "kind": "states",
+      "file": "p07-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "58906ec4c72e7467e02baa9fcfa1b6fe9d618dee5f4eaf509bfafac960d7d22b"
+    },
+    {
+      "id": "P08",
+      "kind": "layout",
+      "file": "p08.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 61,
+      "sha256": "6b15a2e7754d2df7cf846fef17ed34e7ae37e7c98584a97ea9cc8069735ed7f0"
+    },
+    {
+      "id": "P08",
+      "kind": "states",
+      "file": "p08-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 40,
+      "sha256": "62d0436632b03c57c191dd1c4df5ad03fd385b344616e02e2029131f71168aa2"
+    },
+    {
+      "id": "P08",
+      "kind": "compact",
+      "file": "p08-compact.svg",
+      "width": 480,
+      "height": 900,
+      "text_nodes": 44,
+      "sha256": "90b4f1e2d1adbc93f657242cc1e9a93d7a5653e47dd72b023ba0dc1467626fcc"
+    },
+    {
+      "id": "P09",
+      "kind": "layout",
+      "file": "p09.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 53,
+      "sha256": "6ddbe15683e41f39ee00867490c814c3971b1e9a9547f7804a57c3f49722ae77"
+    },
+    {
+      "id": "P09",
+      "kind": "states",
+      "file": "p09-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 39,
+      "sha256": "eb5354ce5f771918da341f382b430bebe3b825730ae02e8adf9d5a860d6de3d7"
+    },
+    {
+      "id": "P09",
+      "kind": "compact",
+      "file": "p09-compact.svg",
+      "width": 480,
+      "height": 900,
+      "text_nodes": 19,
+      "sha256": "8426130354980b5a039eda9878e4134f6e5afa01cec63622e32be2793734dc50"
+    },
+    {
+      "id": "P10",
+      "kind": "layout",
+      "file": "p10.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 17,
+      "sha256": "9306c2dd40eac3bb2ac7411afe327a16667135c84f7506fde1e8cac1c3f9cdd9"
+    },
+    {
+      "id": "P10",
+      "kind": "states",
+      "file": "p10-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 37,
+      "sha256": "4bba9b7c72212d5bcd8a09aa00f4edd824cedb1a7154f8173d4a49aa3856bac6"
+    },
+    {
+      "id": "P11",
+      "kind": "layout",
+      "file": "p11.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 47,
+      "sha256": "9a35943f62b4184ba2a70bec420fa76775d98c6440e1a830e0f70201959f0537"
+    },
+    {
+      "id": "P11",
+      "kind": "states",
+      "file": "p11-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "cb6f410656bdda21062e083100826d277b6c5202fa8a560199f841dfd5c9691f"
+    },
+    {
+      "id": "P12",
+      "kind": "layout",
+      "file": "p12.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 42,
+      "sha256": "db2b843dc42d6531f36c61d0041bcb0afad707a91f6d14d573fea1582dad5569"
+    },
+    {
+      "id": "P12",
+      "kind": "states",
+      "file": "p12-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "0299ba70389b70ed4e40ecf2d91a757713de828f4ec6e5c4e2c6a59908ff07d9"
+    },
+    {
+      "id": "P13",
+      "kind": "layout",
+      "file": "p13.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 45,
+      "sha256": "805ca06d6585d445498edf589622db561c80b67ba920a6191c5364353c5a01f3"
+    },
+    {
+      "id": "P13",
+      "kind": "states",
+      "file": "p13-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "2146ce638939927a9c4b20a61942369ce8dfaddb4aad1178d03478c480293e1a"
+    },
+    {
+      "id": "P14",
+      "kind": "layout",
+      "file": "p14.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 26,
+      "sha256": "3cca26a38dec12e98fb8b4ce5bbb73f348395bf3d7ef1272b21fc5d9370c575d"
+    },
+    {
+      "id": "P14",
+      "kind": "states",
+      "file": "p14-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 36,
+      "sha256": "714e1aba933049f494fd09d2d8f0a717437cf63321f3de6cc82c97c36690c3f0"
+    },
+    {
+      "id": "P15",
+      "kind": "layout",
+      "file": "p15.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 34,
+      "sha256": "0d851ce7af6d286200b2f92019ed1e865c939ece5aa76c2fcadcd10e715fbdcc"
+    },
+    {
+      "id": "P15",
+      "kind": "states",
+      "file": "p15-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "3ee443566a6f1a8de9e363d2ddee49420699a4801e2a545e9415338262670fa0"
+    },
+    {
+      "id": "P16",
+      "kind": "layout",
+      "file": "p16.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 31,
+      "sha256": "2160dd3156eab82194936e483090743360b5af791edfe4e969f2b4d61311bfc9"
+    },
+    {
+      "id": "P16",
+      "kind": "states",
+      "file": "p16-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "b15f5b807c6f23684f065f1983de33287a1a30e450cb4f95443536365a6c0252"
+    },
+    {
+      "id": "P17",
+      "kind": "layout",
+      "file": "p17.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 19,
+      "sha256": "da7c668e723f98ac2860d5e636c1205be593d40ab00c43fc34346ababc0f4dd3"
+    },
+    {
+      "id": "P17",
+      "kind": "states",
+      "file": "p17-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 36,
+      "sha256": "2e9d85695feb29036d2d661e5a8ea858826dcb23dae2e5bcf7d9eba6fdfa37b5"
+    },
+    {
+      "id": "P18",
+      "kind": "layout",
+      "file": "p18.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 24,
+      "sha256": "eaf7d543c7d1517567f9eb3e2f2094157a3f7a7397ce75528aae5f9395fd4050"
+    },
+    {
+      "id": "P18",
+      "kind": "states",
+      "file": "p18-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "7ce453ccb7d420a5949315f453b1a4c8a80cdae044b3b9fe23c709f4c560bbe7"
+    },
+    {
+      "id": "P19",
+      "kind": "layout",
+      "file": "p19.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 25,
+      "sha256": "09e4e010f22a030fabe77630ed1ce0c3071ae81082216156b13b2181a9aaba46"
+    },
+    {
+      "id": "P19",
+      "kind": "states",
+      "file": "p19-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "df22ef24b41c7ab459d45d08c26ee655065e29995e48e026d2d1d07d2c86df25"
+    },
+    {
+      "id": "P20",
+      "kind": "layout",
+      "file": "p20.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 45,
+      "sha256": "1fc5b140ac4fce4f1a8d90e220e8477345f72c405c257c4a1af7ea92991fc137"
+    },
+    {
+      "id": "P20",
+      "kind": "states",
+      "file": "p20-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "09b670a3c1073a564c7000a58ccf0c316cc77e6bad35503c54a49722851ee2fc"
+    },
+    {
+      "id": "P21",
+      "kind": "layout",
+      "file": "p21.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 44,
+      "sha256": "ec3c70389447332861b0e33e075a946e204342bcdb015792f2ccaca8911cbfb8"
+    },
+    {
+      "id": "P21",
+      "kind": "states",
+      "file": "p21-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "29c0ac133c52eb8ba4ea1ac956fc9694b003c4bf9f821b559ee5db73234cdd32"
+    },
+    {
+      "id": "P22",
+      "kind": "layout",
+      "file": "p22.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 22,
+      "sha256": "deb0342150316171ac03c231d8854aa733bc27bff1f79d1292e1d1ce1120a08b"
+    },
+    {
+      "id": "P22",
+      "kind": "states",
+      "file": "p22-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "a11e529d39947653d91fbc7ca05d0657026b089761a06e394e46c26029626185"
+    },
+    {
+      "id": "V01",
+      "kind": "layout",
+      "file": "v01.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 36,
+      "sha256": "2756ad7cbff3ce25d97266d62a466ded5da9e53b71661c05798ad77bd314949a"
+    },
+    {
+      "id": "V01",
+      "kind": "states",
+      "file": "v01-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "bc772babf5c8ca3637a79df04f4a8804baf40828d0806cf6cffb85156e4f2188"
+    },
+    {
+      "id": "V02",
+      "kind": "layout",
+      "file": "v02.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 28,
+      "sha256": "12dd0b0f5e76c835c04d1eacf6cd839a1a49c6ee65aae34814193363f1306e11"
+    },
+    {
+      "id": "V02",
+      "kind": "states",
+      "file": "v02-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "bb7eb7de54b4b4b91140bb2d53a1efc461e4c77d065b0f754f927d12517d1f5d"
+    },
+    {
+      "id": "V03",
+      "kind": "layout",
+      "file": "v03.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 31,
+      "sha256": "75dc2b10d64926a6e16acd60e8d6637e39e1900f401423b00ec4f1f74fd39d78"
+    },
+    {
+      "id": "V03",
+      "kind": "states",
+      "file": "v03-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "e63994f03063efec4117f831efc2bcff3616f6daf08c78781d94b8028f4811d8"
+    },
+    {
+      "id": "V04",
+      "kind": "layout",
+      "file": "v04.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 49,
+      "sha256": "beec3ffc5a17cbc947e53a7e703f6e8c939a4a3bb5f33704251e06ae67917108"
+    },
+    {
+      "id": "V04",
+      "kind": "states",
+      "file": "v04-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "b9ef0c76a69c1c9c83200abd9c940280515fccff9367b02d8836380c35d066fb"
+    },
+    {
+      "id": "V05",
+      "kind": "layout",
+      "file": "v05.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 27,
+      "sha256": "b06653190bc35da84ac9b946b7dd067bdd498ef74ca5ae23947823fc33ccb494"
+    },
+    {
+      "id": "V05",
+      "kind": "states",
+      "file": "v05-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "dde44f69b45c61ee7f11a2ddc86ebd3daef9130178c3f33fa9771ff8d3bedc21"
+    },
+    {
+      "id": "V06",
+      "kind": "layout",
+      "file": "v06.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 25,
+      "sha256": "6ca3e97c07766934bbdf968579fc963212ae21a19eaf3faa9b0e51dac109563f"
+    },
+    {
+      "id": "V06",
+      "kind": "states",
+      "file": "v06-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "259fa1a957412ac6cd008027f1fa7a5b9a2f9ba54eb36d5ebed5ee3a7ff69e5a"
+    },
+    {
+      "id": "V07",
+      "kind": "layout",
+      "file": "v07.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 31,
+      "sha256": "3df8fe1c60b995b9cc7d4f320c289d3f844e1591e567a3d693eef5accec34267"
+    },
+    {
+      "id": "V07",
+      "kind": "states",
+      "file": "v07-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "dfbf25e88f51574f0b57e588c9913b107519fc6de8a959ed110b7e1c2d64ddd5"
+    },
+    {
+      "id": "V08",
+      "kind": "layout",
+      "file": "v08.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 28,
+      "sha256": "57374182ca17fa2b6484bbb9220335b547dfe499d58563e1ffa6240598df8f85"
+    },
+    {
+      "id": "V08",
+      "kind": "states",
+      "file": "v08-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "f748c792ef2f700dd7061bbfed234943b927da5a46348e80aca0970df931ae3f"
+    },
+    {
+      "id": "V09",
+      "kind": "layout",
+      "file": "v09.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 31,
+      "sha256": "5b90121e55c04dd820240a6a73cbc3b09eeb0f68a7b65360fa31ca8767859c80"
+    },
+    {
+      "id": "V09",
+      "kind": "states",
+      "file": "v09-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "a206d1ac26ce342c3505b46ba2a34e3d6d80e397062152a780ea354300122077"
+    },
+    {
+      "id": "V10",
+      "kind": "layout",
+      "file": "v10.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 27,
+      "sha256": "e163ce333815772a32826d19bd6978ab6a7884106d4b2d0814a7d0f92911e9af"
+    },
+    {
+      "id": "V10",
+      "kind": "states",
+      "file": "v10-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "d3ea24090be6698284de41aaa1bb55b2dd00c4fa8473a8c4ad5fb0b337787f6f"
+    },
+    {
+      "id": "S01",
+      "kind": "layout",
+      "file": "s01.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 38,
+      "sha256": "cfc8697a4e6823e9da8e2b18c77c9b56632e64a119bd13531d0759b4bd45d646"
+    },
+    {
+      "id": "S01",
+      "kind": "states",
+      "file": "s01-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "482c57f543cc2b6cd63f1247eb7f121bee8b35833e92a625694cbe54542d95df"
+    },
+    {
+      "id": "S02",
+      "kind": "layout",
+      "file": "s02.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 26,
+      "sha256": "db956366bda572f91f9ae17a68512cabb43b421064247452e8cbf4e2dab568f8"
+    },
+    {
+      "id": "S02",
+      "kind": "states",
+      "file": "s02-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "03b622e3563b2a146ca5d4ddfc2393aa450907e8d672192b11eaa16bb67de85a"
+    },
+    {
+      "id": "N01",
+      "kind": "layout",
+      "file": "n01.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 29,
+      "sha256": "8ef01e442f0aded724fa42e066c30f5f948fda09b61120b2112f3c4410f964d4"
+    },
+    {
+      "id": "N01",
+      "kind": "states",
+      "file": "n01-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "a10b3447c602afcbf1792104e6bb0334b6489a6a0b434b4d78ba56bcfb91ad47"
+    },
+    {
+      "id": "N02",
+      "kind": "layout",
+      "file": "n02.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 30,
+      "sha256": "dadbc62324f4c50f524ce78b8a1c00e53f7131be8c712cc55f0fc5803aa9f1e6"
+    },
+    {
+      "id": "N02",
+      "kind": "states",
+      "file": "n02-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "03a24e129e261cf6a051477b7d11cf54c2d1576b0493436e4f83411f8223b53e"
+    },
+    {
+      "id": "N03",
+      "kind": "layout",
+      "file": "n03.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 31,
+      "sha256": "94f8f02967af27e0d89d43aee3d6b639ef7ccacfad8059baf0b95cb1e56e149d"
+    },
+    {
+      "id": "N03",
+      "kind": "states",
+      "file": "n03-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "559418058a4f889dc1e50f0891d619a706ec6e8efb49f9e61c2bbc0d446ba772"
+    },
+    {
+      "id": "N04",
+      "kind": "layout",
+      "file": "n04.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 31,
+      "sha256": "c71bafd71412de4fc691e25cafeb90c46f9cda8911478c4f5bd7cf5491dbcfc0"
+    },
+    {
+      "id": "N04",
+      "kind": "states",
+      "file": "n04-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "31c3e8f61790ac13ea008bf1802047b66c5c01efc5ddb1f55c936533c1beacab"
+    },
+    {
+      "id": "N05",
+      "kind": "layout",
+      "file": "n05.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 31,
+      "sha256": "a720f9a17300630f1a0df5596215870af431be206c9d49649ceb39f0c65a7dfb"
+    },
+    {
+      "id": "N05",
+      "kind": "states",
+      "file": "n05-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "ef27bb48763018476686b0c09a9c3e97217ba774bbb8db64e4591fe0fac0297d"
+    },
+    {
+      "id": "N06",
+      "kind": "layout",
+      "file": "n06.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 32,
+      "sha256": "0f01c302a3ab08b76c9aeb77a3affc422626d4daea0de1c21a5747db6dbce227"
+    },
+    {
+      "id": "N06",
+      "kind": "states",
+      "file": "n06-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "ffa5200b0d4db06871379eb5846794fde2d937e27d40c4ca3231a3b4e65f5647"
+    },
+    {
+      "id": "N07",
+      "kind": "layout",
+      "file": "n07.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 29,
+      "sha256": "b9cc0f1dec0e2deb00d221742baf061aca9f20983b7df52f9b7f53ea9f284d70"
+    },
+    {
+      "id": "N07",
+      "kind": "states",
+      "file": "n07-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "5465c3e302f0b43ff4f3f733e60dfd0c0394fce6b3bf4dd458786abcfa04fc01"
+    },
+    {
+      "id": "N08",
+      "kind": "layout",
+      "file": "n08.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 26,
+      "sha256": "f13fd0578a6bcd3d8c780d08d07e4812738f1c24f5a9eaa86666bfd9d55603dd"
+    },
+    {
+      "id": "N08",
+      "kind": "states",
+      "file": "n08-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 36,
+      "sha256": "73d88d992f0dc77a60b4a1d2744de14b640398324ffd05cb5d6fe09109a896e9"
+    },
+    {
+      "id": "D01",
+      "kind": "layout",
+      "file": "d01.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 28,
+      "sha256": "b6bc1c15f3ba427219ccd22fd8ecc4909f88b9e9c27207d73af32d09dc8cf4a5"
+    },
+    {
+      "id": "D01",
+      "kind": "states",
+      "file": "d01-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "a6535d335b60166d352f28638a5d30e77bb6e8f8a918e9649ed83248fadb8095"
+    },
+    {
+      "id": "D02",
+      "kind": "layout",
+      "file": "d02.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 30,
+      "sha256": "cc1d3c6a15fa4a80788e6c20ca5d082de532e2120d23446f70dac3be21508a65"
+    },
+    {
+      "id": "D02",
+      "kind": "states",
+      "file": "d02-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "faf1ffdf00940e1dd92fbde8209c6cb92f394674737fbe663e4639b99850594d"
+    },
+    {
+      "id": "D03",
+      "kind": "layout",
+      "file": "d03.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 22,
+      "sha256": "572ff52659050a602bb42c1b7a3a01bb31dceef58dcef4e8f068e64937240a48"
+    },
+    {
+      "id": "D03",
+      "kind": "states",
+      "file": "d03-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "4ebdc608b8763d9b0a4a59440e1694040c706b8b9a8755d4eeebb7a98a4539ab"
+    },
+    {
+      "id": "D04",
+      "kind": "layout",
+      "file": "d04.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 24,
+      "sha256": "6102b7154be92f3379044006225ceb39929364dbc642e2a26345dc49dc196149"
+    },
+    {
+      "id": "D04",
+      "kind": "states",
+      "file": "d04-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "c4648f077f155a2c5bfe14e7acf7b6ccd5254382cb83e683daafb66e9c0ee4ad"
+    },
+    {
+      "id": "D05",
+      "kind": "layout",
+      "file": "d05.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 24,
+      "sha256": "a2d324edcde2825fb8566342a8a80941410e34f81a92f61a980b236c3bf1927b"
+    },
+    {
+      "id": "D05",
+      "kind": "states",
+      "file": "d05-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "1c27ad75f98b351e9365e07307d9b7d77258baf2d4d29bc2ecf8e2e26f322c32"
+    },
+    {
+      "id": "D06",
+      "kind": "layout",
+      "file": "d06.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 27,
+      "sha256": "40a9ac09ec7c5c9db0960e261cb58893226f2c4486e0b710665c5a0fdcf5bc80"
+    },
+    {
+      "id": "D06",
+      "kind": "states",
+      "file": "d06-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "9602eccebfba845a03d1116524ca67cb326060c0f7bbe2d1124626f55c7f4343"
+    },
+    {
+      "id": "D07",
+      "kind": "layout",
+      "file": "d07.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 23,
+      "sha256": "7b13211d4781fde78c68abef5a26a0444218b1bc488cce785f0050ca13b18843"
+    },
+    {
+      "id": "D07",
+      "kind": "states",
+      "file": "d07-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "9be51f69b688764d8ea896a8c8ead562283cf7773b158c75c2e9f2ccfc4bc643"
+    },
+    {
+      "id": "D08",
+      "kind": "layout",
+      "file": "d08.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 24,
+      "sha256": "5a334950acc0f996bd00d64b2bc521330d09017838ec02a524b1f73fd1dbc7ee"
+    },
+    {
+      "id": "D08",
+      "kind": "states",
+      "file": "d08-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "2d13b735e2f3c1a841c22fac3845eea1904d8e9c272d1abfbb63f26e82510a4a"
+    },
+    {
+      "id": "D09",
+      "kind": "layout",
+      "file": "d09.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 24,
+      "sha256": "d72aa564226a0964d8969f51c81a8aa0cbb87bebfc6b1db577ff6caf984ae297"
+    },
+    {
+      "id": "D09",
+      "kind": "states",
+      "file": "d09-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "9d9caa1ab92d761a46a8b525fe073dfc9396dbbc07e578d068e9090d34d9d692"
+    },
+    {
+      "id": "D10",
+      "kind": "layout",
+      "file": "d10.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 25,
+      "sha256": "b6169bd694ec2e156cb3ba41985583ce079250325b78100c7a474a97c2c0e9ca"
+    },
+    {
+      "id": "D10",
+      "kind": "states",
+      "file": "d10-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "39645bcb61e9b3aa16a934d0f4b0bc7e608efdcfeb5fc2ff240b0bc809d3b134"
+    },
+    {
+      "id": "D11",
+      "kind": "layout",
+      "file": "d11.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 27,
+      "sha256": "7bebf5f55ac99345d514dc868c91da0846621815c63704c8e4d71e7f8bf46e38"
+    },
+    {
+      "id": "D11",
+      "kind": "states",
+      "file": "d11-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "05f886cd7ad9d639b50c231490258d7963c6cd66dbae4c585915ba9de6c6bdb6"
+    },
+    {
+      "id": "D12",
+      "kind": "layout",
+      "file": "d12.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 24,
+      "sha256": "d8d968c59e0415eb96795bf2a1dedff554eea2a9ae7803dd1222fb70ad0f6d09"
+    },
+    {
+      "id": "D12",
+      "kind": "states",
+      "file": "d12-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "8cc1c2d596da5b29ca62b177682aed42dfc91c85a70782cec3308251cc1047a8"
+    },
+    {
+      "id": "M01",
+      "kind": "layout",
+      "file": "m01.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 43,
+      "sha256": "f20e1ae66bcea0f91079238a70fa0ef1ae29950d73fea721711298b5230c7c6f"
+    },
+    {
+      "id": "M01",
+      "kind": "states",
+      "file": "m01-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "c7965df82f8888f04b7c2eb2a1bb48c22ce86b455891dd962d92cde745746109"
+    },
+    {
+      "id": "M02",
+      "kind": "layout",
+      "file": "m02.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 25,
+      "sha256": "8d8a5ca9f8a0d5ce858a200a81a94ec47cbfcf77b933b0eb4db8606f710c7437"
+    },
+    {
+      "id": "M02",
+      "kind": "states",
+      "file": "m02-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "71f7bbf2d495c350da0f2452bff9976cc818543feebd00e6457dc2640f4b0331"
+    },
+    {
+      "id": "M03",
+      "kind": "layout",
+      "file": "m03.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 33,
+      "sha256": "c637526fbafea9fa0b4b52ee28ef6effe8d5ab8bcad743647f345a5df1173fc1"
+    },
+    {
+      "id": "M03",
+      "kind": "states",
+      "file": "m03-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "4c0ec0a6ec5eaf5a628a56c7d328f9958824492c103f98e57b1793934e2881cb"
+    },
+    {
+      "id": "M04",
+      "kind": "layout",
+      "file": "m04.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 35,
+      "sha256": "ea2c4c6d43884ed0a1997b8c48bcd36f02013466d5d49f880f9c9c1b11223a2d"
+    },
+    {
+      "id": "M04",
+      "kind": "states",
+      "file": "m04-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "c12fcb6182b16d1cba8cb093918790aae3db6940a6ecb2e73826576e2bb13bce"
+    },
+    {
+      "id": "M05",
+      "kind": "layout",
+      "file": "m05.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 27,
+      "sha256": "832bb3f816879e4d19b07388375cbf9e04e2ac82ea51e005fb4a026bb5a05095"
+    },
+    {
+      "id": "M05",
+      "kind": "states",
+      "file": "m05-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "85e56680637d06cc660bb1a8b2f785a2a0ffa64afaa4e7523d81c357b7287640"
+    },
+    {
+      "id": "M06",
+      "kind": "layout",
+      "file": "m06.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 29,
+      "sha256": "2137c0bae02b9c4909c93d3d6438d665db59be589e4693f6689f2b9bc61a73de"
+    },
+    {
+      "id": "M06",
+      "kind": "states",
+      "file": "m06-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "fbaefcfcefc32a7e7ed95c988db76aa4672409b8213864a74ceefa3a6e8a9981"
+    },
+    {
+      "id": "M07",
+      "kind": "layout",
+      "file": "m07.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 28,
+      "sha256": "444db7e449185593051e0ddac425b7ecea050166117d88a711b8c508f38f9f30"
+    },
+    {
+      "id": "M07",
+      "kind": "states",
+      "file": "m07-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "7ad490d7c9279d2913e0c930e93af4f0c799551d2f4723252ca19daaaa398f81"
+    },
+    {
+      "id": "M08",
+      "kind": "layout",
+      "file": "m08.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 31,
+      "sha256": "621e2d8fa06ce6a9cfc6ba0dccc74d50a0bad4cb8396063c10dda01ad3162a76"
+    },
+    {
+      "id": "M08",
+      "kind": "states",
+      "file": "m08-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "3507d5e8c074670b00b2dc66b21826b2269a5ae8a71aa72bc924e640b89a33fb"
+    },
+    {
+      "id": "M09",
+      "kind": "layout",
+      "file": "m09.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 29,
+      "sha256": "dbdcc336c7f3cd9c92aaba5e8a40b2d86e883dae730430de0dd15797fae3a6aa"
+    },
+    {
+      "id": "M09",
+      "kind": "states",
+      "file": "m09-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "d6d671ce29736854cf02390b8f784280d8305bd7205277440afa5a4acbc28200"
+    },
+    {
+      "id": "M10",
+      "kind": "layout",
+      "file": "m10.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 27,
+      "sha256": "4043e6de12c04a4cce4df5f6322e6593f49deac170d6170c5c95c392b2e68a6f"
+    },
+    {
+      "id": "M10",
+      "kind": "states",
+      "file": "m10-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "aa5407232f5a8d23b71938c567a5bc3c1bff382066ded079f88c119968945bba"
+    },
+    {
+      "id": "M11",
+      "kind": "layout",
+      "file": "m11.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 29,
+      "sha256": "35930acd41b9185dc505f402337d3e41ae24052725ac972ccd73d1a492dcea0d"
+    },
+    {
+      "id": "M11",
+      "kind": "states",
+      "file": "m11-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "a8fb27cb8d9f03fd312dcdf0b97a89da0312611db1f67144a3f4e7fae1aa4391"
+    },
+    {
+      "id": "C01",
+      "kind": "layout",
+      "file": "c01.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 31,
+      "sha256": "eca995794127fe622ec06477600ca3d4d854fdd598b058d662a4d19073486080"
+    },
+    {
+      "id": "C01",
+      "kind": "states",
+      "file": "c01-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "c3f304390151aa337230bde04b4af997ea0aea1e6b09408313733b584ce215f8"
+    },
+    {
+      "id": "C02",
+      "kind": "layout",
+      "file": "c02.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 28,
+      "sha256": "b80ef0c6873bab475bec3d7196143a56194b5c240ae0ff58d42de16090e169a4"
+    },
+    {
+      "id": "C02",
+      "kind": "states",
+      "file": "c02-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "2267fc2cd7203d1dae2c592370a4fe33db601ecc3256a1095e826946129a5ac1"
+    },
+    {
+      "id": "C03",
+      "kind": "layout",
+      "file": "c03.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 27,
+      "sha256": "ecf0dbf47289fb42c865276778556598a41b902e80757b3318d9af33508c5a4c"
+    },
+    {
+      "id": "C03",
+      "kind": "states",
+      "file": "c03-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "2332f1f98f5d3c7384b05a431e1c3fe67ddebc3620402d7e00e2f11a1acd673b"
+    },
+    {
+      "id": "C04",
+      "kind": "layout",
+      "file": "c04.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 52,
+      "sha256": "af8d50440a58320c267dc48ba3867abd5d74c155fe4eed719766a22cad2bac09"
+    },
+    {
+      "id": "C04",
+      "kind": "states",
+      "file": "c04-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "3447f23e4d671bed07656cb274d5b9ab723b4e0c851a4e1a42b924fac4a4c822"
+    },
+    {
+      "id": "V11",
+      "kind": "layout",
+      "file": "v11.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 37,
+      "sha256": "676c9615d1a3a819f69cfcdd6df46bca54873abc825e4ebf73915e8ea0ff2a40"
+    },
+    {
+      "id": "V11",
+      "kind": "states",
+      "file": "v11-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "ede39e018b5ea36a4451079976a197fecff591d42a170b40ce89f0714333f5ed"
+    },
+    {
+      "id": "V12",
+      "kind": "layout",
+      "file": "v12.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 30,
+      "sha256": "0cc6f3abe250bc2a21ce1b7d39461d4f34033cdaf3d1ca4e33bebb663f795327"
+    },
+    {
+      "id": "V12",
+      "kind": "states",
+      "file": "v12-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "3b0c8078f0708208e816378d210bf8a3b53d91487a0217cf154a30e174885f72"
+    },
+    {
+      "id": "V13",
+      "kind": "layout",
+      "file": "v13.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 29,
+      "sha256": "ed067feba4883ba886b4f9449941a1584ed6bef729b84af90913e5fcb2bc17e4"
+    },
+    {
+      "id": "V13",
+      "kind": "states",
+      "file": "v13-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "3e1346221b5eea5b6b977a0417c3173cf26901aafbf62c5adb1288d29830aac1"
+    },
+    {
+      "id": "D13",
+      "kind": "layout",
+      "file": "d13.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 24,
+      "sha256": "b0540247cf4729519979967488582422c57b2d224bd6138c425133fa44fcdf3b"
+    },
+    {
+      "id": "D13",
+      "kind": "states",
+      "file": "d13-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 35,
+      "sha256": "d5a65344dc8af8da80d396d57e185bb23bb5a2751f298bb8c1c17d1eb101ccb2"
+    },
+    {
+      "id": "D14",
+      "kind": "layout",
+      "file": "d14.svg",
+      "width": 1280,
+      "height": 900,
+      "text_nodes": 22,
+      "sha256": "c8cd804646f8177948517730e9c1d476f3694f9a5068d8ca1c7654a0adebe29c"
+    },
+    {
+      "id": "D14",
+      "kind": "states",
+      "file": "d14-states.svg",
+      "width": 1280,
+      "height": 1024,
+      "text_nodes": 34,
+      "sha256": "6c289f27bc80245ac5bec43528a281369e8eede0d5dd472d4b2f3313ebc63d00"
+    }
+  ]
+}

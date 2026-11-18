@@ -8,7 +8,13 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GameProject {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub player_preferences: Option<crate::PlayerPreferencesConfig>,
     pub entry_scene: String,
+    /// Mutable authored source identities/paths; filesystem IO belongs to ProjectTools.
+    /// Empty preserves the legacy inline storage mode. Otherwise every scene is bound.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub scene_assets: BTreeMap<String, SceneAssetBinding>,
     pub scenes: BTreeMap<String, AuthoredScene>,
     #[serde(default)]
     pub prefabs: BTreeMap<String, Prefab>,
@@ -16,6 +22,51 @@ pub struct GameProject {
     /// Archived cue metadata; installed source contracts validate and prepare it.
     #[serde(default)]
     pub audio_cues: BTreeMap<String, String>,
+}
+
+/// Stable authored scene-file identity, separate from immutable imported resources.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SceneAssetBinding {
+    pub id: String,
+    pub path: String,
+}
+
+/// Optional authored text retains the difference between absent and explicit
+/// JSON null. Merely inspecting a legacy object must not manufacture a name.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum AuthoredName {
+    #[default]
+    Absent,
+    Null,
+    Text(String),
+}
+impl AuthoredName {
+    pub fn is_absent(&self) -> bool {
+        matches!(self, Self::Absent)
+    }
+    pub fn as_deref(&self) -> Option<&str> {
+        if let Self::Text(value) = self {
+            Some(value)
+        } else {
+            None
+        }
+    }
+}
+impl Serialize for AuthoredName {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Text(value) => serializer.serialize_str(value),
+            Self::Absent | Self::Null => serializer.serialize_none(),
+        }
+    }
+}
+impl<'de> Deserialize<'de> for AuthoredName {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Option::<String>::deserialize(deserializer)?
+            .map(Self::Text)
+            .unwrap_or(Self::Null))
+    }
 }
 
 /// Saved scene. Object positions are authored, independently of Play state.
@@ -40,6 +91,9 @@ pub struct Prefab {
 #[serde(deny_unknown_fields)]
 pub struct AuthoredObject {
     pub object: WorldObject,
+    /// Author-facing name; absent legacy names are not invented or written on selection.
+    #[serde(default, skip_serializing_if = "AuthoredName::is_absent")]
+    pub name: AuthoredName,
     #[serde(default)]
     pub prefab: Option<String>,
     #[serde(default)]
@@ -82,6 +136,7 @@ impl AuthoredObject {
     pub fn new(object: WorldObject) -> Self {
         Self {
             object,
+            name: AuthoredName::Absent,
             prefab: None,
             components: BTreeMap::new(),
             overrides: BTreeMap::new(),
@@ -94,6 +149,8 @@ impl GameProject {
     /// A neutral authored starting point with no installed gameplay assumptions.
     pub fn empty() -> Self {
         Self {
+            player_preferences: None,
+            scene_assets: Default::default(),
             entry_scene: "empty".into(),
             scenes: BTreeMap::from([(
                 "empty".into(),
@@ -263,8 +320,28 @@ impl GameProject {
     }
     /// Validate persisted data independently of the host's installed factories.
     pub fn validate_scene_data(&self) -> Result<(), String> {
+        crate::player_preferences_service_request(self)?;
         if !self.scenes.contains_key(&self.entry_scene) {
             return Err("Entry scene is missing".into());
+        }
+        if !self.scene_assets.is_empty() {
+            if self.scene_assets.keys().ne(self.scenes.keys()) {
+                return Err(
+                    "External scene bindings must cover exactly the loaded scene IDs".into(),
+                );
+            }
+            let mut identities = BTreeSet::new();
+            let mut paths = BTreeSet::new();
+            for binding in self.scene_assets.values() {
+                if binding.id.trim().is_empty() || !identities.insert(&binding.id) {
+                    return Err("Scene asset identity is empty or duplicated".into());
+                }
+                if binding.path.trim().is_empty()
+                    || !paths.insert(binding.path.replace('\\', "/").to_lowercase())
+                {
+                    return Err("Scene asset path is empty or duplicated".into());
+                }
+            }
         }
         if self.scenes.len() > 256 {
             return Err("Project exceeds 256 scenes".into());
@@ -336,6 +413,8 @@ mod tests {
     }
     fn schema_project() -> (GameProject, SystemRegistry) {
         let project = GameProject {
+            player_preferences: None,
+            scene_assets: Default::default(),
             entry_scene: "arena".into(),
             scenes: BTreeMap::from([(
                 "arena".into(),

@@ -1207,6 +1207,8 @@ mod tests {
         let mut parent = object(3, None);
         parent.object.transform.translation = [20., 0., 0.];
         GameProject {
+            player_preferences: None,
+            scene_assets: Default::default(),
             entry_scene: "source".into(),
             scenes: BTreeMap::from([
                 (

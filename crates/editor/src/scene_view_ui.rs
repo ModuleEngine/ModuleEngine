@@ -3,6 +3,9 @@
 //! `interact` produces commands before `paint`: the host validates/applies them
 //! and obtains a fresh neutral snapshot, so transform feedback renders in the
 //! same frame. This window never mutates the world, files, or undo history.
+use crate::app::editor_ui::{
+    CHROME_GAP, CHROME_PAD, SCENE_GROUP_HEIGHT, SCENE_SPEED_WIDTH, SCENE_TOOL_SIZE,
+};
 use crate::{
     assets_ui::{AssetDrag, AssetKind},
     scene_tools::{self, Axis, DragGesture, GizmoGeometry, Snap, Space, Tool},
@@ -25,11 +28,14 @@ pub enum SceneAction {
 pub struct SceneViewportState {
     /// Personal view state: the host can persist this in PaneSnapshot.
     pub camera: Camera,
+    pub camera_speed: f32,
     pub tool: Tool,
     pub space: Space,
     pub snap: Snap,
     pub gesture: Option<DragGesture>,
     pub rect: Option<Rect>,
+    pub overlay_rects: Vec<Rect>,
+    pub overlay_targets: std::collections::BTreeMap<String, Rect>,
     pub texture: Option<egui::TextureHandle>,
     gpu_texture: module_engine_player::gpu_presentation::GpuTexture,
     gpu_bridge:
@@ -39,6 +45,9 @@ pub struct SceneViewportState {
     pub error: Option<String>,
     hovered_axis: Option<Axis>,
     locked: bool,
+    camera_drag: bool,
+    camera_fly: bool,
+    camera_input_frame: Option<u64>,
     drop_hint: Option<(String, bool)>,
     render_revision: Option<u64>,
     rendered_key: Option<SceneRenderKey>,
@@ -68,10 +77,9 @@ pub struct PresentedSceneFrame {
 
 fn render_size(rect: Rect, dpi: f32) -> [usize; 2] {
     let physical = rect.size() * dpi;
-    let fit = (1280. / physical.x).min(720. / physical.y).min(1.);
     [
-        (physical.x * fit).round().max(1.) as usize,
-        (physical.y * fit).round().max(1.) as usize,
+        physical.x.round().max(1.) as usize,
+        physical.y.round().max(1.) as usize,
     ]
 }
 
@@ -109,6 +117,99 @@ fn scene_owns_press(response: &egui::Response, pointer: Pos2) -> bool {
     })
 }
 
+fn camera_wheel_steps(event: &egui::Event, options: &egui::InputOptions) -> f32 {
+    if let egui::Event::MouseWheel {
+        unit,
+        delta,
+        modifiers,
+        ..
+    } = event
+        && delta.is_finite()
+    {
+        let horizontal = modifiers.matches_any(options.horizontal_scroll_modifier);
+        let vertical = modifiers.matches_any(options.vertical_scroll_modifier);
+        if modifiers.matches_any(options.zoom_modifier) || (horizontal && !vertical) {
+            return 0.;
+        }
+        let amount = if vertical && !horizontal {
+            delta.x + delta.y
+        } else {
+            delta.y
+        };
+        match unit {
+            egui::MouseWheelUnit::Point => amount / 40.,
+            egui::MouseWheelUnit::Line => amount,
+            egui::MouseWheelUnit::Page => amount * 10.,
+        }
+    } else {
+        0.
+    }
+}
+
+/// Route each wheel event to the RMB owner at that point in the event stream.
+/// A complete press/wheel/release may arrive together in one UI frame.
+fn camera_wheel_route(
+    events: &[egui::Event],
+    final_right_down: bool,
+    was_flying: bool,
+    options: &egui::InputOptions,
+    owns_press: impl Fn(Pos2) -> bool,
+) -> (f32, f32) {
+    let right = egui::PointerButton::Secondary;
+    let mut held = events
+        .iter()
+        .find_map(|event| match event {
+            egui::Event::PointerButton {
+                button, pressed, ..
+            } if *button == right => Some(!pressed),
+            _ => None,
+        })
+        .unwrap_or(final_right_down);
+    let mut owned = was_flying && held;
+    let (mut speed, mut zoom) = (0., 0.);
+    for event in events {
+        match event {
+            egui::Event::PointerButton {
+                pos,
+                button,
+                pressed,
+                ..
+            } if *button == right => {
+                held = *pressed;
+                owned = held && owns_press(*pos);
+            }
+            _ => {
+                let steps = camera_wheel_steps(event, options);
+                if owned {
+                    speed += steps;
+                } else if !held {
+                    zoom += steps;
+                }
+            }
+        }
+    }
+    (
+        if speed.is_finite() { speed } else { 0. },
+        if zoom.is_finite() { zoom } else { 0. },
+    )
+}
+
+/// A fixed group box keeps every overlay control on the same 32-point row.
+fn option_group(ui: &mut egui::Ui, width: f32, contents: impl FnOnce(&mut egui::Ui)) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, SCENE_GROUP_HEIGHT), Sense::hover());
+    ui.painter()
+        .rect_filled(rect, 4., crate::app::editor_ui::RAISED);
+    let mut group = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect.shrink(CHROME_PAD as f32))
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    group.set_clip_rect(ui.clip_rect().intersect(rect));
+    crate::app::editor_ui::compact_spacing(&mut group);
+    group.spacing_mut().interact_size.y = SCENE_TOOL_SIZE;
+    contents(&mut group);
+}
+
 impl Default for SceneViewportState {
     fn default() -> Self {
         Self {
@@ -118,11 +219,14 @@ impl Default for SceneViewportState {
                 distance: 20.,
                 target: [0.; 3],
             },
+            camera_speed: scene_tools::DEFAULT_CAMERA_SPEED,
             tool: Tool::Translate,
             space: Space::World,
             snap: Snap::default(),
             gesture: None,
             rect: None,
+            overlay_rects: vec![],
+            overlay_targets: Default::default(),
             texture: None,
             gpu_texture: Default::default(),
             gpu_bridge: None,
@@ -131,6 +235,9 @@ impl Default for SceneViewportState {
             error: None,
             hovered_axis: None,
             locked: false,
+            camera_drag: false,
+            camera_fly: false,
+            camera_input_frame: None,
             drop_hint: None,
             render_revision: None,
             rendered_key: None,
@@ -183,6 +290,9 @@ impl SceneViewportState {
     }
     /// Call before a scene switch, Play, Undo, or another document transition.
     pub fn cancel_gesture(&mut self) -> Option<SceneAction> {
+        self.camera_drag = false;
+        self.camera_fly = false;
+        self.camera_input_frame = None;
         let gesture = self.gesture.take()?;
         self.hovered_axis = None;
         Some(SceneAction::CancelGesture {
@@ -204,67 +314,10 @@ impl SceneViewportState {
         let mut actions = vec![];
         let mut frame_selected = false;
         self.locked = locked;
-        ui.horizontal_wrapped(|ui| {
-            ui.strong("SCENE");
-            ui.add_enabled_ui(!locked && self.gesture.is_none(), |ui| {
-                for (tool, label) in [
-                    (Tool::Translate, "Move [G]"),
-                    (Tool::Rotate, "Rotate [R]"),
-                    (Tool::Scale, "Scale [S]"),
-                ] {
-                    ui.selectable_value(&mut self.tool, tool, label);
-                }
-                ui.separator();
-                ui.selectable_value(&mut self.space, Space::World, "World");
-                ui.selectable_value(&mut self.space, Space::Local, "Local");
-                ui.separator();
-                ui.checkbox(&mut self.snap.enabled, "Snap");
-                if self.snap.enabled {
-                    match self.tool {
-                        Tool::Translate => {
-                            ui.add(
-                                egui::DragValue::new(&mut self.snap.translation)
-                                    .speed(0.05)
-                                    .range(0.0001..=100000.)
-                                    .prefix("Move: "),
-                            );
-                        }
-                        Tool::Rotate => {
-                            ui.add(
-                                egui::DragValue::new(&mut self.snap.rotation_degrees)
-                                    .speed(1.)
-                                    .range(0.1..=180.)
-                                    .prefix("Rotate: ")
-                                    .suffix("°"),
-                            );
-                        }
-                        Tool::Scale => {
-                            ui.add(
-                                egui::DragValue::new(&mut self.snap.scale)
-                                    .speed(0.01)
-                                    .range(0.001..=100.)
-                                    .prefix("Scale: "),
-                            );
-                        }
-                    }
-                }
-            });
-            if ui
-                .add_enabled(
-                    selected.is_some() && self.gesture.is_none(),
-                    egui::Button::new("Frame [F]"),
-                )
-                .clicked()
-            {
-                frame_selected = true;
-            }
-            if locked {
-                ui.label("Play · editing is available after Stop");
-            }
-        });
         let size = ui.available_size().max(Vec2::splat(1.));
-        let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
+        let (rect, response) = crate::app::editor_ui::image_area(ui, size, Sense::click_and_drag());
         self.rect = Some(rect);
+        frame_selected |= self.overlays(ui, rect, selected, locked);
         // Never test newly edited geometry against a retained older image.
         // An already active gesture keeps using its captured camera/geometry.
         let image_current = self.render_revision.is_none()
@@ -273,7 +326,9 @@ impl SceneViewportState {
                     && key.size == render_size(rect, ui.ctx().pixels_per_point())
             });
         self.drop_hint = None;
-        let pointer = ui.input(|input| input.pointer.interact_pos());
+        let pointer = ui.input(|input| input.pointer.interact_pos()).filter(|p| {
+            self.gesture.is_some() || !self.overlay_rects.iter().any(|r| r.contains(*p))
+        });
         let primary_pressed =
             ui.input(|input| input.pointer.button_pressed(egui::PointerButton::Primary));
         // A press and movement can arrive in the same input frame. The latest
@@ -310,7 +365,10 @@ impl SceneViewportState {
                 });
             (press.map(|(_, pos)| pos), release)
         });
-        let primary_press = primary_press.filter(|pointer| scene_owns_press(&response, *pointer));
+        let primary_press = primary_press.filter(|pointer| {
+            !self.overlay_rects.iter().any(|r| r.contains(*pointer))
+                && scene_owns_press(&response, *pointer)
+        });
         if primary_press.is_some()
             || (response.contains_pointer()
                 && ui.input(|input| input.pointer.button_pressed(egui::PointerButton::Middle)))
@@ -318,7 +376,8 @@ impl SceneViewportState {
             response.request_focus();
         }
         let keyboard = response.has_focus() && !ui.ctx().text_edit_focused();
-        if keyboard {
+        if keyboard && !ui.input(|input| input.pointer.button_down(egui::PointerButton::Secondary))
+        {
             frame_selected |=
                 ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::F));
             if !locked && self.gesture.is_none() {
@@ -360,7 +419,7 @@ impl SceneViewportState {
                 self.focus_object(objects, snapshot, id, rect);
             }
         }
-        let geometry = (!locked && image_current)
+        let geometry = (!locked && image_current && !self.camera_fly)
             .then(|| {
                 selected.and_then(|id| {
                     GizmoGeometry::build(
@@ -446,6 +505,7 @@ impl SceneViewportState {
             ui.ctx().request_repaint();
         }
         if !handled_gesture
+            && !self.camera_fly
             && image_current
             && response.clicked_by(egui::PointerButton::Primary)
             && !dragging_asset
@@ -456,7 +516,9 @@ impl SceneViewportState {
                 .map(|hit| hit.id);
             actions.push(SceneAction::Select(id));
         }
-        self.asset_drop(ui, &response, rect, snapshot, image_current, &mut actions);
+        if !self.camera_fly {
+            self.asset_drop(ui, &response, rect, snapshot, image_current, &mut actions);
+        }
         actions
     }
 
@@ -545,6 +607,12 @@ impl SceneViewportState {
                         frame,
                     ) {
                         Ok(true) => {
+                            if std::env::var_os("MODULE_ENGINE_SCENE_IMAGE_TRACE").is_some() {
+                                eprintln!(
+                                    "Scene image: {}",
+                                    serde_json::json!({"logical_area":[rect.width(),rect.height()],"pixels_per_point":dpi,"requested_pixels":[width,height],"displayed_frame_pixels":[frame.width,frame.height],"settled_1_to_1":([width,height]==[frame.width,frame.height]),"pending":presented.pending,"gpu_resident":frame.gpu.is_some()})
+                                );
+                            }
                             self.displayed_camera = Some(presented.camera);
                             let completed_key = SceneRenderKey {
                                 revision: presented.revision,
@@ -693,7 +761,7 @@ impl SceneViewportState {
         let help = if self.gesture.is_some() {
             "Esc: cancel · release LMB: apply"
         } else {
-            "LMB: select · G/R/S: tool · MMB: orbit · Shift+MMB: pan · wheel: zoom · F: focus"
+            "RMB: WASD fly · Q/E down/up · wheel speed · MMB orbit · Shift+MMB pan · wheel zoom · F focus"
         };
         painter.text(
             rect.left_bottom() + Vec2::new(9., -9.),
@@ -713,6 +781,288 @@ impl SceneViewportState {
         }
     }
 
+    fn orientation_controls(&mut self, ui: &mut egui::Ui) {
+        use crate::app::editor_ui::{self, Icon};
+        let (icon, help) = match self.space {
+            Space::World => (Icon::World, "World axes · click to switch to Local axes"),
+            Space::Local => (Icon::Local, "Local axes · click to switch to World axes"),
+        };
+        let response = editor_ui::icon_button_sized(
+            ui,
+            icon,
+            help,
+            true,
+            self.space == Space::Local,
+            SCENE_TOOL_SIZE,
+        );
+        self.overlay_targets
+            .insert("Orientation".into(), response.rect);
+        if response.clicked() {
+            self.space = match self.space {
+                Space::World => Space::Local,
+                Space::Local => Space::World,
+            };
+        }
+    }
+
+    fn camera_speed_control(&mut self, ui: &mut egui::Ui) {
+        let response = ui
+            .scope(|ui| {
+                // Keep "Speed 1000.0" readable inside the fixed compact field.
+                // DragValue otherwise expands past it using the form's 8px padding.
+                ui.spacing_mut().button_padding.x = CHROME_GAP;
+                ui.add_sized(
+                    egui::vec2(SCENE_SPEED_WIDTH, SCENE_TOOL_SIZE),
+                    egui::DragValue::new(&mut self.camera_speed)
+                        .speed(0.1)
+                        .range(scene_tools::MIN_CAMERA_SPEED..=scene_tools::MAX_CAMERA_SPEED)
+                        .fixed_decimals(1)
+                        .prefix("Speed "),
+                )
+            })
+            .inner
+            .on_hover_text(
+                "Camera flight speed · world units/s · Hold RMB and scroll to change speed",
+            );
+        self.overlay_targets
+            .insert("CameraSpeed".into(), response.rect);
+    }
+
+    fn snap_steps(&mut self, ui: &mut egui::Ui) {
+        ui.strong("Snap steps");
+        for (name, value, range, prefix, suffix) in [
+            (
+                "MoveStep",
+                &mut self.snap.translation,
+                0.0001..=100000.,
+                "Move: ",
+                "",
+            ),
+            (
+                "RotateStep",
+                &mut self.snap.rotation_degrees,
+                0.1..=180.,
+                "Rotate: ",
+                "°",
+            ),
+            (
+                "ScaleStep",
+                &mut self.snap.scale,
+                0.001..=100.,
+                "Scale: ",
+                "",
+            ),
+        ] {
+            let response = ui.add(
+                egui::DragValue::new(value)
+                    .range(range)
+                    .prefix(prefix)
+                    .suffix(suffix),
+            );
+            self.overlay_targets.insert(name.into(), response.rect);
+        }
+    }
+
+    fn snap_controls(&mut self, ui: &mut egui::Ui, compact: bool) {
+        use crate::app::editor_ui::{self, Icon};
+        // Popup areas do not inherit enabled state from their invoking Ui.
+        let enabled = ui.is_enabled();
+        ui.horizontal(|ui| {
+            let response = editor_ui::icon_button_sized(
+                ui,
+                Icon::Snap,
+                "Snap · enable move, rotate and scale increments",
+                true,
+                self.snap.enabled,
+                SCENE_TOOL_SIZE,
+            );
+            self.overlay_targets.insert("Snap".into(), response.rect);
+            if response.clicked() {
+                self.snap.enabled = !self.snap.enabled;
+            }
+            if compact {
+                // A real submenu keeps the compact parent open. A standalone
+                // Popup::menu would replace that parent in egui's popup memory.
+                let (response, _) = egui::containers::menu::SubMenuButton::new("Snap steps")
+                    .config(
+                        egui::containers::menu::MenuConfig::new()
+                            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside),
+                    )
+                    .ui(ui, |ui| {
+                        ui.add_enabled_ui(enabled, |ui| self.snap_steps(ui));
+                    });
+                self.overlay_targets
+                    .insert("SnapSettings".into(), response.rect);
+                return;
+            }
+            let response = editor_ui::icon_button_sized(
+                ui,
+                Icon::Settings,
+                "Snap settings · configure move, rotate and scale increments",
+                true,
+                false,
+                SCENE_TOOL_SIZE,
+            );
+            self.overlay_targets
+                .insert("SnapSettings".into(), response.rect);
+            if let Some(popup) = egui::Popup::menu(&response)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .show(|ui| {
+                    ui.add_enabled_ui(enabled, |ui| self.snap_steps(ui));
+                })
+            {
+                self.overlay_rects.push(popup.response.rect);
+            }
+        });
+    }
+
+    fn overlays(
+        &mut self,
+        ui: &mut egui::Ui,
+        rect: Rect,
+        selected: Option<u64>,
+        locked: bool,
+    ) -> bool {
+        use crate::app::editor_ui::{self, Icon};
+        self.overlay_rects.clear();
+        self.overlay_targets.clear();
+        if rect.width() < 64. || rect.height() < 28. {
+            return false;
+        }
+        let ctx = ui.ctx().clone();
+        let editing = ui.is_enabled() && !locked && self.gesture.is_none() && !self.camera_fly;
+        let navigation = ui.is_enabled() && self.gesture.is_none() && !self.camera_fly;
+        let can_frame =
+            ui.is_enabled() && selected.is_some() && self.gesture.is_none() && !self.camera_fly;
+        let surface = || {
+            egui::Frame::new()
+                .fill(editor_ui::RAISED)
+                .inner_margin(CHROME_PAD)
+                .corner_radius(4)
+        };
+        let tools = [
+            (Tool::Translate, Icon::Move, "Move · G"),
+            (Tool::Rotate, Icon::Rotate, "Rotate · R"),
+            (Tool::Scale, Icon::Scale, "Scale · S"),
+        ];
+        let mut frame = false;
+        if rect.width() < 400. || rect.height() < 160. {
+            let compact =
+                egui::Area::new(ui.make_persistent_id(("scene-compact", self.presentation_owner)))
+                    .order(egui::Order::Foreground)
+                    .enabled(ui.is_enabled())
+                    .fixed_pos(rect.min + Vec2::splat(4.))
+                    .constrain_to(rect)
+                    .show(&ctx, |ui| {
+                        surface().show(ui, |ui| {
+                            let (menu, _) = egui::containers::menu::MenuButton::new(format!(
+                                "Scene · {:?}",
+                                self.tool
+                            ))
+                            .config(
+                                egui::containers::menu::MenuConfig::new()
+                                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside),
+                            )
+                            .ui(ui, |ui| {
+                                ui.add_enabled_ui(editing, |ui| {
+                                    for (tool, _, label) in tools {
+                                        ui.selectable_value(&mut self.tool, tool, label);
+                                    }
+                                    ui.separator();
+                                    ui.strong("Transform axes");
+                                    self.orientation_controls(ui);
+                                    ui.separator();
+                                    ui.strong("Snapping");
+                                    self.snap_controls(ui, true);
+                                });
+                                ui.separator();
+                                ui.strong("Camera");
+                                ui.add_enabled_ui(navigation, |ui| self.camera_speed_control(ui));
+                                ui.separator();
+                                if ui
+                                    .add_enabled(can_frame, egui::Button::new("Frame selected · F"))
+                                    .clicked()
+                                {
+                                    frame = true;
+                                    ui.close();
+                                }
+                            });
+                            self.overlay_targets.insert("Compact".into(), menu.rect);
+                        });
+                    });
+            self.overlay_rects.push(compact.response.rect);
+            return frame;
+        }
+        let rail = egui::Area::new(ui.make_persistent_id(("scene-tools", self.presentation_owner)))
+            .order(egui::Order::Foreground)
+            .enabled(ui.is_enabled())
+            .fixed_pos(rect.min + Vec2::splat(CHROME_GAP))
+            .constrain_to(rect)
+            .show(&ctx, |ui| {
+                surface().show(ui, |ui| {
+                    editor_ui::compact_spacing(ui);
+                    ui.vertical(|ui| {
+                        for (tool, icon, label) in tools {
+                            let response = editor_ui::icon_button_sized(
+                                ui,
+                                icon,
+                                label,
+                                editing,
+                                self.tool == tool,
+                                SCENE_TOOL_SIZE,
+                            );
+                            self.overlay_targets
+                                .insert(format!("{tool:?}"), response.rect);
+                            if response.clicked() {
+                                self.tool = tool;
+                            }
+                        }
+                    });
+                });
+            });
+        self.overlay_rects.push(rail.response.rect);
+        let speed_width = SCENE_SPEED_WIDTH + 2. * CHROME_PAD as f32;
+        let snap_width = 2. * SCENE_TOOL_SIZE + CHROME_GAP + 2. * CHROME_PAD as f32;
+        let right_width = 2. * SCENE_GROUP_HEIGHT + speed_width + snap_width + 3. * CHROME_GAP;
+        let right =
+            egui::Area::new(ui.make_persistent_id(("scene-options", self.presentation_owner)))
+                .order(egui::Order::Foreground)
+                .enabled(ui.is_enabled())
+                .fixed_pos(egui::pos2(
+                    rect.right() - CHROME_GAP - right_width,
+                    rect.top() + CHROME_GAP,
+                ))
+                .constrain_to(rect)
+                .show(&ctx, |ui| {
+                    editor_ui::compact_spacing(ui);
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
+                        option_group(ui, SCENE_GROUP_HEIGHT, |ui| {
+                            ui.add_enabled_ui(editing, |ui| self.orientation_controls(ui));
+                        });
+                        option_group(ui, speed_width, |ui| {
+                            ui.add_enabled_ui(navigation, |ui| self.camera_speed_control(ui));
+                        });
+                        option_group(ui, snap_width, |ui| {
+                            ui.add_enabled_ui(editing, |ui| self.snap_controls(ui, false));
+                        });
+                        option_group(ui, SCENE_GROUP_HEIGHT, |ui| {
+                            let response = editor_ui::icon_button_sized(
+                                ui,
+                                Icon::Frame,
+                                "Frame selected · F",
+                                can_frame,
+                                false,
+                                SCENE_TOOL_SIZE,
+                            );
+                            self.overlay_targets.insert("Frame".into(), response.rect);
+                            frame |= response.clicked();
+                        });
+                    });
+                });
+        self.overlay_rects.push(right.response.rect);
+        frame
+    }
+
     fn report_error(&mut self, error: String, actions: &mut Vec<SceneAction>) {
         if self.error.as_ref() != Some(&error) {
             actions.push(SceneAction::Error(error.clone()));
@@ -720,7 +1070,162 @@ impl SceneViewportState {
         self.error = Some(error);
     }
     fn camera_input(&mut self, ui: &egui::Ui, response: &egui::Response, rect: Rect) {
-        if response.dragged_by(egui::PointerButton::Middle) {
+        let middle = egui::PointerButton::Middle;
+        let right = egui::PointerButton::Secondary;
+        let frame = ui.ctx().cumulative_frame_nr();
+        // A hidden area must not resume an old held-button capture on return.
+        if self.camera_input_frame.is_some_and(|last| frame > last + 1) {
+            self.camera_fly = false;
+            self.camera_drag = false;
+        }
+        self.camera_input_frame = Some(frame);
+        if !ui.is_enabled() || !ui.input(|i| i.focused) || egui::Popup::is_any_open(ui.ctx()) {
+            self.camera_drag = false;
+            self.camera_fly = false;
+            return;
+        }
+        let was_flying = self.camera_fly;
+        if was_flying
+            && (!response.has_focus()
+                || ui.ctx().text_edit_focused()
+                || ui.input(|i| i.pointer.latest_pos().is_none()))
+        {
+            self.camera_fly = false;
+            return;
+        }
+        let can_start = !self.camera_drag
+            && !egui::DragAndDrop::has_any_payload(ui.ctx())
+            && !ui.input(|i| {
+                i.pointer.button_down(egui::PointerButton::Primary) || i.pointer.button_down(middle)
+            });
+        let owns_press = |pointer| {
+            can_start
+                && !self.overlay_rects.iter().any(|r| r.contains(pointer))
+                && scene_owns_press(response, pointer)
+        };
+        // Ownership probes read Context layers/memory. Do not run them while
+        // Context::input holds its lock; copy only the small navigation events.
+        let (wheel_events, final_right_down) = ui.input(|input| {
+            (
+                input
+                    .events
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            egui::Event::MouseWheel { .. }
+                                | egui::Event::PointerButton {
+                                    button: egui::PointerButton::Secondary,
+                                    ..
+                                }
+                        )
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                input.pointer.button_down(right),
+            )
+        });
+        let wheel_options = ui.ctx().options(|options| options.input_options);
+        let (speed_wheel, zoom_wheel) = camera_wheel_route(
+            &wheel_events,
+            final_right_down,
+            was_flying,
+            &wheel_options,
+            owns_press,
+        );
+        let right_press = wheel_events.iter().rev().find_map(|event| match event {
+            egui::Event::PointerButton {
+                pos,
+                button,
+                pressed: true,
+                ..
+            } if *button == right => Some(*pos),
+            _ => None,
+        });
+        let starting_fly =
+            right_press.is_some_and(owns_press) && ui.input(|i| i.pointer.button_down(right));
+        if ui.input(|i| i.pointer.button_released(right) || !i.pointer.button_down(right)) {
+            self.camera_fly = false;
+        }
+        if starting_fly {
+            response.request_focus();
+            self.camera_fly = true;
+        }
+        if ui.ctx().text_edit_focused() {
+            self.camera_drag = false;
+            self.camera_fly = false;
+            return;
+        }
+        if self.camera_fly
+            && (!response.has_focus()
+                || ui.input(|i| i.pointer.latest_pos().is_none())
+                || ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)))
+        {
+            self.camera_fly = false;
+            return;
+        }
+        if speed_wheel != 0. {
+            self.camera_speed = scene_tools::camera_speed(
+                self.camera_speed * 1.25_f32.powf(speed_wheel.clamp(-64., 64.)),
+            );
+            ui.input_mut(|input| input.smooth_scroll_delta = Vec2::ZERO);
+            ui.ctx().request_repaint();
+        }
+        if zoom_wheel != 0.
+            && response.hovered()
+            && !ui
+                .input(|i| i.pointer.hover_pos())
+                .is_some_and(|pointer| self.overlay_rects.iter().any(|r| r.contains(pointer)))
+        {
+            self.camera.distance =
+                (self.camera.distance * (-zoom_wheel * 0.08).exp()).clamp(0.2, 1000.);
+        }
+        if self.camera_fly {
+            let (look, movement, seconds) = ui.input(|input| {
+                let axis = |positive, negative| {
+                    i32::from(input.key_down(positive)) as f32
+                        - i32::from(input.key_down(negative)) as f32
+                };
+                (
+                    if starting_fly {
+                        Vec2::ZERO
+                    } else {
+                        input.pointer.motion().unwrap_or(input.pointer.delta())
+                    },
+                    [
+                        axis(egui::Key::D, egui::Key::A),
+                        axis(egui::Key::E, egui::Key::Q),
+                        axis(egui::Key::W, egui::Key::S),
+                    ],
+                    input.stable_dt,
+                )
+            });
+            scene_tools::fly_camera(
+                &mut self.camera,
+                rect,
+                look,
+                movement,
+                self.camera_speed,
+                seconds,
+            );
+            ui.input_mut(|input| input.smooth_scroll_delta = Vec2::ZERO);
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+            ui.ctx().request_repaint();
+            return;
+        }
+        if response.drag_started_by(middle) {
+            self.camera_drag = true;
+        }
+        if ui.input(|i| i.pointer.button_released(middle) || !i.pointer.button_down(middle)) {
+            self.camera_drag = false;
+        }
+        let over_overlay = ui
+            .input(|i| i.pointer.hover_pos())
+            .is_some_and(|p| self.overlay_rects.iter().any(|r| r.contains(p)));
+        if over_overlay && !self.camera_drag {
+            return;
+        }
+        if self.camera_drag {
             let delta = ui.input(|input| input.pointer.delta());
             if ui.input(|input| input.modifiers.shift) {
                 if let Some(pointer) = ui.input(|input| input.pointer.interact_pos())
@@ -746,13 +1251,6 @@ impl SceneViewportState {
             } else {
                 self.camera.yaw -= delta.x * 0.009;
                 self.camera.pitch = (self.camera.pitch + delta.y * 0.007).clamp(-1.45, 1.45);
-            }
-        }
-        if response.hovered() {
-            let scroll = ui.input(|input| input.smooth_scroll_delta().y);
-            if scroll != 0. {
-                self.camera.distance =
-                    (self.camera.distance * (-scroll * 0.002).exp()).clamp(0.2, 1000.);
             }
         }
     }
@@ -787,6 +1285,12 @@ impl SceneViewportState {
         actions: &mut Vec<SceneAction>,
     ) {
         let locked = self.locked;
+        if ui
+            .input(|i| i.pointer.hover_pos())
+            .is_some_and(|p| self.overlay_rects.iter().any(|r| r.contains(p)))
+        {
+            return;
+        }
         if let Some(payload) = response.dnd_hover_payload::<AssetDrag>() {
             let pointer = ui.input(|input| input.pointer.interact_pos());
             let ray = pointer
@@ -916,6 +1420,117 @@ fn draw_bounds(painter: &egui::Painter, camera: Camera, rect: Rect, [min, max]: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn scene_default_uses_all_physical_pixels_without_the_old_720p_cap() {
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(1600., 1000.));
+        assert_eq!(render_size(rect, 1.), [1600, 1000]);
+        assert_eq!(render_size(rect, 1.5), [2400, 1500]);
+        assert_eq!(render_size(rect, 2.), [3200, 2000]);
+        let portrait = Rect::from_min_size(Pos2::ZERO, Vec2::new(768., 1080.));
+        assert_eq!(render_size(portrait, 1.), [768, 1080]);
+    }
+    #[test]
+    fn large_scene_painter_requests_full_physical_area() {
+        let ctx = egui::Context::default();
+        ctx.set_pixels_per_point(1.5);
+        let mut state = SceneViewportState::default();
+        let mut requested = [0, 0];
+        let mut raw = input(0., vec![]);
+        raw.screen_rect = Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1600., 1000.)));
+        // A native renderer supplies this limit. Bound the root child because
+        // egui's initial sizing pass otherwise exposes a 10000px probe surface.
+        raw.max_texture_side = Some(4096);
+        ctx.run_ui(raw, |ui| {
+            ui.scope_builder(
+                egui::UiBuilder::new()
+                    .max_rect(Rect::from_min_size(Pos2::ZERO, Vec2::new(1600., 1000.))),
+                |ui| {
+                    state.interact(ui, &objects(), &snapshot(), Some(7), false);
+                    state.paint(
+                        ui,
+                        &objects(),
+                        &snapshot(),
+                        Some(7),
+                        &mut |_camera, width, height| {
+                            requested = [width, height];
+                            Ok(Frame {
+                                width,
+                                height,
+                                rgba: vec![255; width * height * 4],
+                                gpu: None,
+                                stats: RenderStats::default(),
+                            })
+                        },
+                    );
+                },
+            );
+        })
+        .drop_without_applying_deltas();
+        let physical = state.rect.unwrap().size() * 1.5;
+        assert_eq!(
+            requested,
+            [physical.x.round() as usize, physical.y.round() as usize]
+        );
+        assert_eq!(requested, [2400, 1500]);
+    }
+    #[test]
+    fn fractional_dock_rect_uses_pixel_aligned_image_and_input_at_each_dpi() {
+        for dpi in [1., 1.5, 2.] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(dpi);
+            let mut state = SceneViewportState::default();
+            let mut requested = [0, 0];
+            let output = ctx.run_ui(input(0., vec![]), |ui| {
+                let mut area = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(
+                    Pos2::new(10.37, 12.23),
+                    Vec2::new(601.2, 403.3),
+                )));
+                state.interact(&mut area, &objects(), &snapshot(), None, false);
+                state.paint(
+                    &mut area,
+                    &objects(),
+                    &snapshot(),
+                    None,
+                    &mut |_, width, height| {
+                        requested = [width, height];
+                        Ok(Frame {
+                            width,
+                            height,
+                            rgba: vec![255; width * height * 4],
+                            gpu: None,
+                            stats: RenderStats::default(),
+                        })
+                    },
+                );
+            });
+            let rect = state.rect.unwrap();
+            for coordinate in [rect.min.x, rect.min.y, rect.max.x, rect.max.y] {
+                assert!((coordinate * dpi - (coordinate * dpi).round()).abs() < 0.001);
+            }
+            assert_eq!(
+                requested,
+                [
+                    (rect.width() * dpi).round() as usize,
+                    (rect.height() * dpi).round() as usize
+                ]
+            );
+            let texture = state.texture.as_ref().unwrap().id();
+            let primitives = ctx.tessellate(output.shapes.clone(), output.pixels_per_point);
+            let mesh = primitives
+                .iter()
+                .find_map(|shape| match &shape.primitive {
+                    egui::epaint::Primitive::Mesh(mesh) if mesh.texture_id == texture => Some(mesh),
+                    _ => None,
+                })
+                .expect("Scene image mesh");
+            assert_eq!(
+                mesh.calc_bounds(),
+                rect,
+                "Image quad and Scene input must share one rect"
+            );
+            output.drop_without_applying_deltas();
+        }
+    }
     use module_engine_core::{Material, Mesh, RenderItem, RenderStats};
     fn objects() -> Vec<WorldObject> {
         vec![WorldObject {
@@ -1026,7 +1641,7 @@ mod tests {
             0.2,
         );
         assert!(actions.contains(&SceneAction::Select(Some(7))));
-        let empty = state.rect.unwrap().left_top() + Vec2::splat(20.);
+        let empty = state.rect.unwrap().left_bottom() + Vec2::new(20., -20.);
         frame(
             &ctx,
             &mut state,
@@ -1925,12 +2540,1125 @@ mod tests {
             });
         });
         output.drop_without_applying_deltas();
-        assert!(requested.0 > 0 && requested.0 <= 1280 && requested.1 > 0 && requested.1 <= 720);
+        let physical = state.rect.unwrap().size() * ctx.pixels_per_point();
+        assert_eq!(
+            (requested.0, requested.1),
+            (physical.x.round() as usize, physical.y.round() as usize)
+        );
         assert!(
             (requested.0 as f32 / requested.1 as f32 - state.rect.unwrap().aspect_ratio()).abs()
                 < 0.01
         );
         assert_eq!(authored, before);
         assert!(state.texture.is_some());
+    }
+    #[test]
+    fn real_transform_overlay_owns_clicks_and_keeps_selection_and_camera() {
+        let ctx = egui::Context::default();
+        let mut state = SceneViewportState::default();
+        frame(&ctx, &mut state, vec![], Some(7), false, 0.);
+        frame(&ctx, &mut state, vec![], Some(7), false, 0.1);
+        let at = state.overlay_targets["Rotate"].center();
+        let camera = state.camera;
+        let press = frame(
+            &ctx,
+            &mut state,
+            vec![egui::Event::PointerMoved(at), button(at, true)],
+            Some(7),
+            false,
+            0.2,
+        );
+        let release = frame(
+            &ctx,
+            &mut state,
+            vec![button(at, false)],
+            Some(7),
+            false,
+            0.3,
+        );
+        assert_eq!(state.tool, Tool::Rotate);
+        assert_eq!(state.camera, camera);
+        assert!(press.is_empty() && release.is_empty());
+        assert!(state.gesture.is_none());
+    }
+    #[test]
+    fn compact_scene_keeps_a_tool_menu_and_disabled_parent_cannot_change_preferences() {
+        for width in [70., 100., 160., 200., 300.] {
+            let ctx = egui::Context::default();
+            let mut state = SceneViewportState::default();
+            for step in 0..3 {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 240.))),
+                        time: Some(step as f64),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        state.interact(ui, &objects(), &snapshot(), Some(7), false);
+                    },
+                );
+                output.drop_without_applying_deltas();
+            }
+            assert!(state.overlay_targets.contains_key("Compact"));
+            assert_eq!(state.overlay_rects.len(), 1);
+            assert!(state.rect.unwrap().contains_rect(state.overlay_rects[0]));
+        }
+        let ctx = egui::Context::default();
+        let mut state = SceneViewportState::default();
+        frame(&ctx, &mut state, vec![], Some(7), false, 0.);
+        frame(&ctx, &mut state, vec![], Some(7), false, 0.1);
+        let at = state.overlay_targets["Snap"].center();
+        for (step, pressed) in [(0.2, true), (0.3, false)] {
+            let output = ctx.run_ui(
+                input(
+                    step,
+                    vec![egui::Event::PointerMoved(at), button(at, pressed)],
+                ),
+                |ui| {
+                    ui.disable();
+                    state.interact(ui, &objects(), &snapshot(), Some(7), false);
+                },
+            );
+            output.drop_without_applying_deltas();
+        }
+        assert!(!state.snap.enabled);
+    }
+    #[test]
+    fn camera_drag_retains_owner_when_crossing_the_real_tools_overlay() {
+        let ctx = egui::Context::default();
+        let mut state = SceneViewportState::default();
+        frame(&ctx, &mut state, vec![], Some(7), false, 0.);
+        frame(&ctx, &mut state, vec![], Some(7), false, 0.1);
+        let start = state.rect.unwrap().center();
+        let middle = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Middle,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(
+            &ctx,
+            &mut state,
+            vec![egui::Event::PointerMoved(start), middle(start, true)],
+            Some(7),
+            false,
+            0.2,
+        );
+        frame(
+            &ctx,
+            &mut state,
+            vec![egui::Event::PointerMoved(start + Vec2::new(30., 10.))],
+            Some(7),
+            false,
+            0.3,
+        );
+        let before = state.camera;
+        let overlay = state.overlay_targets["Rotate"].center();
+        frame(
+            &ctx,
+            &mut state,
+            vec![egui::Event::PointerMoved(overlay)],
+            Some(7),
+            false,
+            0.4,
+        );
+        assert_ne!(state.camera, before);
+        frame(
+            &ctx,
+            &mut state,
+            vec![middle(overlay, false)],
+            Some(7),
+            false,
+            0.5,
+        );
+        assert!(!state.camera_drag);
+    }
+
+    fn right_button(pos: Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+    fn key_event(key: egui::Key, pressed: bool) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+    fn settled_scene() -> (egui::Context, SceneViewportState) {
+        let ctx = egui::Context::default();
+        let mut state = SceneViewportState::default();
+        frame(&ctx, &mut state, vec![], Some(7), false, 0.);
+        frame(&ctx, &mut state, vec![], Some(7), false, 0.01);
+        (ctx, state)
+    }
+
+    #[test]
+    fn right_mouse_flight_moves_looks_and_releases_without_authoring_commands() {
+        let (ctx, mut state) = settled_scene();
+        let rect = state.rect.unwrap();
+        let at = rect.center();
+        let initial = state.camera;
+        // Keys alone cannot move an unfocused/idle Scene camera.
+        assert!(
+            frame(
+                &ctx,
+                &mut state,
+                vec![key_event(egui::Key::W, true)],
+                Some(7),
+                false,
+                0.02
+            )
+            .is_empty()
+        );
+        assert_eq!(state.camera, initial);
+        let actions = frame(
+            &ctx,
+            &mut state,
+            vec![egui::Event::PointerMoved(at), right_button(at, true)],
+            Some(7),
+            false,
+            0.03,
+        );
+        assert!(state.camera_fly && actions.is_empty());
+        let forward = scene_tools::camera_ray(initial, rect, at)
+            .unwrap()
+            .direction;
+        let delta: [f32; 3] = std::array::from_fn(|i| state.camera.target[i] - initial.target[i]);
+        assert!(delta.iter().zip(forward).map(|(a, b)| a * b).sum::<f32>() > 0.);
+        let eye = scene_tools::camera_ray(state.camera, rect, at)
+            .unwrap()
+            .origin;
+        assert!(
+            frame(
+                &ctx,
+                &mut state,
+                vec![
+                    key_event(egui::Key::W, false),
+                    egui::Event::PointerMoved(at + Vec2::new(50., -15.))
+                ],
+                Some(7),
+                false,
+                0.04
+            )
+            .is_empty()
+        );
+        let turned_eye = scene_tools::camera_ray(state.camera, rect, at)
+            .unwrap()
+            .origin;
+        assert!(
+            eye.into_iter()
+                .zip(turned_eye)
+                .all(|(a, b)| (a - b).abs() < 0.0001)
+        );
+        assert_ne!(state.camera.yaw, initial.yaw);
+        // S is backwards in flight and never changes the transform tool.
+        assert!(
+            frame(
+                &ctx,
+                &mut state,
+                vec![key_event(egui::Key::S, true), button(at, true)],
+                Some(7),
+                false,
+                0.05
+            )
+            .is_empty()
+        );
+        assert_eq!(state.tool, Tool::Translate);
+        assert!(state.gesture.is_none());
+        assert!(
+            frame(
+                &ctx,
+                &mut state,
+                vec![button(at, false)],
+                Some(7),
+                false,
+                0.06
+            )
+            .is_empty()
+        );
+        let before_release = state.camera;
+        assert!(
+            frame(
+                &ctx,
+                &mut state,
+                vec![right_button(at, false)],
+                Some(7),
+                false,
+                0.07
+            )
+            .is_empty()
+        );
+        assert!(!state.camera_fly);
+        frame(&ctx, &mut state, vec![], Some(7), false, 0.08);
+        assert_eq!(state.camera, before_release);
+    }
+
+    #[test]
+    fn flight_cannot_start_from_an_overlay_or_another_widgets_press_origin() {
+        for overlay in [
+            None,
+            Some(SceneOverlay::SameLayer),
+            Some(SceneOverlay::Foreground),
+        ] {
+            let (ctx, mut state) = settled_scene();
+            let rect = Rect::from_min_size(Pos2::new(300., 240.), Vec2::new(100., 100.));
+            let extra = overlay.map(|kind| (kind, rect));
+            frame_with_overlay(&ctx, &mut state, vec![], Some(7), false, 0.02, extra);
+            frame_with_overlay(&ctx, &mut state, vec![], Some(7), false, 0.03, extra);
+            let from = overlay.map_or(state.overlay_targets["Orientation"].center(), |_| {
+                rect.center()
+            });
+            let to = state.rect.unwrap().center() + Vec2::new(150., 100.);
+            let before = state.camera;
+            let actions = frame_with_overlay(
+                &ctx,
+                &mut state,
+                vec![
+                    egui::Event::PointerMoved(from),
+                    right_button(from, true),
+                    egui::Event::PointerMoved(to),
+                    key_event(egui::Key::W, true),
+                ],
+                Some(7),
+                false,
+                0.04,
+                extra,
+            );
+            assert!(actions.is_empty() && !state.camera_fly);
+            frame_with_overlay(&ctx, &mut state, vec![], Some(7), false, 0.05, extra);
+            assert_eq!(state.camera, before);
+        }
+    }
+
+    #[test]
+    fn flight_keeps_its_canvas_owner_across_tools_and_stops_on_cancel_lifecycle() {
+        for stop in [
+            "escape",
+            "transition",
+            "hidden",
+            "popup",
+            "disabled",
+            "focus",
+        ] {
+            let (ctx, mut state) = settled_scene();
+            let at = state.rect.unwrap().center();
+            frame(
+                &ctx,
+                &mut state,
+                vec![egui::Event::PointerMoved(at), right_button(at, true)],
+                Some(7),
+                false,
+                0.02,
+            );
+            assert!(state.camera_fly);
+            let overlay = state.overlay_targets["Orientation"].center();
+            let before = state.camera;
+            frame(
+                &ctx,
+                &mut state,
+                vec![egui::Event::PointerMoved(overlay)],
+                Some(7),
+                false,
+                0.03,
+            );
+            assert!(state.camera_fly);
+            assert_ne!(state.camera, before);
+            match stop {
+                "escape" => {
+                    frame(
+                        &ctx,
+                        &mut state,
+                        vec![key_event(egui::Key::Escape, true)],
+                        Some(7),
+                        false,
+                        0.04,
+                    );
+                }
+                "transition" => {
+                    assert!(state.cancel_gesture().is_none());
+                }
+                "hidden" => {
+                    let output = ctx.run_ui(input(0.04, vec![]), |_| {});
+                    output.drop_without_applying_deltas();
+                }
+                "popup" => {
+                    egui::Popup::open_id(&ctx, egui::Id::new("camera-blocking-menu"));
+                }
+                "disabled" | "focus" => {
+                    let mut raw = input(0.04, vec![]);
+                    raw.focused = stop != "focus";
+                    let output = ctx.run_ui(raw, |ui| {
+                        if stop == "disabled" {
+                            ui.disable();
+                        }
+                        assert!(
+                            state
+                                .interact(ui, &objects(), &snapshot(), Some(7), false)
+                                .is_empty()
+                        );
+                    });
+                    output.drop_without_applying_deltas();
+                }
+                _ => unreachable!(),
+            }
+            let before = state.camera;
+            frame(
+                &ctx,
+                &mut state,
+                vec![egui::Event::PointerMoved(at), key_event(egui::Key::W, true)],
+                Some(7),
+                false,
+                0.05,
+            );
+            assert!(!state.camera_fly, "stop={stop}");
+            assert_eq!(state.camera, before, "stop={stop}");
+        }
+    }
+
+    #[test]
+    fn orientation_and_snap_are_separate_icon_controls_with_a_dedicated_steps_popup() {
+        let (ctx, mut state) = settled_scene();
+        let camera = state.camera;
+        let steps = state.snap;
+        let click = |state: &mut SceneViewportState, target: &str, time: f64| {
+            let at = state.overlay_targets[target].center();
+            assert!(
+                frame(
+                    &ctx,
+                    state,
+                    vec![egui::Event::PointerMoved(at), button(at, true)],
+                    Some(7),
+                    false,
+                    time
+                )
+                .is_empty()
+            );
+            assert!(
+                frame(
+                    &ctx,
+                    state,
+                    vec![button(at, false)],
+                    Some(7),
+                    false,
+                    time + 0.01
+                )
+                .is_empty()
+            );
+        };
+        click(&mut state, "Orientation", 0.02);
+        assert_eq!(state.space, Space::Local);
+        assert_eq!(state.snap, steps);
+        assert!(!egui::Popup::is_any_open(&ctx));
+        click(&mut state, "Snap", 0.04);
+        assert!(state.snap.enabled);
+        assert_eq!(state.space, Space::Local);
+        assert!(!egui::Popup::is_any_open(&ctx));
+        click(&mut state, "SnapSettings", 0.06);
+        frame(&ctx, &mut state, vec![], Some(7), false, 0.08);
+        assert!(egui::Popup::is_any_open(&ctx));
+        for name in ["MoveStep", "RotateStep", "ScaleStep"] {
+            assert!(state.overlay_targets.contains_key(name));
+        }
+        assert_eq!(state.camera, camera);
+        assert_eq!(state.snap.translation, steps.translation);
+        let at = state.overlay_targets["MoveStep"].center();
+        frame(
+            &ctx,
+            &mut state,
+            vec![egui::Event::PointerMoved(at), button(at, true)],
+            Some(7),
+            false,
+            0.081,
+        );
+        let moved = at + Vec2::new(20., 0.);
+        assert!(
+            frame(
+                &ctx,
+                &mut state,
+                vec![egui::Event::PointerMoved(moved)],
+                Some(7),
+                false,
+                0.082
+            )
+            .is_empty()
+        );
+        assert!(
+            frame(
+                &ctx,
+                &mut state,
+                vec![button(moved, false)],
+                Some(7),
+                false,
+                0.083
+            )
+            .is_empty()
+        );
+        assert_ne!(state.snap.translation, steps.translation);
+        assert_eq!(state.snap.rotation_degrees, steps.rotation_degrees);
+        assert_eq!(state.snap.scale, steps.scale);
+        assert_eq!(state.space, Space::Local);
+        // The numeric popup owns RMB/WASD as well as pointer drags.
+        let at = state.overlay_targets["MoveStep"].center();
+        frame(
+            &ctx,
+            &mut state,
+            vec![
+                egui::Event::PointerMoved(at),
+                right_button(at, true),
+                key_event(egui::Key::W, true),
+            ],
+            Some(7),
+            false,
+            0.09,
+        );
+        assert!(!state.camera_fly);
+        assert_eq!(state.camera, camera);
+    }
+
+    #[test]
+    fn compact_menu_keeps_axes_and_snap_settings_separate_and_reachable() {
+        let ctx = egui::Context::default();
+        let mut state = SceneViewportState::default();
+        let mut step = 0;
+        let mut draw = |state: &mut SceneViewportState, events| {
+            let mut raw = input(step as f64 * 0.02, events);
+            step += 1;
+            raw.screen_rect = Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(240., 360.)));
+            let output = ctx.run_ui(raw, |ui| {
+                assert!(
+                    state
+                        .interact(ui, &objects(), &snapshot(), Some(7), false)
+                        .is_empty()
+                );
+            });
+            output.drop_without_applying_deltas();
+        };
+        draw(&mut state, vec![]);
+        draw(&mut state, vec![]);
+        let at = state.overlay_targets["Compact"].center();
+        draw(
+            &mut state,
+            vec![egui::Event::PointerMoved(at), button(at, true)],
+        );
+        draw(&mut state, vec![button(at, false)]);
+        draw(&mut state, vec![]);
+        let at = state.overlay_targets["Orientation"].center();
+        draw(
+            &mut state,
+            vec![egui::Event::PointerMoved(at), button(at, true)],
+        );
+        draw(&mut state, vec![button(at, false)]);
+        assert_eq!(state.space, Space::Local);
+        assert!(!state.snap.enabled);
+        if !egui::Popup::is_any_open(&ctx) {
+            let at = state.overlay_targets["Compact"].center();
+            draw(
+                &mut state,
+                vec![egui::Event::PointerMoved(at), button(at, true)],
+            );
+            draw(&mut state, vec![button(at, false)]);
+        }
+        draw(&mut state, vec![]);
+        let at = state.overlay_targets["SnapSettings"].center();
+        draw(
+            &mut state,
+            vec![egui::Event::PointerMoved(at), button(at, true)],
+        );
+        draw(&mut state, vec![button(at, false)]);
+        draw(&mut state, vec![]);
+        assert!(state.overlay_targets.contains_key("MoveStep"));
+        assert!(state.overlay_targets.contains_key("RotateStep"));
+        assert!(state.overlay_targets.contains_key("ScaleStep"));
+    }
+
+    #[test]
+    fn text_field_takes_keys_from_flight_and_scene_can_reacquire_on_a_new_right_press() {
+        let ctx = egui::Context::default();
+        let mut state = SceneViewportState::default();
+        let mut text = String::new();
+        let mut step = 0;
+        let mut draw = |state: &mut SceneViewportState, events, focus_text: bool| {
+            let output = ctx.run_ui(input(step as f64 * 0.02, events), |ui| {
+                let field = ui.text_edit_singleline(&mut text);
+                if focus_text {
+                    field.request_focus();
+                }
+                assert!(
+                    state
+                        .interact(ui, &objects(), &snapshot(), Some(7), false)
+                        .is_empty()
+                );
+            });
+            step += 1;
+            output.drop_without_applying_deltas();
+        };
+        draw(&mut state, vec![], false);
+        draw(&mut state, vec![], false);
+        let at = state.rect.unwrap().center();
+        draw(
+            &mut state,
+            vec![egui::Event::PointerMoved(at), right_button(at, true)],
+            false,
+        );
+        assert!(state.camera_fly);
+        let before = state.camera;
+        draw(&mut state, vec![key_event(egui::Key::W, true)], true);
+        assert!(!state.camera_fly);
+        assert_eq!(state.camera, before);
+        draw(&mut state, vec![right_button(at, false)], true);
+        draw(&mut state, vec![right_button(at, true)], false);
+        assert!(
+            state.camera_fly,
+            "a new canvas RMB press can acquire focus from a text field"
+        );
+    }
+
+    #[test]
+    fn separated_scene_groups_fit_narrow_panes_and_logical_dpi_scales() {
+        for dpi in [1., 1.5, 2.] {
+            for width in [100., 300., 320., 399., 400., 480., 1000.] {
+                let ctx = egui::Context::default();
+                ctx.set_pixels_per_point(dpi);
+                let mut state = SceneViewportState::default();
+                for step in 0..3 {
+                    let mut raw = input(step as f64 * 0.02, vec![]);
+                    raw.screen_rect = Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 360.)));
+                    let output = ctx.run_ui(raw, |ui| {
+                        state.interact(ui, &objects(), &snapshot(), Some(7), false);
+                    });
+                    output.drop_without_applying_deltas();
+                }
+                let rect = state.rect.unwrap();
+                for (index, a) in state.overlay_rects.iter().enumerate() {
+                    assert!(
+                        rect.contains_rect(*a),
+                        "dpi={dpi} width={width} rect={rect:?} overlay={a:?}"
+                    );
+                    for b in &state.overlay_rects[index + 1..] {
+                        assert!(!a.intersects(*b));
+                    }
+                }
+                if rect.width() >= 400. {
+                    let axes = state.overlay_targets["Orientation"];
+                    let snap = state.overlay_targets["Snap"];
+                    let steps = state.overlay_targets["SnapSettings"];
+                    let framing = state.overlay_targets["Frame"];
+                    assert!(snap.left() - axes.right() >= 16.);
+                    assert!((framing.left() - steps.right() - 4.).abs() < 0.1);
+                    assert!((axes.width() - 32.).abs() < 0.1);
+                    for name in [
+                        "Orientation",
+                        "CameraSpeed",
+                        "Snap",
+                        "SnapSettings",
+                        "Frame",
+                    ] {
+                        let control = state.overlay_targets[name];
+                        assert!((control.height() - 32.).abs() < 0.1, "{name}: {control:?}");
+                        assert!(
+                            (control.top() - axes.top()).abs() < 0.1,
+                            "dpi={dpi} width={width} {name}: {control:?}, axes={axes:?}"
+                        );
+                    }
+                } else {
+                    assert!(state.overlay_targets.contains_key("Compact"));
+                }
+            }
+        }
+    }
+    struct OptionsHarness {
+        ctx: egui::Context,
+        view: SceneViewportState,
+        width: f32,
+        step: u32,
+        locked: bool,
+        disabled: bool,
+    }
+
+    #[test]
+    fn compact_speed_field_fits_min_max_and_typed_value_at_native_font_size() {
+        let mut harness = OptionsHarness::new(800.);
+        crate::app::editor_ui::configure(&harness.ctx);
+        for value in [scene_tools::MIN_CAMERA_SPEED, scene_tools::MAX_CAMERA_SPEED] {
+            harness.view.camera_speed = value;
+            harness.draw(vec![]);
+            let field = harness.view.overlay_targets["CameraSpeed"];
+            assert!(
+                (field.width() - SCENE_SPEED_WIDTH).abs() < 0.1,
+                "value={value} field={field:?}"
+            );
+            let output = harness.ctx.run_ui(input(1., vec![]), |ui| {
+                harness
+                    .view
+                    .interact(ui, &objects(), &snapshot(), Some(7), false);
+            });
+            let field = harness.view.overlay_targets["CameraSpeed"];
+            let text = output
+                .shapes
+                .iter()
+                .filter_map(|s| {
+                    if let egui::Shape::Text(t) = &s.shape {
+                        Some(t)
+                    } else {
+                        None
+                    }
+                })
+                .find(|t| t.galley.text().starts_with("Speed "))
+                .expect("Speed label drawn");
+            assert!(
+                field.contains_rect(Rect::from_min_size(text.pos, text.galley.size())),
+                "value={value} field={field:?} text={:?}",
+                text.galley.size()
+            );
+            output.drop_without_applying_deltas();
+        }
+        harness.click("CameraSpeed");
+        harness.draw(vec![egui::Event::Text("1000.0".into())]);
+        harness.draw(vec![key_event(egui::Key::Enter, true)]);
+        assert_eq!(harness.view.camera_speed, scene_tools::MAX_CAMERA_SPEED);
+        assert!(
+            (harness.view.overlay_targets["CameraSpeed"].width() - SCENE_SPEED_WIDTH).abs() < 0.1
+        );
+    }
+
+    fn wheel(unit: egui::MouseWheelUnit, delta: f32) -> egui::Event {
+        egui::Event::MouseWheel {
+            unit,
+            delta: Vec2::new(0., delta),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn flight_qe_is_vertical_and_owned_wheel_changes_speed_without_a_zoom_tail() {
+        let mut harness = OptionsHarness::new(1000.);
+        harness.view.camera_speed = 20.;
+        let at = harness.view.rect.unwrap().center();
+        let camera = harness.view.camera;
+        harness.draw(vec![egui::Event::PointerMoved(at), right_button(at, true)]);
+        harness.draw(vec![key_event(egui::Key::Q, true)]);
+        let descended = harness.view.camera.target;
+        assert!(descended[1] < camera.target[1]);
+        assert_eq!(descended[0], camera.target[0]);
+        assert_eq!(descended[2], camera.target[2]);
+        harness.draw(vec![
+            key_event(egui::Key::Q, false),
+            key_event(egui::Key::E, true),
+        ]);
+        assert!((harness.view.camera.target[1] - camera.target[1]).abs() < 0.0001);
+        harness.draw(vec![
+            key_event(egui::Key::E, false),
+            wheel(egui::MouseWheelUnit::Line, 1.),
+        ]);
+        assert_eq!(harness.view.camera_speed, 25.);
+        assert_eq!(harness.view.camera.distance, camera.distance);
+        harness.draw(vec![]);
+        assert_eq!(harness.view.camera_speed, 25.);
+        harness.draw(vec![wheel(egui::MouseWheelUnit::Point, -40.)]);
+        assert_eq!(harness.view.camera_speed, 20.);
+        let before_release = harness.view.camera;
+        harness.draw(vec![right_button(at, false)]);
+        for _ in 0..12 {
+            harness.draw(vec![]);
+        }
+        assert_eq!(
+            harness.view.camera, before_release,
+            "no smoothed fly-scroll zooms after release"
+        );
+        harness.draw(vec![wheel(egui::MouseWheelUnit::Line, 1.)]);
+        assert!(
+            harness.view.camera.distance < camera.distance,
+            "ordinary wheel still zooms"
+        );
+        assert_eq!(harness.view.camera_speed, 20.);
+    }
+
+    #[test]
+    fn camera_speed_text_entry_orientation_cycle_and_play_preferences_are_independent() {
+        for width in [1000., 240.] {
+            let mut harness = OptionsHarness::new(width);
+            let camera = harness.view.camera;
+            let snap = harness.view.snap;
+            for expected in [Space::Local, Space::World] {
+                if width < 400. && !egui::Popup::is_any_open(&harness.ctx) {
+                    harness.click("Compact");
+                }
+                harness.click("Orientation");
+                assert_eq!(harness.view.space, expected);
+                assert!(!harness.view.overlay_targets.contains_key("World"));
+                assert!(!harness.view.overlay_targets.contains_key("Local"));
+            }
+            if width < 400. && !egui::Popup::is_any_open(&harness.ctx) {
+                harness.click("Compact");
+            }
+            harness.click("CameraSpeed");
+            harness.draw(vec![egui::Event::Text("32.5".into())]);
+            harness.draw(vec![key_event(egui::Key::Enter, true)]);
+            assert_eq!(harness.view.camera_speed, 32.5, "width={width}");
+            assert_eq!(harness.view.camera, camera);
+            assert_eq!(harness.view.snap, snap);
+            assert_eq!(harness.view.space, Space::World);
+            // Camera preferences are allowed during Play, unlike transform axes.
+            harness.locked = true;
+            harness.draw(vec![]);
+            if width < 400. && !egui::Popup::is_any_open(&harness.ctx) {
+                harness.click("Compact");
+            }
+            harness.click("CameraSpeed");
+            harness.draw(vec![egui::Event::Text("24".into())]);
+            harness.draw(vec![key_event(egui::Key::Enter, true)]);
+            assert_eq!(harness.view.camera_speed, 24.);
+        }
+    }
+
+    #[test]
+    fn speed_wheel_limits_and_overlay_origin_keep_other_camera_state() {
+        let mut harness = OptionsHarness::new(1000.);
+        for name in ["Orientation", "CameraSpeed", "SnapSettings"] {
+            let at = harness.view.overlay_targets[name].center();
+            let before = harness.view.camera;
+            let speed = harness.view.camera_speed;
+            harness.draw(vec![
+                egui::Event::PointerMoved(at),
+                right_button(at, true),
+                wheel(egui::MouseWheelUnit::Line, 1.),
+            ]);
+            assert!(!harness.view.camera_fly);
+            assert_eq!(harness.view.camera, before);
+            assert_eq!(harness.view.camera_speed, speed);
+            harness.draw(vec![right_button(at, false)]);
+        }
+        let at = harness.view.rect.unwrap().center();
+        harness.draw(vec![egui::Event::PointerMoved(at), right_button(at, true)]);
+        harness.view.camera_speed = scene_tools::MAX_CAMERA_SPEED;
+        harness.draw(vec![wheel(egui::MouseWheelUnit::Line, 10000.)]);
+        assert_eq!(harness.view.camera_speed, scene_tools::MAX_CAMERA_SPEED);
+        harness.view.camera_speed = scene_tools::MIN_CAMERA_SPEED;
+        harness.draw(vec![wheel(egui::MouseWheelUnit::Line, -10000.)]);
+        assert_eq!(harness.view.camera_speed, scene_tools::MIN_CAMERA_SPEED);
+    }
+
+    #[test]
+    fn wheel_uses_rmb_ownership_at_its_event_not_the_final_button_state() {
+        let mut observed = vec![];
+        for case in 0..5 {
+            let mut harness = OptionsHarness::new(1000.);
+            let at = harness.view.rect.unwrap().center();
+            harness.draw(vec![egui::Event::PointerMoved(at)]);
+            if case < 2 {
+                harness.draw(vec![right_button(at, true)]);
+            }
+            let events = match case {
+                0 => vec![
+                    wheel(egui::MouseWheelUnit::Line, 1.),
+                    right_button(at, false),
+                ],
+                1 => vec![
+                    right_button(at, false),
+                    wheel(egui::MouseWheelUnit::Line, 1.),
+                ],
+                2 => vec![
+                    wheel(egui::MouseWheelUnit::Line, 1.),
+                    right_button(at, true),
+                ],
+                3 => vec![
+                    right_button(at, true),
+                    wheel(egui::MouseWheelUnit::Line, 1.),
+                ],
+                _ => vec![
+                    right_button(at, true),
+                    wheel(egui::MouseWheelUnit::Line, 1.),
+                    right_button(at, false),
+                ],
+            };
+            let distance = harness.view.camera.distance;
+            harness.draw(events);
+            observed.push((
+                case,
+                harness.view.camera_speed,
+                harness.view.camera.distance < distance,
+                harness.view.camera_fly,
+            ));
+        }
+        assert_eq!(
+            observed,
+            vec![
+                (0, 10., false, false),
+                (1, 8., true, false),
+                (2, 8., true, true),
+                (3, 10., false, true),
+                (4, 10., false, false)
+            ]
+        );
+    }
+
+    #[test]
+    fn camera_wheel_keeps_configured_zoom_and_horizontal_modifiers_reserved() {
+        for flying in [false, true] {
+            for modifiers in [
+                egui::Modifiers::CTRL,
+                egui::Modifiers::COMMAND,
+                egui::Modifiers::SHIFT,
+                egui::Modifiers::ALT,
+            ] {
+                let mut harness = OptionsHarness::new(1000.);
+                if modifiers.alt {
+                    harness.ctx.options_mut(|options| {
+                        options.input_options.zoom_modifier = egui::Modifiers::ALT
+                    });
+                }
+                let at = harness.view.rect.unwrap().center();
+                harness.draw(vec![egui::Event::PointerMoved(at)]);
+                if flying {
+                    harness.draw(vec![right_button(at, true)]);
+                }
+                let before = harness.view.camera;
+                let speed = harness.view.camera_speed;
+                let mut event = wheel(egui::MouseWheelUnit::Line, 1.);
+                if let egui::Event::MouseWheel {
+                    modifiers: current, ..
+                } = &mut event
+                {
+                    *current = modifiers;
+                }
+                harness.draw(vec![event]);
+                assert_eq!(
+                    harness.view.camera, before,
+                    "flying={flying}, modifiers={modifiers:?}"
+                );
+                assert_eq!(harness.view.camera_speed, speed);
+            }
+        }
+    }
+
+    #[test]
+    fn speed_field_respects_disabled_parent_and_fly_wheel_is_applied_once_per_frame() {
+        for width in [1000., 240.] {
+            let mut harness = OptionsHarness::new(width);
+            if width < 400. {
+                harness.click("Compact");
+            }
+            harness.click("CameraSpeed");
+            harness.disabled = true;
+            harness.draw(vec![
+                egui::Event::Text("100".into()),
+                key_event(egui::Key::Enter, true),
+            ]);
+            assert_eq!(harness.view.camera_speed, scene_tools::DEFAULT_CAMERA_SPEED);
+        }
+        let mut harness = OptionsHarness::new(1000.);
+        let at = harness.view.rect.unwrap().center();
+        harness.draw(vec![egui::Event::PointerMoved(at), right_button(at, true)]);
+        let mut passes = 0;
+        let output = harness.ctx.run_ui(
+            input(0.06, vec![wheel(egui::MouseWheelUnit::Line, 1.)]),
+            |ui| {
+                passes += 1;
+                if passes == 1 {
+                    ui.ctx().request_discard("repeat overlay layout");
+                }
+                assert!(
+                    harness
+                        .view
+                        .interact(ui, &objects(), &snapshot(), Some(7), false)
+                        .is_empty()
+                );
+            },
+        );
+        output.drop_without_applying_deltas();
+        assert!(passes >= 2);
+        assert_eq!(harness.view.camera_speed, 10.);
+    }
+
+    #[test]
+    fn crossing_another_scene_keeps_the_held_flight_wheel_owner_in_both_draw_orders() {
+        for (active_column, release) in [(0, false), (1, false), (0, true), (1, true)] {
+            let ctx = egui::Context::default();
+            let mut active = SceneViewportState::default();
+            let mut other = SceneViewportState::default();
+            let mut step = 0;
+            let mut draw =
+                |active: &mut SceneViewportState, other: &mut SceneViewportState, events| {
+                    let output = ctx.run_ui(input(step as f64 * 0.02, events), |ui| {
+                        ui.columns(2, |columns| {
+                            for (index, column) in columns.iter_mut().enumerate() {
+                                let view = if index == active_column {
+                                    &mut *active
+                                } else {
+                                    &mut *other
+                                };
+                                assert!(
+                                    view.interact(column, &objects(), &snapshot(), Some(7), false)
+                                        .is_empty()
+                                );
+                            }
+                        });
+                    });
+                    step += 1;
+                    output.drop_without_applying_deltas();
+                };
+            draw(&mut active, &mut other, vec![]);
+            draw(&mut active, &mut other, vec![]);
+            let at = active.rect.unwrap().center();
+            let destination = other.rect.unwrap().center();
+            let other_camera = other.camera;
+            draw(
+                &mut active,
+                &mut other,
+                vec![egui::Event::PointerMoved(at), right_button(at, true)],
+            );
+            assert!(active.camera_fly);
+            let mut events = vec![
+                egui::Event::PointerMoved(destination),
+                wheel(egui::MouseWheelUnit::Line, 1.),
+            ];
+            if release {
+                events.push(right_button(destination, false));
+            }
+            draw(&mut active, &mut other, events);
+            assert_eq!(active.camera_speed, 10.);
+            assert_eq!(active.camera_fly, !release);
+            assert!(!other.camera_fly);
+            assert_eq!(other.camera_speed, scene_tools::DEFAULT_CAMERA_SPEED);
+            assert_eq!(other.camera, other_camera, "draw order {active_column}");
+        }
+    }
+    impl OptionsHarness {
+        fn new(width: f32) -> Self {
+            let mut harness = Self {
+                ctx: egui::Context::default(),
+                view: SceneViewportState::default(),
+                width,
+                step: 0,
+                locked: false,
+                disabled: false,
+            };
+            harness.draw(vec![]);
+            harness.draw(vec![]);
+            harness
+        }
+        fn draw(&mut self, events: Vec<egui::Event>) {
+            let mut raw = input(self.step as f64 * 0.02, events);
+            self.step += 1;
+            raw.screen_rect = Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(self.width, 500.)));
+            let output = self.ctx.run_ui(raw, |ui| {
+                if self.disabled {
+                    ui.disable();
+                }
+                assert!(
+                    self.view
+                        .interact(ui, &objects(), &snapshot(), Some(7), self.locked)
+                        .is_empty()
+                );
+            });
+            output.drop_without_applying_deltas();
+        }
+        fn click(&mut self, target: &str) {
+            let at = self.view.overlay_targets[target].center();
+            self.draw(vec![egui::Event::PointerMoved(at), button(at, true)]);
+            self.draw(vec![button(at, false)]);
+            self.draw(vec![]);
+        }
+        fn open_steps(&mut self) {
+            if self.width < 400. {
+                self.click("Compact");
+            }
+            self.click("SnapSettings");
+            assert!(self.view.overlay_targets.contains_key("MoveStep"));
+        }
+    }
+
+    #[test]
+    fn open_snap_steps_respect_play_and_disabled_boundaries() {
+        for width in [1000., 240.] {
+            for disabled in [true, false] {
+                let mut harness = OptionsHarness::new(width);
+                harness.open_steps();
+                let at = harness.view.overlay_targets["MoveStep"].center();
+                let before = harness.view.snap;
+                harness.disabled = disabled;
+                harness.locked = !disabled;
+                harness.draw(vec![]);
+                harness.draw(vec![egui::Event::PointerMoved(at), button(at, true)]);
+                let moved = at + Vec2::new(20., 0.);
+                harness.draw(vec![egui::Event::PointerMoved(moved)]);
+                harness.draw(vec![button(moved, false)]);
+                assert_eq!(
+                    harness.view.snap, before,
+                    "width={width}, disabled={disabled}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn snap_steps_accept_numeric_text_in_both_normal_and_compact_menus() {
+        for width in [1000., 240.] {
+            for (field, value) in [("MoveStep", 1.25), ("RotateStep", 30.), ("ScaleStep", 0.25)] {
+                let mut harness = OptionsHarness::new(width);
+                harness.open_steps();
+                harness.click(field);
+                harness.draw(vec![egui::Event::Text(value.to_string())]);
+                harness.draw(vec![key_event(egui::Key::Enter, true)]);
+                let actual = match field {
+                    "MoveStep" => harness.view.snap.translation,
+                    "RotateStep" => harness.view.snap.rotation_degrees,
+                    _ => harness.view.snap.scale,
+                };
+                assert!(
+                    (actual - value).abs() < 0.001,
+                    "width={width} field={field}: expected {value}, actual {actual}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn flight_applies_elapsed_time_once_when_egui_repeats_a_layout_pass() {
+        let mut harness = OptionsHarness::new(1000.);
+        let at = harness.view.rect.unwrap().center();
+        harness.draw(vec![egui::Event::PointerMoved(at), right_button(at, true)]);
+        assert!(harness.view.camera_fly);
+        let before = harness.view.camera.target;
+        let mut passes = 0;
+        let mut expected_distance = 0.;
+        let output = harness
+            .ctx
+            .run_ui(input(0.06, vec![key_event(egui::Key::W, true)]), |ui| {
+                passes += 1;
+                if passes == 1 {
+                    expected_distance = ui.input(|i| i.stable_dt).min(0.1) * 8.;
+                    ui.ctx().request_discard("exercise a second layout pass");
+                }
+                assert!(
+                    harness
+                        .view
+                        .interact(ui, &objects(), &snapshot(), Some(7), false)
+                        .is_empty()
+                );
+            });
+        output.drop_without_applying_deltas();
+        assert!(passes >= 2);
+        let distance = harness
+            .view
+            .camera
+            .target
+            .into_iter()
+            .zip(before)
+            .map(|(a, b)| (a - b).powi(2))
+            .sum::<f32>()
+            .sqrt();
+        assert!(
+            (distance - expected_distance).abs() < 0.0001,
+            "{passes} passes: expected {expected_distance}, actual {distance}"
+        );
     }
 }

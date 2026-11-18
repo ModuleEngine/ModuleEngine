@@ -4,7 +4,7 @@
 
 [English](editor-game.md) | [Русский](ru/editor-game.md) | [Documentation](README.md)
 
-Open **File → New Project → Empty scene** or **Two arenas example** and choose a separate new/empty folder. The authoring windows are **Scene / Hierarchy / Inspector / Assets**; for Play, open **Windows → Game**. The folder may be inside the engine installation's `projects/` or `outputs/`, but not inside copied assets. A new game project uses the current Engine architecture; choosing **Don't save** for New uses its last saved version. Saving writes `game` into the graph file; game-state changes during Play do not enter that file. See [Scene and Assets workflow](scene-assets.md) and [menus and saving](editor-workflow.md).
+Open **File → New Project → Empty scene** or **Two arenas example** and choose a separate new/empty folder. The authoring windows are **Scene / Hierarchy / Inspector / Assets**; for Play, open **Windows → Game**. The folder may be inside the engine installation's `projects/` or `outputs/`, but not inside copied assets. A new game project uses the current Engine architecture; choosing **Don't save** for New uses its last saved version. New projects keep scenes in independent [scene files](scene-files.md), referenced by the project. Ordinary Save preserves an old inline project until explicit conversion. Play changes never enter authored source. See [Scene and Assets workflow](scene-assets.md) and [menus and saving](editor-workflow.md).
 
 Save As transfers the authored scene, prefabs, overrides, disabled data, and the entire `assets/` library with declared dependencies. Confirmed replacement of an existing destination file retains backups of its metadata; conflicting assets are not replaced. Cancelled or failed opening/creation of another project preserves the current work. **Check Project** and export after **Use saved version** use the on-disk version, while the unsaved scene and drafts remain in the editor.
 
@@ -14,9 +14,9 @@ On first launch, Project creates the Scene / Hierarchy / Inspector / Assets layo
 
 ## Scenes and objects
 
-The scene list in **Hierarchy** selects the authoring preview. **Scene name** and **+ Scene** create an empty scene; **Duplicate** copies the current scene with all objects, local IDs, references, and prefabs. **Set as entry** sets the starting scene for Game and the exported game. The selected authored scene and starting scene may differ.
+Hierarchy selects the authored scene by its display name. The **…** menu and **File → Scene** own New/Open/Duplicate, entry selection and source-file rename/move/delete/conversion. Assets opens registered scenes with a double-click. Duplicate preserves local IDs, references and prefabs; its scene/source identity is new. Selected and entry scenes may differ.
 
-Select an object in Hierarchy or by clicking geometry in Scene. **+ Object** creates an object with a new nonzero ID. Scene gizmos change its transform; numeric position, rotation in radians, scale, parent, and color are available in Inspector. **Delete** removes an object and its descendants; remaining objects' references to deleted IDs are cleared. A parent cycle or other invalid state is rejected as a whole. Gameplay actors remain roots; the hierarchy supports decorative objects.
+Select an object in Hierarchy or Scene. Search includes matching ancestors; disclosures fold actual children. The **+** icon adds an empty object with a new nonzero ID. **F2**/context Rename edits its display name; an unnamed object uses its prefab identity or `Object <id>`. IDs and component details are in hover help. **Delete** on a focused object row or the context menu removes it and descendants as one validated Undo and clears remaining references to removed IDs. Text fields retain their keys. Transform/parent/color editing stays in Inspector and gizmos; invalid parent cycles reject as a whole. Gameplay actors remain roots.
 
 **Play** starts a copy. The selected source game supplies its controls and help;
 the generic Game pane only explains viewport focus. **Pause** retains and suspends

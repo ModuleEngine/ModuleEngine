@@ -53,7 +53,6 @@ impl WindowNavigation {
         if !available.iter().any(|item| item.editor == editor) {
             return Err("This window is unavailable for the current modules/distribution".into());
         }
-        let restricted = layout.restrict(available);
         self.reconcile(layout);
         let panes = layout.panes();
         let existing = self
@@ -75,7 +74,11 @@ impl WindowNavigation {
         let (id, created) = if let Some(id) = existing {
             (id, false)
         } else {
-            let active = self.active.ok_or("Workspace has no active area")?;
+            let active = self
+                .active
+                .filter(|id| layout.panes().iter().any(|(p, _)| p == id))
+                .or_else(|| layout.panes().first().map(|(id, _)| *id))
+                .ok_or("Workspace has no main area")?;
             let added = layout.split(active, super::dock::Axis::Horizontal)?;
             layout.choose(added, editor);
             (added, true)
@@ -83,18 +86,26 @@ impl WindowNavigation {
         self.activate(id, layout);
         Ok(OpenedWindow {
             id,
-            layout_changed: restricted || created,
+            layout_changed: created,
         })
     }
 }
 
 impl Editor {
+    pub(super) fn activate_area(&mut self, id: u64) {
+        match self.workspace {
+            WorkspaceKind::Engine => self.engine_navigation.activate(id, &self.engine_layout),
+            WorkspaceKind::Project => self.project_navigation.activate(id, &self.project_layout),
+        }
+        self.pending_area_focus = Some(id);
+    }
     /// Menu commands stay in the selected Engine/Project workspace. Availability
     /// comes from installed, enabled module panels and the distribution policy.
     pub(super) fn open_window(&mut self, editor: EditorType) {
         if self.workspace == WorkspaceKind::Engine && !self.can_author_engine() {
             self.workspace = WorkspaceKind::Project;
         }
+        self.reconcile_workspace_selection();
         let available = self.available_editors();
         let (layout, navigation) = match self.workspace {
             WorkspaceKind::Engine => (&mut self.engine_layout, &mut self.engine_navigation),
@@ -102,6 +113,7 @@ impl Editor {
         };
         match navigation.open(layout, editor, &available) {
             Ok(opened) => {
+                self.pending_area_focus = Some(opened.id);
                 self.personal_dirty |= opened.layout_changed;
                 let label = available
                     .iter()
@@ -126,20 +138,66 @@ impl Editor {
         ui: &mut egui::Ui,
         available: &[EditorDescriptor],
     ) -> DockResponse {
+        let workspace = self.workspace_key();
         let (layout, navigation) = match self.workspace {
             WorkspaceKind::Engine => (&mut self.engine_layout, &mut self.engine_navigation),
             WorkspaceKind::Project => (&mut self.project_layout, &mut self.project_navigation),
         };
-        let restricted = layout.restrict(available);
         navigation.reconcile(layout);
-        let mut response = layout.draw(ui, available, navigation.active());
-        response.changed |= restricted;
+        let response = layout.draw(ui, available, navigation.active());
+        if std::env::var_os("MODULE_ENGINE_DOCK_TRACE").is_some()
+            && (ui.input(|i| i.pointer.any_pressed() || i.pointer.any_released())
+                || response.drag_pane.is_some())
+        {
+            eprintln!(
+                "Dock pointer: {:?}",
+                ui.input(|i| (
+                    i.pointer.interact_pos(),
+                    i.pointer.press_origin(),
+                    i.pointer.primary_down(),
+                    response.drag_pane.as_ref().map(|(id, _, _)| *id),
+                    i.events.clone()
+                ))
+            );
+        }
+        let scale = ui.ctx().pixels_per_point();
+        let origin = ui
+            .input(|i| i.viewport().inner_rect.map(|rect| rect.min))
+            .unwrap_or_default()
+            * scale;
+        self.area_host_windows.retain(|key, _| {
+            key.as_ref().is_none_or(|(space, id)| {
+                space == &workspace && layout.detached.iter().any(|area| area.id == *id)
+            })
+        });
+        self.area_drop_targets
+            .retain(|(id, _)| layout.host_for(*id).is_some());
+        self.area_drop_targets.extend(
+            response
+                .panes
+                .iter()
+                .map(|pane| {
+                    (
+                        pane.id,
+                        egui::Rect::from_min_max(
+                            origin + pane.area_rect.min.to_vec2() * scale,
+                            origin + pane.area_rect.max.to_vec2() * scale,
+                        ),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        );
         // Close/reset/restrict may invalidate the focused ID. Reuse the most
         // recently used surviving area, then the first leaf as a stable fallback.
         navigation.reconcile(layout);
         if let Some(id) = response.activated_pane {
             navigation.activate(id, layout);
         }
+        if let Some((id, rect, start)) = response.drag_pane {
+            self.begin_area_drag(id, rect, start, ui.ctx());
+            ui.disable();
+        }
+        self.draw_area_drop_preview(ui);
         response
     }
 }
@@ -360,13 +418,13 @@ mod tests {
                 &EditorDescriptor::builtins(false),
             )
             .unwrap();
-        assert_eq!(opened.id, panel.id);
+        assert_ne!(opened.id, panel.id);
         assert!(opened.layout_changed);
         assert!(
             layout
                 .panes()
                 .iter()
-                .all(|(_, kind)| *kind == EditorType::Scene)
+                .any(|(id, kind)| *id == panel.id && *kind == EditorType::Extension(900))
         );
     }
 }

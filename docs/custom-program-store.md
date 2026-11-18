@@ -73,3 +73,9 @@ The 256 MiB limit applies to executable bytes of store entries. Shared Cargo dep
 `stats()` returns an atomic snapshot without file IO, source reads or acquiring the build mutex. `program_hits`, `cache_misses`, `cargo_build_invocations`, root/dependency built/fresh, eviction/coalescing, resident limits, rejection reasons and proof/build time distinguish reuse from a real rebuild. The snapshot includes neither environment values nor Custom text; ordinary compiler diagnostics retain their previous format. `root_artifacts_built` counts the ordinary worker binary, not its build script.
 
 Runtime checks cover instance independence, real fresh events, cancellation/coalescing, bounded eviction/leases and product corruption. The production Workbench regression separately checks Game → Scene → Stop → Game, initial state/time, a new PID and unchanged authored document. The native Editor benchmark checks the entire user route with the previous overall 45-second watchdog; store counters were added to the report without weakening its criteria. Results of specific runs and known limitations are in [review-fixes-20261016.md](review-fixes-20261016.md).
+
+SDK macro auditing permits literal `env!("CARGO_PKG_NAME")` and
+`env!("CARGO_PKG_VERSION")`: both are checked against the hashed package manifest
+and Cargo dependency metadata. Unknown SDK environment inputs and computed macro
+arguments remain uncached. Capability metadata uses the package name; rejecting
+that proven value would unnecessarily compile unchanged Custom code again.

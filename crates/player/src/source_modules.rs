@@ -67,7 +67,11 @@ pub fn install(registry: &mut SystemRegistry) -> Result<(), String> {
             }
             Ok(Box::new(Spin))
         },
-    )
+    )?;
+    registry.describe_module(SPIN, module_engine_core::CapabilityMetadata::new(
+        "Rotation example", "Rotate participating objects using the example's speed, axis and enabled component fields.",
+        module_engine_core::CapabilityOwner::Project, module_engine_core::CapabilityKind::ExecutableSystem, env!("CARGO_PKG_NAME"),
+    ).configured_by([module_engine_core::CapabilityConfiguration::ExecutionGraph, module_engine_core::CapabilityConfiguration::ComponentFields]))
 }
 
 struct Spin;

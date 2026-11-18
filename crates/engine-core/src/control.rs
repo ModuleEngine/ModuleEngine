@@ -184,6 +184,14 @@ pub struct ScriptContext {
     /// New events are output, rather than mutations of the input event list.
     #[serde(default)]
     pub emitted_events: Vec<Value>,
+    #[serde(default)]
+    pub settings: crate::ScriptSettingsSnapshot,
+    #[serde(default)]
+    pub setting_requests: Vec<crate::ScriptSettingRequest>,
+    #[serde(default)]
+    pub script_ui: Vec<crate::ScriptUiPanel>,
+    #[serde(default)]
+    pub ui_actions: BTreeMap<String, Value>,
 }
 
 fn default_base() -> f64 {
@@ -208,6 +216,10 @@ impl ScriptContext {
             input: Value::Null,
             events: vec![],
             emitted_events: vec![],
+            settings: BTreeMap::new(),
+            setting_requests: vec![],
+            script_ui: vec![],
+            ui_actions: BTreeMap::new(),
         }
     }
     /// Create a render-only input when the provider does not support queries.
@@ -232,6 +244,30 @@ impl ScriptContext {
     }
     pub fn parameter(&self, id: &str) -> Option<&Value> {
         self.parameters.get(id)
+    }
+    pub fn setting(&self, id: &str) -> Option<&crate::ScriptSettingSnapshot> {
+        self.settings.get(id)
+    }
+    /// Local validation is convenience only; the Host validates the returned packet again.
+    pub fn request_setting(&mut self, id: &str, option: &str) -> Result<(), String> {
+        let setting = self
+            .settings
+            .get(id)
+            .ok_or_else(|| format!("Setting '{id}' is unavailable"))?;
+        if !setting.options.iter().any(|value| value.id == option) {
+            return Err(format!("Option '{option}' is unavailable for '{id}'"));
+        }
+        if self.setting_requests.len() >= 128 {
+            return Err("Too many setting requests".into());
+        }
+        self.setting_requests.push(crate::ScriptSettingRequest {
+            setting: id.into(),
+            option: option.into(),
+        });
+        Ok(())
+    }
+    pub fn ui_action(&self, control: &str) -> Option<&Value> {
+        self.ui_actions.get(control)
     }
     pub fn property(&self, object: u64, id: &str) -> Option<&Value> {
         self.properties.objects.get(&object)?.get(id)

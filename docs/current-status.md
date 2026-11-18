@@ -4,6 +4,173 @@
 
 [English](current-status.md) | [Русский](ru/current-status.md) | [Documentation](README.md)
 
+**17 November 2026 — 0.4.2 accepted and closed by the owner.** The owner checked
+the delivery and asked to close the milestone, having previously personally
+confirmed that the jitter had disappeared. This completes manual product
+acceptance. The next planned milestone is [0.5: composition and dependencies](product-roadmap.md#compose);
+implementation has not started and will be separate work after its brief is defined.
+
+Accepted final03 delivery: [Full](../outputs/ui-density-042/final03/launch-full.cmd) and [Team](../outputs/ui-density-042/final03/launch-team.cmd).
+The [dated decision and SHA-256](release-042-ui-density-verification.md#owner-acceptance-20261117) separate owner acceptance
+from engineering evidence. No detailed per-scenario owner transcript was recorded.
+Mixed-DPI/Linux and final automated captures are not declared completed; earlier
+report limitations retain their actual status.
+
+The [final03 compact native chrome](release-042-ui-density-verification.md)
+uses shared local 1-point padding and 2-point gaps. Native two-Scene telemetry
+at 1580×940/100% confirms 762×715→787×803 pixels per image. Final03 adds a current
+enabled-state divider guard without changing geometry. Final automated matched
+capture and automated detached/narrow/zoom visual checks were not obtained because
+Computer Use repeatedly reported Escape stop even after explicit resume. This is
+a pre-acceptance automation limitation, not an unclosed product milestone.
+
+The [native resize feedback correction](release-042-resize-jitter-verification.md)
+supersedes the earlier no-reproduction result: an owner capture shows 803/805px
+jitter, and a separate actual Editor probe reproduces continued alternation after
+one controlled stale sample. Native geometry readback now persists without being
+sent back as a resize/move command. Creation, explicit moves, recreation and
+monitor/scale placement still request geometry. The owner later confirmed that
+jitter had disappeared; physical DPI is not certified. Previous icon, Area, SSAO
+and 100% Scene behavior are preserved.
+
+
+The [versioned product roadmap](product-roadmap.md#map) is the planning baseline.
+The closed [0.4.2: image clarity and editor docking](release-042-verification.md)
+implements the following: ordinary Player, Scene and a single Game pane request
+100% physical resolution; editor image edges align with the pixel grid.
+Project Settings is under Edit; free pane headers support native tear-off/docking.
+The original report separates CPU/native evidence from physical held-gesture,
+mixed-monitor DPI and owner image acceptance that had not been recorded then.
+The later general manual acceptance is recorded above; it does not substitute
+for missing detailed scenarios or measurements. FXAA remains unchanged; the
+reported motion trail is not established as fixed. A downscale control is deferred.
+The [SSAO follow-up](release-042-ssao-verification.md) identifies the reported
+static fringe and stepped plane shading as false self-occlusion from raw camera
+depth comparisons. The corrected built-in uses the receiving tangent plane and
+world-distance rejection; FXAA is unchanged. This static fix is separate from
+the still-unconfirmed temporal-trail report.
+The [native pane follow-up](release-042-native-panes-verification.md) unifies docked
+and detached client headers, retains the OS title/name/×, and changes secondary
+Close to remove just that instance. That report records the earlier singleton
+window snapshot; the [area-host follow-up](release-042-area-hosts-verification.md)
+now gives floating hosts their own split trees and the common Area menu.
+Area Close removes one leaf; OS × closes all current leaves of that host.
+Split and editor choice preserve host membership; docking is explicit drag,
+and the Return menu command is removed. The final-main fallback explanation
+is hover help, including disabled Close. Legacy singleton layouts remain readable;
+new trees are not a supported downgrade format. Closed leaves stay absent after
+save/reopen.
+The report distinguishes native header/close evidence from the unreproduced
+held-resize jitter and the still-required physical input check.
+
+The [Editor window icon follow-up](release-042-window-icon-verification.md)
+reuses the original installed ModuleEngine ICO unchanged in root/floating windows and sets both Windows icon
+sizes on their exact owned HWNDs. Cached-data and offscreen native slot checks
+pass; taskbar appearance has not been visually rechecked while owner input is
+active. The new candidate is delivered separately; the open previous build,
+EXE resources and Player branding are preserved.
+
+[0.4.1: anti-aliasing from Editor to Player](release-041-plan.md) corresponds
+to editor clarity stage 3 (3.1–3.6).
+The [0.4.1 engineering report](release-041-verification.md) now records the
+implemented rendering explanations/controls, matched FXAA/off frames, native
+Full/Team workflows and actual relocated Players, including export from Team.
+The [owner checks](product-roadmap-checks.md) define how to exercise each delivery.
+The owner now reports that 0.4.1 settings work and are clear, following the earlier
+quick discovery of Project Settings and comment on excessive permanent explanatory
+text. This is an owner observation; full independent human acceptance
+remains open, not an unqualified release acceptance or new game-performance
+certification. The [compact settings and player-menu follow-up](release-041-menu-verification.md)
+now provides sections, help on request, concise statuses, a stable-ID Custom menu
+and per-game local preferences. Actual separate Player processes retain Off after
+exit, while a separate clean profile starts at FXAA; package and authored files
+remain unchanged. The report records the scoped checks and remaining human acceptance.
+
+The [separate-scene / Hierarchy follow-up](scene-files.md) now provides versioned
+mutable scene sources, stable bindings and combined file history, with a compact
+searchable object tree and explicit names/F2. Old inline projects require explicit
+conversion. Windows Core (115), ProjectTools (75) and Editor (303) checks, actual Full/Team/Player
+exports and native UI pass in the documented scope; Linux ProjectTools (74) and Editor
+compilation pass. Physical DPI, hardware Linux, crash-atomic multi-file storage
+and new FPS certification are not established by this follow-up. Its final
+independent review and source/artifact bindings are separate from stage2A history.
+
+The [Scene controls](scene-assets.md) follow-up separates orientation, snapping
+and framing: World/Local is one switching globe/cube icon, alongside a per-area
+Speed field, and snap increments have their own settings. Held RMB + WASD,
+Q down/E up, mouse look and RMB-wheel speed adjustment navigate the personal Scene
+camera, without changing the authored scene or game camera. Its input/layout
+checks and native captures are scoped follow-up evidence, not a new storage,
+hardware-DPI or game-performance certification.
+
+
+On 13 November the user accepted the [engine composition and editor direction](engine-composition-direction.md):
+clarify technical engine/gameplay ownership first, make the Engine overview the
+main entry point, retain an additional architecture map and focused subsystem
+graphs, and make Engine/Project identity explicit. The user then narrowed the
+scope to **one configurable ModuleEngine with multiple game projects**.
+Independent Engine management, switching and shared-version update workflows
+are deferred, not prerequisites for UI work. The agreement itself did not
+establish UI/runtime acceptance; subsequent implementation is recorded below.
+Historical evidence retains its original scope.
+
+Stage 1 (tasks 1.1–1.5) of the [editor clarity plan](editor-clarity-plan.md) now
+provides [source-owned descriptions and a read-only capability inventory](engine-capabilities.md).
+Engine/gameplay/project ownership, actual registry participation, optional
+services/libraries and unknown evidence are separate. Windows scoped CPU/Editor
+and smaller-feature checks, strict Clippy, two actual 44-record fixture reports
+and WSL CPU metadata checks pass; [stage-1 evidence and limits](engine-capabilities.md#stage1-verification)
+record the bounded verification and independent review. Stage 2's
+[Engine Overview](engine-overview.md#stage2-verification) is implemented with
+bounded Windows UI/regression checks, Linux compilation and source-bound
+independent review. It identifies the current project/configuration/rights,
+separates source-owned groups and opens real tools without altering authored data.
+[Stage 2A — native editor UI rollout](editor-clarity-plan.md#stage-2a) is now
+implemented and delivered. The [rollout record](editor-ui-rollout.md) documents
+named workspaces/real OS areas, graph/Scene input, hierarchy, shared commands and
+hidden-draft safety. Windows passes 295 ordinary Editor tests plus five explicit
+native/artifact cases, matching Full/Team/Player delivery and a valid native
+Graph/Game/Scene benchmark. F23 Linux compilation/build and actual WSLg Overview/
+Scene pass on software Vulkan. The existing desktop launch target now contains
+the verified Editor. Physical 150/200%/mixed-DPI, native picker selection, external
+foreground input and hardware Linux remain unverified; this is not new G1/ARPG
+60 FPS or cold-start certification. The 72-row matrix retains V02/V10/D11 and P22's
+explicit boundaries. Stage 3 has its separate report above; stages 4–6 are not started; overlapping stage-4 work reuses
+this evidence when that stage is reconciled.
+
+On 14 November the user's queued UI requests were consolidated into an
+[editor design with primary-source research](editor-ui-design.md), a
+[technical geometry/icon/input baseline](editor-ui-spec.md) and
+[design/review skills](editor-ui-skills.md). The design includes named layouts,
+area-border actions/native windows, graph gestures, readable Assets, Scene
+overlays and standard icon controls with hover/focus help. These are documented
+requirements/proposals, not implemented UI changes or a new stage-3–6 acceptance.
+The follow-up [complete UI catalogue](editor-ui-catalog.md) maps 72 design
+surfaces to current source registrations/purposes and explicit proposed routes,
+with per-surface requirements, eight state categories, primary mockups and state
+sheets. It covers all 19 builtin area types, both current module panels, all
+seven app-modal purposes and seven native picker purposes plus OS overwrite.
+Previously open interaction details now have concrete proposed choices for
+review; this remains documentation-only, not implementation acceptance.
+
+The subsequent [focused hierarchy refinement](editor-ui-hierarchy.md) revises
+the Overview, Inspector and Assets mockups, with clearer selection, grouped
+fields/facts, contextual primary actions and three 480-point compact-area
+variants. The catalogue stays at 72 surfaces; other layouts retain their
+earlier composition. This is a design revision, not native editor integration
+or proof of usability/DPI/performance acceptance.
+
+A [catalogue-wide command audit](editor-ui-spec.md#command-ownership) removes
+duplicate local Game-session controls and Project File Save in the mockups.
+Legacy preview Start/Pause is also removed because it shares the shell flag;
+its Reset/configuration remains scoped; component specimens omit
+the shell controller and are marked as samples. Distinct Apply/draft/file
+transactions and menu/shortcut routes remain. The root Blueprint mockup also
+reclaims its permanent command row for the canvas, with RMB creation, eligible
+node double-click and focused-canvas F/Delete defined as target bindings.
+Those mockup revisions left native code unchanged; subsequent native integration
+is tracked in the stage-2A rollout record.
+
 G1 now has completed Windows Editor/Player routes and the agreed 1080p Playing
 budget: mean UI-distinct interval 8.4723 ms, p95 14.0901 ms, peak working set
 338,776,064 bytes. The [1 November continuation](g1-verification-20261101.md)

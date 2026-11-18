@@ -1221,13 +1221,13 @@ impl VulkanRenderer {
     ) -> Result<RenderSubmission, String> {
         if width == 0
             || height == 0
-            || width > 4096
-            || height > 4096
+            || width > 8192
+            || height > 8192
             || width
                 .checked_mul(height)
-                .is_none_or(|pixels| pixels > 4_194_304)
+                .is_none_or(|pixels| pixels > 16_777_216)
         {
-            return Err("GPU viewport must be nonzero, <=4096 per axis and <=4M pixels".into());
+            return Err("GPU viewport must be nonzero, <=8192 per axis and <=16M pixels".into());
         }
         let Some(target) = self.presentation_target.clone() else {
             // No presentation target is the explicit legacy/readback mode used
@@ -1361,11 +1361,11 @@ impl VulkanRenderer {
         }
         if width == 0
             || height == 0
-            || width > 4096
-            || height > 4096
-            || width.checked_mul(height).is_none_or(|p| p > 4_194_304)
+            || width > 8192
+            || height > 8192
+            || width.checked_mul(height).is_none_or(|p| p > 16_777_216)
         {
-            return Err("GPU viewport must be nonzero, <=4096 per axis and <=4M pixels".into());
+            return Err("GPU viewport must be nonzero, <=8192 per axis and <=16M pixels".into());
         }
         self.performance.render_calls += 1;
         self.prepare_for_render(graph, sources)?;

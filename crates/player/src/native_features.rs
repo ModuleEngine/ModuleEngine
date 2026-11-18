@@ -145,6 +145,9 @@ impl NativeFeatureCatalog {
         let mut presentations = Vec::new();
         let mut services = Vec::new();
         if let Some(game) = &document.game {
+            if let Some(request) = module_engine_core::player_preferences_service_request(game)? {
+                services.push(request.id);
+            }
             for contribution in composition
                 .systems
                 .active_game_contributions(&game.execution)

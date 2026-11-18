@@ -58,6 +58,13 @@ type Factory = Arc<
 #[derive(Clone, Default)]
 pub struct HostServiceRegistry {
     factories: BTreeMap<String, Factory>,
+    descriptions: BTreeMap<
+        String,
+        (
+            module_engine_core::CapabilityMetadata,
+            module_engine_core::CapabilityFact,
+        ),
+    >,
 }
 impl HostServiceRegistry {
     pub fn new() -> Self {
@@ -82,6 +89,101 @@ impl HostServiceRegistry {
     }
     pub fn contains(&self, id: &str) -> bool {
         self.factories.contains_key(id)
+    }
+    pub fn describe_service(
+        &mut self,
+        id: &str,
+        metadata: module_engine_core::CapabilityMetadata,
+        availability: module_engine_core::CapabilityFact,
+    ) -> Result<(), String> {
+        metadata.validate()?;
+        if !self.contains(id) || metadata.kind != module_engine_core::CapabilityKind::Service {
+            return Err(format!(
+                "Service metadata needs an installed service factory '{id}'"
+            ));
+        }
+        let description = (metadata, availability);
+        if self
+            .descriptions
+            .get(id)
+            .is_some_and(|old| old != &description)
+        {
+            return Err(format!("Conflicting service metadata for '{id}'"));
+        }
+        self.descriptions.insert(id.into(), description);
+        Ok(())
+    }
+    /// Inspect factories and explicit authored requests without constructing a
+    /// service, resolving assets, creating a state root or opening a device.
+    pub fn capability_inventory(
+        &self,
+        requests: &Result<Vec<HostServiceRequest>, String>,
+    ) -> module_engine_core::CapabilityInventory {
+        use module_engine_core::*;
+        let mut inventory = CapabilityInventory::default();
+        let selected = requests
+            .as_ref()
+            .map_err(Clone::clone)
+            .and_then(|requests| {
+                let mut ids = BTreeSet::new();
+                for request in requests {
+                    if request.id.trim().is_empty() || !ids.insert(request.id.clone()) {
+                        return Err(
+                            "Service request discovery has an empty or duplicate ID".to_owned()
+                        );
+                    }
+                }
+                Ok(ids)
+            });
+        if let Err(error) = &selected {
+            inventory.diagnostics.push(error.clone());
+        }
+        let mut ids: BTreeSet<_> = self.factories.keys().cloned().collect();
+        if let Ok(selected) = &selected {
+            ids.extend(selected.iter().cloned());
+        }
+        for id in ids {
+            let installed = self.contains(&id);
+            if !installed {
+                inventory
+                    .diagnostics
+                    .push(format!("Requested host service '{id}' is not installed"));
+            }
+            let (metadata, available) = self.descriptions.get(&id).cloned().unwrap_or_else(|| {
+                (
+                    CapabilityMetadata::unknown(
+                        &id,
+                        "Native service purpose/support not described by its source",
+                        CapabilityKind::Service,
+                    ),
+                    if installed {
+                        CapabilityFact::unknown(
+                            "Factory exists; platform/configuration support not described",
+                        )
+                    } else {
+                        CapabilityFact::known(false, "Requested service factory is not installed")
+                    },
+                )
+            });
+            inventory.records.push(CapabilityRecord {
+                participation: match &selected {
+                    Ok(selected) => CapabilityFact::known(
+                        selected.contains(&id),
+                        "Explicit authored host-service requests; not a running service",
+                    ),
+                    Err(error) => CapabilityFact::unknown(error),
+                },
+                id,
+                metadata,
+                installed,
+                available,
+                version: None,
+                dependencies: BTreeSet::new(),
+                provided_components: BTreeSet::new(),
+                consumed_components: BTreeSet::new(),
+            });
+        }
+        inventory
     }
     pub fn build(
         &self,
@@ -115,6 +217,103 @@ impl HostServiceRegistry {
             services.services.insert(request.id.clone(), service);
         }
         Ok(services)
+    }
+}
+
+/// Source descriptions are independent of native factory construction.
+pub fn audio_capability_metadata() -> module_engine_core::CapabilityMetadata {
+    use module_engine_core::*;
+    CapabilityMetadata::new("WAV playback service", "Play explicitly requested WAV cues, looping music and independent volume buses; games own event/cue policy.", CapabilityOwner::Engine, CapabilityKind::Service, env!("CARGO_PKG_NAME"))
+        .configured_by([CapabilityConfiguration::NativeSource])
+}
+pub fn persistence_capability_metadata() -> module_engine_core::CapabilityMetadata {
+    use module_engine_core::*;
+    CapabilityMetadata::new("Versioned JSON storage service", "Read and atomically publish explicitly requested namespaced game saves; games own payloads, progress and recovery policy.", CapabilityOwner::Engine, CapabilityKind::Service, env!("CARGO_PKG_NAME"))
+        .configured_by([CapabilityConfiguration::NativeSource])
+}
+
+#[cfg(test)]
+mod capability_tests {
+    use super::*;
+    use module_engine_core::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn inspection_never_constructs_factories_and_distinguishes_request_failure_from_empty() {
+        let called = Arc::new(AtomicUsize::new(0));
+        let counter = called.clone();
+        let mut registry = HostServiceRegistry::new();
+        registry
+            .register("fixture.service", move |_, _| {
+                counter.fetch_add(1, Ordering::SeqCst);
+                Err("Inventory must never construct this service".into())
+            })
+            .unwrap();
+        registry
+            .describe_service(
+                "fixture.service",
+                CapabilityMetadata::new(
+                    "Fixture service",
+                    "A source-owned service",
+                    CapabilityOwner::Engine,
+                    CapabilityKind::Service,
+                    "fixture",
+                ),
+                CapabilityFact::known(true, "Fixture implementation; no device probe"),
+            )
+            .unwrap();
+        let empty = registry.capability_inventory(&Ok(vec![]));
+        assert_eq!(empty.records[0].participation.value, Some(false));
+        let requests = Ok(vec![HostServiceRequest {
+            id: "fixture.service".into(),
+            config: Value::Null,
+            asset_references: BTreeSet::from(["not-resolved".into()]),
+        }]);
+        let selected = registry.capability_inventory(&requests);
+        assert_eq!(selected.records[0].participation.value, Some(true));
+        assert_eq!(selected, registry.capability_inventory(&requests));
+        let unknown = registry.capability_inventory(&Err("Source request discovery failed".into()));
+        assert_eq!(unknown.records[0].participation.value, None);
+        assert!(!unknown.diagnostics.is_empty());
+        assert_eq!(called.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn missing_and_duplicate_requests_and_undescribed_services_are_not_ready_claims() {
+        let mut registry = HostServiceRegistry::new();
+        registry
+            .register("foreign", |_, _| Err("Never called".into()))
+            .unwrap();
+        let request = HostServiceRequest {
+            id: "not.installed".into(),
+            config: Value::Null,
+            asset_references: BTreeSet::new(),
+        };
+        let inventory = registry.capability_inventory(&Ok(vec![request.clone()]));
+        let missing = inventory
+            .records
+            .iter()
+            .find(|r| r.id == request.id)
+            .unwrap();
+        assert!(!missing.installed);
+        assert_eq!(missing.available.value, Some(false));
+        assert_eq!(missing.participation.value, Some(true));
+        assert!(!inventory.diagnostics.is_empty());
+        let foreign = inventory
+            .records
+            .iter()
+            .find(|r| r.id == "foreign")
+            .unwrap();
+        assert_eq!(foreign.metadata.owner, CapabilityOwner::Unknown);
+        assert_eq!(foreign.available.value, None);
+        let duplicate = registry.capability_inventory(&Ok(vec![request.clone(), request]));
+        assert!(
+            duplicate
+                .records
+                .iter()
+                .all(|r| r.participation.value.is_none())
+        );
+        assert!(!duplicate.diagnostics.is_empty());
     }
 }
 

@@ -260,6 +260,11 @@ pub fn install(registry: &mut SystemRegistry) -> Result<(), String> {
             }))
         },
     )?;
+    registry.describe_module("g1.rules", CapabilityMetadata::new(
+        "Crate Garden rules", "Execute this game's crate pushing, unlimited Undo, campaign, records, saved attempts and audio cue policy.",
+        CapabilityOwner::Project, CapabilityKind::ExecutableSystem, env!("CARGO_PKG_NAME"),
+    ).configured_by([CapabilityConfiguration::ExecutionGraph, CapabilityConfiguration::ModuleTool, CapabilityConfiguration::NativeSource])
+        .uses_libraries(module_engine_game_kit::library_capabilities().into_iter().map(|m| m.id.into())))?;
     registry.register_project_contract(
         "g1.rules",
         |project, _| {
@@ -362,7 +367,11 @@ pub fn install(registry: &mut SystemRegistry) -> Result<(), String> {
         service_requests,
         diagnostics: crate::diagnostics,
     })?;
-    registry.register_pose_projection("g1.presentation", project_garden_poses)
+    registry.register_pose_projection("g1.presentation", project_garden_poses)?;
+    registry.describe_contribution("g1.presentation", CapabilityMetadata::new(
+        "Crate Garden host integration", "Supply the game's diorama camera, scene decoration, input adaptation and explicit audio/persistence requests; UI is installed separately.",
+        CapabilityOwner::Project, CapabilityKind::HostContribution, env!("CARGO_PKG_NAME"),
+    ).configured_by([CapabilityConfiguration::NativeSource]))
 }
 pub fn registry() -> SystemRegistry {
     let mut registry = SystemRegistry::builtin();

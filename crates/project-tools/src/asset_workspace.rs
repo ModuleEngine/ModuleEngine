@@ -27,6 +27,19 @@ pub fn asset_reference(id: &str) -> String {
 #[cfg(test)]
 thread_local! {
     static USAGE_DOCUMENT_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static SOURCE_WRITE_FAILURE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn with_source_write_failure<T>(at: usize, work: impl FnOnce() -> T) -> T {
+    struct Reset(Option<usize>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            SOURCE_WRITE_FAILURE.set(self.0);
+        }
+    }
+    let _reset = Reset(SOURCE_WRITE_FAILURE.replace(Some(at)));
+    work()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,6 +115,10 @@ pub struct AssetOperationRecord {
     pub deleted_asset: Option<(String, AssetEntry)>,
     #[serde(default)]
     pub created_directories: Vec<String>,
+    /// Source files are regenerated from hydrated history, using a separately
+    /// accepted disk generation. Imported resource deltas keep exact replay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_project: Option<String>,
 }
 #[derive(Clone, Debug)]
 pub struct AssetOperation {
@@ -110,6 +127,7 @@ pub struct AssetOperation {
     /// Exact old references in opaque archived data were preserved rather than
     /// guessed. Hosts must display these diagnostics after a successful edit.
     pub diagnostics: Vec<String>,
+    pub source_files: Option<crate::ProjectFileState>,
 }
 
 impl AssetOperationRecord {
@@ -203,6 +221,7 @@ pub struct AssetWorkspace {
     validator: Option<DocumentValidator>,
     composition: Option<CompositionContext>,
     property_objects: Option<BTreeSet<u64>>,
+    project_source: Option<crate::ProjectFileState>,
 }
 type DocumentValidator = Arc<dyn Fn(&GraphDocument) -> Result<(), String> + Send + Sync + 'static>;
 fn reject_schema_default_rewrites(
@@ -248,6 +267,7 @@ impl AssetWorkspace {
             validator: None,
             composition: None,
             property_objects: None,
+            project_source: None,
         })
     }
     /// Add the host's installed schema/policy validation to every candidate
@@ -259,6 +279,315 @@ impl AssetWorkspace {
     {
         self.validator = Some(Arc::new(validator));
         self
+    }
+    /// Bind file operations to this accepted source generation. Commit includes
+    /// project JSON and every affected authored scene in the same rollback unit.
+    pub fn with_project_source(mut self, state: crate::ProjectFileState) -> Self {
+        self.project_source = Some(state);
+        self
+    }
+
+    /// Only registered scene bindings and the selected project metadata can be
+    /// written by this entry point; it is not arbitrary filesystem mutation.
+    pub fn publish_project_source(
+        &self,
+        before: &GraphDocument,
+        after: &GraphDocument,
+        label: &str,
+    ) -> Result<AssetOperation, String> {
+        if self.project_source.is_none() {
+            return Err("Accepted project source state is required".into());
+        }
+        self.commit(before, after.clone(), BTreeMap::new(), label.into(), None)
+    }
+
+    pub fn edit_scene_source(
+        &self,
+        document: &GraphDocument,
+        edit: &crate::SceneSourceEdit,
+    ) -> Result<AssetOperation, String> {
+        use crate::SceneSourceEdit;
+        let (candidate, label) = match edit {
+            SceneSourceEdit::Delete { scene } => return self.delete_scene_source(document, scene),
+            SceneSourceEdit::Restore { trash_id } => {
+                return self.restore_scene_source(document, trash_id);
+            }
+            SceneSourceEdit::Convert => (
+                crate::externalize_scenes(document, false)?,
+                "Convert scenes to source files".to_owned(),
+            ),
+            SceneSourceEdit::New { name, duplicate } => {
+                let (candidate, _) = crate::new_scene_source(document, name, duplicate.as_deref())?;
+                (candidate, format!("Create scene: {name}"))
+            }
+            SceneSourceEdit::SetEntry { scene } => {
+                let mut candidate = document.clone();
+                let game = candidate.game.as_mut().ok_or("No game project")?;
+                if !game.scenes.contains_key(scene) {
+                    return Err("Scene is missing".into());
+                }
+                game.entry_scene = scene.clone();
+                (candidate, "Set entry scene".into())
+            }
+            SceneSourceEdit::Rename {
+                scene,
+                name,
+                filename,
+            } => {
+                if name.trim().is_empty()
+                    || filename.is_empty()
+                    || filename.contains(['/', '\\', ':'])
+                {
+                    return Err("Enter a scene name and a filename without a path".into());
+                }
+                let mut candidate = document.clone();
+                let game = candidate.game.as_mut().ok_or("No game project")?;
+                let binding = game
+                    .scene_assets
+                    .get_mut(scene)
+                    .ok_or("Convert embedded scenes to source files first")?;
+                let parent = binding
+                    .path
+                    .rsplit_once('/')
+                    .ok_or("Scene parent is missing")?
+                    .0;
+                binding.path =
+                    crate::scene_files::validate_scene_path(&format!("{parent}/{filename}"))?;
+                game.scenes.get_mut(scene).ok_or("Scene is missing")?.name = name.clone();
+                (candidate, format!("Rename scene: {name}"))
+            }
+            SceneSourceEdit::Move { scene, folder } => {
+                let mut candidate = document.clone();
+                let game = candidate.game.as_mut().ok_or("No game project")?;
+                let binding = game
+                    .scene_assets
+                    .get_mut(scene)
+                    .ok_or("Convert embedded scenes to source files first")?;
+                let filename = binding
+                    .path
+                    .rsplit('/')
+                    .next()
+                    .ok_or("Scene filename is missing")?;
+                binding.path =
+                    crate::scene_files::validate_scene_path(&format!("{folder}/{filename}"))?;
+                (candidate, "Move scene file".into())
+            }
+        };
+        self.publish_project_source(document, &candidate, &label)
+    }
+
+    pub fn delete_scene_source(
+        &self,
+        document: &GraphDocument,
+        scene_id: &str,
+    ) -> Result<AssetOperation, String> {
+        let state = self
+            .project_source
+            .as_ref()
+            .ok_or("Accepted source state is required")?;
+        let mut after = document.clone();
+        let game = after.game.as_mut().ok_or("No game project")?;
+        if game.entry_scene == scene_id {
+            return Err("Choose another entry scene before deleting this scene".into());
+        }
+        let binding = game
+            .scene_assets
+            .remove(scene_id)
+            .ok_or("Convert embedded scenes to source files first")?;
+        let scene = game.scenes.remove(scene_id).ok_or("Scene is missing")?;
+        let hash = state
+            .files
+            .get(&binding.path)
+            .and_then(Clone::clone)
+            .ok_or("Save the scene before deleting its source file")?;
+        let deleted = AssetEntry {
+            path: binding.path,
+            sha256: hash,
+            dependencies: vec![],
+        };
+        self.commit(
+            document,
+            after,
+            BTreeMap::new(),
+            format!("Delete scene: {}", scene.name),
+            Some((binding.id, deleted)),
+        )
+    }
+
+    pub fn scene_trash_identity(&self, trash_id: &str) -> Result<Option<String>, String> {
+        let record = self.read_trash_record(trash_id)?;
+        let Some((asset, entry)) = &record.deleted_asset else {
+            return Ok(None);
+        };
+        Ok(record.before.game.as_ref().and_then(|game| {
+            game.scene_assets
+                .iter()
+                .find(|(_, v)| v.id == *asset && v.path == entry.path)
+                .map(|(id, _)| id.clone())
+        }))
+    }
+
+    pub fn restore_scene_source(
+        &self,
+        document: &GraphDocument,
+        trash_id: &str,
+    ) -> Result<AssetOperation, String> {
+        let state = self
+            .project_source
+            .as_ref()
+            .ok_or("Accepted source state is required")?;
+        let record = self.read_trash_record(trash_id)?;
+        if record.source_project.as_deref() != Some(&state.project) {
+            return Err("Scene trash belongs to another project".into());
+        }
+        let id = self
+            .scene_trash_identity(trash_id)?
+            .ok_or("This trash record is not an authored scene")?;
+        let before = record
+            .before
+            .game
+            .as_ref()
+            .ok_or("Missing deleted scene data")?;
+        let binding = before.scene_assets[&id].clone();
+        let snapshot = record
+            .files
+            .iter()
+            .find(|f| f.path == binding.path)
+            .and_then(|f| f.before.clone())
+            .ok_or("Deleted scene snapshot missing")?;
+        let bytes = self
+            .read_snapshot(&Some(snapshot))?
+            .ok_or("Deleted scene bytes missing")?;
+        let scene = crate::scene_files::decode_scene_asset(&bytes, &id, &binding)?;
+        if before.scenes.get(&id) != Some(&scene) {
+            return Err("Deleted scene snapshot differs from recorded authored data".into());
+        }
+        let mut after = document.clone();
+        let game = after.game.as_mut().ok_or("No game project")?;
+        if game.scenes.contains_key(&id) || game.scene_assets.values().any(|v| v.id == binding.id) {
+            return Err("Scene identity is already in this project".into());
+        }
+        let binding_path = binding.path.clone();
+        game.scenes.insert(id.clone(), scene);
+        game.scene_assets.insert(id, binding);
+        self.commit_preferred(
+            document,
+            after,
+            BTreeMap::new(),
+            "Restore scene source".into(),
+            None,
+            BTreeMap::from([(binding_path, bytes)]),
+        )
+    }
+
+    fn read_trash_record(&self, id: &str) -> Result<AssetOperationRecord, String> {
+        if id.is_empty()
+            || !id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+        {
+            return Err("Invalid trash record identity".into());
+        }
+        let bytes = fs::read(self.checked_target(&format!(".asset-trash/{id}/record.json"))?)
+            .map_err(|e| e.to_string())?;
+        serde_json::from_slice(&bytes).map_err(|e| e.to_string())
+    }
+
+    /// Replay immutable resource bytes exactly, but serialize authored scene
+    /// bodies from the target history snapshot. A later successful Save is an
+    /// accepted generation, not an external-edit bypass or stale byte snapshot.
+    pub fn replay_project_operation(
+        &self,
+        record: &AssetOperationRecord,
+        current: &GraphDocument,
+        forward: bool,
+    ) -> Result<AssetOperation, String> {
+        let state = self
+            .project_source
+            .as_ref()
+            .ok_or("Accepted source state is required")?;
+        if record.source_project.as_deref() != Some(&state.project) {
+            return Err("File history belongs to another project/source route".into());
+        }
+        let (expected, target) = if forward {
+            (&record.before, &record.after)
+        } else {
+            (&record.after, &record.before)
+        };
+        if current != expected {
+            return Err("Asset history document boundary differs; replay was not applied".into());
+        }
+        let mut source_paths = BTreeSet::from([state.project.clone()]);
+        for document in [&record.before, &record.after] {
+            if let Some(game) = &document.game {
+                source_paths.extend(game.scene_assets.values().map(|v| v.path.clone()));
+            }
+        }
+        let mut changes = BTreeMap::new();
+        let mut preferred = BTreeMap::new();
+        for file in &record.files {
+            if source_paths.contains(&file.path) {
+                let snapshot = if forward { &file.after } else { &file.before };
+                let exists_in_target = file.path == state.project
+                    || target
+                        .game
+                        .as_ref()
+                        .is_some_and(|g| g.scene_assets.values().any(|v| v.path == file.path));
+                if exists_in_target && let Some(bytes) = self.read_snapshot(snapshot)? {
+                    preferred.insert(file.path.clone(), bytes);
+                }
+                continue;
+            }
+            let (from, to) = if forward {
+                (&file.before, &file.after)
+            } else {
+                (&file.after, &file.before)
+            };
+            self.check_snapshot_state(&file.path, from)?;
+            changes.insert(file.path.clone(), self.read_snapshot(to)?);
+        }
+        for directory in &record.created_directories {
+            self.editable(directory)?;
+            let path = self.checked_target(directory)?;
+            if forward && path.exists() {
+                return Err("Asset folder already exists; redo was not applied".into());
+            }
+            if !forward
+                && (!path.is_dir()
+                    || fs::read_dir(&path)
+                        .map_err(|e| e.to_string())?
+                        .next()
+                        .is_some())
+            {
+                return Err("Asset folder is missing or not empty; undo was not applied".into());
+            }
+        }
+        let operation = self.commit_preferred(
+            current,
+            target.clone(),
+            changes,
+            format!("{} {}", if forward { "Redo" } else { "Undo" }, record.label),
+            None,
+            preferred,
+        )?;
+        for directory in &record.created_directories {
+            let path = self.checked_target(directory)?;
+            let result = if forward {
+                fs::create_dir_all(path)
+            } else {
+                fs::remove_dir(path)
+            };
+            if let Err(error) = result {
+                // No unowned paths are involved. Restore the just-published
+                // source/resource bytes before reporting a directory failure.
+                let rollback = operation.record.undo(&self.root, &operation.document);
+                return Err(format!(
+                    "Folder replay failed: {error}; rollback: {}",
+                    rollback.err().unwrap_or_else(|| "restored".into())
+                ));
+            }
+        }
+        Ok(operation)
     }
     /// Supply installed, pinned source contracts explicitly. A validation
     /// callback alone cannot establish which arbitrary strings are resources.
@@ -332,6 +661,7 @@ impl AssetWorkspace {
             } else {
                 vec![path]
             },
+            source_project: None,
         };
         if let Err(error) = write_new(
             &self.checked_target(&format!(".asset-history/{}/record.json", record.id))?,
@@ -346,6 +676,7 @@ impl AssetWorkspace {
             document: document.clone(),
             record,
             diagnostics: vec![],
+            source_files: None,
         })
     }
     /// Adopt files freshly created by the import worker. Caller must pass only
@@ -405,6 +736,7 @@ impl AssetWorkspace {
                 files: deltas,
                 deleted_asset: None,
                 created_directories: vec![],
+                source_project: None,
             };
             write_new(
                 &self.checked_target(&format!(".asset-history/{}/record.json", record.id))?,
@@ -414,6 +746,7 @@ impl AssetWorkspace {
                 document: candidate,
                 record,
                 diagnostics: vec![],
+                source_files: None,
             })
         })
     }
@@ -1022,8 +1355,52 @@ impl AssetWorkspace {
         label: String,
         deleted: Option<(String, AssetEntry)>,
     ) -> Result<AssetOperation, String> {
+        self.commit_preferred(before, after, changes, label, deleted, BTreeMap::new())
+    }
+    fn commit_preferred(
+        &self,
+        before: &GraphDocument,
+        after: GraphDocument,
+        mut changes: BTreeMap<String, Option<Vec<u8>>>,
+        label: String,
+        deleted: Option<(String, AssetEntry)>,
+        preferred: BTreeMap<String, Vec<u8>>,
+    ) -> Result<AssetOperation, String> {
         self.validate_candidate(&after)?;
+        let source_plan = self
+            .project_source
+            .as_ref()
+            .map(|state| {
+                crate::scene_files::prepare_project_sources(&self.root, &after, state, &preferred)
+            })
+            .transpose()?;
+        if let Some(plan) = &source_plan {
+            for (path, bytes) in &plan.changes {
+                if changes.insert(path.clone(), bytes.clone()).is_some() {
+                    return Err(format!(
+                        "Imported asset conflicts with authored source: {path}"
+                    ));
+                }
+            }
+        }
         let id = crate::history::unique_id();
+        if changes.is_empty() {
+            return Ok(AssetOperation {
+                document: after.clone(),
+                record: AssetOperationRecord {
+                    id,
+                    label,
+                    before: before.clone(),
+                    after,
+                    files: vec![],
+                    deleted_asset: deleted,
+                    created_directories: vec![],
+                    source_project: self.project_source.as_ref().map(|s| s.project.clone()),
+                },
+                diagnostics: vec![],
+                source_files: source_plan.map(|p| p.accepted),
+            });
+        }
         let mut deltas = vec![];
         for (index, (path, bytes)) in changes.iter().enumerate() {
             let target = self.checked_target(path)?;
@@ -1035,6 +1412,13 @@ impl AssetWorkspace {
             } else {
                 None
             };
+            if let Some(expected) = source_plan.as_ref().and_then(|p| p.expected.get(path))
+                && original.as_deref().map(hash_bytes).as_ref() != expected.as_ref()
+            {
+                return Err(format!(
+                    "Authored source changed during publication: {path}"
+                ));
+            }
             let store =
                 |side: &str, data: &Option<Vec<u8>>| -> Result<Option<AssetFileSnapshot>, String> {
                     let Some(data) = data else { return Ok(None) };
@@ -1060,6 +1444,7 @@ impl AssetWorkspace {
             files: deltas,
             deleted_asset: deleted,
             created_directories: vec![],
+            source_project: self.project_source.as_ref().map(|s| s.project.clone()),
         };
         if let Some((_, asset)) = &record.deleted_asset {
             let source = record
@@ -1085,11 +1470,15 @@ impl AssetWorkspace {
         for file in &record.files {
             self.check_snapshot_state(&file.path, &file.before)?;
         }
-        self.write_changes(&changes)?;
+        self.write_changes_ordered(
+            &changes,
+            self.project_source.as_ref().map(|s| s.project.as_str()),
+        )?;
         Ok(AssetOperation {
             document: after,
             record,
             diagnostics: vec![],
+            source_files: source_plan.map(|p| p.accepted),
         })
     }
     fn rewrite_references(
@@ -1220,6 +1609,13 @@ impl AssetWorkspace {
         }
     }
     fn write_changes(&self, changes: &BTreeMap<String, Option<Vec<u8>>>) -> Result<(), String> {
+        self.write_changes_ordered(changes, None)
+    }
+    fn write_changes_ordered(
+        &self,
+        changes: &BTreeMap<String, Option<Vec<u8>>>,
+        last: Option<&str>,
+    ) -> Result<(), String> {
         let originals = changes
             .keys()
             .map(|p| {
@@ -1238,9 +1634,22 @@ impl AssetWorkspace {
             })
             .collect::<Result<BTreeMap<_, _>, String>>()?;
         let mut touched = vec![];
-        for (path, bytes) in changes {
+        let mut ordered: Vec<_> = changes.iter().collect();
+        ordered.sort_by_key(|(path, _)| Some(path.as_str()) == last);
+        for (write_index, (path, bytes)) in ordered.into_iter().enumerate() {
             touched.push(path);
-            if let Err(error) = write_current(&self.checked_target(path)?, bytes.as_deref()) {
+            #[cfg(not(test))]
+            let _ = write_index;
+            #[cfg(test)]
+            let injected = SOURCE_WRITE_FAILURE.get() == Some(write_index);
+            #[cfg(not(test))]
+            let injected = false;
+            let result = if injected {
+                Err("Injected authored-source publication failure".into())
+            } else {
+                write_current(&self.checked_target(path)?, bytes.as_deref())
+            };
+            if let Err(error) = result {
                 let mut rollback = vec![];
                 for p in touched.into_iter().rev() {
                     let target = self.checked_target(p)?;

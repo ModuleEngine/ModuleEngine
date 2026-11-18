@@ -59,6 +59,53 @@ Transform локален относительно parent; remove удаляет 
 
 В Team редактируется только заранее разрешённый gameplay Update source; scalar speed и shaders принадлежат frozen Engine. Текст может быть ошибочным и сохраняться для исправления, но key set и bindings не меняются.
 
+<a id="script-settings-menu"></a>
+
+## Настройки и авторское меню игры
+
+В маршруте Update `game.execution` GameHost вызов `ctx.setting(setting_id)` возвращает необязательный `ScriptSettingSnapshot`. Постоянный ID настройки — это ID открытой группы вариантов, а не прохода рендеринга. `options` содержит актуальные `ScriptSettingOption { id, label }`; перебирайте их для собственного списка вариантов. `selected: Option<String>` — действующий вариант, `None` означает неоднозначные runtime controls. `source` принимает `local`, `project`, `runtime` или `mixed`; `project` включает defaults и условия. `persistence.enabled/saved/error` и `rejection` отделяют долговечность выбора от отклонённого запроса. Legacy корневой Runtime не выдумывает эти возможности GameHost.
+
+`ctx.request_setting(setting_id, option_id)` добавляет `ScriptSettingRequest` и возвращает результат локальной проверки. Перед принятием host повторно проверяет весь кандидат по текущим настройкам и контрактам рендерера; успех helper-вызова не доказывает принятие кадра или запись на диск. См. [приоритет и локальные профили](settings.md#player-menu-preferences).
+
+Автор может выдавать `ScriptUiPanel` через `ctx.script_ui`. Панель имеет постоянный `id`, авторский `title`, `position` в логических пунктах относительно Game viewport, `width` и упорядоченные элементы `Text`/`Choice`. Choice привязывается к ID настройки, а нативный renderer меню читает актуальные разрешённые варианты и выбор из host; скрипт не передаёт устаревшее выбранное значение и не копирует список вариантов. Автор определяет содержание и расположение меню. Например, разрешённый игровой Update может привязать настроенное сглаживание:
+
+~~~rust
+use module_engine_core::{ScriptUiItem, ScriptUiPanel};
+
+fn update(ctx: &mut ScriptContext) {
+    const SETTING: &str = "antialiasing";
+    if ctx.setting(SETTING).is_none() {
+        return;
+    }
+    let choice = ctx.ui_action("edge-choice")
+        .and_then(|value| value.as_str()).map(str::to_owned);
+    let problem = choice.and_then(|option| {
+        ctx.request_setting(SETTING, &option).err()
+    });
+    let mut items = vec![ScriptUiItem::Choice {
+        id: "edge-choice".into(),
+        label: "Anti-aliasing".into(),
+        setting: SETTING.into(),
+    }];
+    if let Some(text) = problem {
+        items.push(ScriptUiItem::Text { text });
+    }
+    ctx.script_ui.push(ScriptUiPanel {
+        id: "graphics-menu".into(),
+        title: "Graphics".into(),
+        position: [16., 16.],
+        width: 320.,
+        items,
+    });
+}
+~~~
+
+`ctx.ui_action(control_id)` читает ID выбранного варианта как JSON-строку для этого **экземпляра** Custom. Нативные действия используют `script_ui_action_key(instance, control)`, а не разбиение ID по знакам пунктуации. ID панелей уникальны внутри экземпляра, ID элементов управления — среди всех панелей этого экземпляра; разные экземпляры могут использовать одинаковые ID. Выдавайте панели при каждом принятом вызове, пока они должны быть видимы; пустой вывод очищает меню этого экземпляра. Лимиты — 16 панелей, 128 элементов и 128 запросов настройки за вызов в рамках существующего ограниченного пакета.
+
+Меню владеет своим вводом указателя, popup и клавиатуры, не передавая щелчок игровому миру. Удалённые/непригодные настройки скрывают элементы управления. Меню показывает **Applying**, когда принятый выбор отличается от выбора показанного кадра, **Refused** при недопустимом запросе и **Not saved / works until exit**, когда выбор принят, но запись не удалась. Щелчок по текущему варианту может повторить сохранение. Повреждённый кандидат меню сохраняет прежнее принятое описание; UI может оставить его отключённым с ошибкой вместо принятия ввода из отклонённого пакета.
+
+Эти поля входят в точную идентичность SDK data/API **`module-engine-data-api/v3`**. `engine-sdk.json`, связанный Core, workers, prebuilt metadata и locks Engine/Player должны совпадать. Worker/пакет v2 не считается v3 молча из-за наличия defaults у некоторых JSON-полей; используйте явный совместимый rebuild/обновление контрактов. Эта идентичность не обещает стабильный Rust ABI.
+
 ## Визуальные scalar-выражения
 
 CustomProgram понимает обычную функцию без generic-параметров с именованными аргументами f64 и результатом f64; выбирает speed или единственную свободную функцию. Поддержаны последовательные let, ссылки на предыдущие bindings, конечные float-литералы f64, скобки, + - * / %, унарный минус, завершающее выражение или return expr;.
