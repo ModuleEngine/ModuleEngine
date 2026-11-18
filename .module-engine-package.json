@@ -27,7 +27,7 @@
     "crates/editor/src/activity.rs": "afe7eac52c09216eb272da3c211bd978a9b6bd2c79177e8997d6bdbe59814abe",
     "crates/editor/src/app.rs": "ce0435654d3097335cc02779712d5c015e8b46504e05a3d4da77426cb7788e5b",
     "crates/editor/src/app_icon.rs": "214fa9373f27c33ab68072b43dca5f06d40815b6494bfd3d0148641e1b0dd406",
-    "crates/editor/src/area_drag.rs": "b66cbc2e260f825e1362ef9d967b10d0864aca78c20b1c2be375f31a8c1afd99",
+    "crates/editor/src/area_drag.rs": "63dcc1b95fc407fb98fa517303ff4800a75f96a448bbaf57d53df68a5f07493d",
     "crates/editor/src/assets_ui.rs": "6daa9faaf052788d776152bd9b8f480a667fd0e9d187098bc374b719423f8716",
     "crates/editor/src/assets_workspace_ui.rs": "e05db72e90e2821ff6bdfd1e925295a96b2b794e263584cf7285f8b992f37cc5",
     "crates/editor/src/authoring.rs": "33444c74ab0b475fee2e321b5b16f7a8b20e3e3e199effa5985e7fd8816e86bb",

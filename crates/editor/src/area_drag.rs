@@ -424,6 +424,8 @@ impl Editor {
         let Some((pointer, held, _)) = pointer(ctx) else {
             return;
         };
+        #[cfg(not(windows))]
+        let _ = held;
         let original = self.active_layout_mut().clone();
         let source_slot = self
             .area_drop_targets
