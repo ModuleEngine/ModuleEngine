@@ -350,7 +350,7 @@ Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
 - Authored data rules from [AGENTS.md](../AGENTS.md) stay: the authored document is separate from the Play copy, stable IDs and unknown JSON payloads survive, a failed change keeps the last good version. Scene files stay JSON; only the in-memory runtime representation changes.
 - Each risky choice (R1.1, R2.1, R3.1, R8.1, R9.1) starts with a spike and a benchmark; the decision is recorded in [decisions](decisions.md) before migration starts.
 - The old path stays behind a switch until the new one passes parity; it is removed in the same phase after acceptance, not left as a second production implementation.
-- Every hardware-dependent feature declares its tier and a fallback. Tier A is the current Vulkan 1.3 baseline plus descriptor indexing, buffer device address and synchronization2 (all core in 1.2/1.3). Tier B adds `VK_EXT_mesh_shader`. Tier C adds `VK_KHR_acceleration_structure` and `VK_KHR_ray_query` (and `VK_KHR_ray_tracing_pipeline` where used).
+- Every hardware-dependent feature declares its tier and a fallback. The [R0.4 hardware contract](hardware-tiers.md) lists the Vulkan 1.3 base tier A and the independent mesh shader (B) and ray tracing (C) additions, with their individual features and requirements for native Player presentation.
 - Measurements follow [release decisions](#decision): sequential GPU runs, recorded driver and load, mean and p95, the real game window rather than offscreen alone.
 
 ### Benchmark scenes used by all phases
@@ -371,8 +371,8 @@ Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
 | --- | --- | --- | --- |
 | R0.1 | Done 21 November 2026: the owner paused the 0.5 brief and new UI work; recorded in [current status](current-status.md) and [decisions](decisions.md). Bug fixes to accepted 0.4.2 remain allowed. | Dated decision in both languages. | Done |
 | R0.2 | Done 21 November 2026: S3–S5 are reproducible fixtures (S4 on pinned Khronos Sponza) and `scripts/bench.py` writes JSON results to `outputs/bench/<date>/`; see [running benchmarks](bench.md) and the [accepted series](bench-r02-20261121.md) (maximum spread 4.75 %). | Three consecutive runs differ by ≤5 % on mean values. | Done |
-| R0.3 | Add GPU timestamp queries per render-graph pass and CPU spans for tick, extraction, recording and submission; show them in an editor overlay. | Per-pass GPU times are visible in the editor and in JSON. | 2–3 d |
-| R0.4 | Record the target hardware: GPU, driver, `vulkaninfo` dump, supported tiers A/B/C. Decide the minimum supported GPU. | Tier table checked into `docs/`. | 0.5 d |
+| R0.3 | Added GPU timestamp queries per render-graph pass and CPU spans for tick, extraction, recording and submission. | [Frame timings](bench.md#frame-timings) are available in Editor Game and benchmark JSON. | Done |
+| R0.4 | [Hardware tiers and device evidence](hardware-tiers.md). RTX 4080 SUPER is the development reference. GTX 1660 SUPER 6 GB is the candidate for minimum Windows tier A hardware. | Tier table and full Vulkan dump recorded in `docs/`. Physical qualification is on the [pre-release checklist](hardware-tiers.md#minimum-gpu). | Done |
 | R0.5 | Hygiene prerequisites: GPU and DXC tests skip with a clear message when unavailable; Vulkan validation layers and debug names in debug builds; typed errors with `thiserror` in `render-vulkan` instead of `String`. | `verify` passes on a machine without DXC/GPU with explicit skips; a debug run shows no validation errors on S1. | 2–3 d |
 | R0.6 | Baseline report: S1–S5 on the current code. | Report linked from this section; it is the reference for every later "not worse" criterion. | 1 d |
 
@@ -400,7 +400,7 @@ Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
 | R2.1 | Device layer: tier detection, a memory allocator (`gpu-allocator`) instead of one allocation per resource, 2–3 frames in flight with per-frame command pools and timeline semaphores, a staging ring and a transfer queue, a deletion queue that replaces `retirement.rs` semantics. Spike first: allocator and frame pacing on S3. | Zero validation errors on S1–S3; in steady state the CPU never waits for the frame it just submitted. | 2 w |
 | R2.2 | Bindless resources: one global descriptor set with descriptor indexing (texture array, samplers, storage buffers) or buffer device address. Replace the atlas with per-texture images, mipmaps generated at import or on upload, anisotropic sampling. The push-constant ABI gains bindless indices; custom HLSL passes keep working. | 1,000 unique textures without the 8192 px limit; no shimmering on a moving camera over S4 floors; existing custom-pass tests pass. | 1.5–2 w |
 | R2.3 | GPU-resident scene: one mesh pool (shared vertex/index buffers) uploaded once per mesh; instance buffer with transforms and material indices updated from R1.6 deltas; material buffer. Remove the CPU vertex transform in `geometry.rs`. | Upload bytes per frame proportional to changed objects; S3 CPU frame ≤1 ms. | 1.5–2 w |
-| R2.4 | GPU culling and indirect drawing: compute frustum culling, `vkCmdDrawIndexedIndirectCount`, then two-phase Hi-Z occlusion culling. | Draw calls per pass do not grow with object count; S3 scaled to 100,000 instances keeps 60 FPS at 1080p on the R0.4 GPU. | 1.5–2 w |
+| R2.4 | GPU culling and indirect drawing: compute frustum culling, `vkCmdDrawIndexedIndirectCount`, then two-phase Hi-Z occlusion culling. | Draw calls per pass do not grow with object count; S3 scaled to 100,000 instances keeps 60 FPS at 1080p on the [R0.4 reference GPU](hardware-tiers.md#reference-gpu). | 1.5–2 w |
 | R2.5 | Render graph v2: automatic barriers with synchronization2, transient resource aliasing, async compute queue. Existing graph documents load unchanged; built-in passes (forward, gbuffer, deferred, SSAO, FXAA, tonemap, color encode) are migrated. | Existing graph and custom-pass tests pass; built-ins match the old images within the `image_quality_check` tolerance; transient memory on S4 is at least 30 % lower. | 2–3 w |
 | R2.6 | Game swapchain for Player: present modes, frame pacing, resize, prepared for HDR output. | Player S1/S2 run directly on the swapchain; frame-time p95 not worse than R0.6. | 1 w |
 | R2.7 | Parity and switch: the old renderer behind a feature flag until S1/S2 pass, then removal. | S1/S2 gates pass on the new renderer; old code deleted; independent review. | 0.5–1 w |
@@ -434,7 +434,7 @@ Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
 | # | Task | Acceptance | Effort |
 | --- | --- | --- | --- |
 | R5.1 | glTF metallic-roughness materials: base color, normal, metallic-roughness, occlusion, emissive, alpha mask/blend; importer and material asset in the editor; BC7/BC5 compression at import. | Khronos sample models (DamagedHelmet, FlightHelmet) import with all maps; editor changes reach Player. | 1.5 w |
-| R5.2 | Lights as ECS components (directional, point, spot, area later) with clustered light culling in compute; one shading model for forward and deferred. | S4 with 256 point lights: lighting ≤2 ms at 1080p on the R0.4 GPU. | 1.5 w |
+| R5.2 | Lights as ECS components (directional, point, spot, area later) with clustered light culling in compute; one shading model for forward and deferred. | S4 with 256 point lights: lighting ≤2 ms at 1080p on the [R0.4 reference GPU](hardware-tiers.md#reference-gpu). | 1.5 w |
 | R5.3 | Shadows: cascaded shadow maps for the sun (4 cascades, PCF with optional PCSS), a shadow atlas for point/spot lights, cached static shadows. | No visible cascade seams or acne on S4; shadows ≤2.5 ms. | 1.5–2 w |
 | R5.4 | Image-based lighting and sky: environment cubemap, prefiltered specular, irradiance as spherical harmonics, BRDF LUT, a physical sky model. | Sample models match the Khronos glTF Sample Viewer within an agreed image tolerance. | 1 w |
 | R5.5 | HDR pipeline: physical camera exposure with auto exposure, bloom, tonemapper choice (ACES/AgX), motion vectors and TAA. TAA is the prerequisite for ray-tracing denoising and upscaling. | Stable image without crawling edges in motion over S4; previous FXAA profile still available. | 1.5 w |
@@ -471,7 +471,7 @@ Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
 | --- | --- | --- | --- |
 | R8.1 | Spike: meshlet build with `meshopt` and a task/mesh shader path on S5. | Decision with numbers: mesh path vs R2.4 indirect path. | 4–5 d |
 | R8.2 | Meshlets at import: clustering, bounds and normal cones stored in the asset. | Meshlet data cached; import time recorded. | 3–4 d |
-| R8.3 | Task/mesh shader pipeline with per-meshlet frustum, cone and Hi-Z culling. | S5 at 60 FPS at 1080p on the R0.4 GPU (if tier B). | 1.5 w |
+| R8.3 | Task/mesh shader pipeline with per-meshlet frustum, cone and Hi-Z culling. | S5 at 60 FPS at 1080p on the [R0.4 reference GPU](hardware-tiers.md#reference-gpu) using tier B. | 1.5 w |
 | R8.4 | Continuous LOD: simplified LOD chain (`meshopt` simplify) or meshlet hierarchy with screen-space error selection, without visible popping. | S5 memory and GPU time within agreed budget; no popping in a fly-through. | 1.5–2 w |
 | R8.5 | Fallback: the same meshlet data drawn through compute culling and indirect draws on tier A. | Identical image on tier A within tolerance. | 3–4 d |
 
