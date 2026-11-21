@@ -83,6 +83,7 @@ English is the primary documentation language. Every document below has a comple
 
 - [Pinned Windows tools](toolchain.md)
 - [ModuleEngine CI](ci.md)
+- [Licensing and attribution](licensing.md)
 - [Verification Routes](verification.md)
 - [Editor diagnostics](editor-diagnostics.md)
 - [Independent Change Review](review.md)

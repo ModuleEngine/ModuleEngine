@@ -167,3 +167,9 @@ Normal native Vulkan presentation keeps pixels on the GPU and admits one pending
 | Verification and measurement boundaries | [game-verification](docs/game-verification.md) |
 
 The shared execution and renderer/service boundaries are documented in [shared-game-host.md](docs/shared-game-host.md).
+
+<a id="лицензия"></a>
+
+## License
+
+ModuleEngine is licensed under either of the [MIT License](LICENSE-MIT) or the [Apache License, Version 2.0](LICENSE-APACHE), at your option. Exports ship these files with [THIRD-PARTY-LICENSES.txt](THIRD-PARTY-LICENSES.txt) for the bundled Rust packages. See [licensing and attribution](docs/licensing.md) for assets, the license policy check, and code-signing status.

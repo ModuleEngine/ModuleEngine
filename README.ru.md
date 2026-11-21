@@ -158,3 +158,9 @@ Integration проверяет Vulkan forward/deferred, Custom compute/vertex/fr
 
 
 Общие границы исполнения, рендеринга и сервисов описаны в [shared-game-host.md](docs/ru/shared-game-host.md).
+
+<a id="лицензия"></a>
+
+## Лицензия
+
+ModuleEngine распространяется по [лицензии MIT](LICENSE-MIT) или [Apache License, Version 2.0](LICENSE-APACHE), на ваш выбор. Экспорты поставляют эти файлы вместе с [THIRD-PARTY-LICENSES.txt](THIRD-PARTY-LICENSES.txt) для встроенных Rust-пакетов. Ассеты, проверка лицензий и состояние подписи кода описаны в разделе [лицензии и атрибуция](docs/ru/licensing.md).

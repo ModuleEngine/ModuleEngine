@@ -16,6 +16,8 @@ pub const EDITOR_EXECUTABLE: &str = if cfg!(windows) {
 } else {
     "ModuleEngine"
 };
+/// Project license and third-party notices shipped with every Full, Team and Player delivery.
+pub const LICENSE_FILES: [&str; 3] = ["LICENSE-MIT", "LICENSE-APACHE", "THIRD-PARTY-LICENSES.txt"];
 pub const PROJECT_BINDING_NAME: &str = ".module-engine-project.json";
 pub fn project_binding_path(project_path: &Path) -> Result<PathBuf, String> {
     let name = project_path
@@ -613,7 +615,9 @@ pub fn write_full_manifest(
         "AGENTS.md",
         ".agents/skills/moduleengine-debug/SKILL.md",
         ".codex/config.toml",
-        "LICENSE",
+        "LICENSE-MIT",
+        "LICENSE-APACHE",
+        "THIRD-PARTY-LICENSES.txt",
         "toolchain-manifest.json",
         "run.ps1",
         "run.sh",

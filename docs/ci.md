@@ -17,14 +17,14 @@ successful planning and both platforms, including selected additional routes.
 The [workflow](../.github/workflows/ci.yml) runs for all PRs, pushes to `main`, the merge queue,
 and manual invocation; there are no workflow-level path filters. [ci_plan.py](../scripts/ci_plan.py)
 reads the Git diff, including deleted files and both sides of renames. Only changes
-to `docs/`, Markdown, LICENSE, and `.gitignore` skip additional routes;
+to `docs/`, Markdown, `LICENSE-MIT`, `LICENSE-APACHE`, and `.gitignore` skip additional routes;
 an unknown new source path enables them. An initial push/manual run enables everything.
 Failure to determine the diff fails planning.
 
 | Runner | Always | When sources change |
 | --- | --- | --- |
-| `windows-2022` | Python unit checks, `contracts`, `clippy` | `native-tools`, then `package` |
-| `ubuntu-24.04` | Python unit checks, `contracts`, `clippy` | `native` on explicitly selected Mesa lavapipe, then `package` |
+| `windows-2022` | Python unit checks, [license policy](licensing.md#third-party-code), `contracts`, `clippy` | `native-tools`, then `package` |
+| `ubuntu-24.04` | Python unit checks, [license policy](licensing.md#third-party-code), `contracts`, `clippy` | `native` on explicitly selected Mesa lavapipe, then `package` |
 
 The existing checks job always plans and runs `clippy` separately on both platforms,
 including documentation PRs. Its command is
