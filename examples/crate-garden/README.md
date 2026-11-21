@@ -32,7 +32,8 @@ Existing different asset bytes are rejected. `--replace` explicitly regenerates
 these assets; do not use it on a project containing your own edited replacements.
 `asset-origins.json` records generated paths, sizes and SHA-256 values. All
 models, sounds and the melody were created for this project by that script and
-are distributed under the repository's [MIT license](../../LICENSE). No external
+are distributed under the repository's license, [MIT](../../LICENSE-MIT) OR
+[Apache-2.0](../../LICENSE-APACHE). No external
 asset pack or recorded music is required.
 
 The simple palette material intentionally targets the engine's currently

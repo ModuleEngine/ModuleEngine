@@ -92,6 +92,8 @@ jobs:
             target/${{ steps.cargo-cache-context.outputs.native_host }}/release
       - name: Fetch locked dependencies before offline verification
         run: cargo fetch --locked
+      - name: Third-party license policy and notices file
+        run: python scripts/third_party_licenses.py --check
       - name: Launcher and CI policy unit checks
         run: python -B -m unittest discover -s scripts -p "test_*.py" -v
       - name: Inspect contracts plan

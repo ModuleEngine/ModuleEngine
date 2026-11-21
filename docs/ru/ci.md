@@ -13,14 +13,14 @@
 [Workflow](../../.github/workflows/ci.yml) запускается для всех PR, push в `main`, merge queue
 и вручную; workflow-level path filters отсутствуют. [ci_plan.py](../../scripts/ci_plan.py)
 читает Git diff, включая удалённые файлы и обе стороны rename. Только изменения
-в `docs/`, Markdown, LICENSE и `.gitignore` пропускают дополнительные маршруты;
+в `docs/`, Markdown, `LICENSE-MIT`, `LICENSE-APACHE` и `.gitignore` пропускают дополнительные маршруты;
 неизвестный новый source path включает их. Initial push/manual run включает всё.
 Ошибка определения diff завершает планирование ошибкой.
 
 | Runner | Всегда | При изменении исходников |
 | --- | --- | --- |
-| `windows-2022` | Python unit checks, `contracts`, `clippy` | `native-tools`, затем `package` |
-| `ubuntu-24.04` | Python unit checks, `contracts`, `clippy` | `native` на явно выбранном Mesa lavapipe, затем `package` |
+| `windows-2022` | Python unit checks, [проверка лицензий](licensing.md#third-party-code), `contracts`, `clippy` | `native-tools`, затем `package` |
+| `ubuntu-24.04` | Python unit checks, [проверка лицензий](licensing.md#third-party-code), `contracts`, `clippy` | `native` на явно выбранном Mesa lavapipe, затем `package` |
 
 Существующий checks job всегда отдельно планирует и выполняет `clippy` на обеих
 платформах, включая документационные PR. Команда:

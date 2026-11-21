@@ -712,6 +712,16 @@ fn export_into_staging(
     }
     let player = build_native_player(document, &backend_root)?;
     fs::copy(player, destination.join(PLAYER_EXECUTABLE)).map_err(|e| e.to_string())?;
+    // The binary embeds third-party code whose licenses require these notices.
+    for name in crate::distribution::LICENSE_FILES {
+        let source = backend_root.join(name);
+        if !source.is_file() {
+            return Err(format!(
+                "Player export requires {name} in the engine package"
+            ));
+        }
+        fs::copy(&source, destination.join(name)).map_err(|e| e.to_string())?;
+    }
     fs::write(
         destination.join("project.json"),
         serde_json::to_vec_pretty(&{
@@ -725,7 +735,7 @@ fn export_into_staging(
         .map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
-    fs::write(destination.join("README.txt"),format!("ModuleEngine standalone Player\nLaunch ./{PLAYER_EXECUTABLE}. Rust, Cargo, DXC and engine sources are not required.\nNative platform: {}. Packages are not cross-platform binaries.\nSelected native features: {}\nR restarts; Escape closes. Gameplay controls are shown by the selected project.\nAn installed compatible GPU driver is required for GPU rendering; Linux GUI also requires a working Wayland or X11 session and the system runtime libraries used by this native build.\n",native_platform(),features.iter().cloned().collect::<Vec<_>>().join(", "))).map_err(|e|e.to_string())?;
+    fs::write(destination.join("README.txt"),format!("ModuleEngine standalone Player\nLaunch ./{PLAYER_EXECUTABLE}. Rust, Cargo, DXC and engine sources are not required.\nNative platform: {}. Packages are not cross-platform binaries.\nSelected native features: {}\nR restarts; Escape closes. Gameplay controls are shown by the selected project.\nAn installed compatible GPU driver is required for GPU rendering; Linux GUI also requires a working Wayland or X11 session and the system runtime libraries used by this native build.\nLicenses: ModuleEngine is MIT OR Apache-2.0 (LICENSE-MIT, LICENSE-APACHE); bundled third-party notices are in THIRD-PARTY-LICENSES.txt.\n",native_platform(),features.iter().cloned().collect::<Vec<_>>().join(", "))).map_err(|e|e.to_string())?;
     let mut files = BTreeSet::new();
     collect_files(&destination, &destination, &mut files)?;
     let hashes = files
@@ -874,6 +884,9 @@ fn reserved_player_path(relative: &str, scripts: &BTreeSet<String>) -> bool {
             | "player.json"
             | "project.json"
             | "readme.txt"
+            | "license-mit"
+            | "license-apache"
+            | "third-party-licenses.txt"
             | ".module-engine-package.json"
             | ".spirv"
             | ".sdk"
@@ -1795,6 +1808,8 @@ mod tests {
             "assets/../project.json",
             "player.json",
             "README.txt",
+            "LICENSE-MIT",
+            "third-party-licenses.TXT",
             ".spirv/cache.spv",
             "scripts/game-controller/worker.exe",
             ".module-engine-package.json",

@@ -84,6 +84,7 @@
 
 - [Закреплённые инструменты Windows](toolchain.md)
 - [CI ModuleEngine](ci.md)
+- [Лицензии и атрибуция](licensing.md)
 - [Маршруты проверок](verification.md)
 - [Диагностика редактора](editor-diagnostics.md)
 - [Независимое ревью изменений](review.md)
