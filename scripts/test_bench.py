@@ -91,5 +91,137 @@ class FrameTimingSummaryTest(unittest.TestCase):
         )
 
 
+def scene_case(scene, scale=1.0, peak=500 * 1024 ** 2, status="complete", signature=None, p99=None):
+    """A complete per-scene result whose declared metrics are scaled from 10 ms."""
+    metrics = {key: {"mean_ms": 10.0 * scale, "p95_ms": 12.0 * scale,
+                     "p99_ms": (p99 or 14.0) * scale} for key in bench.GATE_METRICS[scene]}
+    return {"scene": scene, "status": status, "metrics": metrics,
+            "signature": signature or {"vulkan_device": "RTX", "effective_present_mode": "Immediate"},
+            "fixture": {"fixture": scene}, "peak_working_set_bytes": peak}
+
+
+def side_runs(side, scales, scenes=("S2",), first=1, **kwargs):
+    return [{"side": side, "run": first + index,
+             "results": {scene: scene_case(scene, scale, **kwargs) for scene in scenes}}
+            for index, scale in enumerate(scales)]
+
+
+class NotWorseRuleTest(unittest.TestCase):
+    def test_quiet_metric_uses_five_percent_floor_on_medians(self):
+        row = bench.judge_metric("timing", [10.0, 10.1, 10.05, 9.95, 10.0],
+                                 [10.4, 10.45, 30.0, 10.4, 10.5], True)
+        self.assertEqual(row["tolerance_percent"], 5.0)
+        self.assertAlmostEqual(row["change_percent"], 4.5)
+        self.assertEqual(row["verdict"], "same")  # one 30 ms outlier does not move the median
+
+    def test_noisy_metric_tolerance_is_twice_measured_spread(self):
+        baseline = [10.0, 10.5, 11.1, 10.2, 10.4]  # spread 11 % of median 10.4
+        row = bench.judge_metric("timing", baseline, [11.0] * 5, True)
+        self.assertAlmostEqual(row["baseline_spread_percent"], 100 * 1.1 / 10.4)
+        self.assertAlmostEqual(row["tolerance_percent"], 2 * 100 * 1.1 / 10.4)
+        self.assertEqual(row["verdict"], "same")
+        self.assertEqual(bench.judge_metric("timing", baseline, [13.5] * 5, True)["verdict"], "worse")
+        self.assertEqual(bench.judge_metric("timing", baseline, [7.5] * 5, True)["verdict"], "better")
+
+    def test_memory_is_near_strict(self):
+        baseline = [1000.0] * 5
+        self.assertEqual(bench.judge_metric("memory", baseline, [1009.0] * 5, True)["verdict"], "same")
+        self.assertEqual(bench.judge_metric("memory", baseline, [1020.0] * 5, True)["verdict"], "worse")
+
+    def test_borderline_band_and_missing_values(self):
+        self.assertTrue(bench.judge_metric("timing", [10.0] * 5, [10.55] * 5, True)["borderline"])
+        self.assertFalse(bench.judge_metric("timing", [10.0] * 5, [10.2] * 5, True)["borderline"])
+        missing = bench.judge_metric("timing", [10.0, None], [10.0, 10.0], True)
+        self.assertEqual(missing["verdict"], "missing")
+        self.assertFalse(missing["borderline"])
+
+    def test_blocking_verdicts_tail_tracking_and_comparability(self):
+        runs = side_runs("baseline", [1.0] * 5) + side_runs("candidate", [1.0] * 5, p99=40.0)
+        scene = bench.compare_sides(runs, ["S2"])["S2"]
+        tail = [row for row in scene["metrics"] if row["statistic"] == "p99_ms"]
+        self.assertTrue(tail and all(row["verdict"] == "worse" and not row["blocking"] for row in tail))
+        self.assertTrue(scene["passed"])
+
+        slower = side_runs("baseline", [1.0] * 5) + side_runs("candidate", [1.08] * 5)
+        self.assertFalse(bench.compare_sides(slower, ["S2"])["S2"]["passed"])
+
+        other = side_runs("baseline", [1.0] * 5) + side_runs(
+            "candidate", [1.0] * 5, signature={"vulkan_device": "RTX", "effective_present_mode": "Fifo"})
+        item = bench.compare_sides(other, ["S2"])["S2"]
+        self.assertFalse(item["comparable"] or item["passed"])
+        self.assertIn("signature.effective_present_mode", item["reasons"][0])
+        self.assertIn("INCOMPARABLE", bench.render_table({"S2": item}))
+
+        failed = side_runs("baseline", [1.0] * 5) + side_runs("candidate", [1.0] * 5, status="failed")
+        self.assertFalse(bench.compare_sides(failed, ["S2"])["S2"]["comparable"])
+
+        no_memory = side_runs("baseline", [1.0] * 5) + side_runs("candidate", [1.0] * 5, peak=None)
+        self.assertFalse(bench.compare_sides(no_memory, ["S2"])["S2"]["passed"])
+
+    def test_schedule_interleaves_sides_and_rerun_starts_with_candidate(self):
+        self.assertEqual(bench.interleaved_schedule(2), [
+            ("baseline", 1), ("candidate", 1), ("baseline", 2), ("candidate", 2)])
+        self.assertEqual(bench.interleaved_schedule(1, candidate_first=True)[0][0], "candidate")
+
+    def test_scene_subset_and_tail_statistics(self):
+        self.assertEqual(bench.parse_scenes("s3, S2"), ["S2", "S3"])
+        with self.assertRaises(bench.argparse.ArgumentTypeError):
+            bench.parse_scenes("S9")
+        self.assertEqual(bench.stats(range(1, 101))["p99_ms"], 99)
+        self.assertEqual(bench.with_tail({"mean_ms": 1.0}, list(range(1, 201)))["p99_ms"], 198)
+        self.assertIsNone(bench.with_tail(None, [1.0]))
+
+
+class CompareSeriesTest(unittest.TestCase):
+    """Drive the A/B orchestration with fixture results instead of a GPU."""
+
+    def run_series(self, candidate_scale):
+        calls = []
+
+        def fake_pass(side, label, folder, scenes, number):
+            calls.append((side["side"], number, tuple(scenes)))
+            scale = 1.0 if side["side"] == "baseline" else candidate_scale(number)
+            return side_runs(side["side"], [scale], scenes, first=number)[0]
+
+        with tempfile.TemporaryDirectory() as folder:
+            series = Path(folder)
+            sides = {name: {"side": name, "ref": name, "root": series, "exe": series / "exe",
+                            "head": "0" * 40, "source_digest": "digest", "binary_sha256": "hash"}
+                     for name in bench.SIDES}
+            with patch.object(bench, "measure_pass", fake_pass), \
+                    patch.object(bench, "capture", return_value={"source_digest": "digest"}), \
+                    patch.object(bench, "entry", return_value={"sha256": "hash"}), \
+                    patch("builtins.print"):
+                code = bench.compare_series(series, sides, ["S2", "S3"], 3, {})
+            report = json.loads((series / "compare.json").read_text(encoding="utf-8"))
+            self.assertTrue((series / "compare.md").is_file())
+        return code, report, calls
+
+    def test_clear_pass_runs_one_interleaved_session(self):
+        code, report, calls = self.run_series(lambda number: 1.01)
+        self.assertEqual(code, 0)
+        self.assertTrue(report["accepted"])
+        self.assertEqual(report["rerun_scenes"], [])
+        self.assertEqual([side for side, _, _ in calls],
+                         ["baseline", "candidate"] + ["baseline", "candidate"] * 3)
+
+    def test_borderline_scene_is_repeated_once_and_judged_on_both_sessions(self):
+        # Session 1 is 5.5 % slower (borderline); the rerun shows 2 % slower.
+        code, report, calls = self.run_series(lambda number: 1.055 if number <= 3 else 1.02)
+        self.assertEqual(report["rerun_scenes"], ["S2", "S3"])
+        rerun = [call for call in calls if call[1] > 3]
+        self.assertEqual(rerun[0][0], "candidate")
+        self.assertEqual(len(rerun), 6)
+        self.assertEqual(report["scenes"]["S2"]["runs"], {"baseline": 6, "candidate": 6})
+        self.assertEqual(code, 0)
+
+    def test_clear_regression_fails_without_rerun(self):
+        code, report, calls = self.run_series(lambda number: 1.2)
+        self.assertEqual(code, 1)
+        self.assertFalse(report["accepted"])
+        self.assertEqual(report["rerun_scenes"], [])
+        self.assertEqual(len(calls), 8)
+
+
 if __name__ == "__main__":
     unittest.main()

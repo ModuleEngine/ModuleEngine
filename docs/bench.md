@@ -111,6 +111,70 @@ start a new complete series. R0.3–R0.6 have separate acceptance criteria.
 warmup and returns success when all scenes complete. It does not evaluate the
 three-run repeatability gate.
 
+<a id="not-worse"></a>
+
+## Not worse than the baseline
+
+Every later acceptance criterion that says "not worse than R0.6" (or than
+any other baseline) is decided by this rule, and `scripts/bench.py --compare`
+applies it and returns the verdict. Archived numbers are not reused: drivers,
+Windows and background load drift, so the baseline commit is rebuilt and
+measured again in the same session as the candidate. The R0.6 baseline
+commit is the source revision recorded in the
+[R0.6 report](product-roadmap.md#rebuild-r0).
+
+```sh
+python scripts/bench.py --no-profiling --compare <baseline commit>
+python scripts/bench.py --no-profiling --compare <baseline commit> --scenes S2,S3
+```
+
+1. **Paired session.** Both sides are built in Release from their own
+   sources: the baseline in a temporary Git worktree, the candidate from the
+   current checkout including uncommitted changes, or from `--candidate <commit>`.
+   After one unscored prewarm pass per side, full passes alternate baseline,
+   candidate, baseline, … until each side has five (`--rounds`, at least 3).
+   Machine drift then affects both sides equally.
+2. **Median verdict.** Each metric is reduced to one value per run. The verdict
+   compares the median of the candidate's runs with the median of the
+   baseline's runs: `change = 100 × (candidate − baseline) / baseline`.
+   Positive means slower or larger.
+3. **Per-metric tolerance from measured noise.**
+   `tolerance = max(floor, 2 × spread)`, where `spread = 100 × (max − min) /
+   median` of the baseline's runs in this session. The floor is 5 % for
+   timings and 1 % for peak working set, so memory is compared almost
+   strictly. A change above `+tolerance` is **worse**, below `−tolerance` is
+   **better**, otherwise **same**.
+4. **One automatic rerun on the border.** If a blocking metric's change is
+   within 25 % of its tolerance on either side of the line
+   (`|change − tolerance| ≤ 0.25 × tolerance`), the affected scenes are
+   measured once more, starting with the candidate. The verdict is then taken
+   from both sessions together, with no further reruns.
+
+| Metric | Role |
+| --- | --- |
+| Mean and p95 of each declared metric (see the table above: frame interval, S2 GameHost step, CPU submit, S3 ECS tick) | Blocking |
+| Peak working set of each scene process | Blocking, 1 % floor |
+| p99 of each declared metric | Tracked: reported, never blocks. S2 step time has no raw samples, so its p99 is reported as missing. |
+
+A scene passes when every run on both sides completed, the scene signature
+(adapter, driver, present mode, profiling, resolution, workload counts) and
+fixture inventory match across all runs, and no blocking metric is worse or
+missing. A changed fixture is not comparable: record a new baseline instead.
+The series passes, and the command exits 0, only when every requested scene
+passes and neither side's sources or binary changed during the series. A
+rejected comparison exits 1, an error 2. A comparison of a commit against
+itself (A/A) shows the machine's current noise. A criterion on a metric the
+launcher does not record yet, such as R3.5 open-to-first-frame, uses the same
+rule with its own paired measurement until the launcher records it.
+
+The series directory `outputs/bench/<date>/<time>-compare/` contains both
+build logs and binaries, `compare-manifest.json` with the commits and rule,
+per-run scene JSON in `session-1/` (and `session-2/` after a rerun),
+`compare.json` with every value and verdict, and `compare.md` with the table
+that is also printed. A full S1–S5 comparison runs 12 passes and takes much
+longer than the repeatability series; limit `--scenes` to what the criterion
+names when appropriate.
+
 <a id="vulkan-validation"></a>
 
 ## Debug Vulkan validation (R0.5)
