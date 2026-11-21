@@ -6,7 +6,7 @@ Recorded project roadmap and planning baseline, updated 17 November 2026.
 
 The final demonstration is concrete: you assemble the capabilities you need. A colleague reproduces that configuration from its description and changes a second game. The first game still builds and plays as before. A player receives only what their game needs.
 
-This document records the reviewed sequence and its full acceptance expectations. **The owner closed 0.4.2 on 17 November 2026; 0.5 is the next planned milestone. Its implementation has not started.** On 21 November 2026 the owner requested the [engine rebuild track](#rebuild); it proposes pausing the 0.5 brief and new UI work until its core phases are accepted. The 0.4.1 implementation and historical 0.4.2 engineering evidence remain recorded below. Future version numbers and milestone scopes are planning labels: they do not mean those versions have shipped, authorize every implementation, or promise dates. Existing specifications, ownership boundaries and budgets remain in force. Use the agreed [0.5 composition and dependency scope](#compose) for the next brief and the [owner check cards](product-roadmap-checks.md) for short personal checks.
+This document records the reviewed sequence and its full acceptance expectations. **The owner closed 0.4.2 on 17 November 2026. On 21 November 2026 the owner started the [engine rebuild track](#rebuild) and paused the 0.5 brief and new UI work until its core phases R1, R3 and R4 are accepted. 0.5 implementation has not started.** The 0.4.1 implementation and historical 0.4.2 engineering evidence remain recorded below. Future version numbers and milestone scopes are planning labels: they do not mean those versions have shipped, authorize every implementation, or promise dates. Existing specifications, ownership boundaries and budgets remain in force. Use the agreed [0.5 composition and dependency scope](#compose) for the next brief and the [owner check cards](product-roadmap-checks.md) for short personal checks.
 
 [Version map](#map) · [Baseline](#baseline) · [Starting handoff](#start) · [Independent use](#usability) · [Release decisions](#decision) · [Engine rebuild](#rebuild)
 
@@ -20,7 +20,7 @@ This document records the reviewed sequence and its full acceptance expectations
 | [0.4.1](#render) | First complete route from ordinary launch to the image in Player, with compact settings and permitted choices in the game menu. | Editor |
 | [0.4.2](#image-and-docking) | Image, panes, stabilization and compact chrome; closed by the owner’s decision. | Accepted 17 Nov 2026 |
 | [R0–R10](#rebuild) | Engine rebuild track: `bevy_ecs` world, GPU-driven Vulkan renderer, editor on Vulkan, `rapier3d`/`kira`, skeletal animation, PBR, mesh shaders and hybrid ray tracing. | Engine core · proposed 21 Nov 2026 |
-| [0.5](#compose) | Add, remove or replace a capability without unrelated settings getting in the way. | Next · planned |
+| [0.5](#compose) | Add, remove or replace a capability without unrelated settings getting in the way. | Paused until R1/R3/R4 |
 | [0.6](#pin) | Identical starting configurations for A and B; changing B does not require updating A. | Stability |
 | [0.7](#extend) | Two distinct tasks: configure an existing function and write a new one. | Extensions |
 | [0.8](#restore) | One entry description, available pinned sources/resources and an understandable refusal. | Handoff |
@@ -105,7 +105,7 @@ Original detailed brief: [0.4.2 plan](release-042-plan.md). The protocol above i
 
 ## 0.5 — I assemble what I need and understand the consequences
 
-**Status — next planned milestone; implementation has not started and follows a separate brief.**
+**Status — paused by the owner on 21 November 2026 until the [engine rebuild track](#rebuild) phases R1, R3 and R4 are accepted; implementation has not started and follows a separate brief.**
 
 Disabling a button while retaining its service, resource requirement and Player dependency does not remove unnecessary engine capabilities.
 
@@ -320,11 +320,11 @@ Basis: [portfolio gates](portfolio-roadmap.md), [independent review](review.md),
 
 ## Engine rebuild track — a modern Vulkan renderer and ready-made libraries
 
-**Status — requested by the owner on 21 November 2026; planning only, no implementation has started.** The owner chose the high-end rendering route: stay on Vulkan through `ash`, render the editor through Vulkan as well, build the renderer GPU-driven from the start, and then add hybrid ray tracing, mesh shaders and other modern features on top of a solid rasterizer. Runtime pieces that are not this project's value (ECS storage, physics, audio, math) move to proven libraries; the editor, its authored-data rules and the render-graph/HLSL authoring model stay.
+**Status — started by the owner's decision of 21 November 2026; it is the current priority. No implementation has started yet.** The owner chose the high-end rendering route: stay on Vulkan through `ash`, render the editor through Vulkan as well, build the renderer GPU-driven from the start, and then add hybrid ray tracing, mesh shaders and other modern features on top of a solid rasterizer. Runtime pieces that are not this project's value (ECS storage, physics, audio, math) move to proven libraries; the editor, its authored-data rules and the render-graph/HLSL authoring model stay.
 
 Phase numbers R0–R10 are planning labels, not versions. Effort is a rough range for one full-time developer with Vulkan experience; it is speculation until R0 records real throughput (see the [complete route](#map) rule on estimates). The phases are ordered by dependency; independent phases can overlap when there is more than one developer.
 
-**Relation to the version route.** The track proposes pausing the 0.5 brief and new UI work until R1, R3 and R4 are accepted, because they change the world storage, the editor shell and the editor/game boundary that 0.5 would build on. The owner confirms this pause in R0.1. The track does not replace any milestone: R5 is the technical base for [1.3](#real), R6–R7 supply the physics and skeleton that [0.9a](#combat) and the [G2 decisions](#g2-agreement) need, and every phase keeps the G1 and ARPG budgets from [release decisions](#decision) as regression gates. Ray tracing and mesh shaders are optional hardware tiers: G1/G3-style packages must never require them.
+**Relation to the version route.** On 21 November 2026 the owner paused the 0.5 brief and new UI work until R1, R3 and R4 are accepted, because they change the world storage, the editor shell and the editor/game boundary that 0.5 would build on. The track does not replace any milestone: R5 is the technical base for [1.3](#real), R6–R7 supply the physics and skeleton that [0.9a](#combat) and the [G2 decisions](#g2-agreement) need, and every phase keeps the G1 and ARPG budgets from [release decisions](#decision) as regression gates. Ray tracing and mesh shaders are optional hardware tiers: G1/G3-style packages must never require them.
 
 ### Where the code stands today
 
@@ -369,7 +369,7 @@ Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
 
 | # | Task | Acceptance | Effort |
 | --- | --- | --- | --- |
-| R0.1 | Owner confirms the pause of the 0.5 brief and new UI work; record it in [current status](current-status.md) and [decisions](decisions.md). Bug fixes to accepted 0.4.2 remain allowed. | Dated decision in both languages. | 0.5 d |
+| R0.1 | Done 21 November 2026: the owner paused the 0.5 brief and new UI work; recorded in [current status](current-status.md) and [decisions](decisions.md). Bug fixes to accepted 0.4.2 remain allowed. | Dated decision in both languages. | Done |
 | R0.2 | Build S3–S5 as reproducible fixtures (S1, S2 exist) and a `bench` runner that writes JSON results to `outputs/bench/<date>/`. | Three consecutive runs differ by ≤5 % on mean values. | 3–4 d |
 | R0.3 | Add GPU timestamp queries per render-graph pass and CPU spans for tick, extraction, recording and submission; show them in an editor overlay. | Per-pass GPU times are visible in the editor and in JSON. | 2–3 d |
 | R0.4 | Record the target hardware: GPU, driver, `vulkaninfo` dump, supported tiers A/B/C. Decide the minimum supported GPU. | Tier table checked into `docs/`. | 0.5 d |
