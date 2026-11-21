@@ -168,6 +168,7 @@ struct VulkanFrameRenderer {
     name: String,
     pending: Option<(u64, Arc<AtomicBool>)>,
     busy_skips: u64,
+    frame_profiling: bool,
 }
 
 impl VulkanFrameRenderer {
@@ -184,6 +185,7 @@ impl VulkanFrameRenderer {
             name,
             pending: None,
             busy_skips: 0,
+            frame_profiling: false,
         })
     }
 }
@@ -209,6 +211,7 @@ impl FrameRenderer for VulkanFrameRenderer {
         let mut backend = self.backend.try_lock().map_err(|_| {
             "GPU is preparing a new configuration; showing the last frame".to_string()
         })?;
+        backend.set_frame_profiling(self.frame_profiling);
         backend.render(
             scene,
             camera,
@@ -269,6 +272,7 @@ impl FrameRenderer for VulkanFrameRenderer {
             }
             Err(_) => return Err("Vulkan device lock is poisoned".into()),
         };
+        backend.set_frame_profiling(self.frame_profiling);
         let submitted = backend.render_presented(
             scene,
             camera,
@@ -332,6 +336,9 @@ impl FrameRenderer for VulkanFrameRenderer {
             backend.set_detailed_stats(enabled);
         }
     }
+    fn set_frame_profiling(&mut self, enabled: bool) {
+        self.frame_profiling = enabled;
+    }
 
     fn prepare_candidate(
         &mut self,
@@ -351,6 +358,7 @@ impl FrameRenderer for VulkanFrameRenderer {
             name: self.name.clone(),
             pending: None,
             busy_skips: 0,
+            frame_profiling: self.frame_profiling,
         })))
     }
 

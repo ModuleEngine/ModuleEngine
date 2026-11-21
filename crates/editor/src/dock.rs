@@ -1512,6 +1512,7 @@ mod tests {
                                                         height,
                                                         rgba: vec![80; width * height * 4],
                                                         gpu: None,
+                                                        timings: None,
                                                         stats: Default::default(),
                                                     })
                                                 },

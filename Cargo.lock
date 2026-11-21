@@ -1447,6 +1447,7 @@ version = "0.4.0"
 dependencies = [
  "ash",
  "eframe",
+ "log",
  "module-engine-arpg",
  "module-engine-core",
  "module-engine-g1",

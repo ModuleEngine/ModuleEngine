@@ -993,6 +993,7 @@ mod tests {
                     height,
                     rgba: vec![ticket as u8; width * height * 4],
                     gpu: None,
+                    timings: None,
                     stats: Default::default(),
                 },
             );

@@ -1,4 +1,6 @@
 //! Authored scenes and staged execution graphs. Play never writes authored data.
+#[path = "game_timing_overlay.rs"]
+mod game_timing_overlay;
 #[path = "hierarchy_ui.rs"]
 mod hierarchy_ui;
 #[path = "inspector_drafts.rs"]
@@ -233,6 +235,8 @@ pub struct GameWorkbench {
     worker_view_visible: bool,
     requested_viewport: Option<[usize; 2]>,
     worker_frame: Option<Arc<Frame>>,
+    profile_frames: bool,
+    displayed_timings: Option<Box<FrameTimings>>,
     worker_rejected_document: Option<Arc<GraphDocument>>,
     worker_deferred_document: Option<(Arc<GraphDocument>, bool)>,
     repaint: Option<egui::Context>,
@@ -320,6 +324,8 @@ impl Default for GameWorkbench {
             worker_view_visible: false,
             requested_viewport: None,
             worker_frame: None,
+            profile_frames: false,
+            displayed_timings: None,
             worker_rejected_document: None,
             worker_deferred_document: None,
             repaint: None,
@@ -432,6 +438,27 @@ impl GameWorkbench {
     }
     /// Native Editor execution is asynchronous; headless/CLI callers opt in
     /// explicitly rather than silently changing their deterministic API.
+    pub(super) fn set_frame_profiling(&mut self, enabled: bool) {
+        if enabled != self.profile_frames {
+            self.profile_frames = enabled;
+            self.displayed_timings = None;
+            self.game_frame = GameFrameCache::default();
+            if self.worker.is_some() {
+                self.queue_worker_command(WorkerCommand::SetFrameProfiling(enabled));
+            }
+        }
+    }
+
+    pub(super) fn has_displayed_play_timings(&self) -> bool {
+        self.play_session
+            && self.displayed_timings.as_deref().is_some_and(|timings| {
+                matches!(
+                    &timings.gpu,
+                    Some(module_engine_core::GpuTimings::Available { .. })
+                )
+            })
+    }
+
     pub fn set_background_game(&mut self, enabled: bool, context: Option<&egui::Context>) {
         self.background_game = enabled;
         if enabled {
@@ -447,8 +474,9 @@ impl GameWorkbench {
             self.install_worker(host);
         }
     }
-    fn install_worker(&mut self, host: GameHost) {
+    fn install_worker(&mut self, mut host: GameHost) {
         self.clear_worker();
+        host.set_frame_profiling(self.profile_frames);
         if self.accepted_game_context.is_none() {
             self.accepted_game_context = Some(PreparationContext {
                 root: host.root.clone(),
@@ -478,6 +506,7 @@ impl GameWorkbench {
         self.worker_viewport = None;
         self.worker_view_visible = false;
         self.worker_frame = None;
+        self.displayed_timings = None;
         self.worker_rejected_document = None;
         self.worker_deferred_document = None;
     }
@@ -539,6 +568,10 @@ impl GameWorkbench {
             !matches!(
                 (&command, queued),
                 (WorkerCommand::SetPlaying(_), WorkerCommand::SetPlaying(_))
+                    | (
+                        WorkerCommand::SetFrameProfiling(_),
+                        WorkerCommand::SetFrameProfiling(_)
+                    )
                     | (
                         WorkerCommand::SetViewport { .. },
                         WorkerCommand::SetViewport { .. }
@@ -1801,6 +1834,7 @@ impl GameWorkbench {
             ui.label("Open or create a game project through File.");
             return false;
         }
+        let mut profile_frames = self.profile_frames;
         ui.horizontal_wrapped(|ui| {
             ui.label(if self.play_session {
                 if *playing { "Playing" } else { "Paused" }
@@ -1808,7 +1842,10 @@ impl GameWorkbench {
                 "Authored preview"
             });
             ui.label("Click the viewport to focus game controls");
+            ui.checkbox(&mut profile_frames, "Frame timings")
+                .on_hover_text("Show CPU and GPU timings for the displayed Game frame");
         });
+        self.set_frame_profiling(profile_frames);
         if let Err(error) = self.ensure(document, root, compile_root, kind) {
             self.error = Some(error);
         }
@@ -1820,6 +1857,7 @@ impl GameWorkbench {
             return false;
         }
         if let Some(host) = &mut self.host {
+            host.set_frame_profiling(self.profile_frames);
             let size = ui.available_size().max(Vec2::splat(1.));
             let (rect, response) =
                 crate::app::editor_ui::image_area(ui, size, egui::Sense::click());
@@ -1870,6 +1908,7 @@ impl GameWorkbench {
                                 &frame,
                             ) {
                                 Ok(true) => {
+                                    self.displayed_timings.clone_from(&frame.timings);
                                     self.displayed_camera = host.last_presented_camera();
                                     self.displayed_settings =
                                         host.last_presented_settings().clone();
@@ -1930,6 +1969,8 @@ impl GameWorkbench {
                         Color32::WHITE,
                     );
                 }
+                let profile_blocks_input = self.profile_frames
+                    && game_timing_overlay::show(ui, rect, self.displayed_timings.as_deref());
                 if !self.play_session {
                     stopped_game_hint(ui, rect);
                     return false;
@@ -1969,9 +2010,9 @@ impl GameWorkbench {
                         rect,
                         state: host.session.state(),
                         camera: self.displayed_camera.unwrap_or(host.camera),
-                        aim,
+                        aim: if profile_blocks_input { None } else { aim },
                         respect_editor_focus: true,
-                        world_enabled: *playing && !script_ui.blocks_world,
+                        world_enabled: *playing && !script_ui.blocks_world && !profile_blocks_input,
                     },
                     &status,
                 );
@@ -2044,6 +2085,7 @@ impl GameWorkbench {
                 ) {
                     Ok(true) => {
                         self.worker_frame = Some(frame.clone());
+                        self.displayed_timings.clone_from(&frame.timings);
                         self.displayed_camera = Some(snapshot.camera);
                         self.displayed_settings = snapshot.frame_settings.clone();
                         self.performance.game_render_calls += 1;
@@ -2076,6 +2118,8 @@ impl GameWorkbench {
                 Color32::LIGHT_GRAY,
             );
         }
+        let profile_blocks_input = self.profile_frames
+            && game_timing_overlay::show(ui, rect, self.displayed_timings.as_deref());
         if !self.play_session {
             stopped_game_hint(ui, rect);
             ui.ctx().request_repaint_after(if playing {
@@ -2114,9 +2158,9 @@ impl GameWorkbench {
                 rect,
                 state: &snapshot.state,
                 camera: self.displayed_camera.unwrap_or(snapshot.camera),
-                aim,
+                aim: if profile_blocks_input { None } else { aim },
                 respect_editor_focus: true,
-                world_enabled: playing && !script_ui.blocks_world,
+                world_enabled: playing && !script_ui.blocks_world && !profile_blocks_input,
             },
             &status,
         );

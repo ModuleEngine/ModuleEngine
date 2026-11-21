@@ -6,7 +6,7 @@ license.workspace = true
 
 [features]
 default = []
-ui = ["dep:eframe", "dep:winit", "module-engine-arpg?/ui", "module-engine-project-puzzle?/ui", "module-engine-g1?/ui"]
+ui = ["dep:eframe", "dep:winit", "dep:log", "module-engine-arpg?/ui", "module-engine-project-puzzle?/ui", "module-engine-g1?/ui"]
 arpg = ["dep:module-engine-arpg"]
 puzzle = ["dep:module-engine-project-puzzle"]
 g1 = ["dep:module-engine-g1"]
@@ -24,6 +24,7 @@ module-engine-project-puzzle = { path = "../project-puzzle", optional = true }
 module-engine-g1 = { path = "../project-g1", optional = true }
 module-engine-vulkan = { path = "../render-vulkan", optional = true }
 eframe = { workspace = true, optional = true }
+log = { version = "0.4", optional = true }
 serde.workspace = true
 serde_json.workspace = true
 png.workspace = true

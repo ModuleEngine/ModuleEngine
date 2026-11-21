@@ -85,6 +85,7 @@ fn parse_diagnostic_personal_root(value: Option<&OsStr>) -> Result<Option<PathBu
 
 pub struct Capture {
     destination: Option<PathBuf>,
+    game_timings: bool,
     last_frame: Option<u64>,
     frames: u32,
     requested: bool,
@@ -106,6 +107,7 @@ impl Capture {
             destination: std::env::var_os("MODULE_ENGINE_UI_SCREENSHOT_TO")
                 .filter(|value| !value.is_empty())
                 .map(PathBuf::from),
+            game_timings: false,
             last_frame: None,
             frames: 0,
             requested: false,
@@ -119,6 +121,15 @@ impl Capture {
                     .map_or(400, |g| g.settle_ms),
             ),
         }
+    }
+
+    pub fn wait_for_game_timings(&mut self) -> bool {
+        self.game_timings = self.destination.is_some();
+        self.game_timings
+    }
+
+    pub fn requires_game_timings(&self) -> bool {
+        self.game_timings
     }
 
     /// Returns true only after the requested native screenshot was saved.

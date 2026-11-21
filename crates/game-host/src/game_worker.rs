@@ -233,6 +233,7 @@ pub enum CustomApplyMode {
 #[derive(Debug)]
 pub enum WorkerCommand {
     SetPlaying(bool),
+    SetFrameProfiling(bool),
     SetViewport {
         width: usize,
         height: usize,
@@ -870,6 +871,10 @@ impl Actor {
                     // workflow/pause. Accepted pressed edges stay queued.
                     mailbox.held = GameInput::default();
                 }
+            }
+            WorkerCommand::SetFrameProfiling(enabled) => {
+                self.host.set_frame_profiling(enabled);
+                self.reset_presentation_grid();
             }
             WorkerCommand::SetViewport { width, height } => {
                 // Zero disables rendering for a hidden Game view. Validate before
@@ -3004,6 +3009,7 @@ mod tests {
                     dropped: dropped_tx,
                 })),
                 stats: Default::default(),
+                timings: None,
             }));
             snapshot.actor_id
         };

@@ -283,9 +283,13 @@ impl Editor {
                 self.graph_canvas.zoom = 0.5;
             }
             "settings" => self.reveal_editor(EditorType::ProjectSettings),
-            "game" => {
+            "game" | "game-timings" => {
                 self.workspace = WorkspaceKind::Project;
                 self.reveal_editor(EditorType::Game);
+                if view == "game-timings" && self.ui_capture.wait_for_game_timings() {
+                    self.game_workbench.set_frame_profiling(true);
+                    self.playing = true;
+                }
             }
             "scene" => {
                 self.workspace = WorkspaceKind::Project;

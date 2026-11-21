@@ -46,16 +46,49 @@ class CargoArtifactTest(unittest.TestCase):
 
 
 class PresentationSignatureTest(unittest.TestCase):
-    def test_vsync_request_is_part_of_each_scene_signature(self):
+    def test_present_mode_and_profiling_are_part_of_each_scene_signature(self):
         for scene in bench.SCENES:
             with self.subTest(scene=scene):
                 field = "native_vsync_requested" if scene in ("S1", "S2") else "gui_vsync"
-                off = bench.summarize_scene(scene, {field: False})[3]
-                on = bench.summarize_scene(scene, {field: True})[3]
+                off = bench.summarize_scene(scene, {
+                    field: False, "effective_present_mode": "Fifo", "frame_profiling": False,
+                })[3]
+                on = bench.summarize_scene(scene, {
+                    field: True, "effective_present_mode": "Fifo", "frame_profiling": True,
+                })[3]
                 missing = bench.summarize_scene(scene, {})[3]
                 self.assertIs(off["vsync_requested"], False)
                 self.assertIs(on["vsync_requested"], True)
                 self.assertIsNone(missing["vsync_requested"])
+                self.assertEqual(off["effective_present_mode"], "Fifo")
+                self.assertIsNone(missing["effective_present_mode"])
+                self.assertIs(off["frame_profiling"], False)
+                self.assertIs(on["frame_profiling"], True)
+
+
+class FrameTimingSummaryTest(unittest.TestCase):
+    def test_pass_samples_are_grouped_by_role_and_missing_timings_stay_unavailable(self):
+        summary = bench.summarize_frame_timings([
+            {"timings": {"gpu": {"status": "unavailable", "reason": "queue unsupported"}}},
+            {"timings": {"cpu_submit_ms": 0.2, "gpu": {
+                "status": "available", "graph_ms": 3.0, "passes": [
+                    {"id": "post", "bypassed": False, "ms": 1.6},
+                ],
+            }}},
+            {"timings": {"gpu": {"status": "available", "graph_ms": 1.0, "passes": [
+                {"id": "post", "bypassed": True, "ms": 0.3},
+            ]}}},
+            {"timings": None},
+        ])
+        self.assertEqual(summary["profiled_frames"], 3)
+        self.assertEqual(summary["gpu_graph_ms"]["mean_ms"], 2.0)
+        self.assertEqual(summary["gpu_unavailable_reasons"], {"queue unsupported": 1})
+        self.assertIsNone(summary["cpu"]["cpu_tick_ms"])
+        self.assertEqual(summary["cpu"]["cpu_submit_ms"]["samples"], 1)
+        self.assertEqual(
+            [(p["bypassed"], p["mean_ms"]) for p in summary["gpu_pass_ms"]],
+            [(False, 1.6), (True, 0.3)],
+        )
 
 
 if __name__ == "__main__":

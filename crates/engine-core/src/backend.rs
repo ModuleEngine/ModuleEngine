@@ -167,6 +167,9 @@ pub trait FrameRenderer: Send {
         RendererPerformance::default()
     }
     fn set_detailed_stats(&mut self, _enabled: bool) {}
+    /// Profile future submissions. In-flight and completed frames keep their
+    /// original capture state regardless of later requests.
+    fn set_frame_profiling(&mut self, _enabled: bool) {}
     /// Return a separate configuration sharing reusable caches if supported.
     /// Cache warming must not change the active configuration on rejection.
     /// None asks the host to call its registered isolated factory instead.

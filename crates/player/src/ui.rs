@@ -23,6 +23,9 @@ const FRAME_BUDGET_MS: f64 = 1000. / 60.;
 
 #[path = "image_trace.rs"]
 mod image_trace;
+#[path = "present_mode.rs"]
+mod present_mode;
+pub use present_mode::{benchmark_present_mode, observe_benchmark_present_mode};
 
 fn physical_game_size(rect: Rect, scale: f32, minimized: bool) -> [u32; 2] {
     if minimized || !rect.is_positive() || !scale.is_finite() || scale <= 0. {
@@ -139,6 +142,15 @@ pub fn gui_vsync_requested() -> Result<bool, String> {
         Some(other) => Err(format!(
             "MODULE_ENGINE_GUI_VSYNC must be on or off, got {other}"
         )),
+    }
+}
+
+/// Standalone benchmark commands and the series launcher share this switch.
+pub fn benchmark_profiling_enabled() -> Result<bool, String> {
+    match env_option("MODULE_ENGINE_BENCHMARK_PROFILING")?.as_deref() {
+        None | Some("on") => Ok(true),
+        Some("off") => Ok(false),
+        Some(_) => Err("MODULE_ENGINE_BENCHMARK_PROFILING must be on or off".into()),
     }
 }
 
@@ -467,7 +479,9 @@ pub fn run_host(mut host: GameHost) -> Result<(), String> {
 
 /// Measure the shipping Player path including framework texture upload and
 /// presentation cadence. The UI closes itself after 30 + 120 completed frames.
-pub fn run_benchmark_host(host: GameHost, folder: &Path) -> Result<(), String> {
+pub fn run_benchmark_host(mut host: GameHost, folder: &Path) -> Result<(), String> {
+    let frame_profiling = benchmark_profiling_enabled()?;
+    host.set_frame_profiling(frame_profiling);
     let target_frames =
         benchmark_frame_count(env_option("MODULE_ENGINE_BENCHMARK_FRAMES")?.as_deref())?;
     let arm_mode = benchmark_arm_mode(env_option("MODULE_ENGINE_BENCHMARK_ARM")?.as_deref())?;
@@ -483,6 +497,7 @@ pub fn run_benchmark_host(host: GameHost, folder: &Path) -> Result<(), String> {
             .with_decorations(false)
             .with_position([0., 0.]),
     )?;
+    observe_benchmark_present_mode();
     eframe::run_native(
         "ModuleEngine / Native Player benchmark",
         options,
@@ -518,6 +533,7 @@ pub fn run_benchmark_host(host: GameHost, folder: &Path) -> Result<(), String> {
                 host,
                 cc,
                 Some(NativeBenchmark {
+                    frame_profiling,
                     target_frames,
                     folder,
                     outcome,
@@ -883,12 +899,21 @@ impl eframe::App for Player {
                                     .then(|| "Game worker stopped unexpectedly".to_owned())
                             });
                         if let Some(benchmark) = &mut self.benchmark {
+                            let observation_index = benchmark.presentations.len();
                             benchmark.observe_game_frame(
                                 observed_at.unwrap_or(now),
                                 snapshot.frame_completed_at,
                                 snapshot.frame_presentation.as_ref(),
                                 fresh_frame,
                             );
+                            if let Some(observation) =
+                                benchmark.presentations.get_mut(observation_index)
+                            {
+                                observation.timings = snapshot
+                                    .frame
+                                    .as_ref()
+                                    .and_then(|frame| frame.timings.clone());
+                            }
                             let pixels_per_point = ui.ctx().pixels_per_point();
                             sample = Some(NativeFrameSample {
                                 started: now,
@@ -1144,6 +1169,7 @@ struct NativeFrameSample {
 }
 
 struct NativeBenchmark {
+    frame_profiling: bool,
     target_frames: usize,
     folder: PathBuf,
     outcome: Arc<Mutex<Option<Result<(), String>>>>,
@@ -1179,6 +1205,8 @@ struct NativePresentationObservation {
     metadata: FramePresentation,
     completed_since_start_ms: f64,
     observed_since_start_ms: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timings: Option<Box<module_engine_core::FrameTimings>>,
 }
 
 #[derive(Serialize)]
@@ -1360,6 +1388,7 @@ impl NativeBenchmark {
                     * 1000.,
                 observed_since_start_ms: now.saturating_duration_since(self.started).as_secs_f64()
                     * 1000.,
+                timings: None,
             });
         }
     }
@@ -1551,8 +1580,13 @@ impl NativeBenchmark {
             "gui_graphics":self.gui_graphics,
             "gl_vendor":self.gui_graphics.gl_vendor,"gl_renderer":self.gui_graphics.gl_renderer,"renderer_device":snapshot.map(|s|s.device.as_str()),"vulkan_device":snapshot.map(|s|s.device.as_str())
         }).as_object().unwrap().clone());
+        let present_mode = benchmark_present_mode();
         report.as_object_mut().unwrap().extend(serde_json::json!({
             "cpu_identifier":std::env::var("PROCESSOR_IDENTIFIER").ok(),
+            "effective_present_mode":present_mode.effective_present_mode,
+            "effective_present_mode_unavailable_reason":present_mode.effective_present_mode_unavailable_reason,
+            "observed_present_modes":present_mode.observed_present_modes,
+            "frame_profiling":self.frame_profiling,
             "native_vsync_requested":gui_vsync_requested().unwrap_or(true),"model_paths":self.model_paths,"world_kind":snapshot.map(|s|format!("{:?}",s.world_kind)),
             "enemy_count_min":self.samples.iter().map(|s|s.enemies).min(),"enemy_count_max":self.samples.iter().map(|s|s.enemies).max(),
             "game_status_final":diagnostics.and_then(|value|value.get("status")),"player_health_final":player_health,
@@ -1845,6 +1879,7 @@ mod timing_tests {
     fn benchmark() -> NativeBenchmark {
         NativeBenchmark {
             target_frames: BENCHMARK_FRAMES,
+            frame_profiling: false,
             folder: PathBuf::new(),
             outcome: Arc::new(Mutex::new(None)),
             physical_size: Box::new(|| Some([1920, 1080])),
@@ -2013,6 +2048,7 @@ mod timing_tests {
             metadata: presentation(1),
             completed_since_start_ms: 1.,
             observed_since_start_ms: 2.,
+            timings: None,
         });
         benchmark.seen_presentations.insert((1, 1, 1));
         benchmark.last_presentation = Some(presentation(1));

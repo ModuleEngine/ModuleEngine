@@ -40,6 +40,36 @@ pub struct RenderStats {
     pub shaded_pixels: usize,
 }
 
+/// Optional profiler data belonging to one completed frame.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct FrameTimings {
+    pub cpu_tick_ms: Option<f64>,
+    pub cpu_extract_ms: Option<f64>,
+    pub cpu_record_ms: Option<f64>,
+    pub cpu_submit_ms: Option<f64>,
+    pub gpu: Option<GpuTimings>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum GpuTimings {
+    Available {
+        graph_ms: f64,
+        passes: Vec<GpuPassTiming>,
+    },
+    Unavailable {
+        reason: String,
+    },
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct GpuPassTiming {
+    pub id: String,
+    /// A bypassed pass still records its graph-defined copy.
+    pub bypassed: bool,
+    pub ms: f64,
+}
+
 /// An API-specific, immutable GPU frame lease. The implementation retains its
 /// native allocations until both CPU ownership and actual consumer GPU work end.
 /// Core never interprets native handles or depends on a graphics/window API.
@@ -63,6 +93,7 @@ pub struct Frame {
     pub rgba: Vec<u8>,
     pub gpu: Option<Arc<dyn GpuFrame>>,
     pub stats: RenderStats,
+    pub timings: Option<Box<FrameTimings>>,
 }
 
 impl Frame {
@@ -103,6 +134,7 @@ pub fn render_scene(scene: &SceneSnapshot, width: usize, height: usize, camera: 
         height,
         rgba: BACKGROUND.repeat(pixels),
         gpu: None,
+        timings: None,
         stats: RenderStats {
             objects: scene.items.len(),
             ..RenderStats::default()
@@ -195,6 +227,7 @@ pub fn render_scene(scene: &SceneSnapshot, width: usize, height: usize, camera: 
 
 fn empty_frame() -> Frame {
     Frame {
+        timings: None,
         width: 0,
         height: 0,
         rgba: vec![],

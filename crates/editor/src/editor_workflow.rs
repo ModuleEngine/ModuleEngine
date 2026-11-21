@@ -901,8 +901,10 @@ impl Editor {
         self.workflow.show_report = true;
     }
     pub(super) fn workflow_frame(&mut self, ctx: &egui::Context) {
-        let capture_ready = std::env::var_os("MODULE_ENGINE_CAPTURE_WAIT_READY").is_none()
-            || !self.game_workbench.has_pending_preparation();
+        let capture_ready = (std::env::var_os("MODULE_ENGINE_CAPTURE_WAIT_READY").is_none()
+            || !self.game_workbench.has_pending_preparation())
+            && (!self.ui_capture.requires_game_timings()
+                || self.game_workbench.has_displayed_play_timings());
         match self.ui_capture.tick(ctx, capture_ready) {
             Ok(true) => {
                 self.workflow.allow_close = true;
