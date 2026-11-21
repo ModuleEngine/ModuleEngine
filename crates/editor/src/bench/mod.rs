@@ -3,7 +3,7 @@ mod fixtures;
 
 use eframe::egui;
 use fixtures::Fixture;
-use module_engine_core::{Graph, RenderOverrides, RenderSubmission};
+use module_engine_core::{FrameTimings, Graph, RenderOverrides, RenderSubmission};
 use module_engine_host::{GameHost, HostOptions, RenderMode};
 use module_engine_player::{
     gpu_presentation::{GpuPresentationBridge, GpuTexture},
@@ -106,18 +106,18 @@ fn scene(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
         (WARMUP, FRAMES)
     };
     let gui_vsync = ui::gui_vsync_requested()?;
+    let frame_profiling = ui::benchmark_profiling_enabled()?;
     let report = json!({
         "version":1,"scene":id,"status":"incomplete","fixture":fixture.inventory,"gui_vsync":gui_vsync,
+        "frame_profiling":frame_profiling,
         "loaded_draw_items":fixture.scene.items.len(),"loaded_triangles":triangles,"camera":fixture.camera,
         "render_pixels":SIZE,"warmup_requested":warmup,"measured_requested":frames,
         "scope":"Current Vulkan Forward graph into a native window using the Player GPU bridge",
         "metrics":{
-            "gpu_pass_ms":null,"gpu_total_ms":null,"meshlets_culled":null,"meshlets_drawn":null,
+            "meshlets_culled":null,"meshlets_drawn":null,
             "image_reference_difference":null,
         },
         "unavailable_reasons":{
-            "gpu_pass_ms":"R0.3 timestamp queries",
-            "gpu_total_ms":"R0.3 timestamp queries",
             "meshlets_culled":"R8 meshlet pipeline",
             "meshlets_drawn":"R8 meshlet pipeline",
             "image_reference_difference":"No accepted S4 reference image; current Forward cannot bind the fixture's 256 point lights",
@@ -137,6 +137,7 @@ fn scene(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
             .with_inner_size([1920., 1080.])
             .with_decorations(false),
     )?;
+    ui::observe_benchmark_present_mode();
     let outcome = eframe::run_native(
         &format!("ModuleEngine / {id} benchmark"),
         options,
@@ -155,6 +156,7 @@ fn scene(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
                 },
             )))?;
             renderer.set_detailed_stats(false);
+            renderer.set_frame_profiling(frame_profiling);
             let probe = renderer.probe_vertex_allocation(triangles);
             let mut blocked = probe.blocked.clone();
             if id == "S5" {
@@ -198,6 +200,11 @@ fn scene(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
     )
     .map_err(ui::gui_startup_error);
     let mut report = returned.lock().unwrap();
+    let present_mode = ui::benchmark_present_mode();
+    report["effective_present_mode"] = json!(present_mode.effective_present_mode);
+    report["effective_present_mode_unavailable_reason"] =
+        json!(present_mode.effective_present_mode_unavailable_reason);
+    report["observed_present_modes"] = json!(present_mode.observed_present_modes);
     if let Err(error) = outcome {
         report["status"] = json!("failed");
         report["error"] = json!(error);
@@ -221,6 +228,7 @@ struct Sample {
     transform_extract_ms: Option<f64>,
     observed_producer_latency_ms: f64,
     work: FrameWork,
+    timings: Option<Box<FrameTimings>>,
 }
 
 struct Flight {
@@ -277,7 +285,7 @@ impl SceneApp {
         self.texture.poll(&self.bridge)?;
         let now = Instant::now();
         if let Some(flight) = self.in_flight.take() {
-            let Some(frame) = self.renderer.poll_presented(flight.ticket)? else {
+            let Some(mut frame) = self.renderer.poll_presented(flight.ticket)? else {
                 self.in_flight = Some(flight);
                 return Ok(());
             };
@@ -306,6 +314,12 @@ impl SceneApp {
                         "Measured native window must remain visible at {SIZE:?}; got {pixels:?}"
                     ));
                 }
+                if let Some(timings) = &mut frame.timings
+                    && let Some((tick_ms, extract_ms)) = flight.ecs
+                {
+                    timings.cpu_tick_ms = Some(tick_ms);
+                    timings.cpu_extract_ms = Some(extract_ms);
+                }
                 self.samples.push(Sample {
                     frame_interval_ms: now
                         .duration_since(previous.ok_or("Missing warmup observation")?)
@@ -317,6 +331,7 @@ impl SceneApp {
                     observed_producer_latency_ms: now.duration_since(flight.started).as_secs_f64()
                         * 1000.,
                     work,
+                    timings: frame.timings,
                 });
             }
             self.completed += 1;

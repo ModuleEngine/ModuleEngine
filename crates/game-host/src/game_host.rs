@@ -772,7 +772,26 @@ enum PendingPresentationKind {
 struct PendingPresentation {
     ticket: u64,
     started: Instant,
+    host_timings: Option<HostFrameTimings>,
     kind: PendingPresentationKind,
+}
+
+struct HostFrameTimings {
+    tick_ms: Option<f64>,
+    extract_ms: f64,
+}
+
+impl HostFrameTimings {
+    fn attach(self, frame: &mut Frame) {
+        let timings = frame.timings.get_or_insert_with(Default::default);
+        timings.cpu_tick_ms = self.tick_ms;
+        timings.cpu_extract_ms = Some(self.extract_ms);
+        if timings.gpu.is_none() {
+            timings.gpu = Some(module_engine_core::GpuTimings::Unavailable {
+                reason: "Selected renderer does not collect GPU timestamps".into(),
+            });
+        }
+    }
 }
 
 /// Private owner identity for a native interpolated submission, never pixels
@@ -798,6 +817,7 @@ pub struct GameHost {
     pub script_sources: BTreeMap<String, String>,
     pub last_step_ms: f64,
     pub last_render_ms: f64,
+    frame_profiling: bool,
     pub device: String,
     pub root: PathBuf,
     pub backend_root: PathBuf,
@@ -1239,6 +1259,7 @@ impl GameHost {
             script_sources,
             last_step_ms: 0.,
             last_render_ms: 0.,
+            frame_profiling: false,
             device,
             root,
             backend_root,
@@ -1556,6 +1577,7 @@ impl GameHost {
                 .map_err(|_| "Render controls poisoned")?
                 .begin_frame();
         }
+        self.session.set_tick_profiling(self.frame_profiling);
         let result = self.session.step_budget(dt, input, max_ticks);
         if self.renderer.is_none() {
             self.overrides
@@ -1690,20 +1712,48 @@ impl GameHost {
         }
         let started = Instant::now();
         let snapshot = self.author_snapshot()?;
+        let extraction_ms = self.extraction_ms(started);
         let controls = self
             .overrides
             .lock()
             .map_err(|_| "Render controls poisoned")?
             .clone();
         let overrides = self.effective_controls(&controls)?;
-        let frame = self
+        let renderer = self
             .renderer
             .as_mut()
-            .ok_or("Headless host has no renderer")?
-            .render(&snapshot, self.camera, width, height, &overrides)?;
+            .ok_or("Headless host has no renderer")?;
+        renderer.set_frame_profiling(self.frame_profiling);
+        let mut frame = renderer.render(&snapshot, self.camera, width, height, &overrides)?;
+        if let Some(timings) = self.accept_frame_timings(extraction_ms) {
+            timings.attach(&mut frame);
+        }
         self.consume_render_batch(controls.resource_commands.len())?;
         self.last_render_ms = started.elapsed().as_secs_f64() * 1000.;
         Ok(frame)
+    }
+
+    pub fn set_frame_profiling(&mut self, enabled: bool) {
+        if self.frame_profiling != enabled {
+            self.frame_profiling = enabled;
+            self.session.set_tick_profiling(enabled);
+            // A paused viewport can acquire a new measurement of its current
+            // inputs. Pending requests still own their original capture state.
+            self.presentation_evaluation = None;
+            self.authored_presentation_requests.clear();
+        }
+    }
+
+    fn extraction_ms(&self, started: Instant) -> Option<f64> {
+        self.frame_profiling
+            .then(|| started.elapsed().as_secs_f64() * 1000.)
+    }
+
+    fn accept_frame_timings(&mut self, extraction_ms: Option<f64>) -> Option<HostFrameTimings> {
+        extraction_ms.map(|extract_ms| HostFrameTimings {
+            tick_ms: self.session.take_profiled_ticks_ms(),
+            extract_ms,
+        })
     }
 
     /// Install a window-owned native endpoint transactionally, before the next
@@ -1818,7 +1868,7 @@ impl GameHost {
             .as_mut()
             .ok_or("Headless host has no renderer")?
             .poll_presented(pending.ticket);
-        let frame = match result {
+        let mut frame = match result {
             Ok(Some(frame)) => frame,
             Ok(None) => {
                 self.pending_presentation = Some(pending);
@@ -1836,6 +1886,9 @@ impl GameHost {
                 return Err(error);
             }
         };
+        if let Some(timings) = pending.host_timings {
+            timings.attach(&mut frame);
+        }
         self.last_render_ms = pending.started.elapsed().as_secs_f64() * 1000.;
         Ok(Some(match pending.kind {
             PendingPresentationKind::Authored { owner, request } => {
@@ -1978,6 +2031,7 @@ impl GameHost {
         }
         let started = Instant::now();
         let snapshot = self.author_snapshot()?;
+        let extraction_ms = self.extraction_ms(started);
         let controls = self
             .overrides
             .lock()
@@ -2015,17 +2069,20 @@ impl GameHost {
         if self.authored_presentation_waiters.front() != Some(&owner) {
             return Ok(None);
         }
-        let submission = self
+        let renderer = self
             .renderer
             .as_mut()
-            .ok_or("Headless host has no renderer")?
-            .render_presented(&snapshot, self.camera, width, height, &overrides)?;
+            .ok_or("Headless host has no renderer")?;
+        renderer.set_frame_profiling(self.frame_profiling);
+        let submission =
+            renderer.render_presented(&snapshot, self.camera, width, height, &overrides)?;
         match submission {
             RenderSubmission::Busy => Ok(None),
             RenderSubmission::Pending(ticket) => {
                 self.pending_presentation = Some(PendingPresentation {
                     ticket,
                     started,
+                    host_timings: self.accept_frame_timings(extraction_ms),
                     kind: PendingPresentationKind::Authored {
                         owner,
                         request: request.clone(),
@@ -2036,7 +2093,10 @@ impl GameHost {
                 self.consume_render_batch(controls.resource_commands.len())?;
                 Ok(None)
             }
-            RenderSubmission::Ready(frame) => {
+            RenderSubmission::Ready(mut frame) => {
+                if let Some(timings) = self.accept_frame_timings(extraction_ms) {
+                    timings.attach(&mut frame);
+                }
                 self.consume_render_batch(controls.resource_commands.len())?;
                 self.last_render_ms = started.elapsed().as_secs_f64() * 1000.;
                 let camera = request.camera;
@@ -2075,6 +2135,7 @@ impl GameHost {
         if self.renderer.is_none() {
             return Err("Headless host has no renderer".into());
         }
+        let extraction_started = self.frame_profiling.then(Instant::now);
         let observed = match PresentationSample::capture(self) {
             Ok(observed) => observed,
             Err(error) => {
@@ -2214,19 +2275,18 @@ impl GameHost {
         };
         let started = Instant::now();
         let snapshot = self.enrich_presentation(raw)?;
-        let submission = self.renderer.as_mut().unwrap().render_presented(
-            &snapshot,
-            camera,
-            width,
-            height,
-            &actual_controls,
-        )?;
+        let extraction_ms = extraction_started.and_then(|started| self.extraction_ms(started));
+        let renderer = self.renderer.as_mut().unwrap();
+        renderer.set_frame_profiling(self.frame_profiling);
+        let submission =
+            renderer.render_presented(&snapshot, camera, width, height, &actual_controls)?;
         match submission {
             RenderSubmission::Busy => Ok(None),
             RenderSubmission::Pending(ticket) => {
                 self.pending_presentation = Some(PendingPresentation {
                     ticket,
                     started,
+                    host_timings: self.accept_frame_timings(extraction_ms),
                     kind: PendingPresentationKind::Interpolated {
                         evaluation,
                         provenance,
@@ -2235,7 +2295,10 @@ impl GameHost {
                 self.consume_render_batch(batch_len)?;
                 Ok(None)
             }
-            RenderSubmission::Ready(frame) => {
+            RenderSubmission::Ready(mut frame) => {
+                if let Some(timings) = self.accept_frame_timings(extraction_ms) {
+                    timings.attach(&mut frame);
+                }
                 self.consume_render_batch(batch_len)?;
                 self.last_render_ms = started.elapsed().as_secs_f64() * 1000.;
                 let source_revision = evaluation.revision;

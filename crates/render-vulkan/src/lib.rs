@@ -5,6 +5,7 @@ mod compiler;
 mod geometry;
 mod graph;
 pub mod presentation;
+mod profiling;
 mod retirement;
 mod vulkan;
 pub use adapter::{VulkanAdapter, install};

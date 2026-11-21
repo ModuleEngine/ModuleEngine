@@ -7,6 +7,7 @@ use crate::{
     compiler::{compile_hlsl_at, verify_shader},
     geometry,
     graph::{Pass, Plan, build_metadata_plan, build_plan_at},
+    profiling::{PendingTimings, TimestampCapture, TimestampPool},
 };
 use ash::{Entry, vk};
 use module_engine_core::{
@@ -294,6 +295,7 @@ struct ProducerFlight {
     _context: Arc<DeviceLifetime>,
     size: [usize; 2],
     stats: RenderStats,
+    timings: Option<PendingTimings>,
     cancelled: Arc<AtomicBool>,
     failure: Option<String>,
 }
@@ -382,6 +384,10 @@ pub struct VulkanRenderer {
     frame_resources: Option<FrameResources>,
     atlas: Option<AtlasGpu>,
     detailed_stats: bool,
+    frame_profiling: bool,
+    timestamp_pool: Option<Arc<TimestampPool>>,
+    timestamp_valid_bits: u32,
+    timestamp_period_ns: f64,
     prepared_inputs: Option<(Graph, BTreeMap<String, String>, Instant)>,
     rejected_inputs: Option<RejectedPreparation>,
     performance: RendererPerformance,
@@ -507,6 +513,9 @@ impl VulkanRenderer {
                 crate::presentation::validate_external_format(&context, physical, 1, 1)?;
             }
             let queue = device.get_device_queue(family, 0);
+            let timestamp_valid_bits = instance
+                .get_physical_device_queue_family_properties(physical)[family as usize]
+                .timestamp_valid_bits;
             let memory = instance.get_physical_device_memory_properties(physical);
             let pool = device
                 .create_command_pool(
@@ -566,6 +575,10 @@ impl VulkanRenderer {
                 producer_error: None,
                 atlas: None,
                 detailed_stats: true,
+                frame_profiling: false,
+                timestamp_pool: None,
+                timestamp_valid_bits,
+                timestamp_period_ns: f64::from(properties.limits.timestamp_period),
                 prepared_inputs: None,
                 rejected_inputs: None,
                 performance: RendererPerformance::default(),
@@ -606,6 +619,7 @@ impl VulkanRenderer {
         };
         let mut replacement = Self::new_at_target(self.resource_root.clone(), Some(target))?;
         replacement.detailed_stats = self.detailed_stats;
+        replacement.frame_profiling = self.frame_profiling;
         replacement.next_ticket = self.next_ticket;
         if let Some((graph, sources, _)) = &self.prepared_inputs {
             replacement.prepare(graph, sources)?;
@@ -620,6 +634,9 @@ impl VulkanRenderer {
     /// Geometry submission counts remain available; visibility counts are omitted.
     pub fn set_detailed_stats(&mut self, enabled: bool) {
         self.detailed_stats = enabled;
+    }
+    pub fn set_frame_profiling(&mut self, enabled: bool) {
+        self.frame_profiling = enabled;
     }
     pub fn performance(&self) -> RendererPerformance {
         self.performance
@@ -1458,6 +1475,10 @@ impl VulkanRenderer {
                 rgba: Vec::new(),
                 gpu: Some(shared.frame()),
                 stats: flight.stats,
+                timings: flight
+                    .timings
+                    .as_ref()
+                    .map(|timings| Box::new(timings.completed())),
             })
         };
         self.frame_resources = Some(flight.resources);
@@ -1631,6 +1652,20 @@ impl VulkanRenderer {
                 self.device.unmap_memory(buffer.memory);
             }
         }
+        let capture = self.frame_profiling.then(|| {
+            TimestampCapture::new(
+                &mut self.timestamp_pool,
+                &self.context,
+                self.timestamp_valid_bits,
+                self.timestamp_period_ns,
+                plan.passes
+                    .iter()
+                    .map(|pass| (pass.id.clone(), !pass_enabled(pass, overrides)))
+                    .collect(),
+            )
+        });
+        let timestamps = capture.as_ref().and_then(|capture| capture.as_ref().ok());
+        let recording_started = self.frame_profiling.then(Instant::now);
         unsafe {
             self.device
                 .reset_command_pool(self.pool, vk::CommandPoolResetFlags::empty())
@@ -1645,6 +1680,9 @@ impl VulkanRenderer {
                         .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
                 )
                 .map_err(vk_error)?;
+        }
+        if let Some(timestamps) = timestamps {
+            timestamps.reset(self.command);
         }
         if let Some(buffer) = &atlas_upload {
             transition(
@@ -1685,7 +1723,13 @@ impl VulkanRenderer {
             vk::PipelineStageFlags::FRAGMENT_SHADER,
             vk::AccessFlags::SHADER_READ,
         );
+        if let Some(timestamps) = timestamps {
+            timestamps.begin(self.command, 0);
+        }
         for (index, pass) in plan.passes.iter().enumerate() {
+            if let Some(timestamps) = timestamps {
+                timestamps.begin(self.command, index as u32 + 1);
+            }
             let pipeline = &self.pipelines[&pipeline_key(pass)];
             let compute = pipeline.compute;
             let stage = if compute {
@@ -2005,6 +2049,12 @@ impl VulkanRenderer {
                     }
                 }
             }
+            if let Some(timestamps) = timestamps {
+                timestamps.end(self.command, index as u32 + 1);
+            }
+        }
+        if let Some(timestamps) = timestamps {
+            timestamps.end(self.command, 0);
         }
         let mut offset = 0u64;
         if let Some(shared) = presentation {
@@ -2085,6 +2135,13 @@ impl VulkanRenderer {
                 .end_command_buffer(self.command)
                 .map_err(vk_error)?;
         }
+        let timings = capture
+            .zip(recording_started)
+            .map(|(capture, started)| PendingTimings {
+                capture,
+                record_ms: started.elapsed().as_secs_f64() * 1000.,
+                submit_ms: None,
+            });
         let resources = if let Some(mut resources) = reused {
             resources.images = images;
             resources
@@ -2122,9 +2179,11 @@ impl VulkanRenderer {
                 submitted_triangles: submitted,
                 ..Default::default()
             },
+            timings,
             cancelled: Arc::new(AtomicBool::new(false)),
             failure: None,
         });
+        let submit_started = self.frame_profiling.then(Instant::now);
         if let Err(error) = unsafe {
             self.device.queue_submit(
                 self.queue,
@@ -2136,6 +2195,11 @@ impl VulkanRenderer {
             self.pending.as_mut().unwrap().failure = Some(error.clone());
             self.producer_error = Some(error.clone());
             return Err(error);
+        }
+        if let Some(started) = submit_started
+            && let Some(timings) = &mut self.pending.as_mut().unwrap().timings
+        {
+            timings.submit_ms = Some(started.elapsed().as_secs_f64() * 1000.);
         }
         self.last_frame_work = Some(frame_work);
         if presentation.is_some() {
@@ -2223,6 +2287,10 @@ impl VulkanRenderer {
             rgba: data,
             stats,
             gpu: None,
+            timings: flight
+                .timings
+                .as_ref()
+                .map(|timings| Box::new(timings.completed())),
         };
         self.frame_resources = Some(flight.resources);
         self.atlas = Some(flight.atlas);
@@ -3114,6 +3182,11 @@ mod tests {
             )
             .unwrap();
         assert!(base.stats.shaded_pixels > 500);
+        assert!(
+            base.timings.is_none(),
+            "ordinary frames do not collect timestamps"
+        );
+        renderer.set_frame_profiling(true);
         let mut bypass = RenderOverrides::default();
         bypass.enabled.insert("ao".into(), false);
         let no_ao = renderer
@@ -3127,6 +3200,37 @@ mod tests {
                 &bypass,
             )
             .unwrap();
+        let timings = no_ao.timings.as_ref().expect("profiled frame");
+        assert!(timings.cpu_record_ms.unwrap() > 0.);
+        assert!(timings.cpu_submit_ms.unwrap() > 0.);
+        match timings.gpu.as_ref().expect("explicit GPU timing state") {
+            module_engine_core::GpuTimings::Available { graph_ms, passes } => {
+                assert!(graph_ms.is_finite() && *graph_ms > 0.);
+                assert_eq!(
+                    passes
+                        .iter()
+                        .map(|pass| pass.id.as_str())
+                        .collect::<Vec<_>>(),
+                    renderer
+                        .prepared
+                        .as_ref()
+                        .unwrap()
+                        .passes
+                        .iter()
+                        .map(|pass| pass.id.as_str())
+                        .collect::<Vec<_>>()
+                );
+                assert!(
+                    passes
+                        .iter()
+                        .all(|pass| pass.ms.is_finite() && pass.ms >= 0.)
+                );
+                assert!(passes.iter().any(|pass| pass.id == "ao" && pass.bypassed));
+            }
+            module_engine_core::GpuTimings::Unavailable { reason } => {
+                assert_eq!(renderer.timestamp_valid_bits, 0, "{reason}");
+            }
+        }
         assert_ne!(
             base.rgba, no_ao.rgba,
             "SSAO executes on GPU and must affect actual pixels"
@@ -3153,6 +3257,13 @@ mod tests {
             copied.rgba, no_ao.rgba,
             "vkCmdCopyImage must match explicitly bypassing AO"
         );
+        if let Some(module_engine_core::GpuTimings::Available { passes, .. }) = copied
+            .timings
+            .as_ref()
+            .and_then(|timings| timings.gpu.as_ref())
+        {
+            assert!(passes.iter().any(|pass| pass.id == "ao" && !pass.bypassed));
+        }
         let (custom_graph, mut custom_sources) = custom_graph();
         renderer.prepare(&custom_graph, &custom_sources).unwrap();
         let previous = renderer.prepared.clone().unwrap();

@@ -152,6 +152,8 @@ pub struct GameSession {
     validation_modules: BTreeSet<String>,
     asset_paths: Option<BTreeMap<String, String>>,
     bootstrap_open: bool,
+    tick_profiling: bool,
+    pending_profiled_ticks_ms: Option<f64>,
 }
 
 type GameWorldFactory =
@@ -299,6 +301,8 @@ impl GameSession {
             validation_modules,
             asset_paths,
             bootstrap_open: true,
+            tick_profiling: false,
+            pending_profiled_ticks_ms: None,
         })
     }
     fn load_provider(
@@ -516,6 +520,7 @@ impl GameSession {
         self.accumulator = (self.accumulator + dt).min(0.25);
         let mut ticks = 0;
         while ticks < max_ticks && self.accumulator + 1e-12 >= 1. / 60. {
+            let tick_started = self.tick_profiling.then(std::time::Instant::now);
             let mut fixed_input = input.clone();
             fixed_input.actions = std::mem::take(&mut self.pending_actions);
             fixed_input.action_values = std::mem::take(&mut self.pending_action_values);
@@ -564,15 +569,29 @@ impl GameSession {
             self.state.time += 1. / 60.;
             self.accumulator -= 1. / 60.;
             ticks += 1;
-            if let Some(transition) = transition {
-                self.publish_transition(transition)?;
+            let transition_result =
+                transition.map_or(Ok(()), |transition| self.publish_transition(transition));
+            if let Some(started) = tick_started {
+                *self.pending_profiled_ticks_ms.get_or_insert(0.) +=
+                    started.elapsed().as_secs_f64() * 1000.;
             }
+            transition_result?;
             if self.state.control.halted {
                 self.accumulator = 0.;
                 break;
             }
         }
         Ok(ticks)
+    }
+    pub fn set_tick_profiling(&mut self, enabled: bool) {
+        if self.tick_profiling != enabled {
+            self.tick_profiling = enabled;
+            self.pending_profiled_ticks_ms = None;
+        }
+    }
+    /// Charge committed ticks to an admitted render request exactly once.
+    pub fn take_profiled_ticks_ms(&mut self) -> Option<f64> {
+        self.pending_profiled_ticks_ms.take()
     }
     /// Unprocessed fixed time, useful for honest interactive-worker status.
     pub fn pending_time(&self) -> f64 {
@@ -696,7 +715,7 @@ impl GameSession {
         Ok(())
     }
     pub fn restart(&mut self) -> Result<(), String> {
-        let replacement = Self::build(
+        let mut replacement = Self::build(
             self.project.clone(),
             self.kind,
             self.registry.clone(),
@@ -705,6 +724,7 @@ impl GameSession {
             self.asset_paths.clone(),
             Some(self.active_components.clone()),
         )?;
+        replacement.tick_profiling = self.tick_profiling;
         let mut stopped_state = self.state.clone();
         let mut stopped_events = self.events.clone();
         self.executor
@@ -1251,6 +1271,49 @@ mod tests {
     fn session(kind: WorldKind) -> GameSession {
         GameSession::new_with_registry(project(), kind, registry(FixtureControl::default()))
             .unwrap()
+    }
+    #[test]
+    fn fixed_tick_timing_tracks_commits_and_clears_on_restart_or_toggle() {
+        let mut session = session(WorldKind::Ecs);
+        let input = GameInput::default();
+        assert_eq!(session.step_budget(1. / 60., &input, 1).unwrap(), 1);
+        assert_eq!(session.take_profiled_ticks_ms(), None);
+        session.set_tick_profiling(true);
+        assert_eq!(session.step_budget(0., &input, 1).unwrap(), 0);
+        assert_eq!(session.take_profiled_ticks_ms(), None);
+        assert_eq!(session.step_budget(3. / 60., &input, 3).unwrap(), 3);
+        let first_step = session.pending_profiled_ticks_ms.unwrap();
+        assert_eq!(session.step_budget(0., &input, 1).unwrap(), 0);
+        assert_eq!(session.pending_profiled_ticks_ms, Some(first_step));
+        assert_eq!(session.step_budget(1. / 60., &input, 1).unwrap(), 1);
+        assert!(
+            session
+                .take_profiled_ticks_ms()
+                .is_some_and(|ms| ms >= first_step)
+        );
+        assert_eq!(session.take_profiled_ticks_ms(), None);
+        assert_eq!(session.step_budget(1. / 60., &input, 1).unwrap(), 1);
+        session.restart().unwrap();
+        assert_eq!(session.take_profiled_ticks_ms(), None);
+        assert_eq!(session.step_budget(1. / 60., &input, 1).unwrap(), 1);
+        assert!(session.pending_profiled_ticks_ms.is_some());
+        session.set_tick_profiling(false);
+        assert_eq!(session.take_profiled_ticks_ms(), None);
+    }
+    #[test]
+    fn committed_tick_remains_profiled_when_scene_stop_fails() {
+        let control = FixtureControl::default();
+        let mut session =
+            GameSession::new_with_registry(project(), WorldKind::Ecs, registry(control.clone()))
+                .unwrap();
+        session.set_tick_profiling(true);
+        control.reject_stop.store(true, Ordering::SeqCst);
+        let error = session
+            .step(1. / 60., &input(&["transition"], 0.))
+            .unwrap_err();
+        assert!(error.contains("stop rejected"));
+        assert_eq!(session.state().tick, 1);
+        assert!(session.take_profiled_ticks_ms().is_some());
     }
     #[test]
     fn source_pose_registration_activation_and_omission_preserve_world_and_raw_snapshot() {

@@ -9,6 +9,7 @@
 0.5 brief and new UI work until its phases R1, R3 and R4 are accepted.
 R0.2 is done: the [native benchmarks S1–S5](bench.md) run from the source checkout,
 and the [accepted series](bench-r02-20261121.md) of three runs differs by at most 4.75 %.
+R0.3 adds [frame timings](bench.md#frame-timings) in Game and benchmark JSON.
 See the
 [dated decision](decisions.md#engine-rebuild-20261121).
 

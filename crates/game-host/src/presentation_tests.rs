@@ -480,6 +480,7 @@ impl FrameRenderer for GpuRecorder {
             height,
             rgba: Vec::new(),
             stats: RenderStats::default(),
+            timings: None,
             gpu: Some(Arc::new(FixtureGpuLease { serial, drops })),
         };
         if delayed {
@@ -1335,6 +1336,45 @@ fn pending_authored_frame_keeps_camera_and_submits_changed_inputs_on_completion_
         draws.lock().unwrap().attempts,
         3,
         "a later explicit refresh must still check renderer dependencies"
+    );
+}
+
+#[test]
+fn pending_frame_keeps_submission_timings_after_profiling_is_turned_off() {
+    let (mut host, draws, _temp) = gpu_host();
+    host.set_frame_profiling(true);
+    for _ in 0..2 {
+        assert_eq!(host.step_budget(1. / 60., &input(&[]), 1).unwrap(), 1);
+    }
+    draws.lock().unwrap().busy = true;
+    assert!(host.render_presented(80, 45).unwrap().is_none());
+    {
+        let mut draws = draws.lock().unwrap();
+        draws.busy = false;
+        draws.delayed = true;
+    }
+    assert!(host.render_presented(80, 45).unwrap().is_none());
+    assert_eq!(host.session.take_profiled_ticks_ms(), None);
+
+    host.set_frame_profiling(false);
+    draws.lock().unwrap().ready = true;
+    let completed = host.render_presented(81, 46).unwrap().unwrap();
+    let timings = completed
+        .timings
+        .as_ref()
+        .expect("timings frozen on admission");
+    assert!(timings.cpu_tick_ms.is_some_and(|ms| ms >= 0.));
+    assert!(timings.cpu_extract_ms.is_some());
+    assert!(matches!(
+        timings.gpu,
+        Some(module_engine_core::GpuTimings::Unavailable { .. })
+    ));
+    assert!(
+        host.render_presented(81, 46)
+            .unwrap()
+            .unwrap()
+            .timings
+            .is_none()
     );
 }
 

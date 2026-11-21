@@ -1458,6 +1458,7 @@ mod tests {
                                 height,
                                 rgba: vec![255; width * height * 4],
                                 gpu: None,
+                                timings: None,
                                 stats: RenderStats::default(),
                             })
                         },
@@ -1498,6 +1499,7 @@ mod tests {
                             height,
                             rgba: vec![255; width * height * 4],
                             gpu: None,
+                            timings: None,
                             stats: RenderStats::default(),
                         })
                     },
@@ -2240,6 +2242,7 @@ mod tests {
                             height,
                             rgba: vec![128; width * height * 4],
                             gpu: None,
+                            timings: None,
                             stats: RenderStats::default(),
                         })
                     },
@@ -2312,6 +2315,7 @@ mod tests {
                                 height,
                                 rgba: vec![128; width * height * 4],
                                 gpu: None,
+                                timings: None,
                                 stats: RenderStats::default(),
                             },
                             camera,
@@ -2375,6 +2379,7 @@ mod tests {
                                 height,
                                 rgba: vec![128; width * height * 4],
                                 gpu: None,
+                                timings: None,
                                 stats: RenderStats::default(),
                             },
                             camera,
@@ -2533,6 +2538,7 @@ mod tests {
                             height,
                             rgba: vec![255; width * height * 4],
                             gpu: None,
+                            timings: None,
                             stats: RenderStats::default(),
                         })
                     },

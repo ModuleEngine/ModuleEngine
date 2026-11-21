@@ -77,7 +77,12 @@ submission at a time on the window thread, observes completion on a later UI
 callback and submits the next frame in that same callback. This includes window
 scheduling. The launcher requests `MODULE_ENGINE_GUI_VSYNC=off` for every scene.
 WGPU can fall back to display pacing when an unsynchronized mode is unavailable.
-`--vsync` explicitly requests the display-paced mode. `comparison.json` also lists
+`--vsync` explicitly requests the display-paced mode. Each scene records the
+request separately from `effective_present_mode`, the concrete mode selected by
+wgpu when configuring the benchmark window. If the selection is unavailable
+or changes during the run, the effective mode is null and the report gives a
+reason. This reports swapchain configuration. It does not measure compositor
+behavior, scanout, or time spent waiting for presentation. `comparison.json` also lists
 FPS derived from each run's mean frame interval. The per-scene S1/S2 reports
 include the Player's render time and the existing cadence observed from its
 normal worker. Cadence measures application observations. The CPU submit
@@ -91,9 +96,8 @@ For each declared mean, calculate
 The limit is inclusive at 5%. p95 uses nearest rank and is reported separately.
 A measurement error, missing mean, incompatible fixture or adapter, change of
 sources or binary, or diagnostic run prevents a pass. The S1/S2 60 FPS targets
-and S1's 1 GiB working-set target are recorded independently. GPU pass and
-total timings, reference-image difference, and meshlet counts remain null with
-reasons when unavailable. Aggregate Vulkan wall time is not a GPU timestamp.
+and S1's 1 GiB working-set target are recorded independently. Reference-image
+difference and meshlet counts remain null with reasons when unavailable.
 
 Each invocation creates a unique `outputs/bench/<local date>/<series>/` with
 `manifest.json`, per-scene JSON and logs, three `run.json` files,
@@ -103,3 +107,46 @@ binds tracked and untracked source files, including fixture assets, to HEAD.
 The binary hash and each run's input inventory are retained. An unsuccessful
 series exits nonzero and its reports remain available. If conditions change,
 start a new complete series. R0.3–R0.6 have separate acceptance criteria.
+`python scripts/bench.py --once` runs one diagnostic S1–S5 pass with per-scene
+warmup and returns success when all scenes complete. It does not evaluate the
+three-run repeatability gate.
+
+<a id="frame-timings"></a>
+
+## Frame timings (R0.3)
+
+In the Editor's **Game** area, enable **Frame timings** to see the CPU and
+GPU timings for the most recently displayed frame. Timing is off by default.
+The switch belongs to the editor session and does not change project data.
+The panel scrolls when the pass list exceeds the available height.
+[See the native Game capture on Windows](media/game-frame-timings-r03.png).
+
+Vulkan records a timestamp pair around each graph pass and around the graph
+as a whole. Pass times include that pass's resource transitions and scheduled
+resource operations. A bypass row measures its copy route. Pipeline overlap
+can make pass intervals overlap. Atlas upload and output transfer commands
+are recorded outside the graph markers. Window presentation is outside the
+producer command buffer. The renderer reads the query results after completion
+of the same frame, without waiting on the queries.
+An unsupported queue or unavailable result carries a reason instead of a
+numeric sample. Software rendering can still report the host CPU intervals.
+
+The CPU tick row sums the time of fixed ticks committed since the previous
+admitted render request. A rejected or busy request leaves that time queued.
+Frames without a new tick have no tick sample. Extraction covers
+preparing the render-scene input, including interpolation and content
+enrichment as applicable. Command recording starts after geometry preparation
+and uploads to mapped memory. Queue submission covers the CPU call to Vulkan.
+S3 supplies its own fixture tick and extraction. S4/S5 render static inputs
+and have no gameplay tick or per-frame extraction sample.
+
+The benchmark launcher enables capture for all five scenes by default.
+`--no-profiling` disables the added CPU spans and GPU timestamp queries. The
+manifest and every scene record the setting in `frame_profiling`. In the raw JSON,
+S1/S2 associate `timings` with observed `presentation_samples`; S3–S5 store it
+in `samples`. Per-scene summaries expose sample counts and timings under
+`metrics.profiling`, including `gpu_graph_ms`, `gpu_pass_ms` and unavailable
+reasons. The R0.2 gate still uses the metrics declared above. The
+[accepted R0.2 series](bench-r02-20261121.md) predates this instrumentation.
+Use `--no-profiling` for the R0.6 baseline when comparing against R0.2, and
+record the profiling setting and effective present modes in the R0.6 report.

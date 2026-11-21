@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run three consecutive native ModuleEngine benchmark passes."""
+"""Run native ModuleEngine benchmarks."""
 import argparse
 import ctypes
 from datetime import datetime
@@ -58,6 +58,34 @@ def stats(values):
         return None
     return {"samples": len(values), "mean_ms": statistics.mean(values),
             "p95_ms": values[math.ceil(len(values) * 0.95) - 1], "max_ms": values[-1]}
+
+
+def summarize_frame_timings(observations):
+    profiles = [row["timings"] for row in observations if row.get("timings") is not None]
+    cpu = {}
+    for key in ("cpu_tick_ms", "cpu_extract_ms", "cpu_record_ms", "cpu_submit_ms"):
+        cpu[key] = stats(profile[key] for profile in profiles if profile.get(key) is not None)
+    graph = []
+    passes = {}
+    unavailable = {}
+    for profile in profiles:
+        gpu = profile.get("gpu")
+        if not gpu or gpu["status"] != "available":
+            reason = gpu["reason"] if gpu else "No GPU timestamp data"
+            unavailable[reason] = unavailable.get(reason, 0) + 1
+            continue
+        graph.append(gpu["graph_ms"])
+        for render_pass in gpu["passes"]:
+            key = (render_pass["id"], render_pass["bypassed"])
+            passes.setdefault(key, []).append(render_pass["ms"])
+    return {
+        "profiled_frames": len(profiles), "cpu": cpu, "gpu_graph_ms": stats(graph),
+        "gpu_pass_ms": [
+            {"id": pass_id, "bypassed": bypassed, **stats(values)}
+            for (pass_id, bypassed), values in passes.items()
+        ] if graph else None,
+        "gpu_unavailable_reasons": unavailable,
+    }
 
 
 if os.name == "nt":
@@ -168,6 +196,13 @@ def execute_scene(exe, scene, group, env):
     ):
         status = "incomplete"
         constraints.append("Reported GUI vsync request does not match the series configuration")
+    if status == "complete" and signature["frame_profiling"] is not (
+        scene_env["MODULE_ENGINE_BENCHMARK_PROFILING"] == "on"
+    ):
+        status = "incomplete"
+        constraints.append("Reported frame profiling does not match the series configuration")
+    if reason := raw.get("effective_present_mode_unavailable_reason"):
+        constraints.append(reason)
     if proc.returncode or timed_out:
         status = "failed"
     if peak is None:
@@ -192,6 +227,7 @@ def execute_scene(exe, scene, group, env):
 
 
 def summarize_scene(scene, raw):
+    instrumentation = {key: raw.get(key) for key in ("effective_present_mode", "frame_profiling")}
     if scene in ("S1", "S2"):
         statuses = raw.get("game_status_samples", [])
         player_valid = (
@@ -206,15 +242,17 @@ def summarize_scene(scene, raw):
             "complete" if player_valid else "incomplete",
             {"frame_interval_ms": raw.get("ui_observed_unique_frame_interval"),
              "game_step_ms": raw.get("game_step") if scene == "S2" else None,
-             "render_ms": raw.get("renderer_content_render_readback")},
+             "render_ms": raw.get("renderer_content_render_readback"),
+             "profiling": summarize_frame_timings(raw.get("presentation_samples", []))},
             [] if player_valid else ["Native Player workload or timing evidence is incomplete"],
-            {"vsync_requested": raw.get("native_vsync_requested"),
+            {"vsync_requested": raw.get("native_vsync_requested"), **instrumentation,
              **{key: raw.get(key) for key in ("gui_graphics", "vulkan_device", "monitor_pixels",
                                              "monitor_refresh_millihertz", "offscreen_render_pixels",
                                              "measured_requested", "warmup_requested")}},
         )
     samples = raw.get("samples", [])
     metrics = dict(raw.get("metrics", {}))
+    metrics["profiling"] = summarize_frame_timings(samples)
     for key in ("frame_interval_ms", "cpu_submit_ms", "ecs_tick_ms",
                 "transform_extract_ms", "observed_producer_latency_ms"):
         metrics[key] = stats(row[key] for row in samples if row[key] is not None)
@@ -231,6 +269,7 @@ def summarize_scene(scene, raw):
                                         "measured_requested")},
         "adapter": limits.get("adapter"), "driver_version_raw": limits.get("driver_version_raw"),
         "vsync_requested": raw.get("gui_vsync"),
+        **instrumentation,
     }
     constraints = ["Legacy Forward cannot consume the fixture's 256 point lights"] if scene == "S4" else []
     status = raw.get("status", "incomplete")
@@ -334,13 +373,14 @@ def built_editor(messages, host):
     return exe
 
 
-def run_series(series, diagnostic, vsync):
+def run_series(series, diagnostic, vsync, profiling, once):
     env = os.environ.copy()
     for variable in ("EFRAME_SCREENSHOT_TO", "MODULE_ENGINE_UI_SCREENSHOT_TO",
                      "MODULE_ENGINE_CAPTURE_ATTACK", "MODULE_ENGINE_RESOURCE_ROOT"):
         env.pop(variable, None)
     env.update(MODULE_ENGINE_BENCHMARK_ARM="automatic", MODULE_ENGINE_BENCHMARK_FRAMES="240",
                MODULE_ENGINE_RESOURCE_ROOT=str(ROOT),
+               MODULE_ENGINE_BENCHMARK_PROFILING="on" if profiling else "off",
                MODULE_ENGINE_GUI_VSYNC="on" if vsync else "off")
     bench_assets = ensure_bench_assets()
     source = capture(ROOT)
@@ -364,11 +404,14 @@ def run_series(series, diagnostic, vsync):
         "dxc_inputs": dxc_inputs(env),
         "gui_environment": {key: env.get(key) for key in ("MODULE_ENGINE_GUI_RENDERER",
                             "MODULE_ENGINE_WINDOW_SYSTEM", "VK_DRIVER_FILES", "VK_ICD_FILENAMES")},
-        "build": build, "scenes_in_order": SCENES, "runs": 3, "diagnostic": diagnostic,
+        "build": build, "scenes_in_order": SCENES, "runs": 1 if once else 3,
+        "diagnostic": diagnostic or once,
         "gui_vsync": vsync, "bench_assets": bench_assets,
+        "frame_profiling": profiling,
         "warmup_and_measured_frames": {"S1": [30, 240], "S2": [30, 240], "S3": [30, 240],
                                        "S4": [30, 240], "S5": [5, 30]},
-        "warmup_order": "One unscored pass S1–S5, then per-process frame warmup in each scored pass",
+        "warmup_order": ("Per-process frame warmup only" if once else
+                         "One unscored pass S1–S5, then per-process frame warmup in each scored pass"),
         "resolution": [1920, 1080], "means_compared": GATE_METRICS,
         "spread": "100 * (max(run means) - min(run means)) / arithmetic_mean(run means)",
         "limit_percent_inclusive": LIMIT_PERCENT,
@@ -394,7 +437,7 @@ def run_series(series, diagnostic, vsync):
     with (series / "gpu.csv").open("x", encoding="utf-8") as gpu_log:
         sampler = subprocess.Popen([*telemetry, "-l", "1"], stdout=gpu_log, stderr=subprocess.STDOUT) if telemetry else None
         try:
-            for number in range(4):
+            for number in (range(1, 2) if once else range(4)):
                 group = series / (f"run-{number:02}" if number else "prewarm")
                 group.mkdir()
                 run = {"run": number, "started_at": datetime.now().astimezone().isoformat(),
@@ -410,9 +453,19 @@ def run_series(series, diagnostic, vsync):
             if sampler is not None and sampler.poll() is None:
                 sampler.terminate()
                 sampler.wait()
-    metrics = compare(runs)
     source_matches = capture(ROOT)["source_digest"] == source["source_digest"]
     binary_matches = entry(series, exe.name)["sha256"] == exe_hash
+    if once:
+        complete = (source_matches and binary_matches
+                    and all(case["status"] == "complete" for case in runs[0]["results"].values()))
+        write_json(series / "comparison.json", {
+            "accepted": False, "diagnostic": True, "complete": complete,
+            "source_matches": source_matches, "binary_matches": binary_matches,
+            "source_digest": source["source_digest"], "binary_sha256": exe_hash,
+            "reason": "One pass does not evaluate three-run repeatability",
+        })
+        return 0 if complete else 1
+    metrics = compare(runs)
     available = [datum["within_5_percent"] for item in metrics.values()
                  for datum in item["timing"].values() if datum["within_5_percent"] is not None]
     timing = [datum["within_5_percent"] for item in metrics.values() for datum in item["timing"].values()]
@@ -433,13 +486,17 @@ def main():
     parser.add_argument("--diagnostic", action="store_true", help="Record a series with known competing load")
     parser.add_argument("--vsync", action="store_true",
                         help="Keep GUI vsync; frame intervals are then capped by the monitor refresh rate")
+    parser.add_argument("--no-profiling", action="store_true",
+                        help="Disable CPU and GPU frame profiling for baseline comparisons")
+    parser.add_argument("--once", action="store_true",
+                        help="Run one diagnostic S1–S5 pass with per-scene warmup only")
     args = parser.parse_args()
     now = datetime.now().astimezone()
     series = ROOT / "outputs" / "bench" / now.date().isoformat() / now.strftime("%H%M%S-%f")
     series.mkdir(parents=True)
     print(f"Reports: {series}", flush=True)
     try:
-        return run_series(series, args.diagnostic, args.vsync)
+        return run_series(series, args.diagnostic, args.vsync, not args.no_profiling, args.once)
     except (ValueError, OSError, subprocess.SubprocessError, KeyError) as error:
         write_json(series / "failure.json", {"error": str(error)})
         print(f"bench: {error}", file=sys.stderr)
