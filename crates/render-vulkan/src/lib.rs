@@ -22,4 +22,7 @@ pub use graph::{
 pub use graph::{custom_fullscreen_manifest, demo_custom_fullscreen_source};
 pub use module_engine_core::RendererPerformance;
 pub use retirement::{ProducerRetirementReport, finish_producer_retirements};
-pub use vulkan::{RenderGraphValidator, VulkanRenderer, validate_overrides, validate_overrides_at};
+pub use vulkan::{
+    FrameWork, RenderGraphValidator, VertexAllocation, VulkanRenderer, validate_overrides,
+    validate_overrides_at,
+};

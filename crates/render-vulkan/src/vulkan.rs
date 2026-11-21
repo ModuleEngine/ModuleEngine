@@ -333,6 +333,31 @@ impl Drop for Pipeline {
         }
     }
 }
+/// Work recorded by the most recent successful Vulkan queue submission.
+#[derive(Clone, Copy, Debug, Default, serde::Serialize)]
+pub struct FrameWork {
+    pub draw_calls: usize,
+    pub vertex_write_bytes: usize,
+    pub atlas_upload_bytes: usize,
+}
+
+/// Adapter and legacy vertex-buffer limits for one known-size scene.
+#[derive(Debug, serde::Serialize)]
+pub struct VertexAllocation {
+    pub adapter: String,
+    pub driver_version_raw: u32,
+    pub requested_bytes: u64,
+    pub max_buffer_bytes: u64,
+    pub max_single_allocation_bytes: u64,
+    pub allocation_bytes: Option<u64>,
+    pub heap_bytes: Option<u64>,
+    pub heap_budget_bytes: Option<u64>,
+    pub heap_usage_bytes: Option<u64>,
+    pub blocked: Option<String>,
+}
+
+const VERTEX_BUFFER_MULTIPLIER: u64 = 2;
+
 pub struct VulkanRenderer {
     resource_root: std::path::PathBuf,
     context: Arc<DeviceLifetime>,
@@ -360,6 +385,7 @@ pub struct VulkanRenderer {
     prepared_inputs: Option<(Graph, BTreeMap<String, String>, Instant)>,
     rejected_inputs: Option<RejectedPreparation>,
     performance: RendererPerformance,
+    last_frame_work: Option<FrameWork>,
     #[cfg(test)]
     allocation_fault: Option<AllocationFault>,
     #[cfg(test)]
@@ -543,6 +569,7 @@ impl VulkanRenderer {
                 prepared_inputs: None,
                 rejected_inputs: None,
                 performance: RendererPerformance::default(),
+                last_frame_work: None,
                 #[cfg(test)]
                 allocation_fault: None,
                 #[cfg(test)]
@@ -596,6 +623,111 @@ impl VulkanRenderer {
     }
     pub fn performance(&self) -> RendererPerformance {
         self.performance
+    }
+    pub fn last_frame_work(&self) -> Option<FrameWork> {
+        self.last_frame_work
+    }
+
+    /// Test the actual buffer size and memory type used by the current path,
+    /// without allocating the buffer's backing memory or expanding geometry.
+    pub fn probe_vertex_allocation(&self, triangles: usize) -> VertexAllocation {
+        let requested_bytes = (triangles as u64)
+            .saturating_mul((3 * geometry::VERTEX_BYTES) as u64 * VERTEX_BUFFER_MULTIPLIER)
+            .max(4);
+        let mut v11 = vk::PhysicalDeviceVulkan11Properties::default();
+        let mut v13 = vk::PhysicalDeviceVulkan13Properties::default();
+        let mut physical = vk::PhysicalDeviceProperties2::default()
+            .push_next(&mut v11)
+            .push_next(&mut v13);
+        unsafe {
+            self.instance
+                .get_physical_device_properties2(self.physical, &mut physical)
+        };
+        let driver_version_raw = physical.properties.driver_version;
+        let mut result = VertexAllocation {
+            adapter: self.name.clone(),
+            driver_version_raw,
+            requested_bytes,
+            max_buffer_bytes: v13.max_buffer_size,
+            max_single_allocation_bytes: v11.max_memory_allocation_size,
+            allocation_bytes: None,
+            heap_bytes: None,
+            heap_budget_bytes: None,
+            heap_usage_bytes: None,
+            blocked: None,
+        };
+        if requested_bytes > result.max_buffer_bytes
+            || requested_bytes > result.max_single_allocation_bytes
+        {
+            result.blocked = Some(
+                "Legacy vertex buffer exceeds the selected adapter's buffer or allocation limit"
+                    .into(),
+            );
+            return result;
+        }
+        let requirements = unsafe {
+            let buffer = match self.device.create_buffer(
+                &vk::BufferCreateInfo::default()
+                    .size(requested_bytes)
+                    .usage(vk::BufferUsageFlags::VERTEX_BUFFER)
+                    .sharing_mode(vk::SharingMode::EXCLUSIVE),
+                None,
+            ) {
+                Ok(buffer) => buffer,
+                Err(error) => {
+                    result.blocked = Some(format!("Create legacy vertex buffer: {error:?}"));
+                    return result;
+                }
+            };
+            let requirements = self.device.get_buffer_memory_requirements(buffer);
+            self.device.destroy_buffer(buffer, None);
+            requirements
+        };
+        result.allocation_bytes = Some(requirements.size);
+        let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+        let memory_type = match self.memory_type(requirements.memory_type_bits, host) {
+            Ok(index) => index,
+            Err(error) => {
+                result.blocked = Some(error);
+                return result;
+            }
+        };
+        let heap = self.memory.memory_types[memory_type as usize].heap_index as usize;
+        result.heap_bytes = Some(self.memory.memory_heaps[heap].size);
+        if requirements.size > self.memory.memory_heaps[heap].size
+            || requirements.size > result.max_single_allocation_bytes
+        {
+            result.blocked = Some(
+                "Legacy vertex allocation exceeds its host-visible heap or allocation limit".into(),
+            );
+            return result;
+        }
+        let extensions = unsafe {
+            self.instance
+                .enumerate_device_extension_properties(self.physical)
+        };
+        if extensions.is_ok_and(|extensions| {
+            extensions.iter().any(|extension| unsafe {
+                CStr::from_ptr(extension.extension_name.as_ptr()) == ash::ext::memory_budget::NAME
+            })
+        }) {
+            let mut budget = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
+            let mut memory = vk::PhysicalDeviceMemoryProperties2::default().push_next(&mut budget);
+            unsafe {
+                self.instance
+                    .get_physical_device_memory_properties2(self.physical, &mut memory)
+            };
+            result.heap_budget_bytes = Some(budget.heap_budget[heap]);
+            result.heap_usage_bytes = Some(budget.heap_usage[heap]);
+            if requirements.size > budget.heap_budget[heap].saturating_sub(budget.heap_usage[heap])
+            {
+                result.blocked = Some(
+                    "Legacy vertex allocation exceeds currently available host-visible heap budget"
+                        .into(),
+                );
+            }
+        }
+        result
     }
     /// Explicit preparation always fingerprints current include contents. Only
     /// ordinary render calls coalesce unchanged-source dependency scans.
@@ -1403,14 +1535,14 @@ impl VulkanRenderer {
         let new_vertex = if let Some(resources) = reused.as_mut() {
             if resources.vertex.size < vertex_bytes.len() as u64 {
                 resources.vertex = self.buffer(
-                    vertex_bytes.len() as u64 * 2,
+                    vertex_bytes.len() as u64 * VERTEX_BUFFER_MULTIPLIER,
                     vk::BufferUsageFlags::VERTEX_BUFFER,
                 )?;
             }
             None
         } else {
             Some(self.buffer(
-                vertex_bytes.len() as u64 * 2,
+                vertex_bytes.len() as u64 * VERTEX_BUFFER_MULTIPLIER,
                 vk::BufferUsageFlags::VERTEX_BUFFER,
             )?)
         };
@@ -1472,6 +1604,11 @@ impl VulkanRenderer {
                 .as_ref()
                 .and_then(|resources| resources.staging.as_ref())
         });
+        let mut frame_work = FrameWork {
+            vertex_write_bytes: vertex_bytes.len(),
+            atlas_upload_bytes: if upload { atlas.atlas.rgba.len() } else { 0 },
+            ..Default::default()
+        };
         let atlas_upload = if upload {
             Some(self.buffer(
                 atlas.atlas.rgba.len() as u64,
@@ -1828,6 +1965,7 @@ impl VulkanRenderer {
                         } else {
                             self.device.cmd_draw(self.command, 3, 1, 0, 0);
                         }
+                        frame_work.draw_calls += 1;
                         self.device.cmd_end_rendering(self.command);
                     }
                 }
@@ -1999,6 +2137,7 @@ impl VulkanRenderer {
             self.producer_error = Some(error.clone());
             return Err(error);
         }
+        self.last_frame_work = Some(frame_work);
         if presentation.is_some() {
             self.next_ticket = ticket;
             self.performance.gpu_submissions += 1;

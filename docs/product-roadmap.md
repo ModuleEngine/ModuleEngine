@@ -370,7 +370,7 @@ Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
 | # | Task | Acceptance | Effort |
 | --- | --- | --- | --- |
 | R0.1 | Done 21 November 2026: the owner paused the 0.5 brief and new UI work; recorded in [current status](current-status.md) and [decisions](decisions.md). Bug fixes to accepted 0.4.2 remain allowed. | Dated decision in both languages. | Done |
-| R0.2 | Build S3–S5 as reproducible fixtures (S1, S2 exist) and a `bench` runner that writes JSON results to `outputs/bench/<date>/`. | Three consecutive runs differ by ≤5 % on mean values. | 3–4 d |
+| R0.2 | Done 21 November 2026: S3–S5 are reproducible fixtures (S4 on pinned Khronos Sponza) and `scripts/bench.py` writes JSON results to `outputs/bench/<date>/`; see [running benchmarks](bench.md) and the [accepted series](bench-r02-20261121.md) (maximum spread 4.75 %). | Three consecutive runs differ by ≤5 % on mean values. | Done |
 | R0.3 | Add GPU timestamp queries per render-graph pass and CPU spans for tick, extraction, recording and submission; show them in an editor overlay. | Per-pass GPU times are visible in the editor and in JSON. | 2–3 d |
 | R0.4 | Record the target hardware: GPU, driver, `vulkaninfo` dump, supported tiers A/B/C. Decide the minimum supported GPU. | Tier table checked into `docs/`. | 0.5 d |
 | R0.5 | Hygiene prerequisites: GPU and DXC tests skip with a clear message when unavailable; Vulkan validation layers and debug names in debug builds; typed errors with `thiserror` in `render-vulkan` instead of `String`. | `verify` passes on a machine without DXC/GPU with explicit skips; a debug run shows no validation errors on S1. | 2–3 d |

@@ -119,7 +119,27 @@ pub fn native_options(viewport: egui::ViewportBuilder) -> Result<eframe::NativeO
         )?;
     }
     eprintln!("ModuleEngine GUI requested: {policy:?}; game renderer is independent");
-    Ok(native_options_for(viewport, policy))
+    let mut options = native_options_for(viewport, policy);
+    if !gui_vsync_requested()? {
+        // Developer benchmarks measure engine cost rather than display cadence.
+        options.glow_options.vsync = false;
+        options.wgpu_options.surface.present_mode = eframe::wgpu::PresentMode::AutoNoVsync;
+        eprintln!("ModuleEngine GUI presentation: vsync disabled by MODULE_ENGINE_GUI_VSYNC=off");
+    }
+    Ok(options)
+}
+
+/// `MODULE_ENGINE_GUI_VSYNC=off` disables GUI presentation vsync. Unset or
+/// `on` keeps the default. Benchmarks use it so window cadence does not cap
+/// measured frame intervals at the monitor refresh rate.
+pub fn gui_vsync_requested() -> Result<bool, String> {
+    match env_option("MODULE_ENGINE_GUI_VSYNC")?.as_deref() {
+        None | Some("on") => Ok(true),
+        Some("off") => Ok(false),
+        Some(other) => Err(format!(
+            "MODULE_ENGINE_GUI_VSYNC must be on or off, got {other}"
+        )),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1533,7 +1553,7 @@ impl NativeBenchmark {
         }).as_object().unwrap().clone());
         report.as_object_mut().unwrap().extend(serde_json::json!({
             "cpu_identifier":std::env::var("PROCESSOR_IDENTIFIER").ok(),
-            "native_vsync_requested":true,"model_paths":self.model_paths,"world_kind":snapshot.map(|s|format!("{:?}",s.world_kind)),
+            "native_vsync_requested":gui_vsync_requested().unwrap_or(true),"model_paths":self.model_paths,"world_kind":snapshot.map(|s|format!("{:?}",s.world_kind)),
             "enemy_count_min":self.samples.iter().map(|s|s.enemies).min(),"enemy_count_max":self.samples.iter().map(|s|s.enemies).max(),
             "game_status_final":diagnostics.and_then(|value|value.get("status")),"player_health_final":player_health,
             "game_diagnostics_final":diagnostics,

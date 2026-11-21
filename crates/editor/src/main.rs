@@ -5,6 +5,8 @@ mod app;
 mod app_icon;
 mod assets_ui;
 mod authoring;
+#[cfg(feature = "bench")]
+mod bench;
 mod canvas;
 mod distribution;
 mod engine_profile_verification;
@@ -102,6 +104,13 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     match args.first().map(String::as_str) {
+        #[cfg(feature = "bench")]
+        Some("--bench-scene") => {
+            if requested_profile.is_some() || args.len() != 3 {
+                return Err("Usage: --bench-scene S1|S2|S3|S4|S5 <new output folder>".into());
+            }
+            return bench::run(&args[1], Path::new(&args[2]));
+        }
         Some("--inspect-installed-contracts") => {
             let output = Path::new(
                 args.get(1)

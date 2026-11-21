@@ -13,6 +13,7 @@ English is the primary documentation language. Every document below has a comple
 - [ModuleEngine 0.4](../README.md)
 - [Working on ModuleEngine](../AGENTS.md)
 - [Current ModuleEngine Status](current-status.md)
+- [Run native benchmarks S1–S5](bench.md) · [R0.2 accepted series, 21 November 2026](bench-r02-20261121.md)
 - [Product roadmap by version: stable configurations, independent authors and five games](product-roadmap.md#map)
 - [0.4.2 plan: Player image and editor docking](release-042-plan.md) · [Roadmap scope](product-roadmap.md#image-and-docking)
 - [0.4.1 implementation brief and handoff: anti-aliasing from Editor to Player](release-041-plan.md) · [Owner checks by version](product-roadmap-checks.md)
