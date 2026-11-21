@@ -385,7 +385,7 @@
       effort: '2–3 недели, не входит в оценки трека R', deps: ['aiA'], depNote: 'только если AI-A дала решение «продолжать»', unlocks: [], tasks: [] },
     g05: { id: 'R1+R3+R4', kicker: 'Контрольная точка', title: 'Снять паузу с 0.5 и UI', cls: 'gate', tag: 'ТОЧКА',
       ttl: 'Снять паузу 0.5 и UI', meta: '≈10–16 нед от старта', goal: 'Когда приняты R1, R3 и R4, хранение мира, оболочка редактора и граница редактора с играми уже новые. Тогда бриф 0.5 и работа над UI возобновляются.',
-      effort: '≈10–16 недель, если R0, R1, R2.1, R3 и R4 делать первыми', deps: ['R3', 'R4'], depNote: 'и R1 — она нужна до R4', unlocks: ['v05'], tasks: [] },
+      effort: '≈10–16 недель, если R0, R1, R2.1, R3 и R4 делать первыми', deps: ['R1', 'R3', 'R4'], shownVia: { R1: 'R4' }, depNote: 'на схеме R1 показана через R4', unlocks: ['v05'], tasks: [] },
     useful: { id: 'R2+R5', kicker: 'Контрольная точка', title: 'Первая полезная точка', cls: 'gate', tag: 'ТОЧКА',
       ttl: 'Первая полезная точка', meta: '≈4,5–7 мес', goal: 'GPU-driven рендер с PBR и тенями: первый момент, когда новое изображение видно в играх. Примерно через 4,5–7 месяцев (R0, R1, R2 и R5).',
       effort: '≈4,5–7 месяцев', deps: ['R5'], unlocks: ['v13'], tasks: [] },
@@ -479,6 +479,21 @@
     p.kicker = `${prefix} · ${WORD[s]}`;
   });
   const hot = k => ['cur', 'next'].includes(phases[k].cls) ? ['edge hot', 'ah'] : ['edge', 'a'];
+
+  // Headline: a task in progress, the next available task, all tasks done, or work blocked
+  // (open tasks remain but no phase can start, e.g. a dependency was removed from the plan).
+  const flat = [];
+  order.forEach(k => phases[k].tasks.forEach(t => flat.push({ k, t })));
+  const open = flat.filter(x => x.t[4] !== D);
+  const summary = (() => {
+    const inProgress = flat.find(x => x.t[4] === C);
+    if (inProgress) return { kind: 'cur', item: inProgress, remaining: open.length };
+    const available = open.find(x => ['cur', 'next'].includes(phases[x.k].cls));
+    if (available) return { kind: 'next', item: available, remaining: open.length };
+    if (!open.length) return { kind: flat.length ? 'done' : 'empty', remaining: 0 };
+    const k = open[0].k;
+    return { kind: 'blocked', phase: k, waits: phases[k].deps.filter(d => stateOf(d) !== 'done'), remaining: open.length };
+  })();
   // @model-end
 
   // Layout grid
@@ -613,17 +628,22 @@
   }
 
   // "Now" strip, header pill and footer stamp
-  const flat = [];
-  order.forEach(k => phases[k].tasks.forEach(t => flat.push({ k, t })));
   const li = (title, small) => `<li>${esc(title)}${small ? `<small>${esc(small)}</small>` : ''}</li>`;
-  let cur = flat.find(x => x.t[4] === C), curLabel = 'Сейчас';
-  if (!cur) { cur = flat.find(x => x.t[4] !== D && ['cur', 'next'].includes(phases[x.k].cls)); curLabel = 'Следующая задача'; }
+  const cur = ['cur', 'next'].includes(summary.kind) ? summary.item : null;
+  const curLabel = { cur: 'Сейчас', next: 'Следующая задача', blocked: 'Работа заблокирована', done: 'Трек завершён', empty: 'Нет данных' }[summary.kind];
   const done = flat.filter(x => x.t[4] === D);
   const doneShown = done.slice(-4);
   $('now-done').innerHTML = li(`${phases.v042.id} — ${phases.v042.title}`, 'Принята владельцем 17.11.2026') +
     (done.length > doneShown.length ? li(`…и раньше выполненные: ${done.length - doneShown.length}`) : '') +
     doneShown.map(x => li(`${x.t[0]} — ${x.t[1]}`, x.t[3])).join('');
   $('now-cur-label').textContent = curLabel;
+  const progress = p => {
+    const d = p.tasks.filter(t => t[4] === D).length, c = p.tasks.filter(t => t[4] === C).length;
+    $('now-bar').innerHTML = p.tasks.map(t => `<span class="${t[4] === D ? 'd' : t[4] === C ? 'c' : ''}">${esc(t[0])}</span>`).join('');
+    $('now-bar').setAttribute('aria-label', `Прогресс фазы ${p.id}: ${d} из ${p.tasks.length} задач готовы` + (c ? `, ${c} в работе` : ''));
+    $('now-cap-l').textContent = `Фаза ${p.id} · ${d} из ${p.tasks.length} готово`;
+    $('now-cap-r').textContent = `вся ${p.id} — ${p.effort}`;
+  };
   let focusKey = order[0] || 'R0';
   if (cur) {
     const p = phases[cur.k], note = NOTES[cur.t[0]] || {};
@@ -631,14 +651,21 @@
     $('pill').textContent = `${curLabel} · ${cur.t[0]} ${note.short || p.ttl.toLowerCase()}`;
     $('now-cur-big').textContent = `${cur.t[0]} — ${cur.t[1]}`;
     $('now-cur-sub').textContent = note.about || `Готово, когда: ${cur.t[2]}. Оценка: ${cur.t[3]}.`;
-    const d = p.tasks.filter(t => t[4] === D).length, c = p.tasks.filter(t => t[4] === C).length;
-    $('now-bar').innerHTML = p.tasks.map(t => `<span class="${t[4] === D ? 'd' : t[4] === C ? 'c' : ''}">${esc(t[0])}</span>`).join('');
-    $('now-bar').setAttribute('aria-label', `Прогресс фазы ${p.id}: ${d} из ${p.tasks.length} задач готовы` + (c ? `, ${c} в работе` : ''));
-    $('now-cap-l').textContent = `Фаза ${p.id} · ${d} из ${p.tasks.length} готово`;
-    $('now-cap-r').textContent = `вся ${p.id} — ${p.effort}`;
-  } else {
+    progress(p);
+  } else if (summary.kind === 'blocked') {
+    const p = phases[summary.phase];
+    const waits = summary.waits.map(d => phases[d].id + (phases[d].missing ? ' (нет в плане)' : '')).join(', ');
+    focusKey = summary.phase;
+    $('pill').textContent = `${curLabel} · ${p.id} ждёт ${waits || 'зависимостей'}`;
+    $('now-cur-big').textContent = `Нет доступной задачи: ${p.id} ждёт ${waits || 'зависимостей'}`;
+    $('now-cur-sub').textContent = `В плане ${summary.remaining} незавершённых задач, но ни одна фаза не может начаться. Проверь зависимости ${p.id} в docs/product-roadmap.md.`;
+    progress(p);
+  } else if (summary.kind === 'done') {
     $('pill').textContent = 'Все фазы трека готовы';
     $('now-cur-big').textContent = 'Все задачи трека выполнены';
+  } else {
+    $('pill').textContent = 'Нет данных о задачах';
+    $('now-cur-big').textContent = 'В docs/product-roadmap.md не найдено ни одной задачи';
   }
   const next = [];
   if (cur) {

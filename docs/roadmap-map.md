@@ -24,7 +24,8 @@ Change the cell in both language versions in the same pull request that starts o
 
 - a phase is done when all its tasks are done, and current when at least one is done or in progress;
 - a phase is next when every phase it depends on is done or current;
-- a checkpoint (R1+R3+R4, R2+R5) is passed when all its phases are done.
+- a checkpoint (R1+R3+R4, R2+R5) is passed when all its phases are done, including a phase whose arrow is drawn through another phase (R1 through R4);
+- the header shows the task in progress, otherwise the next available task; when all tasks are done it says the track is complete, and when open tasks remain but no phase can start (for example, a dependency was removed from the plan) it says work is blocked and names what the phase waits for.
 
 Only sections with a heading of the form `### <ID> — <title>` (for example `### R1 — ...` or `### AI-A — ...`) and task rows whose ID starts with that phase ID (`R1.3`, `AI-A.0`) are read.
 
@@ -32,7 +33,7 @@ Only sections with a heading of the form `### <ID> — <title>` (for example `##
 
 The page template [scripts/roadmap_map.html](../scripts/roadmap_map.html) holds the Russian wording: short task titles, phase descriptions, dependencies, the map layout, the timing chart and the version route. For a task that is not in the template yet, the page uses the first sentence of the task from the Russian roadmap. A new phase needs a node in the template (`phases` and `pos`) and an arrow for each of its dependencies (`add('from>to', ...)`); until the node exists the build prints a warning and the phase is not shown. A phase removed from the roadmap keeps its node but loses its tasks and is marked “not in plan”; the template's old tasks never come back.
 
-`scripts/test_roadmap_map.py` runs the page's data model in Node.js and checks that a phase removed from both Markdown versions disappears from the map and that every dependency listed in a phase card has an arrow.
+`scripts/test_roadmap_map.py` runs the page's data model in Node.js and checks, on small EN/RU fixtures, that a phase removed from both Markdown versions disappears from the map and the header reports blocked work, that the 0.5 checkpoint needs R1, R3 and R4, and that every dependency listed in a phase card has an arrow. Checks against the live roadmap derive their expectations from its tables, so ordinary plan edits do not break them.
 
 ## Checks and local build
 
