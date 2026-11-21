@@ -171,3 +171,12 @@ profile/contract checks, package bindings and Full/Team rights retain their
 current meaning; this decision does not introduce global settings propagation
 or authorize a migration. The [direction record](engine-composition-direction.md)
 is updated in both languages. This change is documentation only.
+
+<a id="engine-rebuild-20261121"></a>
+
+## Accepted engine rebuild priority — 21 November 2026
+
+| Decision | Consequence |
+| --- | --- |
+| The [engine rebuild track](product-roadmap.md#rebuild) is the current priority: `bevy_ecs` world storage, a GPU-driven Vulkan renderer on `ash`, the editor on Vulkan, `rapier3d`/`kira`, skeletal animation, PBR, mesh shaders and hybrid ray tracing. | Work follows phases R0–R10 with their acceptance criteria and benchmarks. Vulkan stays the only game-rendering API. |
+| The 0.5 brief and new UI work are paused until R1, R3 and R4 are accepted. | Bug fixes to accepted 0.4.2 remain allowed. The agreed 0.5 scope is kept and resumes after those phases. |
