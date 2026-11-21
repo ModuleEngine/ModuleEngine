@@ -6,8 +6,10 @@
 
 **21 November 2026 — engine rebuild track started; 0.5 paused.** The owner made the
 [engine rebuild track](product-roadmap.md#rebuild) the current priority and paused the
-0.5 brief and new UI work until its phases R1, R3 and R4 are accepted. Implementation
-has not started; R0 (baseline and benchmarks) comes first. See the
+0.5 brief and new UI work until its phases R1, R3 and R4 are accepted.
+R0.2 is done: the [native benchmarks S1–S5](bench.md) run from the source checkout,
+and the [accepted series](bench-r02-20261121.md) of three runs differs by at most 4.75 %.
+See the
 [dated decision](decisions.md#engine-rebuild-20261121).
 
 **17 November 2026 — 0.4.2 accepted and closed by the owner.** The owner checked

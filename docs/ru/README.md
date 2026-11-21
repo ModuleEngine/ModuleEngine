@@ -13,6 +13,7 @@
 - [ModuleEngine 0.4](../../README.ru.md)
 - [Работа над ModuleEngine](agent-guide.md)
 - [Текущее состояние ModuleEngine](current-status.md)
+- [Запуск нативных бенчмарков S1–S5](bench.md) · [Принятая серия R0.2, 21 ноября 2026](bench-r02-20261121.md)
 - [Продуктовая карта по версиям: стабильные конфигурации, самостоятельные авторы и пять игр](product-roadmap.md#map)
 - [План 0.4.2: изображение Player и docking редактора](release-042-plan.md) · [Объём в дорожной карте](product-roadmap.md#image-and-docking)
 - [Задание и передача 0.4.1: от настройки сглаживания в Editor до Player](release-041-plan.md) · [Проверки владельца по версиям](product-roadmap-checks.md)

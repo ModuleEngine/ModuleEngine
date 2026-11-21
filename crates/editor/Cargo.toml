@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+bench = []
+
 [dependencies]
 module-engine-player = { path = "../player", features = ["ui", "arpg", "puzzle", "g1", "vulkan", "audio", "persistence"] }
 module-engine-host = { path = "../game-host" }

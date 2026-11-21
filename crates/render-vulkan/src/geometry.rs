@@ -1,5 +1,7 @@
 use module_engine_core::{Camera, SceneSnapshot, transform_point};
 use std::{collections::BTreeMap, sync::Arc};
+
+pub(crate) const VERTEX_BYTES: usize = 72;
 pub(crate) struct TextureAtlas {
     pub width: u32,
     pub height: u32,
@@ -74,7 +76,7 @@ pub(crate) fn vertices(
         scene
             .items
             .iter()
-            .map(|i| i.mesh.triangles.len() * 3 * 72)
+            .map(|i| i.mesh.triangles.len() * 3 * VERTEX_BYTES)
             .sum(),
     );
     let mut triangle = 0;
