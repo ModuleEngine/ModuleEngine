@@ -4,6 +4,13 @@
 
 [English](current-status.md) | [Русский](ru/current-status.md) | [Documentation](README.md)
 
+**22 November 2026 — R0.6 baseline recorded.** Three scored native S1–S5
+passes on the RTX 4080 SUPER after R0.5 passed repeatability (maximum
+declared spread 2.39 %). S1/S2 passed their frame and memory budgets.
+The Core ECS tick in S3 averaged 0.756 ms for the upcoming R1.1 spike.
+See the [baseline report](bench-r06-20261122.md) for per-run mean, p95 and
+memory, the comparison with R0.2, and the raw evidence location.
+
 **21 November 2026 — engine rebuild track started; 0.5 paused.** The owner made the
 [engine rebuild track](product-roadmap.md#rebuild) the current priority and paused the
 0.5 brief and new UI work until its phases R1, R3 and R4 are accepted.
