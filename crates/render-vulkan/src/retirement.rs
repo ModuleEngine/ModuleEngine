@@ -1,4 +1,5 @@
 //! Owned producer retirement. Render/Drop never joins these GPU waits.
+use crate::VulkanError;
 use std::{
     sync::{Mutex, OnceLock},
     thread::JoinHandle,
@@ -15,7 +16,7 @@ pub struct ProducerRetirementReport {
 
 #[derive(Default)]
 struct Registry {
-    jobs: Vec<JoinHandle<Result<(), String>>>,
+    jobs: Vec<JoinHandle<Result<(), VulkanError>>>,
     report: ProducerRetirementReport,
     errors: Vec<String>,
 }
@@ -23,7 +24,7 @@ fn registry() -> &'static Mutex<Registry> {
     static JOBS: OnceLock<Mutex<Registry>> = OnceLock::new();
     JOBS.get_or_init(|| Mutex::new(Registry::default()))
 }
-fn collect(job: JoinHandle<Result<(), String>>, state: &mut Registry) {
+fn collect(job: JoinHandle<Result<(), VulkanError>>, state: &mut Registry) {
     state.report.joined_jobs += 1;
     match job.join() {
         Ok(Ok(())) => state.report.completed_submissions += 1,
@@ -32,14 +33,14 @@ fn collect(job: JoinHandle<Result<(), String>>, state: &mut Registry) {
             state.report.unconfirmed_submissions += 1;
             if state.errors.len() < 8 {
                 state.errors.push(match outcome {
-                    Ok(Err(error)) => error,
+                    Ok(Err(error)) => error.to_string(),
                     _ => "GPU producer retirement thread panicked; resources remain pinned".into(),
                 });
             }
         }
     }
 }
-pub(crate) fn retire(job: impl FnOnce() -> Result<(), String> + Send + 'static) {
+pub(crate) fn retire(job: impl FnOnce() -> Result<(), VulkanError> + Send + 'static) {
     // The closure owns a ManuallyDrop bundle: failure to spawn or a panic must
     // leak the native work and its device pin rather than free busy resources.
     let owner = std::thread::Builder::new()

@@ -35,7 +35,7 @@ fn main() -> Result<(), String> {
             .map(|i| (i, "assets/models/demo_crystal.glb".into()))
             .collect(),
     )?;
-    let mut renderer = VulkanRenderer::new_at(root.clone())?;
+    let mut renderer = VulkanRenderer::new_at(root.clone()).map_err(|error| error.to_string())?;
     renderer.set_detailed_stats(false);
     let camera = Camera {
         pitch: 0.85,
@@ -46,13 +46,17 @@ fn main() -> Result<(), String> {
     let overrides = RenderOverrides::default();
     let graph = default_graph(RenderPath::Forward);
     for _ in 0..10 {
-        renderer.render(&scene, camera, 1920, 1080, &graph, &sources, &overrides)?;
+        renderer
+            .render(&scene, camera, 1920, 1080, &graph, &sources, &overrides)
+            .map_err(|error| error.to_string())?;
     }
     let mut samples = vec![];
     for frame in 0..120 {
         scene.items[0].model[0][3] = -6. + (frame as f32 * 0.06).sin();
         let start = Instant::now();
-        renderer.render(&scene, camera, 1920, 1080, &graph, &sources, &overrides)?;
+        renderer
+            .render(&scene, camera, 1920, 1080, &graph, &sources, &overrides)
+            .map_err(|error| error.to_string())?;
         samples.push(start.elapsed().as_secs_f64() * 1000.);
     }
     samples.sort_by(f64::total_cmp);

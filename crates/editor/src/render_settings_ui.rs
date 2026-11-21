@@ -480,6 +480,7 @@ mod tests {
     #[test]
     #[ignore = "Native GPU history restoration; run sequentially with render checks"]
     fn project_variant_combo_click_commits_and_undo_redo_restore_the_authored_choice() {
+        crate::requires_editor_vulkan!();
         let mut document = crate::host::gpu_document(WorldKind::Objects, RenderPath::Forward);
         crate::host::ensure_authoring_configuration(&mut document);
         assert!(

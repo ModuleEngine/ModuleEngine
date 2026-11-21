@@ -270,7 +270,7 @@ fn run(report: &Arc<Mutex<Value>>, report_path: &Path, png: bool) -> Result<Fram
         .join("../..")
         .canonicalize()
         .map_err(|e| e.to_string())?;
-    module_engine_vulkan::install(&mut registry, &root)?;
+    module_engine_vulkan::install(&mut registry, &root).map_err(|error| error.to_string())?;
     let png_folder = png.then(|| {
         report_path
             .parent()

@@ -11,7 +11,7 @@ pub(super) fn workspace_root() -> PathBuf {
 }
 pub(super) fn modules(root: &Path) -> Result<ModuleRegistry, String> {
     let mut modules = ModuleRegistry::builtin();
-    module_engine_vulkan::install(&mut modules, root)?;
+    module_engine_vulkan::install(&mut modules, root).map_err(|error| error.to_string())?;
     Ok(modules)
 }
 fn composition(root: &Path) -> Result<CompositionContext, String> {

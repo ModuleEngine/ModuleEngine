@@ -807,12 +807,14 @@ mod tests {
     }
     #[test]
     fn worker_slow_custom_client_stays_nonblocking_and_preserves_edges_lifecycle() {
+        crate::requires_editor_vulkan!();
         let backend = backend();
         let report = lifecycle(&backend, &backend, &backend.join(".work/worker-tests")).unwrap();
         eprintln!("{}", serde_json::to_string_pretty(&report).unwrap());
     }
     #[test]
     fn worker_fault_latches_without_retry_until_explicit_restart() {
+        crate::requires_editor_vulkan!();
         let backend = backend();
         let report = fault_latch(&backend, &backend, &backend.join(".work/worker-tests")).unwrap();
         eprintln!("{}", serde_json::to_string_pretty(&report).unwrap());

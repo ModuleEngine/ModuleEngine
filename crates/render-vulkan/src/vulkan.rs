@@ -1,6 +1,7 @@
 use crate::presentation::{
     DeviceLifetime, PresentationPool, SharedImage, VulkanPresentationTarget,
 };
+use crate::{VulkanError, instance::InstanceLifetime};
 #[cfg(test)]
 use crate::{compiler::compile_hlsl, graph::build_plan};
 use crate::{
@@ -9,7 +10,7 @@ use crate::{
     graph::{Pass, Plan, build_metadata_plan, build_plan_at},
     profiling::{PendingTimings, TimestampCapture, TimestampPool},
 };
-use ash::{Entry, vk};
+use ash::vk;
 use module_engine_core::{
     Camera, Frame, Graph, RenderOverrides, RenderResourceCommand, RenderStats, RenderSubmission,
     RendererPerformance, SceneSnapshot,
@@ -60,7 +61,7 @@ struct RejectedPreparation {
     sources: BTreeMap<String, String>,
     signature: Option<Vec<String>>,
     checked: Instant,
-    error: String,
+    error: VulkanError,
 }
 impl RejectedPreparation {
     fn matches(&self, graph: &Graph, sources: &BTreeMap<String, String>) -> bool {
@@ -226,7 +227,7 @@ fn validate_frame_images(
     plan: &Plan,
     available: &BTreeSet<&str>,
     readback: &[(String, usize, usize)],
-) -> Result<(), String> {
+) -> Result<(), VulkanError> {
     let mut declared = BTreeSet::new();
     for pass in &plan.passes {
         for (_, resource) in pass
@@ -235,44 +236,46 @@ fn validate_frame_images(
             .filter(|(spec, _)| spec.format != "scene")
         {
             if !available.contains(resource.as_str()) {
-                return Err(format!(
+                return Err(VulkanError::Resource(format!(
                     "GPU pass {} input resource {resource} has no allocated image",
                     pass.id
-                ));
+                )));
             }
         }
         for spec in &pass.manifest.outputs {
             let resource = pass.resource(&spec.name);
             if !declared.insert(resource.clone()) {
-                return Err(format!(
+                return Err(VulkanError::Resource(format!(
                     "GPU output resource identity collision: {resource}"
-                ));
+                )));
             }
             if !available.contains(resource.as_str()) {
-                return Err(format!(
+                return Err(VulkanError::Resource(format!(
                     "GPU pass {} output resource {resource} has no allocated image",
                     pass.id
-                ));
+                )));
             }
         }
         if pass.geometry() {
             let resource = format!("{}.__hardware_depth", pass.id);
             if !declared.insert(resource.clone()) {
-                return Err(format!("GPU depth resource identity collision: {resource}"));
+                return Err(VulkanError::Resource(format!(
+                    "GPU depth resource identity collision: {resource}"
+                )));
             }
             if !available.contains(resource.as_str()) {
-                return Err(format!(
+                return Err(VulkanError::Resource(format!(
                     "GPU pass {} hardware depth has no allocated image",
                     pass.id
-                ));
+                )));
             }
         }
     }
     for (resource, _, _) in readback {
         if !available.contains(resource.as_str()) {
-            return Err(format!(
+            return Err(VulkanError::Resource(format!(
                 "GPU readback resource {resource} has no allocated image"
-            ));
+            )));
         }
     }
     Ok(())
@@ -297,7 +300,7 @@ struct ProducerFlight {
     stats: RenderStats,
     timings: Option<PendingTimings>,
     cancelled: Arc<AtomicBool>,
-    failure: Option<String>,
+    failure: Option<VulkanError>,
 }
 struct ProducerRetirement {
     device: ash::Device,
@@ -325,6 +328,14 @@ impl Drop for ProducerRetirement {
         self.atlas = None;
     }
 }
+struct OwnedShaderModule<'a>(&'a ash::Device, vk::ShaderModule);
+
+impl Drop for OwnedShaderModule<'_> {
+    fn drop(&mut self) {
+        unsafe { self.0.destroy_shader_module(self.1, None) };
+    }
+}
+
 impl Drop for Pipeline {
     fn drop(&mut self) {
         unsafe {
@@ -378,7 +389,7 @@ pub struct VulkanRenderer {
     pipelines: BTreeMap<String, Arc<Pipeline>>,
     pending: Option<ProducerFlight>,
     next_ticket: u64,
-    producer_error: Option<String>,
+    producer_error: Option<VulkanError>,
     prepared: Option<Plan>,
     diagnostics: Vec<String>,
     frame_resources: Option<FrameResources>,
@@ -398,32 +409,24 @@ pub struct VulkanRenderer {
     allocations: std::sync::Arc<AllocationCounts>,
 }
 impl VulkanRenderer {
-    pub fn new() -> Result<Self, String> {
+    pub fn new() -> Result<Self, VulkanError> {
         Self::new_at(crate::compiler::resource_root())
     }
     /// Bind this backend's shader compilation to one explicit package root.
-    pub fn new_at(resource_root: std::path::PathBuf) -> Result<Self, String> {
+    pub fn new_at(resource_root: std::path::PathBuf) -> Result<Self, VulkanError> {
         Self::new_at_target(resource_root, None)
     }
     fn new_at_target(
         resource_root: std::path::PathBuf,
         presentation_target: Option<Arc<VulkanPresentationTarget>>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, VulkanError> {
         unsafe {
-            let entry = Entry::load().map_err(|e| format!("Vulkan loader: {e}"))?;
-            let app = CString::new("ModuleEngine GPU graph").unwrap();
-            let info = vk::ApplicationInfo::default()
-                .application_name(&app)
-                .api_version(vk::API_VERSION_1_3);
-            let instance = entry
-                .create_instance(
-                    &vk::InstanceCreateInfo::default().application_info(&info),
-                    None,
-                )
-                .map_err(|e| format!("Vulkan 1.3 instance: {e:?}"))?;
+            let owner = InstanceLifetime::new()?;
+            let instance = owner.raw.clone();
             let candidates = instance
                 .enumerate_physical_devices()
-                .map_err(|e| format!("Vulkan adapters: {e:?}"))?;
+                .map_err(VulkanError::api("enumerate adapters"))?;
+            let mut extension_error = None;
             let selected = candidates
                 .into_iter()
                 .filter_map(|physical| {
@@ -435,9 +438,14 @@ impl VulkanRenderer {
                         ) {
                             return None;
                         }
-                        let extensions = instance
-                            .enumerate_device_extension_properties(physical)
-                            .ok()?;
+                        let extensions =
+                            match instance.enumerate_device_extension_properties(physical) {
+                                Ok(extensions) => extensions,
+                                Err(error) => {
+                                    extension_error.get_or_insert(error);
+                                    return None;
+                                }
+                            };
                         if !extensions.iter().any(|extension| {
                             CStr::from_ptr(extension.extension_name.as_ptr())
                                 == crate::presentation::extension_name()
@@ -473,11 +481,15 @@ impl VulkanRenderer {
                     }
                 });
             let Some((physical, family, properties)) = selected else {
-                instance.destroy_instance(None);
+                if let Some(source) = extension_error {
+                    return Err(
+                        VulkanError::api("enumerate presentation device extensions")(source),
+                    );
+                }
                 return Err(if presentation_target.is_some() {
-                    "No matching GUI adapter with Vulkan 1.3 dynamic rendering and external-memory import".into()
+                    VulkanError::NoPresentationAdapter
                 } else {
-                    "No Vulkan 1.3 graphics+compute adapter with dynamic rendering; a compatible GPU driver is required".into()
+                    VulkanError::NoAdapter
                 });
             };
             let name = CStr::from_ptr(properties.device_name.as_ptr())
@@ -503,16 +515,32 @@ impl VulkanRenderer {
                         .push_next(&mut rendering),
                     None,
                 )
-                .map_err(|e| format!("Vulkan device {name}: {e:?}"))?;
+                .map_err(|source| VulkanError::CreateDevice {
+                    name: name.clone(),
+                    source,
+                })?;
             let context = Arc::new(DeviceLifetime {
-                _entry: entry,
-                instance: instance.clone(),
+                instance: owner,
                 device: device.clone(),
             });
             if presentation_target.is_some() {
                 crate::presentation::validate_external_format(&context, physical, 1, 1)?;
             }
             let queue = device.get_device_queue(family, 0);
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "Vulkan debug device: {name}, type={:?}, API={}.{}.{}, driver={:#x}, queue={family}, GUI interop={}",
+                properties.device_type,
+                vk::api_version_major(properties.api_version),
+                vk::api_version_minor(properties.api_version),
+                vk::api_version_patch(properties.api_version),
+                properties.driver_version,
+                presentation_target.is_some()
+            );
+            context.name(device.handle(), || format!("ModuleEngine device ({name})"));
+            context.name(queue, || {
+                format!("ModuleEngine graphics+compute queue {family}")
+            });
             let timestamp_valid_bits = instance
                 .get_physical_device_queue_family_properties(physical)[family as usize]
                 .timestamp_valid_bits;
@@ -524,15 +552,19 @@ impl VulkanRenderer {
                         .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),
                     None,
                 )
-                .map_err(vk_error)?;
-            let command = device
-                .allocate_command_buffers(
-                    &vk::CommandBufferAllocateInfo::default()
-                        .command_pool(pool)
-                        .level(vk::CommandBufferLevel::PRIMARY)
-                        .command_buffer_count(1),
-                )
-                .map_err(vk_error)?[0];
+                .map_err(VulkanError::api("create command pool"))?;
+            let command = match device.allocate_command_buffers(
+                &vk::CommandBufferAllocateInfo::default()
+                    .command_pool(pool)
+                    .level(vk::CommandBufferLevel::PRIMARY)
+                    .command_buffer_count(1),
+            ) {
+                Ok(commands) => commands[0],
+                Err(source) => {
+                    device.destroy_command_pool(pool, None);
+                    return Err(VulkanError::api("allocate command buffer")(source));
+                }
+            };
             let sizes = [
                 vk::DescriptorPoolSize {
                     ty: vk::DescriptorType::SAMPLED_IMAGE,
@@ -543,14 +575,23 @@ impl VulkanRenderer {
                     descriptor_count: 1024,
                 },
             ];
-            let descriptor_pool = device
-                .create_descriptor_pool(
-                    &vk::DescriptorPoolCreateInfo::default()
-                        .max_sets(128)
-                        .pool_sizes(&sizes),
-                    None,
-                )
-                .map_err(vk_error)?;
+            let descriptor_pool = match device.create_descriptor_pool(
+                &vk::DescriptorPoolCreateInfo::default()
+                    .max_sets(128)
+                    .pool_sizes(&sizes),
+                None,
+            ) {
+                Ok(pool) => pool,
+                Err(source) => {
+                    device.destroy_command_pool(pool, None);
+                    return Err(VulkanError::api("create descriptor pool")(source));
+                }
+            };
+            context.name(pool, || "ModuleEngine producer command pool".into());
+            context.name(command, || "ModuleEngine render graph commands".into());
+            context.name(descriptor_pool, || {
+                "ModuleEngine graph descriptor pool".into()
+            });
             Ok(Self {
                 context,
                 instance,
@@ -599,7 +640,7 @@ impl VulkanRenderer {
     pub fn set_presentation_target(
         &mut self,
         target: Option<Arc<VulkanPresentationTarget>>,
-    ) -> Result<(), String> {
+    ) -> Result<(), VulkanError> {
         if match (&self.presentation_target, &target) {
             (None, None) => true,
             (Some(a), Some(b)) => {
@@ -610,7 +651,9 @@ impl VulkanRenderer {
             return Ok(());
         }
         if self.presentation_slots.busy() {
-            return Err("GPU presentation target still has leased frames".into());
+            return Err(VulkanError::Presentation(
+                "GPU presentation target still has leased frames".into(),
+            ));
         }
         let Some(target) = target else {
             self.presentation_slots.clear();
@@ -705,7 +748,7 @@ impl VulkanRenderer {
         let memory_type = match self.memory_type(requirements.memory_type_bits, host) {
             Ok(index) => index,
             Err(error) => {
-                result.blocked = Some(error);
+                result.blocked = Some(error.to_string());
                 return result;
             }
         };
@@ -752,7 +795,7 @@ impl VulkanRenderer {
         &mut self,
         graph: &Graph,
         sources: &BTreeMap<String, String>,
-    ) -> Result<(), String> {
+    ) -> Result<(), VulkanError> {
         self.prepare_checked(graph, sources, false)
     }
     fn reject_preparation(
@@ -760,9 +803,9 @@ impl VulkanRenderer {
         graph: &Graph,
         sources: &BTreeMap<String, String>,
         signature: Option<Vec<String>>,
-        error: String,
-    ) -> Result<(), String> {
-        self.diagnostics = vec![error.clone()];
+        error: VulkanError,
+    ) -> Result<(), VulkanError> {
+        self.diagnostics = vec![error.to_string()];
         self.rejected_inputs = Some(RejectedPreparation {
             graph: graph.clone(),
             sources: sources.clone(),
@@ -777,7 +820,7 @@ impl VulkanRenderer {
         graph: &Graph,
         sources: &BTreeMap<String, String>,
         reuse_rejection: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), VulkanError> {
         self.performance.prepare_calls += 1;
         self.performance.plan_builds += 1;
         let started = Instant::now();
@@ -806,13 +849,13 @@ impl VulkanRenderer {
         self.diagnostics.clear();
         Ok(())
     }
-    fn prepare_plan(&mut self, plan: Plan) -> Result<(), String> {
+    fn prepare_plan(&mut self, plan: Plan) -> Result<(), VulkanError> {
         if let Err(error) = schedule_overrides(&plan, &RenderOverrides::default()) {
-            self.diagnostics = vec![error.clone()];
+            self.diagnostics = vec![error.to_string()];
             return Err(error);
         }
         if plan.passes.len() > 64 {
-            return Err("GPU graph exceeds 64 passes".into());
+            return Err(VulkanError::PassLimit);
         }
         if self.pipelines.len() > 256 {
             let mut keep: BTreeSet<_> = plan.passes.iter().map(pipeline_key).collect();
@@ -832,17 +875,16 @@ impl VulkanRenderer {
                             &pass.source,
                         )? != pass.dependency_hash
                         {
-                            return Err(format!(
-                                "Pass {}: HLSL dependencies changed during pipeline preparation",
-                                pass.id
-                            ));
+                            return Err(VulkanError::PassDependenciesChanged(pass.id.clone()));
                         }
                         self.pipelines.insert(key, Arc::new(pipeline));
                         self.performance.pipeline_creations += 1;
                     }
                     Err(error) => {
-                        self.diagnostics = vec![format!("Pass {}: {error}", pass.id)];
-                        return Err(self.diagnostics[0].clone());
+                        return Err(VulkanError::Pass {
+                            pass: pass.id.clone(),
+                            source: Arc::new(error),
+                        });
                     }
                 }
             }
@@ -854,7 +896,7 @@ impl VulkanRenderer {
         &mut self,
         graph: &Graph,
         sources: &BTreeMap<String, String>,
-    ) -> Result<(), String> {
+    ) -> Result<(), VulkanError> {
         if let Some(rejected) = &self.rejected_inputs
             && rejected.matches(graph, sources)
         {
@@ -878,7 +920,11 @@ impl VulkanRenderer {
         }
         self.prepare_checked(graph, sources, true)
     }
-    fn memory_type(&self, bits: u32, required: vk::MemoryPropertyFlags) -> Result<u32, String> {
+    fn memory_type(
+        &self,
+        bits: u32,
+        required: vk::MemoryPropertyFlags,
+    ) -> Result<u32, VulkanError> {
         (0..self.memory.memory_type_count)
             .find(|i| {
                 bits & (1 << i) != 0
@@ -886,9 +932,9 @@ impl VulkanRenderer {
                         .property_flags
                         .contains(required)
             })
-            .ok_or_else(|| format!("Vulkan memory type {required:?} unavailable"))
+            .ok_or(VulkanError::MemoryType { bits, required })
     }
-    fn buffer(&self, size: u64, usage: vk::BufferUsageFlags) -> Result<Buffer, String> {
+    fn buffer(&self, size: u64, usage: vk::BufferUsageFlags) -> Result<Buffer, VulkanError> {
         unsafe {
             let size = size.max(4);
             let buffer = self
@@ -900,7 +946,9 @@ impl VulkanRenderer {
                         .sharing_mode(vk::SharingMode::EXCLUSIVE),
                     None,
                 )
-                .map_err(vk_error)?;
+                .map_err(VulkanError::api("create buffer"))?;
+            self.context
+                .name(buffer, || format!("ModuleEngine {usage:?} buffer"));
             #[cfg(test)]
             self.allocations
                 .buffers
@@ -936,7 +984,7 @@ impl VulkanRenderer {
             let memory = self
                 .device
                 .allocate_memory(&allocation, None)
-                .map_err(vk_error)?;
+                .map_err(VulkanError::api("allocate buffer memory"))?;
             allocated.memory = memory;
             #[cfg(test)]
             self.allocations
@@ -946,7 +994,7 @@ impl VulkanRenderer {
             self.allocation_checkpoint(AllocationFault::BufferMemory)?;
             self.device
                 .bind_buffer_memory(buffer, memory, 0)
-                .map_err(vk_error)?;
+                .map_err(VulkanError::api("bind buffer memory"))?;
             Ok(allocated)
         }
     }
@@ -956,7 +1004,7 @@ impl VulkanRenderer {
         height: u32,
         format: vk::Format,
         depth: bool,
-    ) -> Result<Image, String> {
+    ) -> Result<Image, VulkanError> {
         unsafe {
             let props = self
                 .instance
@@ -972,10 +1020,11 @@ impl VulkanRenderer {
                     | vk::FormatFeatureFlags::TRANSFER_DST
             };
             if !props.optimal_tiling_features.contains(required) {
-                return Err(format!(
-                    "Adapter {} lacks required format capabilities {format:?}: {required:?}",
-                    self.name
-                ));
+                return Err(VulkanError::FormatSupport {
+                    adapter: self.name.clone(),
+                    format,
+                    required,
+                });
             }
             let usage = if depth {
                 vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC
@@ -1000,7 +1049,10 @@ impl VulkanRenderer {
                 .tiling(vk::ImageTiling::OPTIMAL)
                 .usage(usage)
                 .initial_layout(vk::ImageLayout::UNDEFINED);
-            let image = self.device.create_image(&info, None).map_err(vk_error)?;
+            let image = self
+                .device
+                .create_image(&info, None)
+                .map_err(VulkanError::api("create image"))?;
             #[cfg(test)]
             self.allocations
                 .images
@@ -1037,7 +1089,7 @@ impl VulkanRenderer {
                         )?),
                     None,
                 )
-                .map_err(vk_error)?;
+                .map_err(VulkanError::api("allocate image memory"))?;
             allocated.memory = memory;
             #[cfg(test)]
             self.allocations
@@ -1047,7 +1099,7 @@ impl VulkanRenderer {
             self.allocation_checkpoint(AllocationFault::ImageMemory)?;
             self.device
                 .bind_image_memory(image, memory, 0)
-                .map_err(vk_error)?;
+                .map_err(VulkanError::api("bind image memory"))?;
             let view = self
                 .device
                 .create_image_view(
@@ -1058,7 +1110,7 @@ impl VulkanRenderer {
                         .subresource_range(range(aspect)),
                     None,
                 )
-                .map_err(vk_error)?;
+                .map_err(VulkanError::api("create image view"))?;
             allocated.view = view;
             #[cfg(test)]
             self.allocations
@@ -1070,14 +1122,16 @@ impl VulkanRenderer {
         }
     }
     #[cfg(test)]
-    fn allocation_checkpoint(&self, stage: AllocationFault) -> Result<(), String> {
+    fn allocation_checkpoint(&self, stage: AllocationFault) -> Result<(), VulkanError> {
         if self.allocation_fault == Some(stage) {
-            Err(format!("Injected Vulkan allocation failure: {stage:?}"))
+            Err(VulkanError::Resource(format!(
+                "Injected Vulkan allocation failure: {stage:?}"
+            )))
         } else {
             Ok(())
         }
     }
-    fn create_pipeline(&self, pass: &Pass) -> Result<Pipeline, String> {
+    fn create_pipeline(&self, pass: &Pass) -> Result<Pipeline, VulkanError> {
         unsafe {
             let compute = pass.manifest.stage == "compute";
             let profile = if compute { "cs_6_0" } else { "ps_6_0" };
@@ -1142,7 +1196,16 @@ impl VulkanRenderer {
                     &vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings),
                     None,
                 )
-                .map_err(vk_error)?;
+                .map_err(VulkanError::api("create descriptor set layout"))?;
+            let mut pipeline = Pipeline {
+                device: self.device.clone(),
+                pipeline: vk::Pipeline::null(),
+                layout: vk::PipelineLayout::null(),
+                set_layout,
+                compute,
+            };
+            self.context
+                .name(set_layout, || format!("{} descriptor layout", pass.id));
             let layouts = [set_layout];
             let push = [vk::PushConstantRange {
                 stage_flags: vk::ShaderStageFlags::VERTEX
@@ -1151,7 +1214,7 @@ impl VulkanRenderer {
                 offset: 0,
                 size: 128,
             }];
-            let layout = self
+            pipeline.layout = self
                 .device
                 .create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::default()
@@ -1159,23 +1222,34 @@ impl VulkanRenderer {
                         .push_constant_ranges(&push),
                     None,
                 )
-                .map_err(vk_error)?;
+                .map_err(VulkanError::api("create pipeline layout"))?;
+            let layout = pipeline.layout;
+            self.context
+                .name(layout, || format!("{} pipeline layout", pass.id));
             let module = self
                 .device
                 .create_shader_module(
                     &vk::ShaderModuleCreateInfo::default().code(&shader.words),
                     None,
                 )
-                .map_err(vk_error)?;
-            let entry = CString::new(pass.manifest.entry.as_str())
-                .map_err(|_| "Shader entry contains NUL")?;
+                .map_err(VulkanError::api("create shader module"))?;
+            let module = OwnedShaderModule(&self.device, module);
+            self.context.name(module.1, || {
+                format!("{} {profile} {}", pass.id, pass.manifest.entry)
+            });
+            let entry = CString::new(pass.manifest.entry.as_str()).map_err(|source| {
+                VulkanError::ShaderEntry {
+                    stage: "Shader",
+                    source,
+                }
+            })?;
             let stage = vk::PipelineShaderStageCreateInfo::default()
                 .stage(if compute {
                     vk::ShaderStageFlags::COMPUTE
                 } else {
                     vk::ShaderStageFlags::FRAGMENT
                 })
-                .module(module)
+                .module(module.1)
                 .name(&entry);
             let result = if compute {
                 self.device
@@ -1187,7 +1261,12 @@ impl VulkanRenderer {
                         None,
                     )
                     .map(|p| p[0])
-                    .map_err(|(_, e)| vk_error(e))
+                    .map_err(|(partial, source)| {
+                        for handle in partial {
+                            self.device.destroy_pipeline(handle, None);
+                        }
+                        VulkanError::api("create compute pipeline")(source)
+                    })
             } else {
                 let vertex_entry = pass.manifest.vertex_entry.as_deref().unwrap_or("mainVS");
                 let vertex = vertex_artifact.as_ref().unwrap();
@@ -1197,12 +1276,19 @@ impl VulkanRenderer {
                         &vk::ShaderModuleCreateInfo::default().code(&vertex.words),
                         None,
                     )
-                    .map_err(vk_error)?;
-                let ve = CString::new(vertex_entry).map_err(|_| "Vertex entry contains NUL")?;
+                    .map_err(VulkanError::api("create vertex shader module"))?;
+                let vertex_module = OwnedShaderModule(&self.device, vertex_module);
+                self.context.name(vertex_module.1, || {
+                    format!("{} vs_6_0 {vertex_entry}", pass.id)
+                });
+                let ve = CString::new(vertex_entry).map_err(|source| VulkanError::ShaderEntry {
+                    stage: "Vertex",
+                    source,
+                })?;
                 let stages = [
                     vk::PipelineShaderStageCreateInfo::default()
                         .stage(vk::ShaderStageFlags::VERTEX)
-                        .module(vertex_module)
+                        .module(vertex_module.1)
                         .name(&ve),
                     stage,
                 ];
@@ -1311,29 +1397,21 @@ impl VulkanRenderer {
                     .dynamic_state(&dynamic)
                     .layout(layout)
                     .push_next(&mut rendering);
-                let result = self
-                    .device
+                self.device
                     .create_graphics_pipelines(vk::PipelineCache::null(), &[info], None)
                     .map(|p| p[0])
-                    .map_err(|(_, e)| vk_error(e));
-                self.device.destroy_shader_module(vertex_module, None);
-                result
+                    .map_err(|(partial, source)| {
+                        for handle in partial {
+                            self.device.destroy_pipeline(handle, None);
+                        }
+                        VulkanError::api("create graphics pipeline")(source)
+                    })
             };
-            self.device.destroy_shader_module(module, None);
-            match result {
-                Ok(pipeline) => Ok(Pipeline {
-                    device: self.device.clone(),
-                    pipeline,
-                    layout,
-                    set_layout,
-                    compute,
-                }),
-                Err(error) => {
-                    self.device.destroy_pipeline_layout(layout, None);
-                    self.device.destroy_descriptor_set_layout(set_layout, None);
-                    Err(error)
-                }
-            }
+            pipeline.pipeline = result?;
+            self.context.name(pipeline.pipeline, || {
+                format!("{} ({}) pipeline", pass.id, pass.module)
+            });
+            Ok(pipeline)
         }
     }
     #[allow(clippy::too_many_arguments)] // Public integration boundary fixed by the shared renderer contract.
@@ -1346,14 +1424,14 @@ impl VulkanRenderer {
         graph: &Graph,
         sources: &BTreeMap<String, String>,
         overrides: &RenderOverrides,
-    ) -> Result<Frame, String> {
+    ) -> Result<Frame, VulkanError> {
         if self.pending.is_some() {
-            return Err("GPU producer submission is still in flight; poll or discard its ticket before CPU readback".into());
+            return Err(VulkanError::ProducerBusy);
         }
         self.render_output(
             scene, camera, width, height, graph, sources, overrides, None,
         )
-        .and_then(|frame| frame.ok_or_else(|| "CPU render did not complete".into()))
+        .and_then(|frame| frame.ok_or(VulkanError::NoReadback))
     }
     /// Render to one of four leased shared images, without host pixel transfer.
     /// Backpressure does no GPU work and leaves portable resource commands pending.
@@ -1367,7 +1445,7 @@ impl VulkanRenderer {
         graph: &Graph,
         sources: &BTreeMap<String, String>,
         overrides: &RenderOverrides,
-    ) -> Result<RenderSubmission, String> {
+    ) -> Result<RenderSubmission, VulkanError> {
         if width == 0
             || height == 0
             || width > 8192
@@ -1376,7 +1454,7 @@ impl VulkanRenderer {
                 .checked_mul(height)
                 .is_none_or(|pixels| pixels > 16_777_216)
         {
-            return Err("GPU viewport must be nonzero, <=8192 per axis and <=16M pixels".into());
+            return Err(VulkanError::Viewport);
         }
         let Some(target) = self.presentation_target.clone() else {
             // No presentation target is the explicit legacy/readback mode used
@@ -1403,7 +1481,10 @@ impl VulkanRenderer {
         let physical = self.physical;
         let memory = self.memory;
         let Some(slot) = self.presentation_slots.reserve(size, || {
-            let shared = target.allocator.allocate(size[0], size[1])?;
+            let shared = target
+                .allocator
+                .allocate(size[0], size[1])
+                .map_err(VulkanError::Presentation)?;
             SharedImage::import(context, physical, &memory, size[0], size[1], shared)
         })?
         else {
@@ -1430,9 +1511,9 @@ impl VulkanRenderer {
             .map(|flight| flight.cancelled.clone())
     }
     /// Only this exact request can complete; polling never submits or waits.
-    pub fn poll_presented(&mut self, ticket: u64) -> Result<Option<Frame>, String> {
+    pub fn poll_presented(&mut self, ticket: u64) -> Result<Option<Frame>, VulkanError> {
         if ticket == 0 || ticket > self.next_ticket {
-            return Err("Unknown GPU producer presentation ticket".into());
+            return Err(VulkanError::UnknownTicket(ticket));
         }
         if let Some(error) = &self.producer_error {
             return Err(error.clone());
@@ -1448,7 +1529,10 @@ impl VulkanRenderer {
         match unsafe { self.device.get_fence_status(flight.fence) } {
             Ok(false) => return Ok(None),
             Err(error) => {
-                let error = format!("GPU producer completion: {error:?}; resources remain pinned");
+                let error = VulkanError::ProducerUnconfirmed {
+                    operation: "producer completion",
+                    source: error,
+                };
                 self.pending.as_mut().unwrap().failure = Some(error.clone());
                 self.producer_error = Some(error.clone());
                 return Err(error);
@@ -1485,9 +1569,9 @@ impl VulkanRenderer {
         self.atlas = Some(flight.atlas);
         Ok(frame)
     }
-    pub fn discard_presented(&mut self, ticket: u64) -> Result<(), String> {
+    pub fn discard_presented(&mut self, ticket: u64) -> Result<(), VulkanError> {
         if ticket == 0 || ticket > self.next_ticket {
-            return Err("Unknown GPU producer presentation ticket".into());
+            return Err(VulkanError::UnknownTicket(ticket));
         }
         if let Some(flight) = &self.pending
             && flight.ticket == ticket
@@ -1508,7 +1592,7 @@ impl VulkanRenderer {
         sources: &BTreeMap<String, String>,
         overrides: &RenderOverrides,
         presentation: Option<&Arc<SharedImage>>,
-    ) -> Result<Option<Frame>, String> {
+    ) -> Result<Option<Frame>, VulkanError> {
         if let Some(error) = &self.producer_error {
             return Err(error.clone());
         }
@@ -1518,7 +1602,7 @@ impl VulkanRenderer {
             || height > 8192
             || width.checked_mul(height).is_none_or(|p| p > 16_777_216)
         {
-            return Err("GPU viewport must be nonzero, <=8192 per axis and <=16M pixels".into());
+            return Err(VulkanError::Viewport);
         }
         self.performance.render_calls += 1;
         self.prepare_for_render(graph, sources)?;
@@ -1535,6 +1619,9 @@ impl VulkanRenderer {
                 vk::Format::R8G8B8A8_UNORM,
                 false,
             )?;
+            self.context.name(image.image, || "Base-color atlas".into());
+            self.context
+                .name(image.view, || "Base-color atlas view".into());
             atlas = Some(AtlasGpu {
                 keys: texture_keys,
                 atlas: decoded,
@@ -1583,7 +1670,7 @@ impl VulkanRenderer {
                     vertex_buffer.size,
                     vk::MemoryMapFlags::empty(),
                 )
-                .map_err(vk_error)?;
+                .map_err(VulkanError::api("map frame vertex buffer"))?;
             std::ptr::copy_nonoverlapping(
                 vertex_bytes.as_ptr(),
                 mapped.cast::<u8>(),
@@ -1594,16 +1681,20 @@ impl VulkanRenderer {
         if images.is_empty() {
             for pass in &plan.passes {
                 for spec in &pass.manifest.outputs {
-                    images.insert(
-                        pass.resource(&spec.name),
-                        self.image(width as u32, height as u32, format(&spec.format)?, false)?,
-                    );
+                    let id = pass.resource(&spec.name);
+                    let image =
+                        self.image(width as u32, height as u32, format(&spec.format)?, false)?;
+                    self.context.name(image.image, || id.clone());
+                    self.context.name(image.view, || format!("{id} view"));
+                    images.insert(id, image);
                 }
                 if pass.geometry() {
-                    images.insert(
-                        format!("{}.__hardware_depth", pass.id),
-                        self.image(width as u32, height as u32, vk::Format::D32_SFLOAT, true)?,
-                    );
+                    let id = format!("{}.__hardware_depth", pass.id);
+                    let image =
+                        self.image(width as u32, height as u32, vk::Format::D32_SFLOAT, true)?;
+                    self.context.name(image.image, || id.clone());
+                    self.context.name(image.view, || format!("{id} view"));
+                    images.insert(id, image);
                 }
             }
         }
@@ -1643,7 +1734,7 @@ impl VulkanRenderer {
                 let mapped = self
                     .device
                     .map_memory(buffer.memory, 0, buffer.size, vk::MemoryMapFlags::empty())
-                    .map_err(vk_error)?;
+                    .map_err(VulkanError::api("map atlas upload buffer"))?;
                 std::ptr::copy_nonoverlapping(
                     atlas.atlas.rgba.as_ptr(),
                     mapped.cast::<u8>(),
@@ -1669,17 +1760,17 @@ impl VulkanRenderer {
         unsafe {
             self.device
                 .reset_command_pool(self.pool, vk::CommandPoolResetFlags::empty())
-                .map_err(vk_error)?;
+                .map_err(VulkanError::api("reset command pool"))?;
             self.device
                 .reset_descriptor_pool(self.descriptor_pool, vk::DescriptorPoolResetFlags::empty())
-                .map_err(vk_error)?;
+                .map_err(VulkanError::api("reset descriptor pool"))?;
             self.device
                 .begin_command_buffer(
                     self.command,
                     &vk::CommandBufferBeginInfo::default()
                         .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
                 )
-                .map_err(vk_error)?;
+                .map_err(VulkanError::api("begin command buffer"))?;
         }
         if let Some(timestamps) = timestamps {
             timestamps.reset(self.command);
@@ -1816,7 +1907,7 @@ impl VulkanRenderer {
                                 .descriptor_pool(self.descriptor_pool)
                                 .set_layouts(&[pipeline.set_layout]),
                         )
-                        .map_err(vk_error)?[0]
+                        .map_err(VulkanError::api("allocate descriptor set"))?[0]
                 };
                 let image_infos: Vec<_> = descriptor_images
                     .iter()
@@ -1864,7 +1955,9 @@ impl VulkanRenderer {
                             Some("reinhard") => 0.,
                             None => configured.and_then(|v| v.as_f64()).unwrap_or(1.) as f32,
                             Some(other) => {
-                                return Err(format!("Unknown tone mapping mode {other}"));
+                                return Err(VulkanError::Overrides(format!(
+                                    "Unknown tone mapping mode {other}"
+                                )));
                             }
                         }
                     } else {
@@ -2060,9 +2153,13 @@ impl VulkanRenderer {
         if let Some(shared) = presentation {
             let output = images
                 .get_mut(&plan.output)
-                .ok_or("GPU presentation output has no allocated image")?;
+                .ok_or(VulkanError::Presentation(
+                    "GPU presentation output has no allocated image".into(),
+                ))?;
             if output.format != vk::Format::R8G8B8A8_UNORM {
-                return Err("GPU presentation requires RGBA8_UNORM graph output".into());
+                return Err(VulkanError::Presentation(
+                    "GPU presentation requires RGBA8_UNORM graph output".into(),
+                ));
             }
             transition(
                 &self.device,
@@ -2133,7 +2230,7 @@ impl VulkanRenderer {
             }
             self.device
                 .end_command_buffer(self.command)
-                .map_err(vk_error)?;
+                .map_err(VulkanError::api("end command buffer"))?;
         }
         let timings = capture
             .zip(recording_started)
@@ -2156,12 +2253,15 @@ impl VulkanRenderer {
         let ticket = if presentation.is_some() {
             self.next_ticket
                 .checked_add(1)
-                .ok_or("GPU presentation ticket exhausted")?
+                .ok_or(VulkanError::TicketExhausted)?
         } else {
             0
         };
-        let fence =
-            unsafe { self.device.create_fence(&Default::default(), None) }.map_err(vk_error)?;
+        let fence = unsafe { self.device.create_fence(&Default::default(), None) }
+            .map_err(VulkanError::api("create producer fence"))?;
+        self.context.name(fence, || {
+            format!("ModuleEngine producer completion fence (ticket {ticket})")
+        });
         // Install ownership BEFORE submission. Any submit/completion failure
         // leaves this entire bundle pinned, including pools and upload buffers.
         self.pending = Some(ProducerFlight {
@@ -2191,7 +2291,10 @@ impl VulkanRenderer {
                 fence,
             )
         } {
-            let error = format!("GPU producer submit: {error:?}; resources remain pinned");
+            let error = VulkanError::ProducerUnconfirmed {
+                operation: "producer submit",
+                source: error,
+            };
             self.pending.as_mut().unwrap().failure = Some(error.clone());
             self.producer_error = Some(error.clone());
             return Err(error);
@@ -2209,7 +2312,10 @@ impl VulkanRenderer {
         }
         // Explicit CPU capture/readback is the only render call that waits.
         if let Err(error) = unsafe { self.device.wait_for_fences(&[fence], true, 30_000_000_000) } {
-            let error = format!("GPU diagnostic completion: {error:?}; resources remain pinned");
+            let error = VulkanError::ProducerUnconfirmed {
+                operation: "diagnostic completion",
+                source: error,
+            };
             self.pending.as_mut().unwrap().failure = Some(error.clone());
             self.producer_error = Some(error.clone());
             return Err(error);
@@ -2228,7 +2334,7 @@ impl VulkanRenderer {
             let mapped = self
                 .device
                 .map_memory(staging.memory, 0, staging.size, vk::MemoryMapFlags::empty())
-                .map_err(vk_error)?;
+                .map_err(VulkanError::api("map readback buffer"))?;
             std::ptr::copy_nonoverlapping(mapped.cast::<u8>(), data.as_mut_ptr(), data.len());
             self.device.unmap_memory(staging.memory);
             self.performance.cpu_readback_bytes += staging.size;
@@ -2324,8 +2430,9 @@ impl Drop for VulkanRenderer {
                         .device
                         .wait_for_fences(&[flight.fence], true, 30_000_000_000)
                 }
-                .map_err(|error| {
-                    format!("GPU producer retirement: {error:?}; resources remain pinned")
+                .map_err(|error| VulkanError::ProducerUnconfirmed {
+                    operation: "producer retirement",
+                    source: error,
                 })?;
                 unsafe {
                     std::mem::ManuallyDrop::drop(&mut pinned);
@@ -2344,6 +2451,7 @@ mod content_player_tests {
     use module_engine_core::{ObjectsWorld, WorldProvider};
     #[test]
     fn actual_imported_uv_texture_changes_forward_and_deferred_gpu_pixels_and_cache_is_reused() {
+        crate::requires_capabilities!(Vulkan, Dxc);
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let mut content = module_engine_content::ContentLibrary::new(&root).unwrap();
         let mut scene = ObjectsWorld::demo().snapshot();
@@ -2410,6 +2518,7 @@ mod content_player_tests {
     }
     #[test]
     fn sealed_custom_root_eol_variants_render_equal_without_dxc_and_content_changes_fail() {
+        crate::requires_capabilities!(Vulkan, Dxc);
         let parent = std::env::temp_dir().canonicalize().unwrap();
         let package = parent.join(format!(
             "module-native-sealed-eol-{}-{}",
@@ -2487,7 +2596,8 @@ mod content_player_tests {
             .prepare(&graph, &changed)
             .unwrap_err();
         assert!(
-            error.contains("Precompiled Player shader") && error.contains("re-export"),
+            error.to_string().contains("Precompiled Player shader")
+                && error.to_string().contains("re-export"),
             "{error}"
         );
         let artifact = std::fs::read_dir(package.join(".spirv"))
@@ -2502,7 +2612,8 @@ mod content_player_tests {
             .prepare(&graph, &sources)
             .unwrap_err();
         assert!(
-            error.contains("Precompiled Player shader") && error.contains("re-export"),
+            error.to_string().contains("Precompiled Player shader")
+                && error.to_string().contains("re-export"),
             "{error}"
         );
         // Native checks run serially; sealed consumers must not compile on PATH.
@@ -2519,6 +2630,7 @@ mod content_player_tests {
 
     #[test]
     fn sealed_player_renders_from_exported_spirv_without_dxc_and_missing_artifact_fails() {
+        crate::requires_capabilities!(Vulkan, Dxc);
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let package = root.join(format!(
             ".work/precompiled-player-test-{}",
@@ -2569,15 +2681,12 @@ fn pipeline_key(pass: &Pass) -> String {
     serde_json::to_string(&pass.manifest).unwrap().hash(&mut h);
     format!("{:016x}", h.finish())
 }
-fn vk_error(error: vk::Result) -> String {
-    format!("Vulkan: {error:?}")
-}
-fn format(name: &str) -> Result<vk::Format, String> {
+fn format(name: &str) -> Result<vk::Format, VulkanError> {
     match name {
         "rgba32float" => Ok(vk::Format::R32G32B32A32_SFLOAT),
         "r32float" => Ok(vk::Format::R32_SFLOAT),
         "rgba8unorm" => Ok(vk::Format::R8G8B8A8_UNORM),
-        _ => Err(format!("Unknown GPU format {name}")),
+        _ => Err(VulkanError::Resource(format!("Unknown GPU format {name}"))),
     }
 }
 fn range(aspect: vk::ImageAspectFlags) -> vk::ImageSubresourceRange {
@@ -2629,13 +2738,15 @@ fn copy_image(
     to: &str,
     width: u32,
     height: u32,
-) -> Result<(), String> {
+) -> Result<(), VulkanError> {
     if from == to {
-        return Err("Resource copy cannot alias itself".into());
+        return Err(VulkanError::Resource(
+            "Resource copy cannot alias itself".into(),
+        ));
     }
     let source = images
         .get_mut(from)
-        .ok_or_else(|| format!("Unknown GPU resource {from}"))?;
+        .ok_or_else(|| VulkanError::Resource(format!("Unknown GPU resource {from}")))?;
     transition(
         device,
         command,
@@ -2648,9 +2759,11 @@ fn copy_image(
     let format = source.format;
     let target = images
         .get_mut(to)
-        .ok_or_else(|| format!("Unknown GPU resource {to}"))?;
+        .ok_or_else(|| VulkanError::Resource(format!("Unknown GPU resource {to}")))?;
     if target.format != format {
-        return Err("Resource copy requires identical image formats".into());
+        return Err(VulkanError::Resource(
+            "Resource copy requires identical image formats".into(),
+        ));
     }
     transition(
         device,
@@ -2689,13 +2802,13 @@ fn copy_image(
 fn schedule_overrides(
     plan: &Plan,
     overrides: &RenderOverrides,
-) -> Result<BTreeMap<usize, Vec<RenderResourceCommand>>, String> {
+) -> Result<BTreeMap<usize, Vec<RenderResourceCommand>>, VulkanError> {
     for (id, params) in &overrides.parameters {
         let pass = plan
             .passes
             .iter()
             .find(|p| &p.id == id)
-            .ok_or_else(|| format!("Unknown render pass {id}"))?;
+            .ok_or_else(|| VulkanError::Overrides(format!("Unknown render pass {id}")))?;
         for (name, value) in params {
             if !pass.manifest.parameters.contains(name)
                 || !value.as_f64().is_some_and(|v| {
@@ -2704,15 +2817,15 @@ fn schedule_overrides(
                         && (name != "mode" || v == 0. || v == 1.)
                 })
             {
-                return Err(format!(
+                return Err(VulkanError::Overrides(format!(
                     "Pass {id}: unsupported/nonfinite scalar parameter {name}"
-                ));
+                )));
             }
         }
     }
     for id in overrides.enabled.keys() {
         if !plan.passes.iter().any(|pass| &pass.id == id) {
-            return Err(format!("Unknown render pass {id}"));
+            return Err(VulkanError::Overrides(format!("Unknown render pass {id}")));
         }
     }
     for pass in &plan.passes {
@@ -2729,9 +2842,9 @@ fn schedule_overrides(
                     .zip(output)
                     .is_some_and(|(a, b)| a.format == b.format && a.semantic == b.semantic)
             {
-                return Err(format!(
+                return Err(VulkanError::Overrides(format!(
                     "Pass {id} cannot be disabled: no type-preserving single-image bypass"
-                ));
+                )));
             }
         }
     }
@@ -2751,28 +2864,34 @@ fn schedule_overrides(
         let (needed, destination) = match command {
             RenderResourceCommand::ClearResource { name, value } => {
                 if !value.iter().all(|v| v.is_finite()) {
-                    return Err("Resource clear requires finite values".into());
+                    return Err(VulkanError::Overrides(
+                        "Resource clear requires finite values".into(),
+                    ));
                 }
                 (
                     producers
                         .get(name)
-                        .ok_or_else(|| format!("Unknown resource {name}"))?
+                        .ok_or_else(|| VulkanError::Overrides(format!("Unknown resource {name}")))?
                         .0,
                     name,
                 )
             }
             RenderResourceCommand::CopyResource { from, to } => {
                 if from == to {
-                    return Err("Resource copy must use distinct images".into());
+                    return Err(VulkanError::Overrides(
+                        "Resource copy must use distinct images".into(),
+                    ));
                 }
                 let a = producers
                     .get(from)
-                    .ok_or_else(|| format!("Unknown resource {from}"))?;
+                    .ok_or_else(|| VulkanError::Overrides(format!("Unknown resource {from}")))?;
                 let b = producers
                     .get(to)
-                    .ok_or_else(|| format!("Unknown resource {to}"))?;
+                    .ok_or_else(|| VulkanError::Overrides(format!("Unknown resource {to}")))?;
                 if a.1.format != b.1.format || a.1.semantic != b.1.semantic {
-                    return Err("Resource copy requires matching format and semantic".into());
+                    return Err(VulkanError::Overrides(
+                        "Resource copy requires matching format and semantic".into(),
+                    ));
                 }
                 (a.0.max(b.0), to)
             }
@@ -2782,9 +2901,9 @@ fn schedule_overrides(
             .get(destination)
             .is_some_and(|first| *first <= last)
         {
-            return Err(
+            return Err(VulkanError::Overrides(
                 "Ordered resource operation would happen after its destination was consumed".into(),
-            );
+            ));
         }
         schedule.entry(last).or_default().push(command.clone());
     }
@@ -2793,14 +2912,14 @@ fn schedule_overrides(
 
 /// Validate portable render controls using only graph resource/parameter metadata.
 /// No shader compilation, world mutation, Vulkan work, or source replacement occurs.
-pub fn validate_overrides(graph: &Graph, overrides: &RenderOverrides) -> Result<(), String> {
+pub fn validate_overrides(graph: &Graph, overrides: &RenderOverrides) -> Result<(), VulkanError> {
     RenderGraphValidator::new(graph)?.validate(overrides)
 }
 pub fn validate_overrides_at(
     graph: &Graph,
     overrides: &RenderOverrides,
     _resource_root: &std::path::Path,
-) -> Result<(), String> {
+) -> Result<(), VulkanError> {
     RenderGraphValidator::new(graph)?.validate(overrides)
 }
 
@@ -2810,12 +2929,12 @@ pub struct RenderGraphValidator {
     plan: Plan,
 }
 impl RenderGraphValidator {
-    pub fn new(graph: &Graph) -> Result<Self, String> {
+    pub fn new(graph: &Graph) -> Result<Self, VulkanError> {
         Ok(Self {
             plan: build_metadata_plan(graph)?,
         })
     }
-    pub fn validate(&self, overrides: &RenderOverrides) -> Result<(), String> {
+    pub fn validate(&self, overrides: &RenderOverrides) -> Result<(), VulkanError> {
         schedule_overrides(&self.plan, overrides).map(|_| ())
     }
 }
@@ -2826,6 +2945,7 @@ mod tests {
     use module_engine_core::{ObjectsWorld, WorldProvider, make_edge};
     #[test]
     fn failed_partial_native_allocations_release_owned_handles_and_device_recovers() {
+        crate::requires_capabilities!(Vulkan);
         let mut renderer = VulkanRenderer::new().unwrap();
         let counts = renderer.allocations.clone();
         let initial = counts.snapshot();
@@ -2847,7 +2967,9 @@ mod tests {
             }
             .expect("injected allocation point must reject the partial object");
             assert!(
-                error.contains("Injected Vulkan allocation failure"),
+                error
+                    .to_string()
+                    .contains("Injected Vulkan allocation failure"),
                 "{error}"
             );
             assert_eq!(
@@ -2924,7 +3046,8 @@ mod tests {
         let error =
             validate_frame_images(&renamed_plan, &available, &renamed_readback).unwrap_err();
         assert!(
-            error.contains("gpu_ssao_added.color") && error.contains("allocated image"),
+            error.to_string().contains("gpu_ssao_added.color")
+                && error.to_string().contains("allocated image"),
             "{error}"
         );
         assert_ne!(
@@ -2951,6 +3074,7 @@ mod tests {
     }
     #[test]
     fn gpu_resource_cache_renames_ssao_geometry_and_output_without_stale_images() {
+        crate::requires_capabilities!(Vulkan, Dxc);
         let scene = ObjectsWorld::demo().snapshot();
         let camera = Camera::default();
         for path in [RenderPath::Forward, RenderPath::Deferred] {
@@ -3035,11 +3159,13 @@ mod tests {
             validator
                 .validate(&controls)
                 .unwrap_err()
+                .to_string()
                 .contains("Unknown render pass")
         );
     }
     #[test]
     fn prepared_plan_reuse_skips_layout_rebuilds_but_keeps_real_edits_and_explicit_freshness() {
+        crate::requires_capabilities!(Vulkan, Dxc);
         let mut renderer = VulkanRenderer::new().unwrap();
         let mut graph = default_graph(RenderPath::Forward);
         let mut sources = BTreeMap::new();
@@ -3095,6 +3221,7 @@ mod tests {
         assert!(
             build_plan(&graph, &BTreeMap::new())
                 .unwrap_err()
+                .to_string()
                 .contains("cycle")
         );
         let (mut graph, sources) = custom_graph();
@@ -3107,6 +3234,7 @@ mod tests {
         assert!(
             build_plan(&graph, &sources)
                 .unwrap_err()
+                .to_string()
                 .contains("expects")
         );
         let mut overrides = RenderOverrides::default();
@@ -3120,6 +3248,7 @@ mod tests {
         assert!(
             validate_overrides(&default_graph(RenderPath::Forward), &overrides)
                 .unwrap_err()
+                .to_string()
                 .contains("type-preserving")
         );
         overrides = RenderOverrides::default();
@@ -3132,11 +3261,13 @@ mod tests {
         assert!(
             validate_overrides(&default_graph(RenderPath::Forward), &overrides)
                 .unwrap_err()
+                .to_string()
                 .contains("semantic")
         );
     }
     #[test]
     fn compiled_hlsl_must_match_manifest_bindings_workgroup_and_storage_format() {
+        crate::requires_capabilities!(Dxc);
         let (graph, sources) = custom_graph();
         let plan = build_plan(&graph, &sources).unwrap();
         let pass = plan.passes.iter().find(|p| p.id == "ao").unwrap();
@@ -3160,12 +3291,14 @@ mod tests {
             assert!(
                 verify_shader(pass, &shader.words, false)
                     .unwrap_err()
+                    .to_string()
                     .contains(expected)
             );
         }
     }
     #[test]
     fn actual_gpu_bypass_and_copy_agree_and_invalid_candidate_retains_prepared_graph() {
+        crate::requires_capabilities!(Vulkan, Dxc);
         let mut renderer = VulkanRenderer::new().expect("GPU regression requires Vulkan1.3 driver");
         let scene = ObjectsWorld::demo().snapshot();
         let graph = default_graph(RenderPath::Forward);
@@ -3294,6 +3427,7 @@ mod fullscreen_tests {
     use module_engine_core::{ObjectsWorld, WorldProvider};
     #[test]
     fn independent_fullscreen_raster_and_compute_execute_equivalent_shader_math() {
+        crate::requires_capabilities!(Vulkan, Dxc);
         let mut renderer = VulkanRenderer::new().unwrap();
         let scene = ObjectsWorld::demo().snapshot();
         let mut graph = default_graph(RenderPath::Forward);
@@ -3343,6 +3477,7 @@ mod conversion_tests {
     use module_engine_core::{ObjectsWorld, WorldProvider};
     #[test]
     fn builtins_including_fxaa_and_color_encode_become_editable_custom_without_pixel_changes() {
+        crate::requires_capabilities!(Vulkan, Dxc);
         let mut renderer = VulkanRenderer::new().unwrap();
         let scene = ObjectsWorld::demo().snapshot();
         for path in [RenderPath::Forward, RenderPath::Deferred] {
@@ -3410,7 +3545,7 @@ mod authored_configuration_tests {
     use crate::{RenderPath, custom_compute_manifest, default_graph};
     use module_engine_core::{ObjectsWorld, WorldProvider};
     #[test]
-    fn authored_config_typos_are_rejected_before_execution_and_disable_has_explicit_precedence() {
+    fn authored_config_typos_are_rejected_by_metadata_validation() {
         let mut graph = default_graph(RenderPath::Forward);
         graph
             .nodes
@@ -3421,6 +3556,7 @@ mod authored_configuration_tests {
         assert!(
             validate_overrides(&graph, &RenderOverrides::default())
                 .unwrap_err()
+                .to_string()
                 .contains("unknown parameter exposue")
         );
         let mut value = serde_json::to_value(custom_compute_manifest()).unwrap();
@@ -3449,9 +3585,15 @@ mod authored_configuration_tests {
         assert!(
             validate_overrides(&graph, &RenderOverrides::default())
                 .unwrap_err()
+                .to_string()
                 .contains("cannot be disabled")
         );
-        graph = default_graph(RenderPath::Forward);
+    }
+
+    #[test]
+    fn authored_disable_has_explicit_precedence_in_rendered_frames() {
+        crate::requires_capabilities!(Vulkan, Dxc);
+        let mut graph = default_graph(RenderPath::Forward);
         graph
             .nodes
             .iter_mut()
@@ -3532,6 +3674,7 @@ mod include_regression {
     use module_engine_core::{ObjectsWorld, WorldProvider};
     #[test]
     fn actual_nested_include_mutation_recompiles_unchanged_inline_shader_and_gpu_pipeline() {
+        crate::requires_capabilities!(Vulkan, Dxc);
         let mut renderer =
             VulkanRenderer::new().expect("Real Vulkan adapter required for GPU regression");
         let name = format!("include-regression-{}", std::process::id());
@@ -3640,12 +3783,16 @@ mod include_regression {
             "Inline authored source remains byte-identical"
         );
         std::fs::write(&child, "this is invalid included HLSL\n").unwrap();
-        assert!(
-            renderer
-                .prepare(&graph, &sources)
-                .unwrap_err()
-                .contains("HLSL compilation failed")
-        );
+        let error = renderer.prepare(&graph, &sources).unwrap_err();
+        let VulkanError::Pass { pass, source } = &error else {
+            panic!("expected pass preparation context: {error}");
+        };
+        assert_eq!(pass, "ao");
+        assert!(matches!(
+            source.as_ref(),
+            VulkanError::Shader(crate::ShaderError::Compile { status, .. }) if !status.success()
+        ));
+        assert!(error.to_string().contains("HLSL compilation failed"));
         let rejected = renderer.performance();
         for _ in 0..120 {
             renderer.rejected_inputs.as_mut().unwrap().checked = Instant::now();
@@ -3661,6 +3808,7 @@ mod include_regression {
                         &RenderOverrides::default()
                     )
                     .unwrap_err()
+                    .to_string()
                     .contains("HLSL compilation failed")
             );
         }

@@ -708,7 +708,8 @@ fn export_into_staging(
             &document.shader_sources,
             &backend_root,
             &destination,
-        )?;
+        )
+        .map_err(|error| error.to_string())?;
     }
     let player = build_native_player(document, &backend_root)?;
     fs::copy(player, destination.join(PLAYER_EXECUTABLE)).map_err(|e| e.to_string())?;
@@ -1545,6 +1546,7 @@ mod tests {
 
     #[test]
     fn player_failed_compilation_leaves_destination_retryable() {
+        crate::requires_editor_vulkan!();
         let backend = backend_root();
         let folder = fixture();
         let assets = folder.join("resources");

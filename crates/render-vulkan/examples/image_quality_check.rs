@@ -54,7 +54,7 @@ fn main() -> Result<(), String> {
     });
     let scene = ObjectsWorld::from_objects(objects)?.snapshot();
     let root = module_engine_vulkan::resource_root();
-    let mut renderer = VulkanRenderer::new_at(root)?;
+    let mut renderer = VulkanRenderer::new_at(root).map_err(|error| error.to_string())?;
     renderer.set_detailed_stats(true);
     let source = builtin_hlsl_source("gpu.fxaa").ok_or("FXAA source missing")?;
     // Control only: the same FXAA footprint operates in sRGB, then decodes
@@ -94,19 +94,8 @@ fn main() -> Result<(), String> {
             (3840, 2160),
         ] {
             // Warm shaders/resources separately from the measured identical work.
-            renderer.render(
-                &scene,
-                Camera::default(),
-                width,
-                height,
-                &graph,
-                &sources,
-                &overrides,
-            )?;
-            let mut times = vec![];
-            for _ in 0..12 {
-                let started = Instant::now();
-                let frame = renderer.render(
+            renderer
+                .render(
                     &scene,
                     Camera::default(),
                     width,
@@ -114,7 +103,22 @@ fn main() -> Result<(), String> {
                     &graph,
                     &sources,
                     &overrides,
-                )?;
+                )
+                .map_err(|error| error.to_string())?;
+            let mut times = vec![];
+            for _ in 0..12 {
+                let started = Instant::now();
+                let frame = renderer
+                    .render(
+                        &scene,
+                        Camera::default(),
+                        width,
+                        height,
+                        &graph,
+                        &sources,
+                        &overrides,
+                    )
+                    .map_err(|error| error.to_string())?;
                 times.push(started.elapsed().as_secs_f64() * 1000.);
                 if times.len() == 1 {
                     png(&folder.join(format!("static-{width}x{height}.png")), &frame)?;
@@ -127,7 +131,9 @@ fn main() -> Result<(), String> {
         for index in 0..72 {
             let mut camera = Camera::default();
             camera.yaw += 0.4 * (index.min(59) as f32 / 59.);
-            let frame = renderer.render(&scene, camera, 1280, 720, &graph, &sources, &overrides)?;
+            let frame = renderer
+                .render(&scene, camera, 1280, 720, &graph, &sources, &overrides)
+                .map_err(|error| error.to_string())?;
             if index >= 59 {
                 if let Some(previous) = &stopped {
                     stop_equal &= previous == &frame.rgba;

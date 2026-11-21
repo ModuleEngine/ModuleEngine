@@ -1118,6 +1118,7 @@ mod tests {
 
     #[test]
     fn export_includes_new_packages_tools_and_relative_external_assets() {
+        crate::requires_editor_vulkan!();
         let temp = fixture("export");
         let asset_root = temp.join("external files");
         fs::create_dir_all(asset_root.join("resources")).unwrap();

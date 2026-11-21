@@ -60,12 +60,13 @@ arguments retain the previous heavy legacy suite**.
 | `quick` | `cargo fmt --all -- --check`, all lib tests of `module-engine-core` and `module-engine-project`. | Not the workspace, Editor, Vulkan runtime, secondary Custom builds, or ignored acceptance. Cold compilation can still be slow. |
 | `contracts` | Quick plus `cargo_build::tests::`, four Inspector regressions, 99 Inspector property scenarios, four previous Save As tests, 28 workflow preservation scenarios, and two `diagnostic_personal` tests for explicit-root validation and Recent/layout isolation with source permissions preserved. | Not all UI, native dialogs, or the full authoring suite. |
 | `clippy` | `cargo clippy --offline --locked --target {native_host} --workspace --all-targets --all-features -- -D warnings` on the pinned native toolchain. | No formatting, tests, or runtime checks; not engine or delivery acceptance. |
+| `render` | CPU graph and cache checks, native DXC compilation, and offscreen Vulkan regressions. | No desktop, delivery, or performance acceptance. |
 | `native` | Five explicit ignored tests: Stop/reuse, slow-UI/hot-apply, native linker, cache context, and Windows executable spellings. | Not desktop benchmark, screen latency, Full export, or strict 60 FPS. A Windows-only test is marked `skipped` on Linux, not passed. |
 | `native-tools` | Three native linker/cache/executable-spelling checks from `native`, without GameUI or GPU. | Not full `native`; a Windows-only test is marked `skipped` on Linux. Used by Windows CI. |
 | `package` | Two ignored `game_package` checks: native target modes and concurrent immutable snapshots. They build minimal Cargo fixtures and execute their products. | **Not a real Full/Team/Player game export, relocation, or full delivery acceptance.** These CLI checks remain a targeted/legacy route. |
 
 The `clippy` profile is explicit and independent: `contracts` still runs formatting
-exactly once, and legacy routes are unchanged. Run
+exactly once, and it adds no steps to the legacy suite. Run
 `python scripts/verify.py --profile clippy --plan`, then
 `python scripts/verify.py --profile clippy`. Planning is process-free and leaves
 `{native_host}` unresolved. Execution checks the actual `rustc -vV` release and
@@ -90,6 +91,40 @@ The test binary runs **directly in the normal loader environment**, not through
 `--list --ignored --exact <name>` result; zero tests never counts as
 success. After execution, the libtest summary is checked against the discovered set. This
 preserves the important Stop/reuse condition from the [previous loader check](postfix-p2-fixes-20261016.md).
+
+<a id="vulkan-dxc-capabilities"></a>
+
+## Vulkan and DXC capabilities
+
+The `render` profile checks shader dependency and graph contracts on the CPU,
+compiles HLSL in tests marked for DXC, and executes Vulkan tests on a compatible
+Vulkan 1.3 device. An adapter must expose dynamic rendering and a graphics+compute
+queue. A software Vulkan device can meet the offscreen requirement.
+Tests which build their own sealed Player shaders still need DXC during setup.
+The allocation rollback test needs Vulkan only. Shader compilation and reflection
+tests can run with DXC alone. Both GameUI scenarios in `native` need Vulkan and DXC.
+Its linker, cache context and Windows executable spelling checks run independently.
+
+A preflight uses the renderer's native initialization and the compiler's actual
+selection and `--version`. A missing capability records the test and its reason.
+A step with only skipped tests has status `skipped`. In a mixed step,
+`test_skips` lists skipped tests and `passed_count` counts executed passes.
+An invalid configured compiler, shader rejection, Vulkan API failure after
+successful preflight, libtest failure and validation errors remain failures.
+Use `--require-capabilities` (`-RequireCapabilities` in PowerShell) to fail on
+a capability skip, as Linux CI does for the offscreen hardware route. Platform
+skips retain their existing behavior. Serialized Editor verification drains
+its worker and GPU retirement jobs before checking validation through teardown.
+The validation error count is process-wide. With parallel GPU tests, an error
+can be attributed to a neighboring test. Local Linux runs used Mesa in WSL.
+The PR workflow checks the native Linux runner.
+
+The wrappers without arguments still run the legacy suite.
+The Windows route calls `cargo.exe` directly and forwards `--` to Clippy and
+`cargo run`. Both wrappers show capability skips in the console, including the
+dependent Windows CLI checks, and continue
+with the CPU checks. The optional Windows desktop benchmark requires its actual
+runtime capabilities. Bootstrap restoration remains explicit.
 
 <a id="isolated-source-fixtures"></a>
 

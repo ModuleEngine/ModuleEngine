@@ -1,3 +1,4 @@
+use crate::VulkanError;
 use module_engine_core::{Camera, SceneSnapshot, transform_point};
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -24,7 +25,7 @@ pub(crate) fn texture_keys(scene: &SceneSnapshot) -> Vec<usize> {
     keys.dedup();
     keys
 }
-pub(crate) fn texture_atlas(scene: &SceneSnapshot) -> Result<TextureAtlas, String> {
+pub(crate) fn texture_atlas(scene: &SceneSnapshot) -> Result<TextureAtlas, VulkanError> {
     let mut textures = BTreeMap::new();
     for item in &scene.items {
         if let Some(t) = &item.material.base_color_texture {
@@ -36,16 +37,22 @@ pub(crate) fn texture_atlas(scene: &SceneSnapshot) -> Result<TextureAtlas, Strin
             .checked_mul(t.height as usize)
             .and_then(|p| p.checked_mul(4));
         if t.width == 0 || t.height == 0 || bytes != Some(t.rgba8.len()) {
-            return Err("Malformed neutral texture image".into());
+            return Err(VulkanError::Resource(
+                "Malformed neutral texture image".into(),
+            ));
         }
     }
     let width = textures.values().map(|t| t.width).max().unwrap_or(1).max(1);
     let height = textures
         .values()
         .try_fold(1u32, |sum, t| sum.checked_add(t.height))
-        .ok_or("Base-color atlas height overflow")?;
+        .ok_or(VulkanError::Resource(
+            "Base-color atlas height overflow".into(),
+        ))?;
     if width > 8192 || height > 8192 {
-        return Err("Base-color atlas exceeds 8192 pixels; reduce imported texture sizes".into());
+        return Err(VulkanError::Resource(
+            "Base-color atlas exceeds 8192 pixels; reduce imported texture sizes".into(),
+        ));
     }
     let mut rgba = vec![255; (width * height * 4) as usize];
     let mut rects = BTreeMap::new();

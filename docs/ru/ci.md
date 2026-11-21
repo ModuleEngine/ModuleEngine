@@ -37,7 +37,7 @@ Linux full `native` запускает offscreen tests с software Vulkan, бе�
 сессии. Windows GPU native acceptance остаётся адресным локальным маршрутом.
 Успешный CI не подтверждает hardware Linux, строгие 60 FPS, cold-start или
 интерактивную desktop приёмку. `package` использует минимальные Cargo fixtures,
-не настоящий game export.
+не настоящий game export. Linux CI передаёт `--require-capabilities`, чтобы отсутствие Vulkan/DXC провалило обязательную offscreen-проверку.
 
 Две платформы выполняются параллельно на отдельных hosted VM; команды внутри
 каждой VM выполняются последовательно. Каждый job получает новый hosted checkout

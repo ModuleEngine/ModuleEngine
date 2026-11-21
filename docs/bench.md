@@ -111,6 +111,23 @@ start a new complete series. R0.3–R0.6 have separate acceptance criteria.
 warmup and returns success when all scenes complete. It does not evaluate the
 three-run repeatability gate.
 
+<a id="vulkan-validation"></a>
+
+## Debug Vulkan validation (R0.5)
+
+A debug build requests `VK_LAYER_KHRONOS_validation` when the loader exposes
+it. The startup log reports layer and debug-utils availability. Debug utils
+names the producer device, queue, commands, pipelines, and frame resources.
+Keep stderr through process exit to capture validation messages and per-instance
+counts. The S1 command exits with an error if a validation error was recorded,
+including during retirement. Use this run for functional diagnostics.
+
+```powershell
+cargo build --offline --locked -p module-engine-editor --features bench
+$env:VK_LAYER_PATH = 'C:\path\to\explicit-layer-manifests'
+.\target\debug\module-engine-editor.exe --bench-scene S1 outputs/s1-debug
+```
+
 <a id="frame-timings"></a>
 
 ## Frame timings (R0.3)

@@ -661,6 +661,7 @@ mod tests {
         let commands = &output.viewport_output[&egui::ViewportId::ROOT].commands;
         assert_eq!(commands.iter().filter(|cmd|matches!(cmd,egui::ViewportCommand::InnerSize(size) if *size==egui::vec2(760.,510.))).count(),1);
         assert_eq!(commands.iter().filter(|cmd|matches!(cmd,egui::ViewportCommand::OuterPosition(pos) if *pos==egui::pos2(64.,64.))).count(),1);
+        output.drop_without_applying_deltas();
         // Callback may read the pre-command native size once; it must not echo it.
         for (position, size) in [old, target, target] {
             area.position = position;
