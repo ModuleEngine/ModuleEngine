@@ -324,6 +324,8 @@ Basis: [portfolio gates](portfolio-roadmap.md), [independent review](review.md),
 
 Phase numbers R0–R10 are planning labels, not versions. Effort is a rough range for one full-time developer with Vulkan experience; it is speculation until R0 records real throughput (see the [complete route](#map) rule on estimates). The phases are ordered by dependency; independent phases can overlap when there is more than one developer.
 
+**Task status.** The last column of every phase task table is the task's status: `Done`, `In progress` (an estimate may follow in parentheses), or the effort estimate while the task has not started. Change it in the same pull request that completes or starts the task, in both languages. The [visual roadmap](roadmap-map.md) is rebuilt from this column after every merge to `main`.
+
 **Relation to the version route.** On 21 November 2026 the owner paused the 0.5 brief and new UI work until R1, R3 and R4 are accepted, because they change the world storage, the editor shell and the editor/game boundary that 0.5 would build on. The track does not replace any milestone: R5 is the technical base for [1.3](#real), R6–R7 supply the physics and skeleton that [0.9a](#combat) and the [G2 decisions](#g2-agreement) need, and every phase keeps the G1 and ARPG budgets from [release decisions](#decision) as regression gates. Ray tracing and mesh shaders are optional hardware tiers: G1/G3-style packages must never require them.
 
 ### Where the code stands today
@@ -373,7 +375,7 @@ Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
 | R0.2 | Done 21 November 2026: S3–S5 are reproducible fixtures (S4 on pinned Khronos Sponza) and `scripts/bench.py` writes JSON results to `outputs/bench/<date>/`; see [running benchmarks](bench.md) and the [accepted series](bench-r02-20261121.md) (maximum spread 4.75 %). | Three consecutive runs differ by ≤5 % on mean values. | Done |
 | R0.3 | Added GPU timestamp queries per render-graph pass and CPU spans for tick, extraction, recording and submission. | [Frame timings](bench.md#frame-timings) are available in Editor Game and benchmark JSON. | Done |
 | R0.4 | [Hardware tiers and device evidence](hardware-tiers.md). RTX 4080 SUPER is the development reference. GTX 1660 SUPER 6 GB is the candidate for minimum Windows tier A hardware. | Tier table and full Vulkan dump recorded in `docs/`. Physical qualification is on the [pre-release checklist](hardware-tiers.md#minimum-gpu). | Done |
-| R0.5 | Hygiene prerequisites: GPU and DXC tests skip with a clear message when unavailable; Vulkan validation layers and debug names in debug builds; typed errors with `thiserror` in `render-vulkan` instead of `String`. | `verify` passes on a machine without DXC/GPU with explicit skips; a debug run shows no validation errors on S1. | 2–3 d |
+| R0.5 | Hygiene prerequisites: GPU and DXC tests skip with a clear message when unavailable; Vulkan validation layers and debug names in debug builds; typed errors with `thiserror` in `render-vulkan` instead of `String`. | `verify` passes on a machine without DXC/GPU with explicit skips; a debug run shows no validation errors on S1. | In progress (2–3 d) |
 | R0.6 | Baseline report: S1–S5 on the current code. | Report linked from this section; it is the reference for every later "not worse" criterion. | 1 d |
 
 <a id="rebuild-r1"></a>
