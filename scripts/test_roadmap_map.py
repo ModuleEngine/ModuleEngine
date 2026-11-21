@@ -1,3 +1,7 @@
+import json
+import re
+import shutil
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -80,6 +84,67 @@ class RepositoryRoadmapTest(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(warnings, [])
         self.assertNotIn(roadmap_map.PLACEHOLDER, page)
+
+
+ROOT = Path(roadmap_map.__file__).resolve().parent.parent
+
+
+def without_phase(markdown, phase_id):
+    """Remove one phase section (heading, table and anchor-free text up to the next section)."""
+    start = markdown.index(f"### {phase_id} — ")
+    rest = re.search(r"\n(?:<a id=|#{1,3} )", markdown[start + 1:])
+    end = start + 1 + rest.start() if rest else len(markdown)
+    return markdown[:start] + markdown[end:]
+
+
+@unittest.skipUnless(shutil.which("node"), "Node.js is needed to run the page model")
+class PageModelTest(unittest.TestCase):
+    """Runs the data part of scripts/roadmap_map.html (between @model markers) in Node."""
+
+    def model(self, en_text, ru_text):
+        merged = roadmap_map.merge(roadmap_map.parse(en_text, "en"), roadmap_map.parse(ru_text, "ru"))
+        template = (ROOT / roadmap_map.TEMPLATE_PATH).read_text(encoding="utf-8")
+        page = roadmap_map.render(template, merged, "test", "now")
+        code = page[page.index("// @model-begin"):page.index("// @model-end")]
+        script = code + """
+process.stdout.write(JSON.stringify(Object.fromEntries(Object.entries(phases).map(([k, p]) =>
+  [k, { cls: p.cls, deps: p.deps, tasks: p.tasks.map(t => [t[0], t[4]]) }]))));
+"""
+        result = subprocess.run(["node", "-"], input=script, capture_output=True, text=True,
+                                encoding="utf-8", check=True)
+        return json.loads(result.stdout)
+
+    def read(self):
+        return ((ROOT / roadmap_map.EN_PATH).read_text(encoding="utf-8"),
+                (ROOT / roadmap_map.RU_PATH).read_text(encoding="utf-8"))
+
+    def test_statuses_reach_the_map(self):
+        model = self.model(*self.read())
+        self.assertEqual(len(model["R0"]["tasks"]), 6)
+        self.assertIn(model["R0"]["cls"], {"cur", "done"})
+
+    def test_removed_phase_tasks_do_not_return_from_template(self):
+        en, ru = self.read()
+        en, ru = without_phase(en, "R0"), without_phase(ru, "R0")
+        self.assertNotIn("| R0.1 |", en)
+        self.assertNotIn("| R0.1 |", ru)
+        self.assertEqual(roadmap_map.compare(roadmap_map.parse(en, "en"), roadmap_map.parse(ru, "ru")), [])
+        model = self.model(en, ru)
+        self.assertEqual(model["R0"]["tasks"], [])
+        self.assertEqual(model["R0"]["cls"], "later")
+        leaked = [t[0] for p in model.values() for t in p["tasks"] if t[0].startswith("R0.")]
+        self.assertEqual(leaked, [])
+        self.assertEqual(len(model["R1"]["tasks"]), 8)
+
+    def test_every_listed_dependency_has_an_arrow(self):
+        model = self.model(*self.read())
+        template = (ROOT / roadmap_map.TEMPLATE_PATH).read_text(encoding="utf-8")
+        links = set(re.findall(r"add\('([^'>]+>[^']+)'", template))
+        missing = [f"{dep}>{key}" for key, phase in model.items() for dep in phase["deps"]
+                   if f"{dep}>{key}" not in links]
+        self.assertEqual(missing, [])
+        for link in ("R2>R7", "R1>R7", "R1>aiA", "R4>aiA", "R6>aiA"):
+            self.assertIn(link, links)
 
 
 if __name__ == "__main__":

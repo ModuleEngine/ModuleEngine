@@ -276,6 +276,7 @@
 <script>
 (() => {
   'use strict';
+  // @model-begin (scripts/test_roadmap_map.py runs this part in Node)
   const D = 'Готово', C = 'В работе', N = 'Впереди';
   const phases = {
     v042: { id: '0.4.2', kicker: 'Рубеж версий · закрыт', title: 'Чёткий кадр и перенос панелей', cls: 'done', tag: 'ПРИНЯТА 17.11',
@@ -384,7 +385,7 @@
       effort: '2–3 недели, не входит в оценки трека R', deps: ['aiA'], depNote: 'только если AI-A дала решение «продолжать»', unlocks: [], tasks: [] },
     g05: { id: 'R1+R3+R4', kicker: 'Контрольная точка', title: 'Снять паузу с 0.5 и UI', cls: 'gate', tag: 'ТОЧКА',
       ttl: 'Снять паузу 0.5 и UI', meta: '≈10–16 нед от старта', goal: 'Когда приняты R1, R3 и R4, хранение мира, оболочка редактора и граница редактора с играми уже новые. Тогда бриф 0.5 и работа над UI возобновляются.',
-      effort: '≈10–16 недель, если R0, R1, R2.1, R3 и R4 делать первыми', deps: ['R1', 'R3', 'R4'], unlocks: ['v05'], tasks: [] },
+      effort: '≈10–16 недель, если R0, R1, R2.1, R3 и R4 делать первыми', deps: ['R3', 'R4'], depNote: 'и R1 — она нужна до R4', unlocks: ['v05'], tasks: [] },
     useful: { id: 'R2+R5', kicker: 'Контрольная точка', title: 'Первая полезная точка', cls: 'gate', tag: 'ТОЧКА',
       ttl: 'Первая полезная точка', meta: '≈4,5–7 мес', goal: 'GPU-driven рендер с PBR и тенями: первый момент, когда новое изображение видно в играх. Примерно через 4,5–7 месяцев (R0, R1, R2 и R5).',
       effort: '≈4,5–7 месяцев', deps: ['R5'], unlocks: ['v13'], tasks: [] },
@@ -429,7 +430,12 @@
       });
     });
   }
-  Object.keys(phases).forEach(k => { if (phases[k].tasks.length && !order.includes(k)) order.push(k); });
+  Object.keys(phases).forEach(k => {
+    const p = phases[k];
+    if (!p.tasks.length || order.includes(k)) return;
+    if (SRC) { p.tasks = []; p.missing = true; } // phase removed from docs/product-roadmap.md
+    else order.push(k);
+  });
 
   const STATE_CLS = ['done', 'cur', 'next', 'later'];
   const memo = {};
@@ -451,6 +457,11 @@
   const WORD = { done: 'готово', cur: 'сейчас', next: 'следующая', later: 'позже' };
   Object.keys(phases).forEach(k => {
     const p = phases[k], s = stateOf(k);
+    if (p.missing) {
+      p.cls = 'later'; p.tag = 'НЕТ В ПЛАНЕ'; p.meta = 'нет в docs/product-roadmap.md';
+      p.kicker = `${p.kicker.split(' · ')[0]} · нет в плане`;
+      return;
+    }
     if (!p.tasks.length) {
       if (p.cls === 'gate' && s === 'done') { p.cls = 'done'; p.tag = 'ПРОЙДЕНА'; p.kicker = 'Контрольная точка · пройдена'; }
       return;
@@ -468,14 +479,15 @@
     p.kicker = `${prefix} · ${WORD[s]}`;
   });
   const hot = k => ['cur', 'next'].includes(phases[k].cls) ? ['edge hot', 'ah'] : ['edge', 'a'];
+  // @model-end
 
   // Layout grid
   const W = 226, H = 104, colX = [24, 304, 584, 864, 1144, 1460], rowY = [80, 214, 348, 482, 616, 750];
   const pos = {
     v042: [0, 2], R0: [1, 2], R1: [2, 1], R2: [2, 3],
     R6: [3, 0], R4: [3, 1], R3: [3, 2], R5: [3, 3], R8: [3, 4],
-    R7: [4, 0], g05: [4, 1], aiA: [4, 2], useful: [4, 3], R9: [4, 4], R10: [4, 5], aiB: [5, 2],
-    g09: [5, 0], v05: [5, 1], v13: [5, 3]
+    aiA: [4, 0], g05: [4, 1], R7: [4, 2], useful: [4, 3], R9: [4, 4], R10: [4, 5],
+    aiB: [5, 0], v05: [5, 1], g09: [5, 2], v13: [5, 3]
   };
   const box = k => { const [c, r] = pos[k]; return { x: colX[c], y: rowY[r], w: c === 5 ? 256 : W, h: H }; };
   const R = k => { const b = box(k); return [b.x + b.w, b.y + b.h / 2]; };
@@ -500,40 +512,51 @@
   const heads = [0, 1, 2, 3, 4].map(c => [colHead(c), c]).concat([['МАРШРУТ ВЕРСИЙ', 5]]);
   heads.forEach(([t, c]) => { el('text', { x: colX[c], y: 40, class: 'colhead' }, svg, t); el('line', { x1: colX[c], x2: colX[c] + (c === 5 ? 256 : W), y1: 54, y2: 54, class: 'colrule' }, svg); });
 
-  // Edges: [path points, class, marker, label]
+  // Edges: add('from>to', points, class, marker, label, label position).
+  // Every dependency listed in a phase card has an edge; scripts/test_roadmap_map.py checks it.
   const pts = a => 'M' + a.map(p => p.join(',')).join(' L');
   const edges = [];
-  const add = (points, cls, mk, label, lp) => edges.push({ points, cls, mk, label, lp });
+  const add = (link, points, cls, mk, label, lp) => edges.push({ link, points, cls, mk, label, lp });
   const [r0x, r0y] = R('R0');
-  add([R('v042'), L('R0')], ...hot('R0'));
-  add([[r0x, r0y], [r0x + 30, r0y], [r0x + 30, L('R1')[1]], L('R1')], ...hot('R1'));
-  add([[r0x, r0y], [r0x + 30, r0y], [r0x + 30, L('R2')[1]], L('R2')], ...hot('R2'));
+  add('v042>R0', [R('v042'), L('R0')], ...hot('R0'));
+  add('R0>R1', [[r0x, r0y], [r0x + 30, r0y], [r0x + 30, L('R1')[1]], L('R1')], ...hot('R1'));
+  add('R0>R2', [[r0x, r0y], [r0x + 30, r0y], [r0x + 30, L('R2')[1]], L('R2')], ...hot('R2'));
   const [r1x, r1y] = R('R1');
-  add([R('R1'), L('R4')], ...hot('R4'));
-  add([[r1x, r1y], [r1x + 30, r1y], [r1x + 30, L('R6')[1]], L('R6')], ...hot('R6'));
-  add([[r1x, r1y], [r1x + 30, r1y], [r1x + 30, 199], [1114, 199], [1114, L('R7')[1]], L('R7')], ...hot('R7'));
-  // R1 needed by R2.3
-  add([[box('R1').x + 113, box('R1').y + H], [box('R2').x + 113, box('R2').y]], 'edge soft', 'a', 'R1.6 → R2.3', [box('R1').x + 122, 336]);
+  add('R1>R4', [R('R1'), L('R4')], ...hot('R4'));
+  add('R1>R6', [[r1x, r1y], [r1x + 30, r1y], [r1x + 30, L('R6')[1]], L('R6')], ...hot('R6'));
+  // R1 → R7 runs in the gap between R4 and R3 and enters R7 from the top
+  const r7b = box('R7'), gapY = (box('R4').y + H + box('R3').y) / 2;
+  add('R1>R7', [[r1x, r1y + 34], [r1x + 42, r1y + 34], [r1x + 42, gapY], [r7b.x + 96, gapY], [r7b.x + 96, r7b.y]], ...hot('R7'));
+  // R1.6 needed by R2.3
+  add('R1>R2', [[box('R1').x + 113, box('R1').y + H], [box('R2').x + 113, box('R2').y]], 'edge soft', 'a', 'R1.6 → R2.3', [box('R1').x + 122, 336]);
   const [r2x, r2y] = R('R2');
-  add([R('R2'), L('R5')], ...hot('R5'));
-  add([[r2x, r2y], [r2x + 30, r2y], [r2x + 30, L('R3')[1]], L('R3')], ...hot('R3'));
-  add([[r2x, r2y], [r2x + 30, r2y], [r2x + 30, L('R8')[1]], L('R8')], ...hot('R8'), 'R2.4', [r2x + 38, 612]);
-  add([R('R4'), L('g05')], 'edge gate', 'ag');
+  add('R2>R5', [R('R2'), L('R5')], ...hot('R5'));
+  add('R2>R3', [[r2x, r2y], [r2x + 30, r2y], [r2x + 30, L('R3')[1]], L('R3')], ...hot('R3'));
+  add('R2>R8', [[r2x, r2y], [r2x + 30, r2y], [r2x + 30, L('R8')[1]], L('R8')], ...hot('R8'), 'R2.4', [r2x + 38, 612]);
+  // R2.3 → R7 runs in the gap between R3 and R5
+  const lowGap = (box('R3').y + H + box('R5').y) / 2, r2b = box('R2');
+  add('R2>R7', [[r2b.x + r2b.w - 20, r2b.y], [r2b.x + r2b.w - 20, lowGap], [1124, lowGap], [1124, r7b.y + 82], [r7b.x, r7b.y + 82]], ...hot('R7'), 'R2.3', [r2b.x + r2b.w - 12, lowGap - 6]);
+  add('R4>g05', [R('R4'), L('g05')], 'edge gate', 'ag');
   const [r3x, r3y] = R('R3');
-  add([[r3x, r3y], [r3x + 34, r3y], [r3x + 34, L('g05')[1] + 22], [box('g05').x, L('g05')[1] + 22]], 'edge gate', 'ag');
-  add([R('R5'), L('useful')], 'edge gate', 'ag');
+  add('R3>g05', [[r3x, r3y], [r3x + 14, r3y], [r3x + 14, L('g05')[1] + 22], [box('g05').x, L('g05')[1] + 22]], 'edge gate', 'ag');
+  add('R5>useful', [R('R5'), L('useful')], 'edge gate', 'ag');
   const [r5x, r5y] = R('R5');
-  add([[r5x, r5y], [r5x + 34, r5y], [r5x + 34, L('R9')[1]], L('R9')], ...hot('R9'));
-  add([[r5x, r5y], [r5x + 34, r5y], [r5x + 34, L('R10')[1]], L('R10')], ...hot('R10'));
-  add([R('g05'), L('v05')], 'edge ver', 'ao');
-  add([R('useful'), L('v13')], 'edge ver', 'ao');
-  add([R('R7'), L('g09')], 'edge ver', 'ao');
-  add([R('aiA'), L('aiB')], 'edge ai', 'at');
-  const r6b = box('R6');
-  add([[r6b.x + r6b.w / 2, r6b.y], [r6b.x + r6b.w / 2, 64], [box('g09').x + 40, 64], [box('g09').x + 40, box('g09').y]], 'edge ver', 'ao');
+  add('R5>R9', [[r5x, r5y], [r5x + 34, r5y], [r5x + 34, L('R9')[1]], L('R9')], ...hot('R9'));
+  add('R5>R10', [[r5x, r5y], [r5x + 34, r5y], [r5x + 34, L('R10')[1]], L('R10')], ...hot('R10'));
+  add('g05>v05', [R('g05'), L('v05')], 'edge ver', 'ao');
+  add('useful>v13', [R('useful'), L('v13')], 'edge ver', 'ao');
+  add('R7>g09', [R('R7'), L('g09')], 'edge ver', 'ao');
+  // AI-A needs R1, R4 and R6: R6 directly, R1 and R4 merge above R4
+  const aib = box('aiA'), r4b = box('R4'), topGap = (box('R6').y + H + r4b.y) / 2;
+  add('R6>aiA', [R('R6'), L('aiA')], 'edge ai', 'at');
+  add('R1>aiA', [[r1x + 30, topGap], [1114, topGap], [1114, aib.y + 80], [aib.x, aib.y + 80]], 'edge ai', 'at');
+  add('R4>aiA', [[r4b.x + r4b.w - 30, r4b.y], [r4b.x + r4b.w - 30, topGap], [1114, topGap], [1114, aib.y + 80], [aib.x, aib.y + 80]], 'edge ai', 'at');
+  add('aiA>aiB', [R('aiA'), L('aiB')], 'edge ai', 'at');
+  // R6 → 0.9a over the top and down the right margin
+  const r6b = box('R6'), g9 = box('g09');
+  add('R6>g09', [[r6b.x + r6b.w / 2, r6b.y], [r6b.x + r6b.w / 2, 64], [g9.x + g9.w + 12, 64], [g9.x + g9.w + 12, g9.y + 30], [g9.x + g9.w, g9.y + 30]], 'edge ver', 'ao');
   // R7 skin refit → R9 (soft)
-  const r7b = box('R7');
-  add([[r7b.x + r7b.w - 30, r7b.y + H], [r7b.x + r7b.w - 30, 172], [1426, 172], [1426, box('R9').y + 40], [box('R9').x + box('R9').w, box('R9').y + 40]], 'edge soft', 'a', 'скины → R9.1', [1436, box('R9').y + 30]);
+  add('R7>R9', [[r7b.x + r7b.w, r7b.y + 82], [1420, r7b.y + 82], [1420, box('R9').y + 40], [box('R9').x + box('R9').w, box('R9').y + 40]], 'edge soft', 'a', 'скины → R9.1', [1428, box('R9').y + 10]);
 
   const eg = el('g', {}, svg);
   edges.forEach(e => {
@@ -601,7 +624,7 @@
     (done.length > doneShown.length ? li(`…и раньше выполненные: ${done.length - doneShown.length}`) : '') +
     doneShown.map(x => li(`${x.t[0]} — ${x.t[1]}`, x.t[3])).join('');
   $('now-cur-label').textContent = curLabel;
-  let focusKey = 'R0';
+  let focusKey = order[0] || 'R0';
   if (cur) {
     const p = phases[cur.k], note = NOTES[cur.t[0]] || {};
     focusKey = cur.k;

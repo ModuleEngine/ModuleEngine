@@ -30,7 +30,9 @@ Only sections with a heading of the form `### <ID> — <title>` (for example `##
 
 ## What stays hand-written
 
-The page template [scripts/roadmap_map.html](../scripts/roadmap_map.html) holds the Russian wording: short task titles, phase descriptions, dependencies, the map layout, the timing chart and the version route. For a task that is not in the template yet, the page uses the first sentence of the task from the Russian roadmap. A new phase needs a node in the template (`phases` and `pos`); until then the build prints a warning and the phase is not shown.
+The page template [scripts/roadmap_map.html](../scripts/roadmap_map.html) holds the Russian wording: short task titles, phase descriptions, dependencies, the map layout, the timing chart and the version route. For a task that is not in the template yet, the page uses the first sentence of the task from the Russian roadmap. A new phase needs a node in the template (`phases` and `pos`) and an arrow for each of its dependencies (`add('from>to', ...)`); until the node exists the build prints a warning and the phase is not shown. A phase removed from the roadmap keeps its node but loses its tasks and is marked “not in plan”; the template's old tasks never come back.
+
+`scripts/test_roadmap_map.py` runs the page's data model in Node.js and checks that a phase removed from both Markdown versions disappears from the map and that every dependency listed in a phase card has an arrow.
 
 ## Checks and local build
 
