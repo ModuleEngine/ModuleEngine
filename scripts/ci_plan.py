@@ -12,7 +12,7 @@ def select(paths):
     # Unknown/new source paths fail toward more coverage, not a missed subsystem.
     relevant = any(not (path.startswith("docs/") or
                         PurePosixPath(path).suffix.lower() == ".md" or
-                        path in {"LICENSE", "LICENSE-MIT", ".gitignore"}) for path in paths)
+                        path in {"LICENSE-MIT", "LICENSE-APACHE", ".gitignore"}) for path in paths)
     return {"native": relevant, "package": relevant, "paths": paths}
 
 
