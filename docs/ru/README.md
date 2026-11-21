@@ -76,6 +76,7 @@
 - [Повторное использование Custom Rust](custom-program-store.md)
 - [Статические модели, текстуры и материалы](content.md)
 - [Vulkan и Custom HLSL](gpu-hlsl.md)
+- [Аппаратные уровни Vulkan и кандидат в минимальную карту для Player](hardware-tiers.md)
 - [Добавление модуля](extending.md)
 
 ## Сборка, поставки и проверки

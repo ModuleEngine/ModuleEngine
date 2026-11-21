@@ -1,0 +1,51 @@
+R0.4 Windows device capture, 2026-11-21
+Microsoft Windows [Version 10.0.26300.10075]
+Command: vulkaninfo.exe (exit 0)
+Full stdout: docs/evidence/r04-vulkaninfo-windows-full.txt
+Full stdout SHA-256: d1acf10455faa9f6358fbe2b9dd677ad34eef424778ab97c4a164f24177c0f4a
+Selected stdout rows with original line numbers:
+
+   5  Vulkan Instance Version: 1.4.341
+ 302  GPU0:
+ 305  	apiVersion        = 1.4.351 (4211039)
+ 306  	driverVersion     = 617.42.0.0 (2588573696)
+ 307  	vendorID          = 0x10de
+ 308  	deviceID          = 0x2702
+ 309  	deviceType        = PHYSICAL_DEVICE_TYPE_DISCRETE_GPU
+ 310  	deviceName        = NVIDIA GeForce RTX 4080 SUPER
+ 380  	maxDrawIndirectCount                            = 4294967295
+ 877  	deviceLUIDValid                   = true
+ 917  	driverName                                           = NVIDIA
+ 918  	driverInfo                                           = 617.42
+1185  	VK_EXT_mesh_shader                            : extension revision 1
+1242  	VK_KHR_acceleration_structure                 : extension revision 13
+1252  	VK_KHR_deferred_host_operations               : extension revision 4
+1266  	VK_KHR_external_memory_win32                  : extension revision 1
+1303  	VK_KHR_ray_query                              : extension revision 1
+1305  	VK_KHR_ray_tracing_pipeline                   : extension revision 1
+1429  		queueFlags                  = QUEUE_GRAPHICS_BIT | QUEUE_COMPUTE_BIT | QUEUE_TRANSFER_BIT | QUEUE_SPARSE_BINDING_BIT
+1657  	multiDrawIndirect                       = true
+1709  VkPhysicalDeviceAccelerationStructureFeaturesKHR:
+1711  	accelerationStructure                                 = true
+1740  	bufferDeviceAddress              = true
+1939  VkPhysicalDeviceMeshShaderFeaturesEXT:
+1941  	taskShader                             = true
+1942  	meshShader                             = true
+2029  VkPhysicalDeviceRayQueryFeaturesKHR:
+2031  	rayQuery = true
+2042  VkPhysicalDeviceRayTracingPipelineFeaturesKHR:
+2044  	rayTracingPipeline                                    = true
+2215  VkPhysicalDeviceVulkan12Features:
+2218  	drawIndirectCount                                  = true
+2226  	descriptorIndexing                                 = true
+2231  	shaderSampledImageArrayNonUniformIndexing          = true
+2232  	shaderStorageBufferArrayNonUniformIndexing         = true
+2238  	descriptorBindingSampledImageUpdateAfterBind       = true
+2244  	descriptorBindingPartiallyBound                    = true
+2245  	descriptorBindingVariableDescriptorCount           = true
+2246  	runtimeDescriptorArray                             = true
+2254  	timelineSemaphore                                  = true
+2255  	bufferDeviceAddress                                = true
+2265  VkPhysicalDeviceVulkan13Features:
+2276  	synchronization2                                   = true
+2279  	dynamicRendering                                   = true

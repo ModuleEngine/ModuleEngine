@@ -10,6 +10,9 @@
 R0.2 is done: the [native benchmarks S1–S5](bench.md) run from the source checkout,
 and the [accepted series](bench-r02-20261121.md) of three runs differs by at most 4.75 %.
 R0.3 adds [frame timings](bench.md#frame-timings) in Game and benchmark JSON.
+R0.4 records [hardware tiers and Windows device evidence](hardware-tiers.md).
+The GTX 1660 SUPER is a candidate for minimum Windows tier A hardware.
+The RTX 4080 SUPER configuration is the only one verified in R0.4.
 See the
 [dated decision](decisions.md#engine-rebuild-20261121).
 
