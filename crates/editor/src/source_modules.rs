@@ -76,6 +76,7 @@ pub(crate) mod tests {
 
     #[test]
     fn registered_source_component_defaults_survive_save_reopen_and_execute() {
+        crate::requires_editor_vulkan!();
         let root = crate::project::source_root();
         let composition = crate::host::composition_at(&root).unwrap();
         let mut document = document();

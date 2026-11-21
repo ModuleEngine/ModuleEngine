@@ -58,7 +58,7 @@ fn catalogs_at(
     let mut modules = ModuleRegistry::builtin();
     #[cfg(feature = "vulkan")]
     if features.contains("vulkan") {
-        module_engine_vulkan::install(&mut modules, root)?;
+        module_engine_vulkan::install(&mut modules, root).map_err(|error| error.to_string())?;
     }
     #[cfg(not(feature = "vulkan"))]
     let _ = (root, &mut modules);

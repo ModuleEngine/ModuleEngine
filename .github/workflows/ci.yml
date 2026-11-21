@@ -124,7 +124,7 @@ jobs:
           vulkaninfo --summary
       - name: Linux native offscreen contracts (Mesa software device)
         if: runner.os == 'Linux' && needs.plan.outputs.native == 'true'
-        run: python scripts/verify.py --profile native --timeout 1800
+        run: python scripts/verify.py --profile native --require-capabilities --timeout 1800
       - name: Native package fixture contracts
         if: needs.plan.outputs.package == 'true'
         run: python scripts/verify.py --profile package --timeout 1800

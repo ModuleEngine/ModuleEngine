@@ -148,7 +148,7 @@ fn scene(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
             let target = target.as_any()
                 .downcast_ref::<module_engine_vulkan::presentation::VulkanPresentationTarget>()
                 .ok_or("Vulkan presentation target is required")?;
-            let mut renderer = VulkanRenderer::new_at(root)?;
+            let mut renderer = VulkanRenderer::new_at(root).map_err(|error| error.to_string())?;
             renderer.set_presentation_target(Some(Arc::new(
                 module_engine_vulkan::presentation::VulkanPresentationTarget {
                     identity: target.identity.clone(),
@@ -285,7 +285,11 @@ impl SceneApp {
         self.texture.poll(&self.bridge)?;
         let now = Instant::now();
         if let Some(flight) = self.in_flight.take() {
-            let Some(mut frame) = self.renderer.poll_presented(flight.ticket)? else {
+            let Some(mut frame) = self
+                .renderer
+                .poll_presented(flight.ticket)
+                .map_err(|error| error.to_string())?
+            else {
                 self.in_flight = Some(flight);
                 return Ok(());
             };
@@ -346,15 +350,18 @@ impl SceneApp {
         }
         let ecs = self.fixture.tick(self.completed);
         let started = Instant::now();
-        let submission = self.renderer.render_presented(
-            &self.fixture.scene,
-            self.fixture.camera,
-            SIZE[0],
-            SIZE[1],
-            &self.graph,
-            &BTreeMap::new(),
-            &RenderOverrides::default(),
-        )?;
+        let submission = self
+            .renderer
+            .render_presented(
+                &self.fixture.scene,
+                self.fixture.camera,
+                SIZE[0],
+                SIZE[1],
+                &self.graph,
+                &BTreeMap::new(),
+                &RenderOverrides::default(),
+            )
+            .map_err(|error| error.to_string())?;
         let cpu_submit_ms = started.elapsed().as_secs_f64() * 1000.;
         let RenderSubmission::Pending(ticket) = submission else {
             return Err("Expected one asynchronous Vulkan frame submission".into());

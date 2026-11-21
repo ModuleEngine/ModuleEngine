@@ -2024,10 +2024,19 @@ fn respawn_same_id_and_actual_same_scene_transition_never_blend_unrelated_lifeti
 
 #[test]
 fn compiled_custom_string_reset_snaps_only_committed_teleport_and_rejection_keeps_history() {
-    // Reuse the existing validated native fixture/compiler path. Only the final
-    // rendering is recorded on CPU; the script really compiles and executes IPC.
+    // Keep the real compiler/IPC fixture and construct the host with a CPU
+    // renderer before installing the Recorder used by the assertions.
     let root = super::test_support::workspace_root();
     let mut document = super::test_support::demo_document();
+    let renderer = document
+        .root
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == "renderer")
+        .unwrap();
+    renderer.module = "render.software3d".into();
+    renderer.subgraph = Some(Box::new(module_engine_core::software3d_graph()));
+    document.engine.exposure = Default::default();
     document.custom_sources.insert(
         "game-controller".into(),
         r#"// module-engine-state: {"schema":"presentation.reset.v1","initial":{"mode":"move","ticks":0}}

@@ -82,6 +82,7 @@ fn invalid_active_renderer_route_never_falls_back_to_unused_vulkan() {
 }
 #[test]
 fn game_scene_and_dependency_watch_follow_wired_renderer_across_unused_reordering() {
+    module_engine_vulkan::requires_capabilities!(Vulkan, Dxc);
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
@@ -188,6 +189,7 @@ fn game_scene_and_dependency_watch_follow_wired_renderer_across_unused_reorderin
 #[test]
 #[ignore = "wall-time diagnostic: explicitly measure slow Custom catchup without imposing a new simulation policy"]
 fn audit_slow_custom_catchup_wall_time() {
+    module_engine_vulkan::requires_capabilities!(Vulkan, Dxc);
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
@@ -232,6 +234,7 @@ fn update(ctx: &mut ScriptContext) {
 }
 #[test]
 fn host_restart_restores_world_script_render_audio_and_camera_without_recompiling() {
+    module_engine_vulkan::requires_capabilities!(Vulkan, Dxc);
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
@@ -355,6 +358,7 @@ fn host_restart_restores_world_script_render_audio_and_camera_without_recompilin
 }
 #[test]
 fn rejected_shader_dependency_watch_tracks_disk_repairs_without_document_edits() {
+    module_engine_vulkan::requires_capabilities!(Vulkan, Dxc);
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
@@ -467,6 +471,7 @@ fn retained_render_controls_drop_only_removed_identities_not_fresh_unknown_comma
     assert!(
         module_engine_vulkan::validate_overrides(&graph, &retained)
             .unwrap_err()
+            .to_string()
             .contains("Unknown render pass new-unknown")
     );
     assert!(
@@ -518,6 +523,7 @@ fn render_settings_validation_includes_unselected_presets_after_pass_removal() {
 }
 #[test]
 fn gpu_pass_removal_prunes_controls_only_on_acceptance_and_keeps_live_session() {
+    module_engine_vulkan::requires_capabilities!(Vulkan, Dxc);
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
@@ -620,6 +626,7 @@ fn gpu_pass_removal_prunes_controls_only_on_acceptance_and_keeps_live_session() 
     assert!(
         validate_candidate_controls(&cleaned, active_graph(&host), &retained, 0., &root)
             .unwrap_err()
+            .to_string()
             .contains("Unknown render pass new-unknown")
     );
     assert!(Arc::ptr_eq(&slot, &host.slots["game-controller"]));
@@ -654,6 +661,7 @@ fn center_cursor_targets_ground_below_camera() {
 }
 #[test]
 fn author_preview_reuses_content_and_custom_and_rejects_failed_edits_transactionally() {
+    module_engine_vulkan::requires_capabilities!(Vulkan, Dxc);
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
@@ -962,6 +970,7 @@ fn author_preview_reuses_content_and_custom_and_rejects_failed_edits_transaction
 }
 #[test]
 fn relocated_game_uses_project_assets_and_installed_backend_for_rust_render_controls() {
+    module_engine_vulkan::requires_capabilities!(Vulkan, Dxc);
     let backend = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()

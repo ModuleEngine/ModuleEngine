@@ -13,6 +13,10 @@ R0.3 adds [frame timings](bench.md#frame-timings) in Game and benchmark JSON.
 R0.4 records [hardware tiers and Windows device evidence](hardware-tiers.md).
 The GTX 1660 SUPER is a candidate for minimum Windows tier A hardware.
 The RTX 4080 SUPER configuration is the only one verified in R0.4.
+R0.5 adds [capability skips in verification](verification.md#vulkan-dxc-capabilities),
+[debug Vulkan diagnostics](bench.md#vulkan-validation), and typed renderer and
+shader errors. The Windows debug S1 run reached Playing at 1920×1080 with zero
+validation errors, including producer retirement.
 See the
 [dated decision](decisions.md#engine-rebuild-20261121).
 

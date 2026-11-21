@@ -138,10 +138,10 @@ mod tests {
                 },
             )
         };
-        run(viewport.center(), None, None);
-        run(viewport.center(), None, None);
+        run(viewport.center(), None, None).drop_without_applying_deltas();
+        run(viewport.center(), None, None).drop_without_applying_deltas();
         let inside = viewport.right_top() + egui::vec2(-32., 26.);
-        run(inside, Some(&timings), Some(true));
+        run(inside, Some(&timings), Some(true)).drop_without_applying_deltas();
         let output = run(inside, Some(&timings), Some(true));
         for value in ["0.420 ms", "1.100 ms"] {
             assert!(
@@ -154,10 +154,12 @@ mod tests {
                 "{value} must fit inside Game"
             );
         }
+        output.drop_without_applying_deltas();
         run(
             viewport.right_top() + egui::vec2(10., 26.),
             Some(&timings),
             Some(false),
-        );
+        )
+        .drop_without_applying_deltas();
     }
 }

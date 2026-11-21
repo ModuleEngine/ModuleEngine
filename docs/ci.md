@@ -41,7 +41,7 @@ Linux full `native` runs offscreen tests with software Vulkan, without a desktop
 session. Windows GPU native acceptance remains a targeted local route.
 Successful CI does not confirm hardware Linux, strict 60 FPS, cold-start, or
 interactive desktop acceptance. `package` uses minimal Cargo fixtures,
-not a real game export.
+not a real game export. Linux CI passes `--require-capabilities` so missing Vulkan or DXC fails the required offscreen check.
 
 The two platforms run in parallel on separate hosted VMs; commands within
 each VM run sequentially. Each job receives a fresh hosted checkout

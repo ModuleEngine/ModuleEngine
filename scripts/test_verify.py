@@ -83,7 +83,7 @@ class RegistryTests(Fixture):
         self.assertCountEqual(actual, registered, "Every real #[ignore] needs a purpose and profile/exclusion decision")
 
     def test_profiles_are_explicit_and_native_never_leaks_into_quick_contracts(self):
-        self.assertEqual(set(self.data["profiles"]), {"quick", "contracts", "clippy", "native", "native-tools", "package"})
+        self.assertEqual(set(self.data["profiles"]), {"quick", "contracts", "clippy", "native", "native-tools", "package", "render"})
         for name in ["quick", "contracts"]:
             chosen = verify.plan(self.data, self.steps, name)["steps"]
             self.assertTrue(chosen)
@@ -234,6 +234,26 @@ class ExecutionTests(Fixture):
                     runner.prepare()
                 self.assertEqual(len(seen), 1)
 
+    def test_capability_skips_are_linked_to_discovered_cases_and_strict_mode_fails(self):
+        marker = "MODULEENGINE_TEST_SKIP\tcase::one\tDXC: absent"
+        for invalid in (marker + "\n" + marker, marker.replace("case::one", "other"),
+                        marker.removesuffix("DXC: absent")):
+            with self.assertRaises(verify.VerificationError):
+                verify.test_skips(invalid, ["case::one"])
+        for strict in (False, True):
+            runner = self.runner("native")
+            runner.prepare = lambda: None
+            runner.test = lambda step: (
+                {"passed_count": 0, "test_skips": verify.test_skips(marker, ["case::one"])}
+                if step["id"] == "native-reuse" else {"passed_count": 1}
+            )
+            with redirect_stdout(io.StringIO()):
+                results, failed = runner.run(strict)
+            self.assertEqual(failed, strict)
+            self.assertEqual(results[0]["status"], "failed" if strict else "skipped")
+            self.assertEqual(results[0]["test_skips"], {"case::one": "DXC: absent"})
+            self.assertEqual(results[1]["status"], "not_run" if strict else "passed")
+
     def test_exact_zero_is_failure_and_later_steps_not_run(self):
         runner = self.runner()
         runner.prepare = lambda: None
@@ -252,7 +272,9 @@ class ExecutionTests(Fixture):
             seen.append((argv, env))
             log = prefix.with_suffix(".stdout.log")
             log.write_text("case::one: test\n" if "--list" in argv else "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n", encoding="utf-8")
-            return {"argv": argv, "stdout": str(log), "exit_code": 0}
+            stderr = prefix.with_suffix(".stderr.log")
+            stderr.write_bytes(b"")
+            return {"argv": argv, "stdout": str(log), "stderr": str(stderr), "exit_code": 0}
         with patch.dict(os.environ, {"LD_LIBRARY_PATH": "/normal/dxc/lib", "PATH": "normal tool path"}):
             runner = self.runner(executor=fake)
         runner.artifact = lambda _: {"path": str(self.binary), "sha256": verify.digest(self.binary)}

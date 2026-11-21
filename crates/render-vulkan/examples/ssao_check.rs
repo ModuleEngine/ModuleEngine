@@ -113,7 +113,7 @@ fn main() -> Result<(), String> {
         return Err("Use a new output directory".into());
     }
     fs::create_dir_all(&output).map_err(|e| e.to_string())?;
-    let mut renderer = VulkanRenderer::new()?;
+    let mut renderer = VulkanRenderer::new().map_err(|error| error.to_string())?;
     let mut reports = vec![];
     let mut failures = vec![];
     for path in [RenderPath::Forward, RenderPath::Deferred] {
@@ -191,25 +191,29 @@ fn main() -> Result<(), String> {
         ] {
             let mut overrides = RenderOverrides::default();
             overrides.enabled.insert("aa".into(), false);
-            let on = renderer.render(
-                &scene,
-                camera,
-                width,
-                height,
-                &graph,
-                &BTreeMap::new(),
-                &overrides,
-            )?;
+            let on = renderer
+                .render(
+                    &scene,
+                    camera,
+                    width,
+                    height,
+                    &graph,
+                    &BTreeMap::new(),
+                    &overrides,
+                )
+                .map_err(|error| error.to_string())?;
             overrides.enabled.insert("ao".into(), false);
-            let off = renderer.render(
-                &scene,
-                camera,
-                width,
-                height,
-                &graph,
-                &BTreeMap::new(),
-                &overrides,
-            )?;
+            let off = renderer
+                .render(
+                    &scene,
+                    camera,
+                    width,
+                    height,
+                    &graph,
+                    &BTreeMap::new(),
+                    &overrides,
+                )
+                .map_err(|error| error.to_string())?;
             let stem = format!("{path:?}-{name}").to_lowercase();
             save(&output.join(format!("{stem}-ao.png")), &on)?;
             save(&output.join(format!("{stem}-bypass.png")), &off)?;

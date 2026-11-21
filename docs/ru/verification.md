@@ -55,12 +55,13 @@ python3 scripts/verify.py --profile native --plan
 | `quick` | `cargo fmt --all -- --check`, все lib tests пакетов `module-engine-core` и `module-engine-project`. | Не workspace, Editor, Vulkan runtime, secondary Custom builds или ignored acceptance. Холодная компиляция всё равно может быть долгой. |
 | `contracts` | Quick плюс `cargo_build::tests::`, четыре Inspector-регрессии, 99 сценариев свойств Inspector, четыре прежних Save As tests, 28 сценариев сохранности workflow и два теста `diagnostic_personal` для проверки явного root и изоляции Recent/layout с сохранением source permissions. | Не всё UI, native dialogs или полный authoring suite. |
 | `clippy` | `cargo clippy --offline --locked --target {native_host} --workspace --all-targets --all-features -- -D warnings` на закреплённом native toolchain. | Без formatting, tests или runtime-проверок; не приёмка движка или поставки. |
+| `render` | CPU-проверки графа и кеша, компиляция HLSL через DXC и offscreen-регрессии на Vulkan. | Без окна, доставки и проверки производительности. |
 | `native` | Пять явных ignored tests: Stop/reuse, slow-UI/hot-apply, native linker, cache context и Windows executable spellings. | Не desktop benchmark, screen latency, Full export или строгие 60 FPS. Windows-only test на Linux отмечается `skipped`, а не пройденным. |
 | `native-tools` | Три native linker/cache/executable-spelling проверки из `native`, без GameUI и GPU. | Не полный `native`; на Linux Windows-only test отмечается `skipped`. Используется Windows CI. |
 | `package` | Две ignored проверки `game_package`: native target modes и concurrent immutable snapshots. Они собирают минимальные Cargo fixtures и исполняют их продукты. | **Не реальный Full/Team/Player game export, relocation или полная приёмка поставки.** Эти CLI-проверки остаются адресным/legacy маршрутом. |
 
 Профиль `clippy` явный и независимый: `contracts` по-прежнему проверяет formatting
-ровно один раз; legacy-маршруты не изменены. Сначала выполните
+ровно один раз; он не добавляет шагов в legacy suite. Сначала выполните
 `python scripts/verify.py --profile clippy --plan`, затем
 `python scripts/verify.py --profile clippy`. Планирование не запускает процессы
 и оставляет `{native_host}` неразрешённым. Исполнение сверяет фактические release
@@ -85,6 +86,42 @@ Test binary запускается **напрямую в normal loader environme
 результат `--list --ignored --exact <name>`; ноль тестов никогда не считается
 успехом. После выполнения сверяется libtest summary с найденным набором. Это
 сохраняет важное условие Stop/reuse из [предыдущей проверки loader](postfix-p2-fixes-20261016.md).
+
+<a id="vulkan-dxc-capabilities"></a>
+
+## Возможности Vulkan и DXC
+
+Профиль `render` проверяет контракты зависимостей шейдеров и графа на CPU,
+компилирует HLSL в тестах с DXC и выполняет Vulkan-тесты на совместимом
+устройстве Vulkan 1.3. Адаптер должен поддерживать dynamic rendering и очередь
+graphics+compute. Для offscreen-проверок подходит и программное устройство Vulkan.
+Тестам, которые сами готовят запечатанные шейдеры Player, нужен DXC на этапе
+подготовки. Тест отката выделений требует только Vulkan. Для тестов компиляции и
+отражения шейдеров достаточно DXC. Обоим сценариям GameUI профиля `native`
+нужны Vulkan и DXC. Проверки линкера, контекста кеша и имён Windows EXE
+выполняются независимо.
+
+Предварительная проверка использует нативную инициализацию рендерера, его
+фактический поиск компилятора и `--version`. При отсутствии возможности
+пишутся имя теста и причина. Если пропущены все тесты шага, его статус —
+`skipped`. В смешанном шаге `test_skips` содержит пропуски, а `passed_count`
+считает выполненные успешные тесты. Некорректно настроенный компилятор,
+отклонение шейдера, ошибка Vulkan API после успешной предварительной проверки,
+сбой libtest и ошибки валидации приводят к отказу. Флаг `--require-capabilities`
+(`-RequireCapabilities` в PowerShell) делает пропуск по возможности ошибкой.
+Linux CI использует его для offscreen-маршрута. Пропуски по платформе сохраняют
+прежнее поведение. При последовательной проверке Editor дожидается завершения
+своих фоновых задач и освобождения ресурсов GPU до проверки итогов валидации.
+Счётчик ошибок валидации общий для процесса. При параллельном запуске GPU-тестов
+ошибка может быть отнесена к соседнему тесту. Локальные Linux-прогоны выполнены
+на Mesa в WSL. Нативный Linux-раннер проверяется в CI pull request.
+
+Вызов wrappers без аргументов по-прежнему выполняет legacy suite.
+Windows-маршрут вызывает `cargo.exe` напрямую и передаёт разделитель аргументов
+`--` в Clippy и `cargo run`. Оба скрипта выводят пропуски в консоль, в том числе
+для зависимых CLI-проверок Windows. CPU-проверки
+продолжают работу. Опциональному оконному бенчмарку Windows нужны его реальные
+возможности окружения. Восстановление инструментов остаётся явной операцией.
 
 <a id="isolated-source-fixtures"></a>
 

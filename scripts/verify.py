@@ -174,6 +174,22 @@ def discover_tests(text):
     return [line[:-6] for line in text.splitlines() if line.endswith(": test")]
 
 
+
+def test_skips(text, listed):
+    """Only accept a preflight marker from a discovered libtest case."""
+    skipped = {}
+    prefix = "MODULEENGINE_TEST_SKIP\t"
+    for line in text.splitlines():
+        if not line.startswith(prefix):
+            continue
+        fields = line.split("\t")
+        if (len(fields) != 3 or fields[1] not in listed or
+                fields[1] in skipped or not fields[2].strip()):
+            raise VerificationError("Invalid or duplicate test capability skip")
+        skipped[fields[1]] = fields[2]
+    return skipped
+
+
 @contextmanager
 def run_lease(path):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -246,6 +262,7 @@ class Runner:
         self.root, self.data, self.plan = root, data, selected_plan
         self.output, self.executor, self.override_timeout = output, executor, timeout
         self.env = os.environ.copy()  # Preserve the normal loader/toolchain environment.
+        self.env["MODULE_ENGINE_VERIFY_SERIAL"] = "1"
         self.env.update(TEMP=str(temp), TMP=str(temp), TMPDIR=str(temp), CARGO_INCREMENTAL="0")
         self.commands, self.products, self.metadata, self.host = [], {}, None, None
         self.baseline = protected_snapshot(root, data["protected"])
@@ -311,12 +328,22 @@ class Runner:
             raise VerificationError("Exact/filter test selection is absent or ambiguous; zero tests is not a pass")
         log = self.command(common + ["--nocapture", "--test-threads=1"], step.get("timeout", 300))
         text = log.read_text(encoding="utf-8", errors="replace")
+        skipped = test_skips(text, listed)
+        if skipped and not step.get("capability_skips"):
+            raise VerificationError("Unexpected capability skip outside a native test step")
         summaries = re.findall(r"^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored;", text, re.MULTILINE)
         if not summaries or tuple(map(int, summaries[-1])) != (len(listed), 0, 0):
             raise VerificationError("Test summary does not confirm the discovered tests passed")
-        return {"artifact": product, "tests": listed, "passed_count": len(listed)}
+        stderr = self.output / self.commands[-1]["stderr"]
+        with stderr.open("rb") as stream:
+            if any(line.startswith(b"Vulkan validation ERROR:") for line in stream):
+                raise VerificationError("Vulkan validation reported errors; see stderr")
+        result = {"artifact": product, "tests": listed, "passed_count": len(listed) - len(skipped)}
+        if skipped:
+            result["test_skips"] = skipped
+        return result
 
-    def run(self):
+    def run(self, require_capabilities=False):
         results, failed = [], False
         self.prepare()
         for step in self.plan["steps"]:
@@ -336,7 +363,15 @@ class Runner:
                     self.command(argv, step["timeout"])
                 else:
                     result.update(self.test(step))
+                skipped = result.get("test_skips", {})
                 result["status"] = "passed"
+                if skipped:
+                    for test, reason in skipped.items():
+                        print(f"Skipped {test}: {reason}", flush=True)
+                    if require_capabilities:
+                        raise VerificationError("Required capabilities unavailable: " + " | ".join(dict.fromkeys(skipped.values())))
+                    if not result["passed_count"]:
+                        result.update(status="skipped", reason=" | ".join(dict.fromkeys(skipped.values())))
             except (VerificationError, OSError, ValueError) as error:
                 result.update(status="failed", reason=str(error))
                 failed = True
@@ -350,10 +385,12 @@ class Runner:
 
 def main(argv=None, root=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", choices=["quick", "contracts", "clippy", "native", "native-tools", "package"], default="quick")
+    parser.add_argument("--profile", choices=["quick", "contracts", "clippy", "native", "native-tools", "package", "render"], default="quick")
     read_only = parser.add_mutually_exclusive_group()
     read_only.add_argument("--list", action="store_true")
     read_only.add_argument("--plan", action="store_true")
+    parser.add_argument("--require-capabilities", action="store_true",
+                        help="Fail if a selected native test cannot run because Vulkan or DXC is unavailable")
     parser.add_argument("--output-root", type=Path)
     parser.add_argument("--timeout", type=float, help="Explicit per-command timeout override, including compilation; never changes product watchdogs")
     args = parser.parse_args(argv)
@@ -367,6 +404,8 @@ def main(argv=None, root=None):
             print(json.dumps({"profiles": data["profiles"], "legacy_routes": data.get("legacy_routes", {}), "ignored_inventory": [s for s in data["steps"] if s.get("ignored")]}, ensure_ascii=False, indent=2))
             return 0
         if args.plan:
+            if args.require_capabilities:
+                selected["require_capabilities"] = True
             print(json.dumps(selected, ensure_ascii=False, indent=2))
             return 0
         if selected["unavailable"]:
@@ -387,10 +426,10 @@ def main(argv=None, root=None):
         temp.mkdir(parents=True, exist_ok=False)
         runner = Runner(root, data, selected, output, temp, args.timeout)
         implementation = {name: digest(root / name) if (root / name).is_file() else None for name in ["scripts/verify.py", "scripts/verification.json", "verify.ps1", "verify.sh"]}
-        report = {"schema_version": 1, "run_id": run_id, "profile": args.profile, "scope": selected["scope"], "started_at": utc(), "platform": PLATFORM, "status": "failed", "temporary_directory": str(temp), "implementation_sha256": implementation, "registry_sha256": implementation["scripts/verification.json"], "source": source_snapshot(root), "protected_author_files": runner.baseline, "steps": [{"id": s["id"], "status": "not_run"} for s in selected["steps"]]}
+        report = {"schema_version": 1, "run_id": run_id, "profile": args.profile, "require_capabilities": args.require_capabilities, "scope": selected["scope"], "started_at": utc(), "platform": PLATFORM, "status": "failed", "temporary_directory": str(temp), "implementation_sha256": implementation, "registry_sha256": implementation["scripts/verification.json"], "source": source_snapshot(root), "protected_author_files": runner.baseline, "steps": [{"id": s["id"], "status": "not_run"} for s in selected["steps"]]}
         try:
             with run_lease(root / "work/verification/launcher.lock"):
-                report["steps"], failed = runner.run()
+                report["steps"], failed = runner.run(args.require_capabilities)
                 report["status"] = "failed" if failed else "passed"
         except (VerificationError, OSError, ValueError) as error:
             report["error"] = str(error)
