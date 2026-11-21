@@ -79,7 +79,7 @@ CI запускает `python scripts/third_party_licenses.py --check` на об
 | `assets/audio/*.wav`, `assets/models/demo_crystal.glb` | Созданы для тестовых фикстур ModuleEngine | MIT OR Apache-2.0 |
 | `assets/gpu/*.hlsl` | Шейдеры ModuleEngine | MIT OR Apache-2.0 |
 | `examples/crate-garden/assets/` | Созданы [`generate_assets.py`](../../examples/crate-garden/generate_assets.py); см. [Crate Garden](../../examples/crate-garden/README.ru.md) | MIT OR Apache-2.0 |
-| `crates/editor/assets/editor.ico` | Иконка редактора ModuleEngine | MIT OR Apache-2.0 |
+| `crates/editor/assets/editor.ico` | Исходное изображение — `eframe 0.36.2/data/icon.png`; ICO подготовлен для ModuleEngine | MIT OR Apache-2.0, Copyright (c) Emil Ernerfeldt; уведомление eframe есть в `THIRD-PARTY-LICENSES.txt` |
 | `examples/bench/khronos/Avocado.glb`, `BoxVertexColors.glb` | [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/e124e8d8d7330a5372bc2b4d00d39a4a9d7997ea/Models), без изменений | CC0-1.0; файлы лицензий лежат рядом с моделями |
 | `docs/media/*.png` | Снимки экрана редактора и Player ModuleEngine | MIT OR Apache-2.0 |
 | `docs/media/blender-workspace-tabs-reference.png` | Снимок панели вкладок Blender 4.3, только как образец интерфейса | Интерфейс и логотип Blender принадлежат Blender Foundation; в игры не поставляется |
