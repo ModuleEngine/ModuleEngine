@@ -522,6 +522,12 @@ SPREAD_FACTOR = 2.0
 BORDERLINE_FRACTION = 0.25
 SIDES = ("baseline", "candidate")
 PASSING = ("same", "better")
+# Every run must report these; a null present mode means unknown or changed during the run.
+REQUIRED_EVIDENCE = ("effective_present_mode", "vsync_requested", "frame_profiling")
+# Presentation-path fields that may differ between sides when declared (R2.6). The adapter,
+# resolution, workload and present mode never may.
+DECLARABLE_CHANGES = ("gui_graphics.backend", "gui_graphics.renderer",
+                      "gui_graphics.requested_renderer", "gui_graphics.requested_gpu_backend")
 
 
 def compare_rows(scene):
@@ -559,27 +565,71 @@ def judge_metric(kind, baseline, candidate, blocking):
             "borderline": abs(change - tolerance) <= BORDERLINE_FRACTION * tolerance}
 
 
-def signature_differences(cases):
-    first = cases[0]
+def flatten(value, prefix):
+    if isinstance(value, dict) and value:
+        result = {}
+        for key, item in value.items():
+            result.update(flatten(item, f"{prefix}.{key}"))
+        return result
+    return {prefix: value}
+
+
+def comparison_fields(case):
+    return {**flatten(case.get("signature") or {}, "signature"),
+            **flatten(case.get("fixture") or {}, "fixture")}
+
+
+def signature_differences(cases, declared=()):
+    """Dotted signature/fixture fields that differ from the first case, except declared ones."""
+    ignored = {f"signature.{field}" for field in declared}
+    first = comparison_fields(cases[0])
     keys = set()
     for case in cases[1:]:
-        for field in ("signature", "fixture"):
-            a, b = first.get(field) or {}, case.get(field) or {}
-            keys |= {f"{field}.{key}" for key in set(a) | set(b) if a.get(key) != b.get(key)}
+        other = comparison_fields(case)
+        keys |= {key for key in set(first) | set(other)
+                 if key not in ignored and first.get(key) != other.get(key)}
     return sorted(keys)
 
 
-def compare_scene(scene, baseline_cases, candidate_cases):
+def run_label(case):
+    return f"{case.get('side', '?')} run {case.get('run', '?')}"
+
+
+def missing_evidence(cases):
+    """Runs whose presentation evidence is unknown, e.g. a null or changing present mode."""
+    problems = []
+    for case in cases:
+        signature = case.get("signature") or {}
+        unknown = [key for key in REQUIRED_EVIDENCE if signature.get(key) is None]
+        if unknown:
+            problems.append(f"{run_label(case)}: {', '.join(unknown)} unknown or changed")
+    return problems
+
+
+def compare_scene(scene, baseline_cases, candidate_cases, declared=()):
     cases = [*baseline_cases, *candidate_cases]
     reasons = []
     if not baseline_cases or not candidate_cases:
         reasons.append("No measured runs on one side")
-    incomplete = [f"{case.get('side', '?')} run {case.get('run', '?')}: {case['status']}"
+    incomplete = [f"{run_label(case)}: {case['status']}"
                   for case in cases if case["status"] != "complete"]
     if incomplete:
         reasons.append("Incomplete runs: " + ", ".join(incomplete))
-    if cases and (differences := signature_differences(cases)):
-        reasons.append("Signature or fixture differs: " + ", ".join(differences))
+    if evidence := missing_evidence(cases):
+        reasons.append("Missing run evidence: " + "; ".join(evidence))
+    for side_cases in (baseline_cases, candidate_cases):
+        if side_cases and (differences := signature_differences(side_cases)):
+            reasons.append(f"Signature or fixture changes within {side_cases[0].get('side', '?')} runs: "
+                           + ", ".join(differences))
+    declared_changes = {}
+    if baseline_cases and candidate_cases:
+        pair = [baseline_cases[0], candidate_cases[0]]
+        if differences := signature_differences(pair, declared):
+            reasons.append("Signature or fixture differs: " + ", ".join(differences))
+        fields = [comparison_fields(case) for case in pair]
+        declared_changes = {field: {"baseline": fields[0].get(f"signature.{field}"),
+                                    "candidate": fields[1].get(f"signature.{field}")}
+                            for field in declared}
     metrics = []
     for key, stat, kind, blocking in compare_rows(scene):
         verdict = judge_metric(kind, [metric_value(case, key, stat) for case in baseline_cases],
@@ -590,17 +640,17 @@ def compare_scene(scene, baseline_cases, candidate_cases):
     return {"comparable": comparable, "reasons": reasons, "passed": passed,
             "borderline": comparable and any(row["blocking"] and row["borderline"] for row in metrics),
             "runs": {"baseline": len(baseline_cases), "candidate": len(candidate_cases)},
-            "metrics": metrics}
+            "declared_changes": declared_changes, "metrics": metrics}
 
 
-def compare_sides(runs, scenes):
+def compare_sides(runs, scenes, declared=()):
     """runs: [{"side", "run", "results": {scene: case}}] from every session that counts."""
     result = {}
     for scene in scenes:
         sides = {side: [{**run["results"][scene], "side": side, "run": run["run"]}
                         for run in runs if run["side"] == side and scene in run["results"]]
                  for side in SIDES}
-        result[scene] = compare_scene(scene, sides["baseline"], sides["candidate"])
+        result[scene] = compare_scene(scene, sides["baseline"], sides["candidate"], declared)
     return result
 
 
@@ -637,6 +687,10 @@ def render_table(scenes):
                 f"{format_metric_value(row, 'candidate_median')} | "
                 f"{'—' if change is None else f'{change:+.2f} %'} | "
                 f"{'—' if tolerance is None else f'±{tolerance:.2f} %'} | {verdict} |")
+    for scene, item in scenes.items():
+        for field, values in item.get("declared_changes", {}).items():
+            lines.append(f"\n{scene}: declared change `{field}`: "
+                         f"{values['baseline']} → {values['candidate']}")
     return "\n".join(lines) + "\n"
 
 
@@ -725,7 +779,7 @@ def measure_session(series, sides, session, scenes, rounds, candidate_first=Fals
     return runs
 
 
-def run_compare(series, baseline_ref, candidate_ref, rounds, scenes, vsync, profiling):
+def run_compare(series, baseline_ref, candidate_ref, rounds, scenes, vsync, profiling, declared=()):
     baseline = resolve_commit(baseline_ref)
     candidate = resolve_commit(candidate_ref) if candidate_ref else None
     _, host = native_host()
@@ -740,7 +794,9 @@ def run_compare(series, baseline_ref, candidate_ref, rounds, scenes, vsync, prof
                 "memory_floor_percent": MEMORY_FLOOR_PERCENT, "spread_factor": SPREAD_FACTOR,
                 "borderline": f"|change − tolerance| ≤ {BORDERLINE_FRACTION} × tolerance",
                 "blocking": "mean and p95 of declared timing metrics, peak working set",
-                "tracked": "p99 of declared timing metrics"}
+                "tracked": "p99 of declared timing metrics",
+                "required_evidence": list(REQUIRED_EVIDENCE),
+                "declared_changes": list(declared)}
         write_json(series / "compare-manifest.json", {
             "version": 1, "local_started": datetime.now().astimezone().isoformat(),
             "scenes": scenes, "gui_vsync": vsync, "frame_profiling": profiling, "rule": rule,
@@ -748,7 +804,7 @@ def run_compare(series, baseline_ref, candidate_ref, rounds, scenes, vsync, prof
                              for key, value in side.items() if key not in ("env",)}
                       for name, side in sides.items()},
         })
-        result = compare_series(series, sides, scenes, rounds, rule)
+        result = compare_series(series, sides, scenes, rounds, rule, declared)
     finally:
         for worktree in worktrees:
             subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=ROOT,
@@ -756,17 +812,17 @@ def run_compare(series, baseline_ref, candidate_ref, rounds, scenes, vsync, prof
     return result
 
 
-def compare_series(series, sides, scenes, rounds, rule):
+def compare_series(series, sides, scenes, rounds, rule, declared=()):
     print("Unscored prewarm pass for each side", flush=True)
     for name in SIDES:
         measure_pass(sides[name], f"prewarm {name}", series / f"prewarm-{name}", scenes, 0)
     runs = measure_session(series, sides, 1, scenes, rounds)
-    verdict = compare_sides(runs, scenes)
+    verdict = compare_sides(runs, scenes, declared)
     rerun = [scene for scene, item in verdict.items() if item["borderline"]]
     if rerun:
         print(f"Borderline result in {', '.join(rerun)}; repeating once", flush=True)
         runs += measure_session(series, sides, 2, rerun, rounds, candidate_first=True)
-        verdict.update(compare_sides(runs, rerun))
+        verdict.update(compare_sides(runs, rerun, declared))
     integrity = {name: {
         "source_matches": capture(side["root"])["source_digest"] == side["source_digest"],
         "binary_matches": entry(side["exe"].parent, side["exe"].name)["sha256"] == side["binary_sha256"],
@@ -814,10 +870,13 @@ def main():
                         help=f"Interleaved runs per side for --compare (default {COMPARE_ROUNDS})")
     parser.add_argument("--scenes", type=parse_scenes, default=list(SCENES),
                         help="Comma-separated scenes for --compare, for example S2,S3")
+    parser.add_argument("--declare-change", action="append", default=[], choices=DECLARABLE_CHANGES,
+                        metavar="FIELD", help="Presentation field allowed to differ between sides "
+                        f"under --compare (repeatable): {', '.join(DECLARABLE_CHANGES)}")
     args = parser.parse_args()
     if args.compare is None and (args.candidate or args.rounds != COMPARE_ROUNDS
-                                 or args.scenes != list(SCENES)):
-        parser.error("--candidate, --rounds and --scenes require --compare")
+                                 or args.scenes != list(SCENES) or args.declare_change):
+        parser.error("--candidate, --rounds, --scenes and --declare-change require --compare")
     if args.compare is not None and (args.once or args.diagnostic):
         parser.error("--compare cannot be combined with --once or --diagnostic")
     if args.rounds < 3:
@@ -831,7 +890,7 @@ def main():
     try:
         if args.compare is not None:
             return run_compare(series, args.compare, args.candidate, args.rounds, args.scenes,
-                               args.vsync, not args.no_profiling)
+                               args.vsync, not args.no_profiling, tuple(args.declare_change))
         return run_series(series, args.diagnostic, args.vsync, not args.no_profiling, args.once)
     except (ValueError, OSError, subprocess.SubprocessError, KeyError) as error:
         write_json(series / "failure.json", {"error": str(error)})

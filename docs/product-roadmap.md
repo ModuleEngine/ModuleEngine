@@ -354,7 +354,7 @@ Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
 - The old path stays behind a switch until the new one passes parity; it is removed in the same phase after acceptance, not left as a second production implementation.
 - Every hardware-dependent feature declares its tier and a fallback. The [R0.4 hardware contract](hardware-tiers.md) lists the Vulkan 1.3 base tier A and the independent mesh shader (B) and ray tracing (C) additions, with their individual features and requirements for native Player presentation.
 - Measurements follow [release decisions](#decision): sequential GPU runs, recorded driver and load, mean and p95, the real game window rather than offscreen alone.
-- "Not worse than R0.6" (or than another baseline) is decided by the [not-worse rule](bench.md#not-worse), approved on 21 November 2026: the baseline commit and the candidate run interleaved in one session, five runs each; medians are compared with a per-metric tolerance of max(5 %, 2 × measured spread); a borderline result is repeated once; peak memory is compared with a 1 % floor; p99 is tracked but does not block. `python scripts/bench.py --compare <baseline>` returns the verdict.
+- "Not worse than R0.6" (or than another baseline) is decided by the [not-worse rule](bench.md#not-worse), approved on 21 November 2026: the baseline commit and the candidate run interleaved in one session, five runs each; medians are compared with a per-metric tolerance of max(5 %, 2 × measured spread); a borderline result is repeated once; peak memory is compared with a 1 % floor; p99 is tracked but does not block. `python scripts/bench.py --compare <baseline>` returns the verdict for the S1–S5 metrics; R3.5 open-to-first-frame has no automated check yet.
 
 ### Benchmark scenes used by all phases
 
@@ -418,7 +418,7 @@ Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
 | R3.2 | Replace the `eframe` shell in Editor and Player UI: window, input, clipboard, IME, DPI, cursor, and the detached native windows from `native_windows.rs`. egui widgets and panes stay unchanged. | Every existing pane opens; detached windows, docking and resize work; native window checks pass. | 1–1.5 w |
 | R3.3 | Scene and Game views sample render-graph output images on the same device. Remove the D3D12/OPAQUE_FD interop path after acceptance. | One frame less latency than today; `gpu_presentation.rs` interop removed; Linux uses the same path. | 4–5 d |
 | R3.4 | Port verification hooks that depend on `eframe` (`__screenshot`, `ui_capture.rs`, editor benchmark). | UI capture and editor benchmark run as before. | 2–3 d |
-| R3.5 | Acceptance. | Open-to-first-frame [not worse](bench.md#not-worse) than R0.6; owner opens the editor, moves panes and plays G1 without visible change; independent review. | 1–2 d |
+| R3.5 | Acceptance. | Open-to-first-frame [not worse](bench.md#not-worse) than R0.6 (the paired open-to-first-frame check is still to be built: neither `--compare` nor the R0.6 report measures it); owner opens the editor, moves panes and plays G1 without visible change; independent review. | 1–2 d |
 
 <a id="rebuild-r4"></a>
 

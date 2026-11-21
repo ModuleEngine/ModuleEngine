@@ -156,16 +156,34 @@ python scripts/bench.py --no-profiling --compare <baseline commit> --scenes S2,S
 | Peak working set of each scene process | Blocking, 1 % floor |
 | p99 of each declared metric | Tracked: reported, never blocks. S2 step time has no raw samples, so its p99 is reported as missing. |
 
-A scene passes when every run on both sides completed, the scene signature
-(adapter, driver, present mode, profiling, resolution, workload counts) and
-fixture inventory match across all runs, and no blocking metric is worse or
-missing. A changed fixture is not comparable: record a new baseline instead.
+A scene passes when every run on both sides completed, every run reports
+its vsync request, frame profiling setting and a known effective present mode,
+the scene signature (adapter, driver, present mode, profiling, resolution,
+workload counts) and fixture inventory match across all runs, and no blocking
+metric is worse or missing. A null present mode means the mode was unknown or
+changed during that run, so the scene is incomparable even when both sides
+report it. A changed fixture is not comparable: record a new baseline instead.
 The series passes, and the command exits 0, only when every requested scene
 passes and neither side's sources or binary changed during the series. A
 rejected comparison exits 1, an error 2. A comparison of a commit against
-itself (A/A) shows the machine's current noise. A criterion on a metric the
-launcher does not record yet, such as R3.5 open-to-first-frame, uses the same
-rule with its own paired measurement until the launcher records it.
+itself (A/A) shows the machine's current noise.
+
+**Declared presentation change.** When the presentation path itself is the
+change under test (R2.6: the current WGPU path against the direct Vulkan
+swapchain), declare each field that may differ between the sides:
+`--declare-change gui_graphics.backend` (also `gui_graphics.renderer`,
+`gui_graphics.requested_renderer`, `gui_graphics.requested_gpu_backend`; the
+option repeats). Only these fields can be declared. A declared field must still
+be identical across all runs of one side, both values are written to
+`compare.json` and `compare.md`, and every other field stays strict: a
+different adapter, resolution, workload or effective present mode is still
+incomparable. Without the option the comparison is fully strict.
+
+**Not covered yet: R3.5 open-to-first-frame.** The launcher does not measure
+editor start to first frame, and the R0.6 report has no such value, so a
+passing `--compare` is not R3.5 evidence. The R3.5 check remains outstanding:
+it needs defined start and first-frame events and a paired command under this
+rule before R3.5 can be accepted.
 
 The series directory `outputs/bench/<date>/<time>-compare/` contains both
 build logs and binaries, `compare-manifest.json` with the commits and rule,
