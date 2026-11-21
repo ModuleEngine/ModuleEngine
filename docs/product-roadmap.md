@@ -6,7 +6,7 @@ Recorded project roadmap and planning baseline, updated 17 November 2026.
 
 The final demonstration is concrete: you assemble the capabilities you need. A colleague reproduces that configuration from its description and changes a second game. The first game still builds and plays as before. A player receives only what their game needs.
 
-This document records the reviewed sequence and its full acceptance expectations. **The owner closed 0.4.2 on 17 November 2026; 0.5 is the next planned milestone. Its implementation has not started.** The 0.4.1 implementation and historical 0.4.2 engineering evidence remain recorded below. Future version numbers and milestone scopes are planning labels: they do not mean those versions have shipped, authorize every implementation, or promise dates. Existing specifications, ownership boundaries and budgets remain in force. Use the agreed [0.5 composition and dependency scope](#compose) for the next brief and the [owner check cards](product-roadmap-checks.md) for short personal checks.
+This document records the reviewed sequence and its full acceptance expectations. **The owner closed 0.4.2 on 17 November 2026. Work on 0.5 started with the ARPG audio scenario.** The 0.4.1 implementation and historical 0.4.2 engineering evidence remain recorded below. Future version numbers and milestone scopes are planning labels: they do not mean those versions have shipped, authorize every implementation, or promise dates. Existing specifications, ownership boundaries and budgets remain in force. See the [0.5 composition and dependency scope](#compose) and the [owner check cards](product-roadmap-checks.md).
 
 [Version map](#map) · [Baseline](#baseline) · [Starting handoff](#start) · [Independent use](#usability) · [Release decisions](#decision)
 
@@ -19,7 +19,7 @@ This document records the reviewed sequence and its full acceptance expectations
 | [0.4](#baseline) | Starting point: one engine, working G1 on the current Windows PC and a separate Player. | Existing baseline |
 | [0.4.1](#render) | First complete route from ordinary launch to the image in Player, with compact settings and permitted choices in the game menu. | Editor |
 | [0.4.2](#image-and-docking) | Image, panes, stabilization and compact chrome; closed by the owner’s decision. | Accepted 17 Nov 2026 |
-| [0.5](#compose) | Add, remove or replace a capability without unrelated settings getting in the way. | Next · planned |
+| [0.5](#compose) | Add, remove or replace a capability without unrelated settings getting in the way. | In progress |
 | [0.6](#pin) | Identical starting configurations for A and B; changing B does not require updating A. | Stability |
 | [0.7](#extend) | Two distinct tasks: configure an existing function and write a new one. | Extensions |
 | [0.8](#restore) | One entry description, available pinned sources/resources and an understandable refusal. | Handoff |
@@ -31,7 +31,7 @@ This document records the reviewed sequence and its full acceptance expectations
 | [1.3](#real) | A game environment with PBR, lighting and controlled cost. | G5 breadth |
 | [1.3.x](#portfolio) | One common release and a separate decision for each game; games six to ten only answer a new question. | Portfolio |
 
-The work is not one long serial pipeline. After owner-accepted 0.4.2, the next planned editor milestone is 0.5; work will begin after a separate brief. Preserve three parallel results: understandable composition and update boundaries (0.5 → 0.6); safe standalone G1 delivery on a clean PC (start checking against the existing baseline); and the first G2 combat encounter (the 0.4.1 route and necessary navigation suffice; do not wait for all 0.5–0.8 tools). Combat needs determine which extension in 0.7 comes first. The complete campaign follows acceptance of G2's foundation. Before 1.0, tool readiness, full-environment handoff in 0.8 and real games converge. After 1.0, test breadth; do not postpone the first useful editor until all later games exist.
+The work is not one long serial pipeline. Preserve three parallel results: understandable composition and update boundaries (0.5 → 0.6); safe standalone G1 delivery on a clean PC (start checking against the existing baseline); and the first G2 combat encounter (the 0.4.1 route and necessary navigation suffice; do not wait for all 0.5–0.8 tools). Combat needs determine which extension in 0.7 comes first. The complete campaign follows acceptance of G2's foundation. Before 1.0, tool readiness, full-environment handoff in 0.8 and real games converge. After 1.0, test breadth; do not postpone the first useful editor until all later games exist.
 
 There are **two finish lines**. 1.0 answers “can a team work independently in the declared configurations?” The 1.3.x result answers “has that been demonstrated by five substantially different finished games on one foundation?” One answer does not establish the other. After 0.4.1, record actual days spent on tooling, game content and fixes before estimating later work. Without those observations, a calendar estimate for G2 or G5 would be speculation.
 
@@ -51,16 +51,16 @@ Basis: [current status](current-status.md), [G1 evidence and acceptance boundari
 
 <a id="start"></a>
 
-## Next brief — 0.5 composition and understandable dependencies
+## First 0.5 scenario — composition and understandable dependencies
 
-**Entry.** The owner closed 0.4.2 on 17 November 2026. Before implementation, define a separate brief from the [agreed 0.5 scope](#compose): current capabilities, examples with/without audio, rights and actual Player-composition evidence. Implementation of 0.5 has not started.
+**Entry.** The owner closed 0.4.2 on 17 November 2026. The first brief in the [agreed 0.5 scope](#compose) covers current capabilities, examples with and without audio, rights and actual Player composition. See the [implemented ARPG audio route](engine-overview.md#audio-composition).
 
 1. Preserve the working UI and authored data. Reconcile stage 4 with implemented 2A and complete only confirmed gaps instead of repeating a redesign.
 2. In Full, show the audio consumer and removal consequences. First refuse clearly while the request is needed; after removing the request, carry the change through UI, runtime and a real Player package. Provide restoration of previous values.
 3. Give the owner two identified examples and a short card: attempt to remove a required capability → resolve the dependency → run without the service → restore it. Team receives permitted settings only; technical composition evidence stays separate.
 4. The parallel G1 card relocates the reference package to clean Windows with declared drivers. Launch without checkout, Editor or compilers; complete a level, hear sound, exit, continue and check score/progress. On the developer machine, separately change a level wall, save, reopen and export; observe the new wall on the player machine. Without a second PC or agreed clean image, record “not checked”; G1 retains its previous acceptance scope.
 
-This leads into a separate 0.5 brief; it is not implementation authorization or a report of implementation. The parallel G2 foundation retains its agreed entry conditions and need not wait for all tools.
+The parallel G2 foundation retains its agreed entry conditions and need not wait for all tools.
 
 <a id="render"></a>
 
@@ -104,7 +104,7 @@ Original detailed brief: [0.4.2 plan](release-042-plan.md). The protocol above i
 
 ## 0.5 — I assemble what I need and understand the consequences
 
-**Status — next planned milestone; implementation has not started and follows a separate brief.**
+**Status — in progress. The first scenario covers ARPG audio.**
 
 Disabling a button while retaining its service, resource requirement and Player dependency does not remove unnecessary engine capabilities.
 

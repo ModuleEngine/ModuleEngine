@@ -1,6 +1,82 @@
-use crate::{GameStateExt, GameStatus, legacy_input};
-use module_engine_core::{Camera, GameContribution, GameProject, GameState, HostServiceRequest};
+use crate::{ArpgEvent, GameStateExt, GameStatus, legacy_input};
+use module_engine_core::{
+    Camera, GameContribution, GameProject, GameState, HostServiceRequest, SystemNode,
+};
 use std::collections::BTreeSet;
+
+pub const AUDIO_SYSTEM: &str = "game.audio";
+pub const AUDIO_SERVICE: &str = "audio.wav";
+pub const PLAYBACK_ENABLED: &str = "playback_enabled";
+pub const SOUND_EVENT: &str = "Sound";
+pub const SOUND_CUE_FIELD: &str = "cue";
+
+#[derive(Clone, Copy)]
+pub enum SoundCue {
+    Attack,
+    Hit,
+    Death,
+    Victory,
+}
+
+impl SoundCue {
+    pub const ALL: [Self; 4] = [Self::Attack, Self::Hit, Self::Death, Self::Victory];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Attack => "attack",
+            Self::Hit => "hit",
+            Self::Death => "death",
+            Self::Victory => "victory",
+        }
+    }
+
+    pub fn event(self) -> &'static str {
+        match self {
+            Self::Attack => "Attack",
+            Self::Hit => "Hit",
+            Self::Death => "Death",
+            Self::Victory => "Victory",
+        }
+    }
+
+    pub(crate) fn from_event(event: ArpgEvent) -> Option<(Self, Option<u64>)> {
+        match event {
+            ArpgEvent::Attack { attacker } => Some((Self::Attack, Some(attacker))),
+            ArpgEvent::Hit { target, .. } => Some((Self::Hit, Some(target))),
+            ArpgEvent::Death { object } => Some((Self::Death, Some(object))),
+            ArpgEvent::Victory => Some((Self::Victory, None)),
+            _ => None,
+        }
+    }
+}
+
+pub fn audio_nodes(project: &GameProject) -> impl Iterator<Item = &SystemNode> {
+    project
+        .execution
+        .stages
+        .iter()
+        .flat_map(|stage| &stage.nodes)
+        .filter(|node| node.module == AUDIO_SYSTEM)
+}
+
+pub fn playback_enabled(params: &serde_json::Value) -> bool {
+    params.get(PLAYBACK_ENABLED) != Some(&serde_json::Value::Bool(false))
+}
+
+pub fn audio_playback_enabled(project: &GameProject) -> bool {
+    audio_nodes(project).any(|node| playback_enabled(&node.params))
+}
+
+pub fn has_audio_request(project: &GameProject) -> bool {
+    !project.audio_cues.is_empty() && audio_playback_enabled(project)
+}
+
+pub fn audio_cue_event(cue: &str) -> &'static str {
+    SoundCue::ALL
+        .into_iter()
+        .find(|known| known.name() == cue)
+        .map_or(SOUND_EVENT, SoundCue::event)
+}
 
 pub fn host_contribution() -> GameContribution {
     GameContribution {
@@ -13,7 +89,7 @@ pub fn host_contribution() -> GameContribution {
             "game.combat",
             "game.health",
             "game.portals",
-            "game.audio",
+            AUDIO_SYSTEM,
         ]
         .into_iter()
         .map(str::to_owned)
@@ -31,26 +107,20 @@ pub fn host_contribution() -> GameContribution {
 }
 /// Removing the authored audio node disables this service without touching
 /// archived cues. Events may still exist without requesting a playback endpoint.
-pub fn service_requests(project: &GameProject) -> Result<Vec<HostServiceRequest>, String> {
-    if project.audio_cues.is_empty()
-        || !project
-            .execution
-            .stages
-            .iter()
-            .flat_map(|stage| &stage.nodes)
-            .any(|node| node.module == "game.audio")
-    {
-        return Ok(vec![]);
-    }
-    Ok(vec![HostServiceRequest {
-        id: "audio.wav".into(),
+pub fn audio_request(project: &GameProject) -> Option<HostServiceRequest> {
+    has_audio_request(project).then(|| HostServiceRequest {
+        id: AUDIO_SERVICE.into(),
         asset_references: project.audio_cues.values().cloned().collect(),
         config: serde_json::json!({
             "cues":project.audio_cues,
-            "event":"Sound",
-            "cue_field":"cue",
+            "event":SOUND_EVENT,
+            "cue_field":SOUND_CUE_FIELD,
         }),
-    }])
+    })
+}
+
+pub fn service_requests(project: &GameProject) -> Result<Vec<HostServiceRequest>, String> {
+    Ok(audio_request(project).into_iter().collect())
 }
 pub fn initial_camera(_: &GameProject) -> Camera {
     Camera {

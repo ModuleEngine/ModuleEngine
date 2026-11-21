@@ -414,10 +414,29 @@ pub fn run_host(mut host: GameHost) -> Result<(), String> {
     // capture can verify the HUD for an authored combat fixture.
     if std::env::var_os("EFRAME_SCREENSHOT_TO").is_some() {
         let mut input = GameInput::default();
-        if std::env::var_os("MODULE_ENGINE_CAPTURE_ATTACK").is_some() {
+        let capture_attack = std::env::var_os("MODULE_ENGINE_CAPTURE_ATTACK").is_some();
+        if capture_attack {
             input = capture_input_for(host.presentation_id(), host.session.state());
         }
         host.step(1. / 60., &input)?;
+        if capture_attack {
+            #[cfg(feature = "arpg")]
+            let arpg_wav_request = module_engine_arpg::audio_request(host.session.project());
+            #[cfg(not(feature = "arpg"))]
+            let arpg_wav_request = None::<module_engine_core::HostServiceRequest>;
+            let report = serde_json::json!({
+                "actions": input.actions,
+                "events": host.session.events(),
+                "native_features": crate::compiled_features(),
+                "arpg_wav_request": arpg_wav_request.map(|request| serde_json::json!({
+                    "id": request.id,
+                    "assets": request.asset_references,
+                    "config": request.config,
+                })),
+                "services": host.services.diagnostics(),
+            });
+            eprintln!("ModuleEngine Player action capture: {report}");
+        }
         if !input.actions.is_empty() {
             input.actions.clear();
             input.action_values.clear();

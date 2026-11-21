@@ -89,10 +89,34 @@ basis is refreshed with the inventory. No per-frame project JSON
 serialization or capability inventory rebuild is added. Group, search and selection are
 transient per-area UI state, not new project fields.
 
-This stage adds discovery and navigation. Dedicated render-path/exposure controls,
-application progress, broader window regrouping and routes to other subsystems
-remain later tasks in the saved plan. Existing graphs/tools still own validation
-and edits; no new rendering or performance guarantee follows from this UI.
+Stage 2 adds discovery and navigation. The following audio workflow extends that
+entry point for the first 0.5 scenario.
+
+<a id="audio-composition"></a>
+
+## ARPG audio composition
+
+In Full, choose **Gameplay → ARPG sound events** in Overview, or **Technical →
+WAV playback service**. The details link authored cue bindings, the scheduled consumer,
+the `audio.wav` request and the selected `audio` Player build feature. **Show
+game.audio** selects the exact node in Gameplay Systems. The Player feature
+line reports the build plan for the current working document.
+
+**Remove audio system…** lists the events and WAV paths that would lose playback
+and blocks confirmation while the request is active. **Disable WAV playback
+request** leaves the cue bindings in the authored project and drops the request.
+Open **Remove audio system…** again and confirm to remove `game.audio` from the
+schedule and remove links that order other systems after it. The removal dialog
+can be cancelled without changing the document. These two edits each create an
+Undo step. Undo twice in the same editor session to restore the original
+schedule, parameters and playback. Save stores the current state for reopening.
+
+In Full and Team, **Edit → Project Settings → Audio** shows existing ARPG cue
+bindings while the playback request is active. Import a WAV through Assets to
+make it available as a replacement for an existing binding. In Team the checked
+package continues to control the schedule. The Audio section disappears when
+the ARPG request is inactive. Other project audio implementations use their own
+contracts and tools.
 
 <a id="stage2-verification"></a>
 

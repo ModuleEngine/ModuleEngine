@@ -28,6 +28,62 @@ use std::{
     sync::{Arc, mpsc},
     time::Duration,
 };
+
+pub(crate) fn audio_wav_label(
+    manifest: Option<&module_engine_project::AssetManifest>,
+    reference: &str,
+) -> String {
+    manifest
+        .and_then(|manifest| manifest.resolve_reference(reference).ok())
+        .unwrap_or_else(|| reference.into())
+}
+
+pub(crate) fn validate_audio_removal(
+    before: &GraphDocument,
+    candidate: &GraphDocument,
+) -> Result<(), String> {
+    use module_engine_arpg::{
+        AUDIO_SYSTEM, audio_cue_event, audio_nodes, has_audio_request, playback_enabled,
+    };
+
+    let Some((game, after)) = before.game.as_ref().zip(candidate.game.as_ref()) else {
+        return Ok(());
+    };
+    if game.execution == after.execution || !has_audio_request(game) {
+        return Ok(());
+    }
+    let remaining = after
+        .execution
+        .stages
+        .iter()
+        .flat_map(|stage| &stage.nodes)
+        .any(|node| {
+            node.module == AUDIO_SYSTEM
+                && (playback_enabled(&node.params)
+                    || audio_nodes(game)
+                        .any(|old| old.id == node.id && playback_enabled(&old.params)))
+        });
+    if remaining {
+        return Ok(());
+    }
+    let manifest = module_engine_project::AssetManifest::from_value(&before.asset_manifest).ok();
+    let bindings = game
+        .audio_cues
+        .iter()
+        .map(|(cue, wav)| {
+            format!(
+                "{} ({cue}) → {}",
+                audio_cue_event(cue),
+                audio_wav_label(manifest.as_ref(), wav)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(format!(
+        "Audio playback is required by {bindings}. Removing its system would stop playback. Disable the WAV playback request in Engine Overview before removing the system."
+    ))
+}
+
 struct HostPreparation {
     document: GraphDocument,
     context: PreparationContext,
@@ -2615,6 +2671,10 @@ impl GameWorkbench {
             }
         }
     }
+    pub fn show_execution_node(&mut self, id: String) {
+        self.systems.select_only(Some(id));
+    }
+
     pub fn systems_ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -2997,6 +3057,10 @@ if ui.button("+ Resource").clicked(){let name=unique_name("resource",draft.resou
         }
         let mut candidate = document.clone();
         candidate.game.as_mut().unwrap().execution = draft;
+        if let Err(error) = validate_audio_removal(document, &candidate) {
+            self.error = Some(error);
+            return false;
+        }
         if let Err(e) = candidate
             .game
             .as_ref()

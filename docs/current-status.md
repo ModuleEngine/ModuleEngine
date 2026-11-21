@@ -7,8 +7,10 @@
 **17 November 2026 — 0.4.2 accepted and closed by the owner.** The owner checked
 the delivery and asked to close the milestone, having previously personally
 confirmed that the jitter had disappeared. This completes manual product
-acceptance. The next planned milestone is [0.5: composition and dependencies](product-roadmap.md#compose);
-implementation has not started and will be separate work after its brief is defined.
+acceptance. The first [0.5 composition and dependencies](product-roadmap.md#compose)
+scenario covers [ARPG audio](engine-overview.md#audio-composition). It links the
+event and WAV to the active service request and Player feature, guards removal
+in Full and exposes active bindings in Team. The rest of the 0.5 scope remains open.
 
 Accepted final03 delivery: [Full](../outputs/ui-density-042/final03/launch-full.cmd) and [Team](../outputs/ui-density-042/final03/launch-team.cmd).
 The [dated decision and SHA-256](release-042-ui-density-verification.md#owner-acceptance-20261117) separate owner acceptance
@@ -135,8 +137,8 @@ Scene pass on software Vulkan. The existing desktop launch target now contains
 the verified Editor. Physical 150/200%/mixed-DPI, native picker selection, external
 foreground input and hardware Linux remain unverified; this is not new G1/ARPG
 60 FPS or cold-start certification. The 72-row matrix retains V02/V10/D11 and P22's
-explicit boundaries. Stage 3 has its separate report above; stages 4–6 are not started; overlapping stage-4 work reuses
-this evidence when that stage is reconciled.
+explicit boundaries. Stage 3 has its separate report above. The first 0.5
+scenario reuses the overlapping stage-4 evidence. Stages 4–6 remain open.
 
 On 14 November the user's queued UI requests were consolidated into an
 [editor design with primary-source research](editor-ui-design.md), a

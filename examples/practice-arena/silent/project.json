@@ -1,0 +1,916 @@
+{
+  "asset_manifest": null,
+  "custom_sources": {},
+  "engine": {
+    "enabled_modules": [],
+    "exposure": {
+      "parameters": {
+        "exposure": {
+          "default": 1.0,
+          "label": "Exposure",
+          "target": {
+            "name": "exposure",
+            "pass": "tonemap"
+          },
+          "value_type": {
+            "Number": {
+              "max": 8.0,
+              "min": 0.01
+            }
+          }
+        }
+      },
+      "variants": {
+        "antialiasing": {
+          "default": "fxaa",
+          "label": "Antialiasing",
+          "options": {
+            "fxaa": {
+              "commands": [
+                {
+                  "SetEnabled": {
+                    "enabled": true,
+                    "pass": "aa"
+                  }
+                }
+              ],
+              "label": "FXAA"
+            },
+            "off": {
+              "commands": [
+                {
+                  "SetEnabled": {
+                    "enabled": false,
+                    "pass": "aa"
+                  }
+                }
+              ],
+              "label": "Off"
+            }
+          }
+        },
+        "tonemap": {
+          "default": "aces",
+          "label": "Tone mapping",
+          "options": {
+            "aces": {
+              "commands": [
+                {
+                  "SetParameter": {
+                    "name": "mode",
+                    "pass": "tonemap",
+                    "value": 1.0
+                  }
+                }
+              ],
+              "label": "ACES"
+            },
+            "reinhard": {
+              "commands": [
+                {
+                  "SetParameter": {
+                    "name": "mode",
+                    "pass": "tonemap",
+                    "value": 0.0
+                  }
+                }
+              ],
+              "label": "Reinhard"
+            }
+          }
+        }
+      }
+    },
+    "initialized": true
+  },
+  "engine_lock": {
+    "component_schemas": {
+      "actor": {
+        "contract_hash": "ff11f2db523fc916d8ee3e58dfb7709d4b9ec963912fbdff3253b05c08fb120d",
+        "owner_module": "game.movement",
+        "version": "1"
+      },
+      "ai": {
+        "contract_hash": "59518e0b7445ed67baba909cb68da729597ef9c22e925c7558fd095d9525202c",
+        "owner_module": "game.ai",
+        "version": "1"
+      },
+      "boss": {
+        "contract_hash": "ecfa2f104f7cfcd1989217aff29bcf29c5cb41c90374c7a9afc8df5b9d435dde",
+        "owner_module": "game.health",
+        "version": "1"
+      },
+      "health": {
+        "contract_hash": "3352bd6bf8b15f18447408f950fbb5f2b4e26497820a9b6469e6961a8c0d942f",
+        "owner_module": "game.health",
+        "version": "1"
+      },
+      "material": {
+        "contract_hash": "43c87a9c77d77045613c60f6e2d3e17341ffb3d99fa34f8eb5f15b15e537060b",
+        "owner_module": "scene.extract",
+        "version": "1"
+      },
+      "melee": {
+        "contract_hash": "9c7725c43c88cae63269b4143d9a17392c5f2433fa9ec691e6fa6dbb97cd2890",
+        "owner_module": "game.combat",
+        "version": "1"
+      },
+      "mesh": {
+        "contract_hash": "d93061cb532cc3d96581fa3a461186a9a014a5b3af415344f38dab831e37b69f",
+        "owner_module": "scene.extract",
+        "version": "1"
+      },
+      "obstacle": {
+        "contract_hash": "67037276a6dadde46c3f81a3d27df7b9bb09ff7334837a825ba6d8c522ea8a97",
+        "owner_module": "game.collision",
+        "version": "1"
+      },
+      "persistent": {
+        "contract_hash": "a51f236f2d8e9e78270f9f84c466cfe968b8507d3e2ecb4652fccd7b12ba4244",
+        "owner_module": "game.portals",
+        "version": "1"
+      },
+      "player": {
+        "contract_hash": "efb0517cfc7d4b714efa07722b32acfe634ab368e637cf2b5a4b3501d270c598",
+        "owner_module": "game.input",
+        "version": "1"
+      },
+      "portal": {
+        "contract_hash": "58882a8921fb8c2f361ab42f1cf3c9d1ba0c63051dad27fb487aa926aab7d899",
+        "owner_module": "game.portals",
+        "version": "1"
+      }
+    },
+    "lock_fingerprint": "c6de095e0bd909e5a136d5a16df0629018c7dd7b7f285c5164c815242f19030c",
+    "profile": {
+      "fingerprint": "7114bec52eea80dfa1302a03601119715b5a49b0d0dfa9694138c142e41c6314",
+      "id": "module-engine.arpg",
+      "version": "1"
+    },
+    "sdk": {
+      "data_api_fingerprint": "module-engine-data-api/v3",
+      "version": "0.4.0"
+    },
+    "system_state_schemas": {
+      "custom.rust.update": "owned-rust-state-v1",
+      "game.ai": "game.ai/1",
+      "game.audio": "game.audio/1",
+      "game.collision": "game.collision/1",
+      "game.combat": "game.combat/1",
+      "game.health": "game.health/1",
+      "game.input": "game.input/1",
+      "game.movement": "game.movement/1",
+      "game.portals": "game.portals/1"
+    }
+  },
+  "engine_profile": {
+    "blueprint": {
+      "available_modules": [
+        "clock.time",
+        "custom.rust",
+        "custom.rust.update",
+        "example.spin",
+        "game.ai",
+        "game.audio",
+        "game.collision",
+        "game.combat",
+        "game.health",
+        "game.input",
+        "game.motion",
+        "game.movement",
+        "game.portals",
+        "gpu.color_encode",
+        "gpu.custom",
+        "gpu.deferred",
+        "gpu.depth_normal",
+        "gpu.forward",
+        "gpu.fxaa",
+        "gpu.gbuffer",
+        "gpu.ssao",
+        "gpu.tonemap",
+        "interface.input",
+        "interface.output",
+        "render.rasterize",
+        "render.software3d",
+        "render.vulkan",
+        "scalar.value",
+        "scene.extract",
+        "viewport.output",
+        "world.ecs",
+        "world.objects"
+      ],
+      "custom_sources": {},
+      "default_execution": {
+        "resources": [],
+        "stages": []
+      },
+      "engine": {
+        "enabled_modules": [],
+        "exposure": {
+          "parameters": {
+            "exposure": {
+              "default": 1.0,
+              "label": "Exposure",
+              "target": {
+                "name": "exposure",
+                "pass": "tonemap"
+              },
+              "value_type": {
+                "Number": {
+                  "max": 8.0,
+                  "min": 0.01
+                }
+              }
+            }
+          },
+          "variants": {
+            "antialiasing": {
+              "default": "fxaa",
+              "label": "Antialiasing",
+              "options": {
+                "fxaa": {
+                  "commands": [
+                    {
+                      "SetEnabled": {
+                        "enabled": true,
+                        "pass": "aa"
+                      }
+                    }
+                  ],
+                  "label": "FXAA"
+                },
+                "off": {
+                  "commands": [
+                    {
+                      "SetEnabled": {
+                        "enabled": false,
+                        "pass": "aa"
+                      }
+                    }
+                  ],
+                  "label": "Off"
+                }
+              }
+            },
+            "tonemap": {
+              "default": "aces",
+              "label": "Tone mapping",
+              "options": {
+                "aces": {
+                  "commands": [
+                    {
+                      "SetParameter": {
+                        "name": "mode",
+                        "pass": "tonemap",
+                        "value": 1.0
+                      }
+                    }
+                  ],
+                  "label": "ACES"
+                },
+                "reinhard": {
+                  "commands": [
+                    {
+                      "SetParameter": {
+                        "name": "mode",
+                        "pass": "tonemap",
+                        "value": 0.0
+                      }
+                    }
+                  ],
+                  "label": "Reinhard"
+                }
+              }
+            }
+          }
+        },
+        "initialized": true
+      },
+      "root": {
+        "edges": [
+          {
+            "from_node": "world",
+            "from_port": "world",
+            "to_node": "extract",
+            "to_port": "world"
+          },
+          {
+            "from_node": "extract",
+            "from_port": "scene",
+            "to_node": "renderer",
+            "to_port": "scene"
+          },
+          {
+            "from_node": "renderer",
+            "from_port": "frame",
+            "to_node": "viewport",
+            "to_port": "frame"
+          }
+        ],
+        "nodes": [
+          {
+            "id": "world",
+            "label": "World",
+            "module": "world.ecs",
+            "params": {},
+            "position": [
+              70.0,
+              120.0
+            ]
+          },
+          {
+            "id": "extract",
+            "label": "Extract scene",
+            "module": "scene.extract",
+            "params": {},
+            "position": [
+              325.0,
+              120.0
+            ]
+          },
+          {
+            "id": "renderer",
+            "label": "Vulkan renderer",
+            "module": "render.vulkan",
+            "params": {},
+            "position": [
+              580.0,
+              120.0
+            ],
+            "subgraph": {
+              "edges": [
+                {
+                  "from_node": "scene",
+                  "from_port": "value",
+                  "to_node": "geometry",
+                  "to_port": "scene"
+                },
+                {
+                  "from_node": "geometry",
+                  "from_port": "color",
+                  "to_node": "ao",
+                  "to_port": "color"
+                },
+                {
+                  "from_node": "geometry",
+                  "from_port": "normals",
+                  "to_node": "ao",
+                  "to_port": "normals"
+                },
+                {
+                  "from_node": "geometry",
+                  "from_port": "depth",
+                  "to_node": "ao",
+                  "to_port": "depth"
+                },
+                {
+                  "from_node": "ao",
+                  "from_port": "color",
+                  "to_node": "tonemap",
+                  "to_port": "color"
+                },
+                {
+                  "from_node": "tonemap",
+                  "from_port": "color",
+                  "to_node": "aa",
+                  "to_port": "color"
+                },
+                {
+                  "from_node": "aa",
+                  "from_port": "color",
+                  "to_node": "encode",
+                  "to_port": "color"
+                },
+                {
+                  "from_node": "encode",
+                  "from_port": "frame",
+                  "to_node": "frame",
+                  "to_port": "value"
+                }
+              ],
+              "nodes": [
+                {
+                  "id": "scene",
+                  "label": "Scene input",
+                  "module": "interface.input",
+                  "params": {
+                    "data_type": "Scene3D",
+                    "port": "scene"
+                  },
+                  "position": [
+                    20.0,
+                    90.0
+                  ]
+                },
+                {
+                  "id": "geometry",
+                  "label": "Geometry GPU pass",
+                  "module": "gpu.forward",
+                  "params": {},
+                  "position": [
+                    245.0,
+                    90.0
+                  ]
+                },
+                {
+                  "id": "ao",
+                  "label": "ao",
+                  "module": "gpu.ssao",
+                  "params": {
+                    "strength": 0.8
+                  },
+                  "position": [
+                    695.0,
+                    90.0
+                  ]
+                },
+                {
+                  "id": "tonemap",
+                  "label": "tonemap",
+                  "module": "gpu.tonemap",
+                  "params": {
+                    "exposure": 1.0,
+                    "mode": "aces"
+                  },
+                  "position": [
+                    920.0,
+                    90.0
+                  ]
+                },
+                {
+                  "id": "aa",
+                  "label": "aa",
+                  "module": "gpu.fxaa",
+                  "params": {},
+                  "position": [
+                    1145.0,
+                    90.0
+                  ]
+                },
+                {
+                  "id": "encode",
+                  "label": "encode",
+                  "module": "gpu.color_encode",
+                  "params": {},
+                  "position": [
+                    1370.0,
+                    90.0
+                  ]
+                },
+                {
+                  "id": "frame",
+                  "label": "Frame output",
+                  "module": "interface.output",
+                  "params": {
+                    "data_type": "Frame3D",
+                    "port": "frame"
+                  },
+                  "position": [
+                    1595.0,
+                    90.0
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "id": "viewport",
+            "label": "Viewport",
+            "module": "viewport.output",
+            "params": {},
+            "position": [
+              840.0,
+              120.0
+            ]
+          }
+        ]
+      },
+      "shader_sources": {}
+    },
+    "identity": {
+      "fingerprint": "7114bec52eea80dfa1302a03601119715b5a49b0d0dfa9694138c142e41c6314",
+      "id": "module-engine.arpg",
+      "version": "1"
+    }
+  },
+  "game": {
+    "audio_cues": {
+      "attack": "assets/audio/attack.wav"
+    },
+    "entry_scene": "arena",
+    "execution": {
+      "resources": [
+        {
+          "data_type": "GameWorld",
+          "external": true,
+          "initial": null,
+          "name": "world"
+        },
+        {
+          "data_type": "GameInput",
+          "external": true,
+          "initial": null,
+          "name": "input"
+        },
+        {
+          "data_type": "GameEvents",
+          "external": true,
+          "initial": [],
+          "name": "events"
+        },
+        {
+          "data_type": "Positions",
+          "external": false,
+          "initial": null,
+          "name": "previous"
+        }
+      ],
+      "stages": [
+        {
+          "name": "Controllers",
+          "nodes": [
+            {
+              "after": [],
+              "bindings": {
+                "input": "input",
+                "world": "world"
+              },
+              "id": "system-0",
+              "module": "game.input",
+              "params": {}
+            }
+          ]
+        },
+        {
+          "name": "AI",
+          "nodes": [
+            {
+              "after": [
+                "system-0"
+              ],
+              "bindings": {
+                "world": "world"
+              },
+              "id": "system-1",
+              "module": "game.ai",
+              "params": {}
+            }
+          ]
+        },
+        {
+          "name": "Movement",
+          "nodes": [
+            {
+              "after": [
+                "system-1"
+              ],
+              "bindings": {
+                "previous": "previous",
+                "world": "world"
+              },
+              "id": "system-2",
+              "module": "game.movement",
+              "params": {}
+            }
+          ]
+        },
+        {
+          "name": "Collisions",
+          "nodes": [
+            {
+              "after": [
+                "system-2"
+              ],
+              "bindings": {
+                "previous": "previous",
+                "world": "world"
+              },
+              "id": "system-3",
+              "module": "game.collision",
+              "params": {}
+            }
+          ]
+        },
+        {
+          "name": "Combat",
+          "nodes": [
+            {
+              "after": [
+                "system-3"
+              ],
+              "bindings": {
+                "events": "events",
+                "world": "world"
+              },
+              "id": "system-4",
+              "module": "game.combat",
+              "params": {}
+            }
+          ]
+        },
+        {
+          "name": "Health",
+          "nodes": [
+            {
+              "after": [
+                "system-4"
+              ],
+              "bindings": {
+                "events": "events",
+                "world": "world"
+              },
+              "id": "system-5",
+              "module": "game.health",
+              "params": {}
+            }
+          ]
+        },
+        {
+          "name": "Scenes",
+          "nodes": [
+            {
+              "after": [
+                "system-5"
+              ],
+              "bindings": {
+                "events": "events",
+                "world": "world"
+              },
+              "id": "system-6",
+              "module": "game.portals",
+              "params": {}
+            }
+          ]
+        },
+        {
+          "name": "Audio events",
+          "nodes": []
+        }
+      ]
+    },
+    "prefabs": {},
+    "scene_assets": {
+      "arena": {
+        "id": "scene-1795014073075-39392-1",
+        "path": "scenes/practice.scene.json"
+      }
+    }
+  },
+  "module_versions": {
+    "clock.time": "0.4.0",
+    "custom.rust": "0.4.0",
+    "custom.rust.update": "0.4.0",
+    "example.spin": "0.4.0",
+    "game.ai": "0.4.0",
+    "game.audio": "0.4.0",
+    "game.collision": "0.4.0",
+    "game.combat": "0.4.0",
+    "game.health": "0.4.0",
+    "game.input": "0.4.0",
+    "game.motion": "0.4.0",
+    "game.movement": "0.4.0",
+    "game.portals": "0.4.0",
+    "gpu.color_encode": "0.4.0",
+    "gpu.custom": "0.4.0",
+    "gpu.deferred": "0.4.0",
+    "gpu.depth_normal": "0.4.0",
+    "gpu.forward": "0.4.0",
+    "gpu.fxaa": "0.4.0",
+    "gpu.gbuffer": "0.4.0",
+    "gpu.ssao": "0.4.0",
+    "gpu.tonemap": "0.4.0",
+    "interface.input": "0.4.0",
+    "interface.output": "0.4.0",
+    "render.rasterize": "0.4.0",
+    "render.software3d": "0.4.0",
+    "render.vulkan": "0.4.0",
+    "scalar.value": "0.4.0",
+    "scene.extract": "0.4.0",
+    "viewport.output": "0.4.0",
+    "world.ecs": "0.4.0",
+    "world.objects": "0.4.0"
+  },
+  "name": "Practice Arena - Silent",
+  "project": {
+    "parameters": {},
+    "rules": [],
+    "variants": {}
+  },
+  "properties": {
+    "active": {
+      "components": {},
+      "global": {},
+      "modules": {},
+      "objects": {}
+    },
+    "detached_components": {},
+    "inactive": {
+      "components": {},
+      "global": {},
+      "modules": {},
+      "objects": {}
+    }
+  },
+  "root": {
+    "edges": [
+      {
+        "from_node": "world",
+        "from_port": "world",
+        "to_node": "extract",
+        "to_port": "world"
+      },
+      {
+        "from_node": "extract",
+        "from_port": "scene",
+        "to_node": "renderer",
+        "to_port": "scene"
+      },
+      {
+        "from_node": "renderer",
+        "from_port": "frame",
+        "to_node": "viewport",
+        "to_port": "frame"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "world",
+        "label": "World",
+        "module": "world.ecs",
+        "params": {},
+        "position": [
+          70.0,
+          120.0
+        ]
+      },
+      {
+        "id": "extract",
+        "label": "Extract scene",
+        "module": "scene.extract",
+        "params": {},
+        "position": [
+          325.0,
+          120.0
+        ]
+      },
+      {
+        "id": "renderer",
+        "label": "Vulkan renderer",
+        "module": "render.vulkan",
+        "params": {},
+        "position": [
+          580.0,
+          120.0
+        ],
+        "subgraph": {
+          "edges": [
+            {
+              "from_node": "scene",
+              "from_port": "value",
+              "to_node": "geometry",
+              "to_port": "scene"
+            },
+            {
+              "from_node": "geometry",
+              "from_port": "color",
+              "to_node": "ao",
+              "to_port": "color"
+            },
+            {
+              "from_node": "geometry",
+              "from_port": "normals",
+              "to_node": "ao",
+              "to_port": "normals"
+            },
+            {
+              "from_node": "geometry",
+              "from_port": "depth",
+              "to_node": "ao",
+              "to_port": "depth"
+            },
+            {
+              "from_node": "ao",
+              "from_port": "color",
+              "to_node": "tonemap",
+              "to_port": "color"
+            },
+            {
+              "from_node": "tonemap",
+              "from_port": "color",
+              "to_node": "aa",
+              "to_port": "color"
+            },
+            {
+              "from_node": "aa",
+              "from_port": "color",
+              "to_node": "encode",
+              "to_port": "color"
+            },
+            {
+              "from_node": "encode",
+              "from_port": "frame",
+              "to_node": "frame",
+              "to_port": "value"
+            }
+          ],
+          "nodes": [
+            {
+              "id": "scene",
+              "label": "Scene input",
+              "module": "interface.input",
+              "params": {
+                "data_type": "Scene3D",
+                "port": "scene"
+              },
+              "position": [
+                20.0,
+                90.0
+              ]
+            },
+            {
+              "id": "geometry",
+              "label": "Geometry GPU pass",
+              "module": "gpu.forward",
+              "params": {},
+              "position": [
+                245.0,
+                90.0
+              ]
+            },
+            {
+              "id": "ao",
+              "label": "ao",
+              "module": "gpu.ssao",
+              "params": {
+                "strength": 0.8
+              },
+              "position": [
+                695.0,
+                90.0
+              ]
+            },
+            {
+              "id": "tonemap",
+              "label": "tonemap",
+              "module": "gpu.tonemap",
+              "params": {
+                "exposure": 1.0,
+                "mode": "aces"
+              },
+              "position": [
+                920.0,
+                90.0
+              ]
+            },
+            {
+              "id": "aa",
+              "label": "aa",
+              "module": "gpu.fxaa",
+              "params": {},
+              "position": [
+                1145.0,
+                90.0
+              ]
+            },
+            {
+              "id": "encode",
+              "label": "encode",
+              "module": "gpu.color_encode",
+              "params": {},
+              "position": [
+                1370.0,
+                90.0
+              ]
+            },
+            {
+              "id": "frame",
+              "label": "Frame output",
+              "module": "interface.output",
+              "params": {
+                "data_type": "Frame3D",
+                "port": "frame"
+              },
+              "position": [
+                1595.0,
+                90.0
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": "viewport",
+        "label": "Viewport",
+        "module": "viewport.output",
+        "params": {},
+        "position": [
+          840.0,
+          120.0
+        ]
+      }
+    ]
+  },
+  "scene_storage_version": 1,
+  "schema_version": 4,
+  "shader_sources": {}
+}

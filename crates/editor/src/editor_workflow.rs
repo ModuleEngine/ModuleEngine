@@ -116,6 +116,7 @@ fn same_path(a: &Path, b: &Path) -> bool {
 
 pub struct Workflow {
     pub(super) workspace_dialog: Option<super::workspaces::WorkspaceDialog>,
+    pub(super) audio_removal: bool,
     saved: GraphDocument,
     recent: RecentProjects,
     recent_path: Option<PathBuf>,
@@ -139,6 +140,7 @@ impl Workflow {
     pub fn new(document: GraphDocument) -> Self {
         Self {
             workspace_dialog: None,
+            audio_removal: false,
             saved: document,
             recent: RecentProjects::default(),
             recent_path: None,
@@ -170,6 +172,7 @@ impl Workflow {
             || self.guard.is_some()
             || self.show_report
             || self.workspace_dialog.is_some()
+            || self.audio_removal
     }
     pub(super) fn has_asset_history(&self) -> bool {
         !self.asset_history.is_empty()
@@ -260,6 +263,7 @@ impl Editor {
         } else {
             self.document.clone()
         };
+        crate::game_ui::validate_audio_removal(&self.document, &candidate)?;
         self.validate_candidate(&candidate, self.can_author_engine())?;
         Ok(candidate)
     }
@@ -1047,7 +1051,10 @@ impl Editor {
             && !self.workflow.allow_close
             && !self.scene_source_ui.active()
         {
-            if self.workflow.job.is_some() || self.workflow.guard.is_some() {
+            if self.workflow.job.is_some()
+                || self.workflow.guard.is_some()
+                || self.workflow.audio_removal
+            {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             } else if self.has_unsaved_work() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -1632,6 +1639,7 @@ impl Editor {
     }
     pub(super) fn draw_workflow_modals(&mut self, ctx: &egui::Context) {
         self.draw_workspace_dialog(ctx);
+        self.draw_audio_removal_dialog(ctx);
         if !self.workflow.blocks_document_edits() {
             self.draw_scene_source_dialog(ctx);
         }

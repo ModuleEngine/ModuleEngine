@@ -6,22 +6,17 @@ use std::collections::BTreeMap;
 
 /// Install source-owned project behavior; the core calls all installed hooks.
 pub fn install_project_contracts(registry: &mut SystemRegistry) -> Result<(), String> {
-    registry.register_project_contract("game.audio", validate_audio_project, prepare_audio_project)
-}
-
-fn audio_active(project: &GameProject) -> bool {
-    project
-        .execution
-        .stages
-        .iter()
-        .flat_map(|stage| &stage.nodes)
-        .any(|node| node.module == "game.audio")
+    registry.register_project_contract(
+        crate::AUDIO_SYSTEM,
+        validate_audio_project,
+        prepare_audio_project,
+    )
 }
 fn validate_audio_project(
     project: &GameProject,
     context: &ComponentValidationContext<'_>,
 ) -> Result<(), String> {
-    if audio_active(project) {
+    if crate::audio_playback_enabled(project) {
         for reference in project.audio_cues.values() {
             validate_component_asset_reference(reference, &["wav".into()], context)?;
         }
@@ -29,7 +24,7 @@ fn validate_audio_project(
     Ok(())
 }
 fn prepare_audio_project(project: &mut GameProject) -> Result<(), String> {
-    if !audio_active(project) {
+    if !crate::audio_playback_enabled(project) {
         let owned = crate::host_contribution().activation_modules;
         let mut nodes = project
             .execution
@@ -41,8 +36,8 @@ fn prepare_audio_project(project: &mut GameProject) -> Result<(), String> {
         // even an ARPG cue name, so only an exclusively ARPG schedule proves
         // these four emitted cues unused. Unknown keys remain opaque.
         if nodes.peek().is_some() && nodes.all(|node| owned.contains(&node.module)) {
-            for cue in ["attack", "hit", "death", "victory"] {
-                project.audio_cues.remove(cue);
+            for cue in crate::SoundCue::ALL {
+                project.audio_cues.remove(cue.name());
             }
         }
     }
@@ -85,7 +80,7 @@ pub fn gameplay_schedule() -> ExecutionGraph {
         ("Combat", "game.combat", vec!["world", "events"]),
         ("Health", "game.health", vec!["world", "events"]),
         ("Scenes", "game.portals", vec!["world", "events"]),
-        ("Audio events", "game.audio", vec!["events"]),
+        ("Audio events", crate::AUDIO_SYSTEM, vec!["events"]),
     ];
     let stages = configs
         .into_iter()

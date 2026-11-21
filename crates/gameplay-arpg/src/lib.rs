@@ -89,7 +89,7 @@ pub fn install(registry: &mut SystemRegistry) -> Result<(), String> {
             "Apply the game's portal conditions and carry selected actors into another scene.",
         ),
         (
-            "game.audio",
+            AUDIO_SYSTEM,
             "ARPG sound events",
             "Translate ARPG gameplay events into game-selected sound cue requests; native playback is a separate service.",
         ),
@@ -105,7 +105,11 @@ pub fn install(registry: &mut SystemRegistry) -> Result<(), String> {
             )
             .configured_by([
                 CapabilityConfiguration::ExecutionGraph,
-                CapabilityConfiguration::ComponentFields,
+                if id == AUDIO_SYSTEM {
+                    CapabilityConfiguration::ProjectSettings
+                } else {
+                    CapabilityConfiguration::ComponentFields
+                },
                 CapabilityConfiguration::NativeSource,
             ]),
         )?;

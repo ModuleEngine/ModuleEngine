@@ -115,6 +115,22 @@ audio service, audio is not created and cue files are not added. A dependency's 
 from a native build is confirmed by its Cargo features/dependency graph; a hidden
 panel, inactive pin or unscheduled system does not prove it.
 
+For ARPG, `game.audio` requests `audio.wav` when at least one scheduled instance
+allows playback and `game.audio_cues` contains bindings. The node parameter
+`playback_enabled: false` opts that instance out of the request. Existing nodes
+with no opt-out retain playback. Disabling the request leaves the original cue
+map in the authored game. Removing the node also removes its translation from
+gameplay events to `Sound`. The Player projection drops unused cue bindings and
+prunes unreferenced WAV files when the dependency information is sufficient.
+See [the Editor route](engine-overview.md#audio-composition).
+
+For a Windows native action capture, run the exported Player with
+`MODULE_ENGINE_GUI_BACKEND=glow`, `EFRAME_SCREENSHOT_TO` set to an absolute PNG
+path outside the package, and `MODULE_ENGINE_CAPTURE_ATTACK=1`. The ARPG capture
+uses a nearby enemy target and logs the input, gameplay events, WAV request,
+active service diagnostics and compiled features. The `played` counter confirms
+the playback request reached the service. Human listening checks audible output.
+
 <a id="custom-sdk-и-фоновые-задачи"></a>
 
 ## Custom SDK and background tasks

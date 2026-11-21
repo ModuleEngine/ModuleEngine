@@ -1,0 +1,301 @@
+{
+  "scene_asset_version": 1,
+  "scene_id": "arena",
+  "asset_id": "scene-1795014073075-39392-1",
+  "scene": {
+    "name": "Practice arena",
+    "objects": [
+      {
+        "object": {
+          "id": 1000,
+          "parent": null,
+          "transform": {
+            "translation": [
+              0.0,
+              -0.5,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              8.0,
+              0.2,
+              8.0
+            ]
+          },
+          "color": [
+            60,
+            78,
+            86,
+            255
+          ]
+        },
+        "prefab": null,
+        "components": {},
+        "overrides": {},
+        "references": {}
+      },
+      {
+        "object": {
+          "id": 1001,
+          "parent": null,
+          "transform": {
+            "translation": [
+              -8.0,
+              0.5,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              0.2,
+              1.0,
+              8.0
+            ]
+          },
+          "color": [
+            95,
+            104,
+            119,
+            255
+          ]
+        },
+        "prefab": null,
+        "components": {
+          "obstacle": {
+            "half_extents": [
+              0.20000000298023224,
+              8.0
+            ]
+          }
+        },
+        "overrides": {},
+        "references": {}
+      },
+      {
+        "object": {
+          "id": 1002,
+          "parent": null,
+          "transform": {
+            "translation": [
+              8.0,
+              0.5,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              0.2,
+              1.0,
+              8.0
+            ]
+          },
+          "color": [
+            95,
+            104,
+            119,
+            255
+          ]
+        },
+        "prefab": null,
+        "components": {
+          "obstacle": {
+            "half_extents": [
+              0.20000000298023224,
+              8.0
+            ]
+          }
+        },
+        "overrides": {},
+        "references": {}
+      },
+      {
+        "object": {
+          "id": 1003,
+          "parent": null,
+          "transform": {
+            "translation": [
+              0.0,
+              0.5,
+              8.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              8.0,
+              1.0,
+              0.2
+            ]
+          },
+          "color": [
+            95,
+            104,
+            119,
+            255
+          ]
+        },
+        "prefab": null,
+        "components": {
+          "obstacle": {
+            "half_extents": [
+              8.0,
+              0.20000000298023224
+            ]
+          }
+        },
+        "overrides": {},
+        "references": {}
+      },
+      {
+        "object": {
+          "id": 1006,
+          "parent": null,
+          "transform": {
+            "translation": [
+              -3.0,
+              0.4,
+              1.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              0.8,
+              0.8,
+              0.8
+            ]
+          },
+          "color": [
+            95,
+            104,
+            119,
+            255
+          ]
+        },
+        "prefab": null,
+        "components": {
+          "obstacle": {
+            "half_extents": [
+              0.800000011920929,
+              0.800000011920929
+            ]
+          }
+        },
+        "overrides": {},
+        "references": {}
+      },
+      {
+        "object": {
+          "id": 1,
+          "parent": null,
+          "transform": {
+            "translation": [
+              0.0,
+              0.0,
+              5.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              0.35,
+              0.7,
+              0.35
+            ]
+          },
+          "color": [
+            70,
+            170,
+            245,
+            255
+          ]
+        },
+        "prefab": null,
+        "components": {
+          "actor": {
+            "radius": 0.35,
+            "speed": 6.0,
+            "team": "player"
+          },
+          "health": {
+            "current": 100.0,
+            "maximum": 100.0
+          },
+          "melee": {
+            "arc": 1.9,
+            "cooldown": 0.35,
+            "damage": 28.0,
+            "duration": 0.12,
+            "range": 2.2,
+            "windup": 0.0
+          },
+          "mesh": {
+            "path": "assets/models/demo_crystal.glb"
+          },
+          "persistent": {},
+          "player": {}
+        },
+        "overrides": {},
+        "references": {}
+      },
+      {
+        "object": {
+          "id": 10,
+          "parent": null,
+          "transform": {
+            "translation": [
+              0.0,
+              0.0,
+              3.4
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              0.3,
+              0.45,
+              0.3
+            ]
+          },
+          "color": [
+            190,
+            80,
+            85,
+            255
+          ]
+        },
+        "components": {
+          "actor": {
+            "team": "enemy",
+            "radius": 0.36,
+            "speed": 2.1
+          },
+          "health": {
+            "maximum": 1000.0,
+            "current": 1000.0
+          }
+        },
+        "overrides": {},
+        "references": {}
+      }
+    ]
+  }
+}

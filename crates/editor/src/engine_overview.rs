@@ -1,4 +1,4 @@
-//! Read-only discovery of source-owned capabilities; existing tools own edits.
+//! Discovery of source-owned capabilities and preview of ARPG audio changes.
 use super::{Editor, EditorType, Graph, WorkspaceKind, egui, panes::PaneMemory};
 use module_engine_core::{
     CapabilityConfiguration as Route, CapabilityDependencyKind, CapabilityFact,
@@ -10,6 +10,7 @@ use std::sync::Arc;
 pub(super) struct OverviewCache {
     inventory: Option<Arc<CapabilityInventory>>,
     basis: Option<Result<String, String>>,
+    audio_feature: Option<Result<bool, String>>,
     invalidated_at: Option<f64>,
 }
 
@@ -62,6 +63,7 @@ pub(super) enum OverviewTarget {
     },
     Rust(String),
     Hlsl(String),
+    AudioSystem(String),
     Window(EditorType),
 }
 impl OverviewTarget {
@@ -70,6 +72,7 @@ impl OverviewTarget {
             Self::Graph { .. } => EditorType::ModuleGraph,
             Self::Rust(_) => EditorType::RustCustom,
             Self::Hlsl(_) => EditorType::Hlsl,
+            Self::AudioSystem(_) => EditorType::GameSystems,
             Self::Window(editor) => *editor,
         }
     }
@@ -180,6 +183,16 @@ impl Editor {
             records: vec![],
             diagnostics: vec![format!("Capability inspection failed: {error}")],
         });
+        self.overview.audio_feature = inventory
+            .records
+            .iter()
+            .any(|record| {
+                record.id == "arpg.presentation" && record.participation.value == Some(true)
+            })
+            .then(|| {
+                crate::game_package::selected_features(&self.document, &root)
+                    .map(|features| features.contains("audio"))
+            });
         inventory.records.extend(self.module_panel_capabilities());
         inventory.records.sort_by(|a, b| {
             (
@@ -458,6 +471,12 @@ impl Editor {
         ui.monospace(&record.id);
         ui.label(&record.metadata.purpose);
         ui.add_space(12.);
+        if matches!(
+            record.id.as_str(),
+            module_engine_arpg::AUDIO_SYSTEM | module_engine_arpg::AUDIO_SERVICE
+        ) {
+            self.audio_overview(ui);
+        }
         let (mut actions, notes) = self.overview_actions(record);
         if record.metadata.kind == CapabilityKind::Renderer
             && let Some(index) = actions
@@ -558,6 +577,220 @@ impl Editor {
         if record.metadata.configuration.contains(&Route::NativeSource) {
             ui.small("Native source/build configuration: edit the implementation package and rebuild. This is not a live module toggle.");
         }
+    }
+
+    fn audio_overview(&mut self, ui: &mut egui::Ui) {
+        use crate::game_ui::audio_wav_label;
+        use module_engine_arpg::{
+            AUDIO_SERVICE, AUDIO_SYSTEM, audio_cue_event, audio_nodes, has_audio_request,
+        };
+
+        let Some(feature) = &self.overview.audio_feature else {
+            return;
+        };
+        let Some(game) = &self.document.game else {
+            return;
+        };
+        let nodes = audio_nodes(game)
+            .map(|node| node.id.clone())
+            .collect::<Vec<_>>();
+        let requested = has_audio_request(game);
+        let manifest = requested
+            .then(|| {
+                module_engine_project::AssetManifest::from_value(&self.document.asset_manifest).ok()
+            })
+            .flatten();
+        super::editor_ui::section(ui, "ARPG audio dependencies");
+        if requested {
+            for (cue, wav) in &game.audio_cues {
+                let wav = audio_wav_label(manifest.as_ref(), wav);
+                let event = audio_cue_event(cue);
+                ui.label(if event == module_engine_arpg::SOUND_EVENT {
+                    format!("Sound ({cue}) → {wav}")
+                } else {
+                    format!("{event} → Sound ({cue}) → {wav}")
+                });
+            }
+            ui.label(format!("WAV playback requested from {AUDIO_SERVICE}."));
+        } else {
+            ui.label("No ARPG WAV playback request.");
+            if !game.audio_cues.is_empty() {
+                ui.label("Cue bindings are retained in the project.");
+            }
+        }
+        if self.overview.invalidated_at.is_some() {
+            ui.label("Player build feature: refresh pending");
+        } else {
+            match feature {
+                Ok(true) => {
+                    ui.label("Player build feature: audio selected");
+                }
+                Ok(false) => {
+                    ui.label("Player build feature: audio omitted");
+                }
+                Err(error) => {
+                    ui.label(format!("Player build feature unknown: {error}"));
+                }
+            }
+        }
+        for id in &nodes {
+            let target = OverviewTarget::AudioSystem(id.clone());
+            let valid = self.overview_target_valid(&target);
+            let response = ui.add_enabled(
+                valid.is_ok(),
+                egui::Button::new(format!("Show {AUDIO_SYSTEM} · {id}")),
+            );
+            if response.clicked() {
+                self.overview_navigation = Some(target);
+            }
+            if let Err(error) = valid {
+                response.on_disabled_hover_text(error);
+            }
+        }
+        if nodes.is_empty() {
+            return;
+        }
+
+        let permission = self.audio_edit_allowed(true);
+        let mut disable = false;
+        ui.horizontal_wrapped(|ui| {
+            if requested {
+                disable = ui
+                    .add_enabled(
+                        permission.is_ok(),
+                        egui::Button::new("Disable WAV playback request"),
+                    )
+                    .clicked();
+            }
+            if ui
+                .add_enabled(
+                    permission.is_ok(),
+                    egui::Button::new("Remove audio system…"),
+                )
+                .clicked()
+            {
+                self.workflow.audio_removal = true;
+                ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+            }
+        });
+        if let Err(error) = permission {
+            ui.small(error);
+        }
+
+        if disable && let Err(error) = self.edit_audio_composition(false) {
+            self.status = error;
+        }
+    }
+
+    pub(super) fn draw_audio_removal_dialog(&mut self, ctx: &egui::Context) {
+        use crate::game_ui::audio_wav_label;
+        use module_engine_arpg::{audio_cue_event, has_audio_request};
+
+        if !self.workflow.audio_removal {
+            return;
+        }
+        let Some(game) = &self.document.game else {
+            self.workflow.audio_removal = false;
+            return;
+        };
+        let requested = has_audio_request(game);
+        let mut remove = false;
+        let modal = egui::Modal::new(egui::Id::new("remove-audio-system")).show(ctx, |ui| {
+                ui.set_width((ctx.content_rect().width() - 32.).clamp(160., 400.));
+                ui.heading("Remove ARPG audio system");
+                if requested {
+                    let manifest = module_engine_project::AssetManifest::from_value(&self.document.asset_manifest).ok();
+                    ui.label("These events still request WAV playback. Removing their system would stop the sounds.");
+                    egui::ScrollArea::vertical().max_height((ctx.content_rect().height() - 160.).clamp(40., 220.)).show(ui, |ui| {
+                        for (cue, wav) in &game.audio_cues {
+                            ui.label(format!("{} ({cue}) → {}", audio_cue_event(cue), audio_wav_label(manifest.as_ref(), wav)));
+                        }
+                    });
+                    ui.label("Disable the WAV playback request before removing the system.");
+                } else {
+                    ui.label("This removes the ARPG sound event system and its ordering links. Cue bindings and WAV files stay in the project. Undo restores the system.");
+                }
+                ui.horizontal_wrapped(|ui| {
+                    if !requested {
+                        remove = ui.button("Remove audio system").clicked();
+                    }
+                    ui.button("Cancel").clicked()
+                }).inner
+            });
+        if remove || modal.inner || modal.should_close() {
+            self.workflow.audio_removal = false;
+        }
+        if remove && let Err(error) = self.edit_audio_composition(true) {
+            self.status = error;
+        }
+    }
+
+    pub(super) fn audio_edit_allowed(&self, engine: bool) -> Result<(), String> {
+        if engine && !self.can_author_engine() {
+            return Err("Full profile and checked matching sources are required".into());
+        }
+        if self.playing || self.game_workbench.is_play_session() {
+            return Err("Stop Play before changing audio".into());
+        }
+        if self.workflow.blocks_document_edits() {
+            return Err("Finish the current project operation before changing audio".into());
+        }
+        if self.json_dirty
+            || self.game_workbench.has_graph_draft()
+            || self.scene_gesture_before.is_some()
+        {
+            return Err("Finish or discard authoring drafts before changing audio".into());
+        }
+        self.require_resolved_module_tools("changing audio")
+    }
+
+    fn edit_audio_composition(&mut self, remove: bool) -> Result<(), String> {
+        use module_engine_arpg::{AUDIO_SYSTEM, PLAYBACK_ENABLED, audio_nodes};
+
+        self.audio_edit_allowed(true)?;
+        let mut candidate = self.document.clone();
+        let game = candidate.game.as_mut().ok_or("No authored game project")?;
+        let ids = audio_nodes(game)
+            .map(|node| node.id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        for stage in &mut game.execution.stages {
+            if remove {
+                stage.nodes.retain(|node| node.module != AUDIO_SYSTEM);
+                for node in &mut stage.nodes {
+                    node.after.retain(|id| !ids.contains(id));
+                }
+            } else {
+                for node in stage
+                    .nodes
+                    .iter_mut()
+                    .filter(|node| node.module == AUDIO_SYSTEM)
+                {
+                    if node.params.is_null() {
+                        node.params = serde_json::json!({});
+                    }
+                    node.params
+                        .as_object_mut()
+                        .ok_or("The audio system needs object parameters to disable playback")?
+                        .insert(PLAYBACK_ENABLED.into(), serde_json::Value::Bool(false));
+                }
+            }
+        }
+        crate::game_ui::validate_audio_removal(&self.document, &candidate)?;
+        self.validate_candidate(&candidate, true)?;
+        if candidate != self.document {
+            self.flush_history();
+            self.document = candidate;
+            self.policy_baseline = self.document.clone();
+            self.changed(false);
+            self.flush_history();
+            self.status = if remove {
+                "ARPG audio system removed. Undo restores it."
+            } else {
+                "WAV playback request disabled. Undo restores playback."
+            }
+            .into();
+        }
+        Ok(())
     }
 
     fn overview_actions(
@@ -769,6 +1002,13 @@ impl Editor {
             OverviewTarget::Window(EditorType::GameSystems) if self.document.game.is_none() => {
                 return Err("This project has no game execution schedule".into());
             }
+            OverviewTarget::AudioSystem(id) => {
+                if !self.document.game.as_ref().is_some_and(|game| {
+                    module_engine_arpg::audio_nodes(game).any(|node| &node.id == id)
+                }) {
+                    return Err("The audio system is no longer scheduled".into());
+                }
+            }
             _ => {}
         }
         Ok(())
@@ -836,6 +1076,7 @@ impl Editor {
                 memory.current_shader = source;
                 memory.snapshot(&self.document);
             }
+            OverviewTarget::AudioSystem(id) => self.game_workbench.show_execution_node(id),
             OverviewTarget::Window(_) => {}
         }
         self.personal_dirty = true;
@@ -885,7 +1126,11 @@ mod tests {
                 events,
                 ..Default::default()
             },
-            |ui| editor.engine_overview_panel(ui, pane),
+            |ui| {
+                editor.workflow_shortcuts(ui.ctx());
+                editor.engine_overview_panel(ui, pane);
+                editor.draw_audio_removal_dialog(ui.ctx());
+            },
         );
         let text = output
             .shapes
@@ -900,6 +1145,147 @@ mod tests {
             .collect();
         output.drop_without_applying_deltas();
         text
+    }
+
+    #[test]
+    fn audio_overview_blocks_removal_then_saves_and_undoes_the_exact_audio_configuration() {
+        let mut document = crate::game_templates::demo_document();
+        let game = document.game.as_mut().unwrap();
+        game.audio_cues.retain(|cue, _| cue == "attack");
+        game.execution
+            .stages
+            .retain(|stage| stage.name != "Custom game logic");
+        document.custom_sources.clear();
+        let node = game
+            .execution
+            .stages
+            .iter_mut()
+            .flat_map(|stage| &mut stage.nodes)
+            .find(|node| node.module == module_engine_arpg::AUDIO_SYSTEM)
+            .unwrap();
+        node.params = serde_json::json!({"legacy": null});
+        game.audio_cues
+            .insert("attack".into(), "asset://practice-attack".into());
+        let mut document = module_engine_project::externalize_scenes(&document, false).unwrap();
+        let fixture = fixture(&document);
+        for relative in ["assets/audio/attack.wav", "assets/models/demo_crystal.glb"] {
+            let target = fixture.path().join(relative);
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            std::fs::copy(crate::project::source_root().join(relative), target).unwrap();
+        }
+        let mut manifest = module_engine_project::AssetManifest::default();
+        manifest
+            .register("practice-attack", "assets/audio/attack.wav", fixture.path())
+            .unwrap();
+        document.asset_manifest = serde_json::to_value(manifest).unwrap();
+        let path = fixture.path().join("audio-project.json");
+        crate::project::save(&path, &document).unwrap();
+        let document = crate::project::read(&path).unwrap();
+        let mut editor = Editor::new(document.clone(), path.clone());
+        editor.workspace = WorkspaceKind::Engine;
+        let inv = inventory(&mut editor);
+        let mut pane = OverviewPane {
+            selected: Some(CapabilityKey::from(record(
+                &inv,
+                module_engine_arpg::AUDIO_SYSTEM,
+            ))),
+            owner: CapabilityOwner::Gameplay,
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let click = |editor: &mut Editor, pane: &mut OverviewPane, text: &str| {
+            let labels = frame(editor, pane, &ctx, vec![]);
+            let pos = labels
+                .iter()
+                .find(|(label, _)| label == text)
+                .unwrap_or_else(|| panic!("Missing {text}: {labels:?}"))
+                .1;
+            for pressed in [true, false] {
+                frame(
+                    editor,
+                    pane,
+                    &ctx,
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                );
+            }
+        };
+
+        let original_file = std::fs::read(&path).unwrap();
+        click(&mut editor, &mut pane, "Remove audio system…");
+        let blocked = frame(&mut editor, &mut pane, &ctx, vec![]);
+        assert!(
+            blocked
+                .iter()
+                .any(|(label, _)| label.contains("Attack (attack) → assets/audio/attack.wav"))
+        );
+        assert!(
+            !blocked
+                .iter()
+                .any(|(label, _)| label == "Remove audio system")
+        );
+        click(&mut editor, &mut pane, "Cancel");
+        assert!(!editor.workflow.audio_removal);
+        assert_eq!(editor.document, document);
+        assert_eq!(editor.history.cursor(), 0);
+        assert_eq!(std::fs::read(&path).unwrap(), original_file);
+        assert!(
+            editor
+                .edit_audio_composition(true)
+                .unwrap_err()
+                .contains("Attack (attack)")
+        );
+
+        click(&mut editor, &mut pane, "Disable WAV playback request");
+        let muted = editor.document.clone();
+        let game = muted.game.as_ref().unwrap();
+        assert!(!module_engine_arpg::has_audio_request(game));
+        assert_eq!(
+            module_engine_arpg::audio_nodes(game).next().unwrap().params,
+            serde_json::json!({"legacy": null, "playback_enabled": false})
+        );
+        click(&mut editor, &mut pane, "Remove audio system…");
+        for key in [egui::Key::S, egui::Key::Z] {
+            frame(
+                &mut editor,
+                &mut pane,
+                &ctx,
+                vec![egui::Event::Key {
+                    key,
+                    physical_key: Some(key),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::COMMAND,
+                }],
+            );
+        }
+        assert!(editor.workflow.audio_removal);
+        assert_eq!(std::fs::read(&path).unwrap(), original_file);
+        click(&mut editor, &mut pane, "Cancel");
+        assert!(editor.document == muted, "{}", editor.status);
+        click(&mut editor, &mut pane, "Remove audio system…");
+        click(&mut editor, &mut pane, "Remove audio system");
+        let silent = editor.document.game.clone().unwrap();
+        assert!(module_engine_arpg::audio_nodes(&silent).next().is_none());
+        assert_eq!(silent.audio_cues, muted.game.as_ref().unwrap().audio_cues);
+        assert!(editor.save(), "{}", editor.status);
+        let reopened = crate::project::read(&path).unwrap();
+        assert_eq!(reopened.game, Some(silent));
+
+        editor.undo();
+        assert!(editor.document == muted, "{}", editor.status);
+        editor.undo();
+        assert!(editor.document == document, "{}", editor.status);
+        assert!(module_engine_arpg::has_audio_request(
+            editor.document.game.as_ref().unwrap()
+        ));
     }
 
     #[test]

@@ -2,9 +2,9 @@
 
 [English](product-roadmap-checks.md) | [Русский](ru/product-roadmap-checks.md) | [Documentation](README.md)
 
-[Full roadmap](product-roadmap.md#map) · [Next planned milestone: 0.5](product-roadmap.md#compose)
+[Full roadmap](product-roadmap.md#map) · [Current milestone: 0.5](product-roadmap.md#compose)
 
-These cards define owner checks, not evidence of completed releases. **The owner reports that 0.4.1 settings work and are clear; full independent human acceptance remains open. The owner accepted and closed 0.4.2 on 17 November 2026; 0.5 is next planned, with implementation not started.** Before a check, the team supplies a ready learning project, the correct build, launch instructions and the expected result. Use copies. Ordinary supplied help is allowed. Record any human hint. This sheet is self-contained and can be printed; the roadmap explains the work behind each card.
+These cards define owner checks. **The owner reports that 0.4.1 settings work and are clear; full independent human acceptance remains open. The owner accepted and closed 0.4.2 on 17 November 2026. Work on 0.5 started with ARPG audio.** Before a check, the team supplies a ready learning project, the correct build, launch instructions and the expected result. Use copies. Ordinary supplied help is allowed. Record any human hint. This sheet is self-contained and can be printed; the roadmap explains the work behind each card.
 
 Participant: __________________  Build / PC: __________________  Role / rights: __________________
 
@@ -56,11 +56,22 @@ No detailed per-scenario owner transcript was recorded. The original card below 
 
 [Work steps: 0.5](product-roadmap.md#compose)
 
-**Status:** next planned milestone; implementation will be separate work after its brief.
+**First scenario.** Start with the two Practice Arena examples. Click the target
+with the left mouse button in each Player. Both swings hit the target. One plays
+an attack signal. The other runs silently.
 
-**Do:** Remove audio while an event still refers to it. Then remove the request and try again.
+The owner confirmed hits in both exported Players and heard the signal only in With Sound.
+The source projects are [With Sound](../examples/practice-arena/with-sound/project.json) and [Silent](../examples/practice-arena/silent/project.json).
 
-**Success:** First it is clear what blocks removal; after the change, the game starts without the service. Returning restores the previous value.
+**Do.** In Full, open **Engine Overview → Gameplay → ARPG sound events** on a copy
+of the With Sound project. Try **Remove audio system…** and cancel. Then choose
+**Disable WAV playback request**, confirm removal, save and reopen the copy.
+For the Undo check, repeat the two edits in one session and undo them both before
+reopening. In Team, compare **Edit → Project Settings** for the two copies.
+
+**Success.** The `Attack` binding explains the refusal. The edited game runs
+silently, Team shows Audio only for With Sound, and Undo restores the original
+schedule and binding. [Editor steps](engine-overview.md#audio-composition).
 
 **Boundary:** The team shows the package composition. A missing button alone is not proof.
 

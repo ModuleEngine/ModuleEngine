@@ -20,6 +20,13 @@ fn project_settings_sections(
     {
         sections.push(("rendering".into(), "Rendering".into()));
     }
+    if document
+        .game
+        .as_ref()
+        .is_some_and(module_engine_arpg::has_audio_request)
+    {
+        sections.push(("audio".into(), "Audio".into()));
+    }
     let owners = schemas
         .iter()
         .map(|(owner, _)| owner)
@@ -511,7 +518,15 @@ impl Editor {
                 self.project_settings_fields(ui, &mut candidate, &schemas, &sections, &mut state);
         }
         if changed {
-            if self.commit_properties(candidate, false) {
+            if state.section == "audio" {
+                let result = self.audio_edit_allowed(false).and_then(|_| {
+                    self.flush_history();
+                    self.commit_scene_document(candidate, "Audio cue updated")?;
+                    self.flush_history();
+                    Ok(())
+                });
+                state.error = result.err();
+            } else if self.commit_properties(candidate, false) {
                 state.error = None;
             } else {
                 state.error = Some(self.status.clone());
@@ -531,6 +546,9 @@ impl Editor {
         let mut changed = false;
         if let Some((_, label)) = sections.iter().find(|(id, _)| id == &state.section) {
             ui.heading(label);
+        }
+        if state.section == "audio" {
+            return self.audio_cue_settings(ui, candidate, state);
         }
         if state.section == "rendering" {
             for (id, exposed) in &self.document.engine.exposure.parameters {
@@ -630,6 +648,93 @@ impl Editor {
                 .show(ui, |ui| {
                     changed |= self.project_settings_conditions(ui, candidate)
                 });
+        }
+        changed
+    }
+
+    fn audio_cue_settings(
+        &self,
+        ui: &mut egui::Ui,
+        candidate: &mut GraphDocument,
+        state: &mut ProjectSettingsState,
+    ) -> bool {
+        use module_engine_arpg::audio_cue_event;
+        use module_engine_project::{AssetManifest, resolve_relative};
+
+        let Some(game) = &mut candidate.game else {
+            return false;
+        };
+        let manifest = match AssetManifest::from_value(&candidate.asset_manifest) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                ui.label(error);
+                return false;
+            }
+        };
+        let choices = manifest
+            .assets
+            .iter()
+            .filter(|(_, entry)| {
+                std::path::Path::new(&entry.path)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"))
+            })
+            .collect::<Vec<_>>();
+        let permission = self.audio_edit_allowed(false);
+        let mut changed = false;
+        if let Err(error) = &permission {
+            ui.small(error);
+        } else if choices.is_empty() {
+            ui.small("Import a WAV in Assets to choose another file.");
+        }
+        for (cue, wav) in &mut game.audio_cues {
+            let mut selected = wav.clone();
+            setting_row(
+                ui,
+                cue,
+                &format!("{} ({cue})", audio_cue_event(cue)),
+                "WAV file for this game event.",
+                |ui| {
+                    ui.add_enabled_ui(permission.is_ok() && !choices.is_empty(), |ui| {
+                        egui::ComboBox::from_id_salt("audio-cue-file")
+                            .width(ui.available_width())
+                            .wrap()
+                            .selected_text(
+                                manifest
+                                    .resolve_reference(wav)
+                                    .unwrap_or_else(|_| wav.clone()),
+                            )
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut selected,
+                                    wav.clone(),
+                                    manifest
+                                        .resolve_reference(wav)
+                                        .unwrap_or_else(|_| wav.clone()),
+                                );
+                                for (id, entry) in &choices {
+                                    let reference = format!("asset://{id}");
+                                    if &reference != wav {
+                                        ui.selectable_value(&mut selected, reference, &entry.path);
+                                    }
+                                }
+                            });
+                    });
+                },
+            );
+            if &selected != wav {
+                match manifest
+                    .resolve_reference(&selected)
+                    .and_then(|path| resolve_relative(&self.project_asset_root(), &path))
+                {
+                    Ok(path) if path.is_file() => {
+                        *wav = selected;
+                        changed = true;
+                    }
+                    Ok(_) => state.error = Some("Selected WAV is missing".into()),
+                    Err(error) => state.error = Some(error),
+                }
+            }
         }
         changed
     }

@@ -1219,7 +1219,10 @@ impl Editor {
         }
         match serde_json::from_str::<GraphDocument>(&self.json_draft) {
             Ok(document) => {
-                if let Err(error) = self.validate_candidate(&document, self.can_author_engine()) {
+                if let Err(error) =
+                    crate::game_ui::validate_audio_removal(&self.document, &document)
+                        .and_then(|_| self.validate_candidate(&document, self.can_author_engine()))
+                {
                     self.status = error;
                     return false;
                 }

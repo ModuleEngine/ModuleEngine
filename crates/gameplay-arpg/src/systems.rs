@@ -84,7 +84,7 @@ pub(crate) fn register_arpg_systems(registry: &mut SystemRegistry) {
             vec![],
         ),
         (
-            "game.audio",
+            crate::AUDIO_SYSTEM,
             audio_system,
             vec![("events", "GameEvents", ReadWrite)],
             vec![],
@@ -708,18 +708,12 @@ fn audio_system(
     let sounds: Vec<_> = ctx
         .events
         .iter()
-        .filter_map(|event| match ArpgEvent::try_from(event).ok()? {
-            ArpgEvent::Attack { attacker } => Some(("attack", Some(attacker))),
-            ArpgEvent::Hit { target, .. } => Some(("hit", Some(target))),
-            ArpgEvent::Death { object } => Some(("death", Some(object))),
-            ArpgEvent::Victory => Some(("victory", None)),
-            _ => None,
-        })
+        .filter_map(|event| crate::SoundCue::from_event(ArpgEvent::try_from(event).ok()?))
         .collect();
     for (cue, object) in sounds {
         ctx.events.push(
             ArpgEvent::Sound {
-                cue: cue.into(),
+                cue: cue.name().into(),
                 object,
             }
             .into(),
