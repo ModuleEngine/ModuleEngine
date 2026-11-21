@@ -6,9 +6,9 @@ Recorded project roadmap and planning baseline, updated 17 November 2026.
 
 The final demonstration is concrete: you assemble the capabilities you need. A colleague reproduces that configuration from its description and changes a second game. The first game still builds and plays as before. A player receives only what their game needs.
 
-This document records the reviewed sequence and its full acceptance expectations. **The owner closed 0.4.2 on 17 November 2026; 0.5 is the next planned milestone. Its implementation has not started.** The 0.4.1 implementation and historical 0.4.2 engineering evidence remain recorded below. Future version numbers and milestone scopes are planning labels: they do not mean those versions have shipped, authorize every implementation, or promise dates. Existing specifications, ownership boundaries and budgets remain in force. Use the agreed [0.5 composition and dependency scope](#compose) for the next brief and the [owner check cards](product-roadmap-checks.md) for short personal checks.
+This document records the reviewed sequence and its full acceptance expectations. **The owner closed 0.4.2 on 17 November 2026; 0.5 is the next planned milestone. Its implementation has not started.** On 21 November 2026 the owner requested the [engine rebuild track](#rebuild); it proposes pausing the 0.5 brief and new UI work until its core phases are accepted. The 0.4.1 implementation and historical 0.4.2 engineering evidence remain recorded below. Future version numbers and milestone scopes are planning labels: they do not mean those versions have shipped, authorize every implementation, or promise dates. Existing specifications, ownership boundaries and budgets remain in force. Use the agreed [0.5 composition and dependency scope](#compose) for the next brief and the [owner check cards](product-roadmap-checks.md) for short personal checks.
 
-[Version map](#map) · [Baseline](#baseline) · [Starting handoff](#start) · [Independent use](#usability) · [Release decisions](#decision)
+[Version map](#map) · [Baseline](#baseline) · [Starting handoff](#start) · [Independent use](#usability) · [Release decisions](#decision) · [Engine rebuild](#rebuild)
 
 <a id="map"></a>
 
@@ -19,6 +19,7 @@ This document records the reviewed sequence and its full acceptance expectations
 | [0.4](#baseline) | Starting point: one engine, working G1 on the current Windows PC and a separate Player. | Existing baseline |
 | [0.4.1](#render) | First complete route from ordinary launch to the image in Player, with compact settings and permitted choices in the game menu. | Editor |
 | [0.4.2](#image-and-docking) | Image, panes, stabilization and compact chrome; closed by the owner’s decision. | Accepted 17 Nov 2026 |
+| [R0–R10](#rebuild) | Engine rebuild track: `bevy_ecs` world, GPU-driven Vulkan renderer, editor on Vulkan, `rapier3d`/`kira`, skeletal animation, PBR, mesh shaders and hybrid ray tracing. | Engine core · proposed 21 Nov 2026 |
 | [0.5](#compose) | Add, remove or replace a capability without unrelated settings getting in the way. | Next · planned |
 | [0.6](#pin) | Identical starting configurations for A and B; changing B does not require updating A. | Stability |
 | [0.7](#extend) | Two distinct tasks: configure an existing function and write a new one. | Extensions |
@@ -314,6 +315,217 @@ Five games on five incomparable forks prove less than five games on one foundati
 **Team evidence.** G1–G5 matrix on one declared release. Do not relabel old measurements or WSLg as a new platform. This completes the declared minimum; it does not promise support for arbitrary games.
 
 Basis: [portfolio gates](portfolio-roadmap.md), [independent review](review.md), [verification boundaries](verification.md).
+
+<a id="rebuild"></a>
+
+## Engine rebuild track — a modern Vulkan renderer and ready-made libraries
+
+**Status — requested by the owner on 21 November 2026; planning only, no implementation has started.** The owner chose the high-end rendering route: stay on Vulkan through `ash`, render the editor through Vulkan as well, build the renderer GPU-driven from the start, and then add hybrid ray tracing, mesh shaders and other modern features on top of a solid rasterizer. Runtime pieces that are not this project's value (ECS storage, physics, audio, math) move to proven libraries; the editor, its authored-data rules and the render-graph/HLSL authoring model stay.
+
+Phase numbers R0–R10 are planning labels, not versions. Effort is a rough range for one full-time developer with Vulkan experience; it is speculation until R0 records real throughput (see the [complete route](#map) rule on estimates). The phases are ordered by dependency; independent phases can overlap when there is more than one developer.
+
+**Relation to the version route.** The track proposes pausing the 0.5 brief and new UI work until R1, R3 and R4 are accepted, because they change the world storage, the editor shell and the editor/game boundary that 0.5 would build on. The owner confirms this pause in R0.1. The track does not replace any milestone: R5 is the technical base for [1.3](#real), R6–R7 supply the physics and skeleton that [0.9a](#combat) and the [G2 decisions](#g2-agreement) need, and every phase keeps the G1 and ARPG budgets from [release decisions](#decision) as regression gates. Ray tracing and mesh shaders are optional hardware tiers: G1/G3-style packages must never require them.
+
+### Where the code stands today
+
+Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
+
+| Area | Current state | Consequence |
+| --- | --- | --- |
+| World storage | `EcsWorld` (`crates/engine-core/src/world.rs`) keeps every column in `BTreeMap<u64, _>`; dynamic components are `serde_json::Value`. `GameSession::step_budget` (`crates/engine-core/src/game.rs`) clones the whole `GameState` before every 60 Hz tick for rollback. | Tick cost grows with world size even when nothing changes; components are parsed JSON, not typed data. |
+| Earlier storage decision | [ecs-storage-decision.md](ecs-storage-decision.md) chose to extend `EcsWorld` over `hecs` as a migration-cost choice with no performance claim. | R1 must record a superseding decision backed by a benchmark. |
+| Renderer binding | `render-vulkan` already uses `ash 0.38`, Vulkan 1.3 with dynamic rendering, an authored render graph (`graph.rs`) and HLSL compiled to SPIR-V through DXC (`compiler.rs`). | Keep the binding, the graph documents and the HLSL authoring contract; rewrite the architecture under them. |
+| Geometry | `geometry::vertices` transforms every triangle of every item on the CPU each frame into one 72-byte-per-vertex buffer; the frame issues one `cmd_draw`. | No GPU-resident meshes, no instancing, no culling. |
+| Materials and textures | All base-color textures are packed into one atlas of at most 8192 px, sampled with `Load` (nearest, no mipmaps). Only base color is read. | No PBR maps, no filtering, a hard texture limit. |
+| Lighting | `forward.hlsl` hardcodes one directional light `(-0.5, 1.0, 0.7)`; there are no shadows. SSAO, FXAA and tonemap passes exist. | Lights are not data; no shadow or IBL path. |
+| GPU resources | One `vkAllocateMemory` per buffer/image, one command pool and buffer, CPU waits on a fence each frame; per-pass state goes through 128-byte push constants. | No allocator, no frames in flight, no descriptor model for many resources. |
+| Presentation | The editor and Player UI run on `eframe` over WGPU (DX12 on Windows, Vulkan on Linux). Vulkan frames reach them through shared D3D12/OPAQUE_FD images (`presentation.rs`, `player/src/gpu_presentation.rs`). The editor uses detached native windows. | Two GPU devices and an interop bridge; a game swapchain does not exist yet. |
+| Animation | `engine-content` rejects glTF files with skins or animations. | No skeletal animation. |
+| Physics | No physics engine; games use their own grid/collision code (`game-kit/src/grid.rs`). | No rigid bodies, joints or general queries. |
+| Audio | `host-services` mixes WAV only and outputs through WinMM; other platforms return an error. | No compressed formats, no Linux audio. |
+| Editor coupling | `crates/editor` depends directly on `gameplay-arpg`, `project-g1`, `project-puzzle` and `example-two-arenas`; `game_ui.rs` alone is about 7,600 lines. | Adding a game means changing the editor. |
+
+### Rules for the whole track
+
+- Authored data rules from [AGENTS.md](../AGENTS.md) stay: the authored document is separate from the Play copy, stable IDs and unknown JSON payloads survive, a failed change keeps the last good version. Scene files stay JSON; only the in-memory runtime representation changes.
+- Each risky choice (R1.1, R2.1, R3.1, R8.1, R9.1) starts with a spike and a benchmark; the decision is recorded in [decisions](decisions.md) before migration starts.
+- The old path stays behind a switch until the new one passes parity; it is removed in the same phase after acceptance, not left as a second production implementation.
+- Every hardware-dependent feature declares its tier and a fallback. Tier A is the current Vulkan 1.3 baseline plus descriptor indexing, buffer device address and synchronization2 (all core in 1.2/1.3). Tier B adds `VK_EXT_mesh_shader`. Tier C adds `VK_KHR_acceleration_structure` and `VK_KHR_ray_query` (and `VK_KHR_ray_tracing_pipeline` where used).
+- Measurements follow [release decisions](#decision): sequential GPU runs, recorded driver and load, mean and p95, the real game window rather than offscreen alone.
+
+### Benchmark scenes used by all phases
+
+| Scene | Content | Main metrics |
+| --- | --- | --- |
+| S1 | An accepted G1 level at 1920×1080 Playing | Frame mean/p95 ≤16.67 ms, peak working set ≤1 GiB (existing gate) |
+| S2 | ARPG at 1080p with 20 active enemies | Frame mean/p95 ≤16.667 ms (existing gate), tick time |
+| S3 | Stress: 10,000 static and 1,000 moving objects, 200 unique meshes, 500 textures; 2,000 entities with 8 components each | CPU tick, CPU frame, GPU time per pass, uploads per frame, draw calls, memory |
+| S4 | Lighting: a Sponza-class interior with 256 point lights, one sun and Khronos glTF sample models | GPU time per pass, image difference against a reference |
+| S5 | Dense geometry: 20–50 million source triangles | GPU time, culled vs drawn meshlets, memory |
+
+<a id="rebuild-r0"></a>
+
+### R0 — Freeze and baseline · 1–2 weeks · depends on nothing
+
+| # | Task | Acceptance | Effort |
+| --- | --- | --- | --- |
+| R0.1 | Owner confirms the pause of the 0.5 brief and new UI work; record it in [current status](current-status.md) and [decisions](decisions.md). Bug fixes to accepted 0.4.2 remain allowed. | Dated decision in both languages. | 0.5 d |
+| R0.2 | Build S3–S5 as reproducible fixtures (S1, S2 exist) and a `bench` runner that writes JSON results to `outputs/bench/<date>/`. | Three consecutive runs differ by ≤5 % on mean values. | 3–4 d |
+| R0.3 | Add GPU timestamp queries per render-graph pass and CPU spans for tick, extraction, recording and submission; show them in an editor overlay. | Per-pass GPU times are visible in the editor and in JSON. | 2–3 d |
+| R0.4 | Record the target hardware: GPU, driver, `vulkaninfo` dump, supported tiers A/B/C. Decide the minimum supported GPU. | Tier table checked into `docs/`. | 0.5 d |
+| R0.5 | Hygiene prerequisites: GPU and DXC tests skip with a clear message when unavailable; Vulkan validation layers and debug names in debug builds; typed errors with `thiserror` in `render-vulkan` instead of `String`. | `verify` passes on a machine without DXC/GPU with explicit skips; a debug run shows no validation errors on S1. | 2–3 d |
+| R0.6 | Baseline report: S1–S5 on the current code. | Report linked from this section; it is the reference for every later "not worse" criterion. | 1 d |
+
+<a id="rebuild-r1"></a>
+
+### R1 — World storage on `bevy_ecs` · 3–5 weeks · depends on R0
+
+| # | Task | Acceptance | Effort |
+| --- | --- | --- | --- |
+| R1.1 | Spike: S3 entities in `bevy_ecs` (standalone crate, no Bevy app) vs current `EcsWorld`: query, mutation, spawn/despawn, snapshot. Decide how schema-defined components are stored: dynamic components registered through `ComponentDescriptor`, or typed native components with `bevy_reflect` and a JSON codec for the rest. | Superseding decision in [ecs-storage-decision.md](ecs-storage-decision.md) (both languages) with numbers. Go if S3 tick is at least 5× faster and no authored-data invariant is lost. | 4–5 d |
+| R1.2 | Stable IDs: a `StableId(u64)` component and a `u64 → Entity` index; IDs survive scene/prefab resolution, saves, exports and Rust IPC. | Existing ID tests pass; save → load → save is byte-identical. | 2 d |
+| R1.3 | Component registry and codecs: native components derive `Reflect`; schema components keep exact JSON keys, `null` and unknown payloads. One registry serves UI, saves, IPC and validation. | Round-trip tests on every scene in `examples/` and the G1/G2 projects produce identical JSON. | 4–5 d |
+| R1.4 | Transaction without a full copy: systems write through command buffers and change journals; a failed tick discards them instead of restoring a clone of `GameState`. | A failing system leaves the world identical (test); a no-op tick on S3 costs O(changed), not O(world). | 3–4 d |
+| R1.5 | Scheduling: port `engine-core/src/systems.rs` and ARPG systems to a `bevy_ecs` `Schedule` with explicit, deterministic ordering at fixed 60 Hz. | Recorded-input replay of G1 levels and the ARPG encounter produces identical event logs before and after. | 4–5 d |
+| R1.6 | Change-driven extraction: render extraction reads `Changed<…>` and produces deltas (spawned, moved, removed, material changed) instead of a full `SceneSnapshot`. The full snapshot remains for the software renderer and diagnostics. | On S3 with 1,000 moving objects the delta contains only those objects. | 2–3 d |
+| R1.7 | Migrate consumers: `game-host`/`game_worker`, `runtime-script` typed commands, `project-g1`, `project-puzzle`, `gameplay-arpg`, `example-two-arenas`. The Object provider stays a compatibility adapter. | All crate test suites pass; no consumer touches the old column maps. | 4–6 d |
+| R1.8 | Acceptance and removal of the old storage. | S2 tick p95 not worse than R0.6; S3 tick ≤2 ms; S1/S2 gates pass; independent review. | 2 d |
+
+<a id="rebuild-r2"></a>
+
+### R2 — GPU-driven renderer foundation · 8–12 weeks · depends on R0; R2.3 also on R1.6
+
+| # | Task | Acceptance | Effort |
+| --- | --- | --- | --- |
+| R2.1 | Device layer: tier detection, a memory allocator (`gpu-allocator`) instead of one allocation per resource, 2–3 frames in flight with per-frame command pools and timeline semaphores, a staging ring and a transfer queue, a deletion queue that replaces `retirement.rs` semantics. Spike first: allocator and frame pacing on S3. | Zero validation errors on S1–S3; in steady state the CPU never waits for the frame it just submitted. | 2 w |
+| R2.2 | Bindless resources: one global descriptor set with descriptor indexing (texture array, samplers, storage buffers) or buffer device address. Replace the atlas with per-texture images, mipmaps generated at import or on upload, anisotropic sampling. The push-constant ABI gains bindless indices; custom HLSL passes keep working. | 1,000 unique textures without the 8192 px limit; no shimmering on a moving camera over S4 floors; existing custom-pass tests pass. | 1.5–2 w |
+| R2.3 | GPU-resident scene: one mesh pool (shared vertex/index buffers) uploaded once per mesh; instance buffer with transforms and material indices updated from R1.6 deltas; material buffer. Remove the CPU vertex transform in `geometry.rs`. | Upload bytes per frame proportional to changed objects; S3 CPU frame ≤1 ms. | 1.5–2 w |
+| R2.4 | GPU culling and indirect drawing: compute frustum culling, `vkCmdDrawIndexedIndirectCount`, then two-phase Hi-Z occlusion culling. | Draw calls per pass do not grow with object count; S3 scaled to 100,000 instances keeps 60 FPS at 1080p on the R0.4 GPU. | 1.5–2 w |
+| R2.5 | Render graph v2: automatic barriers with synchronization2, transient resource aliasing, async compute queue. Existing graph documents load unchanged; built-in passes (forward, gbuffer, deferred, SSAO, FXAA, tonemap, color encode) are migrated. | Existing graph and custom-pass tests pass; built-ins match the old images within the `image_quality_check` tolerance; transient memory on S4 is at least 30 % lower. | 2–3 w |
+| R2.6 | Game swapchain for Player: present modes, frame pacing, resize, prepared for HDR output. | Player S1/S2 run directly on the swapchain; frame-time p95 not worse than R0.6. | 1 w |
+| R2.7 | Parity and switch: the old renderer behind a feature flag until S1/S2 pass, then removal. | S1/S2 gates pass on the new renderer; old code deleted; independent review. | 0.5–1 w |
+
+<a id="rebuild-r3"></a>
+
+### R3 — Editor on Vulkan, no DX12 bridge · 3–5 weeks · depends on R2.1; can overlap R2.2–R2.7
+
+| # | Task | Acceptance | Effort |
+| --- | --- | --- | --- |
+| R3.1 | Spike: `eframe` has no Vulkan backend. Compare `winit` + `egui-winit` + `egui-ash-renderer` against a thin own egui painter on the R2 device. Recommendation: own painter, so the editor, scene views and game share one `VkDevice`. | Decision recorded; the spike draws the current editor at ≥60 FPS with crisp text at 100 % and 150 % DPI. | 4–5 d |
+| R3.2 | Replace the `eframe` shell in Editor and Player UI: window, input, clipboard, IME, DPI, cursor, and the detached native windows from `native_windows.rs`. egui widgets and panes stay unchanged. | Every existing pane opens; detached windows, docking and resize work; native window checks pass. | 1–1.5 w |
+| R3.3 | Scene and Game views sample render-graph output images on the same device. Remove the D3D12/OPAQUE_FD interop path after acceptance. | One frame less latency than today; `gpu_presentation.rs` interop removed; Linux uses the same path. | 4–5 d |
+| R3.4 | Port verification hooks that depend on `eframe` (`__screenshot`, `ui_capture.rs`, editor benchmark). | UI capture and editor benchmark run as before. | 2–3 d |
+| R3.5 | Acceptance. | Open-to-first-frame not worse than R0.6; owner opens the editor, moves panes and plays G1 without visible change; independent review. | 1–2 d |
+
+<a id="rebuild-r4"></a>
+
+### R4 — Decouple the editor from concrete games · 1–2 weeks · depends on R1
+
+| # | Task | Acceptance | Effort |
+| --- | --- | --- | --- |
+| R4.1 | Define an editor extension interface: a game registers its panels, inspectors, verification scenarios and Play hooks. | Interface documented in [architecture](architecture.md). | 2 d |
+| R4.2 | Move game-specific code out of `game_ui.rs` and related editor files into the `ui` features of `gameplay-arpg`, `project-g1` and `project-puzzle`; turn `example-two-arenas` into an example that uses the same interface. | The editor crate builds with no game crate in its dependencies. | 4–6 d |
+| R4.3 | Composition selects which games are linked into an editor build. | Adding a test game requires no change in `crates/editor`; G1 and ARPG behave as before. | 1–2 d |
+
+<a id="rebuild-r5"></a>
+
+### R5 — Physically based materials, lights and shadows · 6–9 weeks · depends on R2
+
+| # | Task | Acceptance | Effort |
+| --- | --- | --- | --- |
+| R5.1 | glTF metallic-roughness materials: base color, normal, metallic-roughness, occlusion, emissive, alpha mask/blend; importer and material asset in the editor; BC7/BC5 compression at import. | Khronos sample models (DamagedHelmet, FlightHelmet) import with all maps; editor changes reach Player. | 1.5 w |
+| R5.2 | Lights as ECS components (directional, point, spot, area later) with clustered light culling in compute; one shading model for forward and deferred. | S4 with 256 point lights: lighting ≤2 ms at 1080p on the R0.4 GPU. | 1.5 w |
+| R5.3 | Shadows: cascaded shadow maps for the sun (4 cascades, PCF with optional PCSS), a shadow atlas for point/spot lights, cached static shadows. | No visible cascade seams or acne on S4; shadows ≤2.5 ms. | 1.5–2 w |
+| R5.4 | Image-based lighting and sky: environment cubemap, prefiltered specular, irradiance as spherical harmonics, BRDF LUT, a physical sky model. | Sample models match the Khronos glTF Sample Viewer within an agreed image tolerance. | 1 w |
+| R5.5 | HDR pipeline: physical camera exposure with auto exposure, bloom, tonemapper choice (ACES/AgX), motion vectors and TAA. TAA is the prerequisite for ray-tracing denoising and upscaling. | Stable image without crawling edges in motion over S4; previous FXAA profile still available. | 1.5 w |
+| R5.6 | Editor workflow: edit lights and materials live, a material preview sphere, the R0.3 overlay shows pass costs. | Owner changes one object's roughness and sees it in Editor and Player (the [1.3](#real) owner check). | 0.5–1 w |
+
+<a id="rebuild-r6"></a>
+
+### R6 — Physics with `rapier3d`, audio with `kira`, shared math · 2–3 weeks · depends on R1; can overlap R2–R5
+
+| # | Task | Acceptance | Effort |
+| --- | --- | --- | --- |
+| R6.1 | `rapier3d`: rigid body, collider and joint components; a physics step synchronized to the 60 Hz tick with `enhanced-determinism`; raycasts and shape queries for systems and scripts; collision events as `GameEvent`; debug draw in the Scene view. | Recorded-input replay stays identical; S2 with projectiles: physics ≤1 ms per tick. | 1–1.5 w |
+| R6.2 | Move game collision code to `rapier3d` where it is a general physics problem; grid rules in `game-kit` stay as game rules. | G1 levels and the ARPG encounter play as before. | 2–3 d |
+| R6.3 | `kira` replaces the WinMM mixer: OGG/MP3/FLAC/WAV, buses, volume and fades, spatial audio; Linux output. Existing game-event-to-sound bindings and audio composition from 0.5 planning keep their meaning. | Same bindings play on Windows and Linux; measured output latency ≤50 ms. | 4–5 d |
+| R6.4 | `glam` for math instead of hand-written matrix helpers (`transform_point` and similar); `rfd` for native file dialogs where the editor has its own. | No hand-written matrix code left outside codecs; dialogs work on Windows and Linux. | 2–3 d |
+
+<a id="rebuild-r7"></a>
+
+### R7 — Skeletal animation · 3–5 weeks · depends on R2.3 and R1; first consumer is the G2 hero
+
+| # | Task | Acceptance | Effort |
+| --- | --- | --- | --- |
+| R7.1 | Import glTF skins, joints and animation clips (the importer rejects them today). | Khronos skinned samples (CesiumMan, Fox) import and play. | 1 w |
+| R7.2 | GPU skinning in compute, writing into the mesh pool, so culling, shadows and later ray-tracing refits see the skinned pose. | 50 skinned characters on S2 within the frame budget. | 1 w |
+| R7.3 | Animation runtime: clip sampling, blending, additive layers, root motion, events on frames. | Attack and dodge timing from the G2 decisions 24–25 can be driven by animation events. | 1 w |
+| R7.4 | Animation state graph with both a visual editor and a text file, applied during paused Play (G2 decisions 22 and 26). | Owner edits a transition while paused and sees it after resuming. | 1–1.5 w |
+| R7.5 | Equipment swaps that change the hero's appearance (G2 decision 14) through attached meshes on joints. | Changing weapon/armor changes the rendered hero. | 2–3 d |
+
+<a id="rebuild-r8"></a>
+
+### R8 — Mesh shaders and virtualized geometry · 4–6 weeks · depends on R2.4; tier B with tier A fallback
+
+| # | Task | Acceptance | Effort |
+| --- | --- | --- | --- |
+| R8.1 | Spike: meshlet build with `meshopt` and a task/mesh shader path on S5. | Decision with numbers: mesh path vs R2.4 indirect path. | 4–5 d |
+| R8.2 | Meshlets at import: clustering, bounds and normal cones stored in the asset. | Meshlet data cached; import time recorded. | 3–4 d |
+| R8.3 | Task/mesh shader pipeline with per-meshlet frustum, cone and Hi-Z culling. | S5 at 60 FPS at 1080p on the R0.4 GPU (if tier B). | 1.5 w |
+| R8.4 | Continuous LOD: simplified LOD chain (`meshopt` simplify) or meshlet hierarchy with screen-space error selection, without visible popping. | S5 memory and GPU time within agreed budget; no popping in a fly-through. | 1.5–2 w |
+| R8.5 | Fallback: the same meshlet data drawn through compute culling and indirect draws on tier A. | Identical image on tier A within tolerance. | 3–4 d |
+
+<a id="rebuild-r9"></a>
+
+### R9 — Hybrid ray tracing · 10–16 weeks · depends on R5 (TAA, PBR); skinned refit depends on R7; tier C with raster fallback
+
+| # | Task | Acceptance | Effort |
+| --- | --- | --- | --- |
+| R9.1 | Acceleration structures: BLAS per mesh with compaction, TLAS rebuilt every frame from the GPU instance buffer, BLAS refit for skinned meshes, memory budget and streaming of BLAS builds. Spike first on S4. | TLAS build ≤0.5 ms for S3; acceleration-structure memory reported in the overlay. | 2 w |
+| R9.2 | Ray-traced shadows with ray queries in compute, soft shadows from area/sun size, temporal denoiser. | S4 sun + 16 shadowed lights ≤2 ms; stable in motion; falls back to R5.3. | 1.5 w |
+| R9.3 | Ray-traced ambient occlusion as an option next to SSAO. | Visible improvement in contact areas; ≤1 ms; SSAO remains the fallback. | 1 w |
+| R9.4 | Hybrid reflections: screen-space reflections with ray-traced fallback for off-screen and rough surfaces; spatiotemporal denoising. Evaluate integrating NVIDIA NRD or AMD FidelityFX denoisers through FFI against an own SVGF-class denoiser. | Mirror and glossy reflections stable in motion; ≤3 ms on S4. | 2–3 w |
+| R9.5 | Dynamic global illumination with ray-traced irradiance probes (DDGI class), with probe placement editing in the editor. ReSTIR GI is a later option, not part of this phase. | Bounced light reacts to a moved light within 1 s; ≤2 ms; raster fallback is IBL from R5.4. | 2–3 w |
+| R9.6 | Path-traced reference mode in the editor: progressive accumulation with the same materials, used to check PBR and the hybrid result. | Reference and hybrid frames comparable side by side in the editor. | 1–1.5 w |
+| R9.7 | Quality presets and capability rules: each RT effect has a raster fallback, presets Low/Medium/High/RT, and a package without RT never requires tier C. | A G1 package runs on a tier A GPU; the same G5-class project switches between RT and raster without authored-data changes. | 0.5–1 w |
+
+<a id="rebuild-r10"></a>
+
+### R10 — Other modern features · 3–6 weeks · each item needs a named consumer before it starts
+
+| # | Task | Acceptance | Effort |
+| --- | --- | --- | --- |
+| R10.1 | Temporal upscaling: AMD FSR (open source) through FFI on top of R5.5 TAA inputs; NVIDIA DLSS through Streamline as an optional plugin. | Render at 67 % resolution with quality comparable to native TAA; ≥30 % frame-time gain on S4 with RT. | 1–2 w |
+| R10.2 | HDR display output (scRGB/HDR10) with a separate SDR path. | Correct output on an HDR monitor; SDR unchanged. | 3–4 d |
+| R10.3 | GPU particles in compute with sorting and lighting. | 100,000 particles ≤1 ms. | 1 w |
+| R10.4 | Variable-rate shading where the GPU supports it. | ≥10 % gain on S4 without visible artifacts, or the feature is dropped. | 3–4 d |
+| R10.5 | Texture and mesh streaming with a residency budget. | S5 runs within a fixed VRAM budget without stalls. | 1–2 w |
+
+### Cross-cutting hygiene, done inside the phases
+
+- `thiserror` error types in every crate touched by a phase; no new `Result<_, String>` APIs.
+- GPU/DXC-dependent tests skip explicitly instead of failing on machines without them (R0.5).
+- Backups of authored projects rotate with a fixed count when migrations touch them (R1, R4).
+- Each phase updates [architecture](architecture.md), [decisions](decisions.md), [current status](current-status.md) and its contract documents in both languages, and ends with an independent review per [review](review.md).
+
+### Order, dependencies and total effort
+
+- R0 → R1 → R4 and R6.
+- R0 → R2.1 → R2.2 → R2.3 (also needs R1.6) → R2.4 → R2.5 → R2.6 → R2.7.
+- R2.1 → R3, in parallel with the rest of R2.
+- R1 + R3 + R4 accepted → resume the 0.5 brief and UI work.
+- R2 → R5 → R9 and R10; R2.4 → R8; R1 + R2.3 → R7 → skinned refit in R9.1.
+
+| Block | Phases | Effort, one developer |
+| --- | --- | --- |
+| Core and editor foundation | R0, R1, R2, R3, R4 | 16–26 weeks |
+| Libraries and animation | R6, R7 | 5–8 weeks |
+| Modern image | R5, R8, R9, R10 | 23–37 weeks |
+| Whole track | R0–R10 | about 44–71 weeks (11–17 months) |
+
+The first useful checkpoint is after R2 + R5: a GPU-driven renderer with PBR and shadows, about 4.5–7 months in (R0, R1, R2 and R5). 0.5 and UI work resume after R1, R3 and R4; R5–R10 can then continue in parallel with the version route, and R6–R7 should land before [0.9a](#combat) needs them. Replace these estimates with measured throughput after R0 and again after R2.
+
+**Stop conditions.** If an R1.1 or R3.1 spike misses its criterion, stop and record the alternative before migrating. If a phase breaks an S1/S2 gate or an authored-data invariant, it returns for correction while the previous path stays active. A modern feature without a consumer or that misses its cost budget is dropped rather than kept as an unused subsystem.
 
 <a id="usability"></a>
 
