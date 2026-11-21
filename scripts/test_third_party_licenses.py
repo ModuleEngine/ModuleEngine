@@ -84,6 +84,36 @@ class RenderTests(unittest.TestCase):
         self.assertIn("Boost Software License - Version 1.0", text)
         self.assertNotIn("\r", text)
 
+    def test_conjunction_without_files_includes_every_required_text(self):
+        both = package(self.root / "j", "j", "MIT AND BSL-1.0")
+        text = tpl.render(self.root, [both])
+        self.assertIn("Copyright (c) Ada <ada@example.com>", text)
+        self.assertIn("Boost Software License - Version 1.0", text)
+        self.assertIn("j 1.0.0 | MIT AND BSL-1.0 | T001, T002", text)
+
+    def test_conjunction_with_missing_text_names_package_and_license(self):
+        bare = package(self.root / "k", "k", "MIT AND ISC")
+        with self.assertRaisesRegex(tpl.PolicyError, r"k 1\.0\.0 .*needs a text for: ISC"):
+            tpl.render(self.root, [bare])
+
+    def test_alternative_without_files_uses_one_complete_option(self):
+        either = package(self.root / "l", "l", "MIT OR Apache-2.0")
+        text = tpl.render(self.root, [either])
+        self.assertIn("MIT License", text)
+        self.assertNotIn("Apache License", text)
+        fallback = package(self.root / "m", "m", "ISC OR Apache-2.0")
+        self.assertIn("Apache License", tpl.render(self.root, [fallback]))
+
+    def test_declared_extra_notice_covers_its_licenses(self):
+        fonts = package(self.root / "epaint_default_fonts", "epaint_default_fonts",
+                        "(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0")
+        for name in tpl.EXTRA_NOTICES["epaint_default_fonts"]["files"]:
+            (self.root / "epaint_default_fonts" / name).parent.mkdir(parents=True, exist_ok=True)
+            (self.root / "epaint_default_fonts" / name).write_text(f"notice {name}\n", encoding="utf-8")
+        text = tpl.render(self.root, [fonts])
+        self.assertIn("notice fonts/OFL.txt", text)
+        self.assertIn("MIT License", text)
+
     def test_package_without_file_or_standard_text_fails(self):
         bare = package(self.root / "i", "i", "ISC")
         with self.assertRaises(tpl.PolicyError):

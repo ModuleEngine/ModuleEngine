@@ -30,10 +30,14 @@ ALLOWED = {
 # Preferred license when a package without its own license file offers a choice.
 STANDARD_TEXTS = ("MIT", "Apache-2.0", "BSL-1.0")
 NOTICE_FILE = re.compile(r"^(licen[cs]e|copying|copyright|notice|unlicense)", re.IGNORECASE)
-# Notices that live outside the package root and are compiled into binaries.
+# Notices that live outside the package root and are compiled into binaries,
+# with the SPDX licenses whose texts they provide.
 EXTRA_NOTICES = {
-    "epaint_default_fonts": ("fonts/OFL.txt", "fonts/UFL.txt", "fonts/Hack-Regular.txt",
-                             "fonts/emoji-icon-font-mit-license.txt"),
+    "epaint_default_fonts": {
+        "files": ("fonts/OFL.txt", "fonts/UFL.txt", "fonts/Hack-Regular.txt",
+                  "fonts/emoji-icon-font-mit-license.txt"),
+        "covers": frozenset({"OFL-1.1", "Ubuntu-font-1.0"}),
+    },
 }
 
 
@@ -150,24 +154,27 @@ def package_notices(root, package):
     directory = Path(package["manifest_path"]).parent
     own = sorted(p.name for p in directory.iterdir() if p.is_file() and NOTICE_FILE.match(p.name))
     notices = []
-    for name in own + list(EXTRA_NOTICES.get(package["name"], ())):
+    extra = EXTRA_NOTICES.get(package["name"], {})
+    for name in own + list(extra.get("files", ())):
         path = directory / name
         if not path.is_file():
             raise PolicyError(f"{package['name']} {package['version']}: missing {name}")
         notices.append(read_text(path))
     if not own:
-        # No license file in the package root: add the standard text of the
-        # preferred allowed license; extra notices cover any other components.
-        choice = None
-        for option in license_options(package["license"] or ""):
-            if option <= ALLOWED:
-                choice = next((name for name in STANDARD_TEXTS if name in option), None)
-                if choice:
-                    break
+        # No license file in the package root: pick the first allowed
+        # alternative whose every required license has a standard text or is
+        # covered by a declared extra notice, and add all of those texts.
+        covered = extra.get("covers", frozenset())
+        allowed = [o for o in license_options(package["license"] or "") if o <= ALLOWED]
+        choice = next((o for o in allowed if not o - set(STANDARD_TEXTS) - covered), None)
         if choice is None:
+            missing = sorted(allowed[0] - set(STANDARD_TEXTS) - covered) if allowed else []
             raise PolicyError(f"{package['name']} {package['version']} ships no license file and "
-                              f"'{package['license']}' has no bundled standard text")
-        notices.append(standard_text(root, choice, package))
+                              f"'{package['license']}' needs a text for: "
+                              f"{', '.join(missing) or 'an allowed license'}")
+        for name in STANDARD_TEXTS:
+            if name in choice:
+                notices.append(standard_text(root, name, package))
     return notices
 
 

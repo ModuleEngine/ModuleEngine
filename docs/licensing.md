@@ -30,9 +30,10 @@ dual-licensed as above, without any additional terms or conditions.
 package compiled into the Windows and Linux binaries, with its SPDX license
 expression and the license and notice texts it ships. Packages used only by
 other platforms, and dev-dependencies, are not included. A package without its
-own license file gets the standard text of its preferred license; the egui
-default fonts add their OFL-1.1, Ubuntu Font Licence, Hack and emoji-font
-notices.
+own license file gets the standard texts of every license in the first allowed
+alternative for which all texts are available (`MIT AND BSL-1.0` yields both);
+if none is, the check fails and names the missing license. The egui default
+fonts add their OFL-1.1, Ubuntu Font Licence, Hack and emoji-font notices.
 
 [`scripts/third_party_licenses.py`](../scripts/third_party_licenses.py)
 generates the file from `Cargo.lock` with the Python standard library and
