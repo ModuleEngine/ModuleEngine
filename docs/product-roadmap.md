@@ -8,7 +8,7 @@ The final demonstration is concrete: you assemble the capabilities you need. A c
 
 This document records the reviewed sequence and its full acceptance expectations. **The owner closed 0.4.2 on 17 November 2026. On 21 November 2026 the owner started the [engine rebuild track](#rebuild) and paused the 0.5 brief and new UI work until its core phases R1, R3 and R4 are accepted. 0.5 implementation has not started.** The 0.4.1 implementation and historical 0.4.2 engineering evidence remain recorded below. Future version numbers and milestone scopes are planning labels: they do not mean those versions have shipped, authorize every implementation, or promise dates. Existing specifications, ownership boundaries and budgets remain in force. Use the agreed [0.5 composition and dependency scope](#compose) for the next brief and the [owner check cards](product-roadmap-checks.md) for short personal checks.
 
-[Version map](#map) · [Baseline](#baseline) · [Starting handoff](#start) · [Independent use](#usability) · [Release decisions](#decision) · [Engine rebuild](#rebuild)
+[Version map](#map) · [Baseline](#baseline) · [Starting handoff](#start) · [Independent use](#usability) · [Release decisions](#decision) · [Engine rebuild](#rebuild) · [AI-assisted live authoring](#ai-authoring)
 
 <a id="map"></a>
 
@@ -20,6 +20,7 @@ This document records the reviewed sequence and its full acceptance expectations
 | [0.4.1](#render) | First complete route from ordinary launch to the image in Player, with compact settings and permitted choices in the game menu. | Editor |
 | [0.4.2](#image-and-docking) | Image, panes, stabilization and compact chrome; closed by the owner’s decision. | Accepted 17 Nov 2026 |
 | [R0–R10](#rebuild) | Engine rebuild track: `bevy_ecs` world, GPU-driven Vulkan renderer, editor on Vulkan, `rapier3d`/`kira`, skeletal animation, PBR, mesh shaders and hybrid ray tracing. | Engine core · proposed 21 Nov 2026 |
+| [AI-A–AI-B](#ai-authoring) | Build a game by plain-language requests while it runs; accepted changes are saved as an ordinary project. | Idea · not before R1/R4/R6 accepted |
 | [0.5](#compose) | Add, remove or replace a capability without unrelated settings getting in the way. | Paused until R1/R3/R4 |
 | [0.6](#pin) | Identical starting configurations for A and B; changing B does not require updating A. | Stability |
 | [0.7](#extend) | Two distinct tasks: configure an existing function and write a new one. | Extensions |
@@ -514,6 +515,7 @@ Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
 - R0 → R2.1 → R2.2 → R2.3 (also needs R1.6) → R2.4 → R2.5 → R2.6 → R2.7.
 - R2.1 → R3, in parallel with the rest of R2.
 - R1 + R3 + R4 accepted → resume the 0.5 brief and UI work.
+- R1 + R4 + R6 accepted → [AI-assisted live authoring](#ai-authoring) AI-A → AI-B (outside this track's effort totals).
 - R2 → R5 → R9 and R10; R2.4 → R8; R1 + R2.3 → R7 → skinned refit in R9.1.
 
 | Block | Phases | Effort, one developer |
@@ -526,6 +528,63 @@ Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
 The first useful checkpoint is after R2 + R5: a GPU-driven renderer with PBR and shadows, about 4.5–7 months in (R0, R1, R2 and R5). 0.5 and UI work resume after R1, R3 and R4; R5–R10 can then continue in parallel with the version route, and R6–R7 should land before [0.9a](#combat) needs them. Replace these estimates with measured throughput after R0 and again after R2.
 
 **Stop conditions.** If an R1.1 or R3.1 spike misses its criterion, stop and record the alternative before migrating. If a phase breaks an S1/S2 gate or an authored-data invariant, it returns for correction while the previous path stays active. A modern feature without a consumer or that misses its cost budget is dropped rather than kept as an unused subsystem.
+
+<a id="ai-authoring"></a>
+
+## AI-assisted live authoring — build a game by dialogue while it runs
+
+**Status — idea recorded by the owner on 21 November 2026; no implementation has started.** The author types a request in plain language ("add a WASD character", "add a double jump", "make the platforms move"). An AI prepares a change while the game keeps running, the engine applies the ready result, and the author tries it at once and refines it with the next request. "Live" does not mean instant generation: it means the game is not closed while a change is prepared and applied.
+
+Stages AI-A and AI-B are planning labels, not versions. By the owner's decision of 21 November 2026 this work is **not near-term**: no stage starts before [R1](#rebuild-r1), [R4](#rebuild-r4) and [R6](#rebuild-r6) are accepted, and it does not pause or reorder the [rebuild track](#rebuild). Those phases supply what live authoring needs: the change journal and stable-ID index (R1), the editor extension interface (R4) and physics for jump and moving platforms (R6).
+
+### What already exists and what is missing
+
+Checked against `main` at `279b036`; R1, R4 and R6 change several rows, so AI-A starts by re-checking this table:
+
+| Area | Current state | Consequence |
+| --- | --- | --- |
+| New logic during Play | [Custom Rust](custom-rust.md) compiles in the background; a compatible hot apply keeps declared state ([custom-state.md](custom-state.md)); a failed tick is rolled back and the previous version keeps running. | Generated mechanics can already be applied without stopping the game. |
+| Scene and system graph during Play | Authored changes and a new graph require **Stop** ([editor-game.md](editor-game.md)); **Restart** is cheap (no recompilation, no GPU recreation). | Until R1, applying a scene change means Stop → Apply → Play. |
+| Ready-made modules | ARPG systems give X/Z movement, collision, combat and health ([gameplay.md](gameplay.md)); there is no gravity, jump or rigid-body physics. | A platformer needs [R6](#rebuild-r6) physics; without it jump would be hand-written Rust. |
+| Vocabulary for the AI | Component schemas and the [capability inventory](engine-capabilities.md) describe installed modules and fields; `--check` validates a saved project. | The AI can be given a typed catalogue and a validator instead of guessing. |
+| Delivery | Save, `--check` and `--export-game` produce a Player with prebuilt workers. | Accepted changes become a standalone game through the existing route. |
+| Safety | The Custom worker has ordinary OS permissions; it is not a sandbox ([questions](questions.md)). | Generated Rust runs only locally and is shown to the author. |
+
+### Rules for every stage
+
+- **Order of means.** The AI first changes data (scene JSON, prefabs, overrides, settings), then assembles installed systems in `game.execution`, and only then writes new logic as Custom Rust. It does not write native modules: they require rebuilding the editor. Rust that proves useful repeatedly is moved into a native module by a person.
+- **One request is one changeset:** an authored JSON patch, Custom sources and the request text. It passes the same validation as Apply and `--check` before it is applied; a rejected changeset changes nothing.
+- **The AI edits only the authored document, never the Play copy.** Saving is the ordinary Save; no change may exist only at runtime. Authored-data rules from [AGENTS.md](../AGENTS.md) stay in force.
+- **Undo** reverts one changeset as one history entry. Reverting the edit (authored data) is separate from reverting the game moment (a Play-state snapshot).
+- **Runtime failure** (panic, the 150 ms timeout, rejected commands) rolls back the whole changeset, and its diagnostics go back to the AI for the next attempt.
+- **Team** keeps its whitelist: the AI may change scenes and permitted gameplay Rust only.
+- Sending project content to an external AI service is the owner's explicit choice of provider and data, made before AI-A starts.
+
+<a id="ai-a"></a>
+
+### AI-A — External-agent prototype · 1 week · depends on R1, R4 and R6 accepted
+
+| # | Task | Acceptance | Effort |
+| --- | --- | --- | --- |
+| AI-A.0 | Re-check the table above on the then-current `main`; confirm that WASD reaches game input in an empty project without the ARPG package; measure Custom Rust compile time per request. | Results recorded with numbers; a missing input source is added as the smallest generic module or the prototype uses an existing game package. | 0.5–1 d |
+| AI-A.1 | A command-line agent works on a project folder with tools: read the module/schema inventory (including `rapier3d` bodies, colliders and character controller from R6.1), read and write scene JSON and `custom_sources`, run `--check`. No engine or editor code changes. | The agent produces a changeset that passes `--check` for each request. | 2 d |
+| AI-A.2 | Run the five reference requests on an empty scene (character with WASD; platforms and jump; double jump; moving platforms; slower movement and a new environment). The author keeps the editor open and applies each answer with Apply Rust or Stop/Play. | Recorded: share of requests playable within ≤2 iterations, time from request to playable result, number of manual edits, share of requests met by modules without new Rust. | 1–2 d |
+| AI-A.3 | Decision. | Owner decides go / change / drop on the recorded metrics; the result is recorded in [decisions](decisions.md). | — |
+
+<a id="ai-b"></a>
+
+### AI-B — Editor integration and live scene patching · 2–3 weeks · depends on an AI-A go decision
+
+| # | Task | Acceptance | Effort |
+| --- | --- | --- | --- |
+| AI-B.1 | A request panel as an editor extension through the [R4.1](#rebuild-r4) interface; status of the pending changeset; the game keeps running while it is prepared. | The editor crate gains no dependency on an AI client outside the extension; the panel can be absent. | 3–4 d |
+| AI-B.2 | Live scene patching: the same authored diff is applied to the Play copy through the R1.4 change journal and the R1.2 `StableId` index, without Stop. | Adding/moving/removing objects and changing component fields appears in the running game; a rejected patch leaves both documents unchanged (test). | 4–5 d |
+| AI-B.3 | Changeset history: one Undo entry per request, automatic rollback on runtime failure, diagnostics returned to the agent. | Undo of a request restores authored data byte-identically; a panicking generated system rolls back and the previous version keeps running. | 2–3 d |
+| AI-B.4 | Acceptance. | The owner repeats the AI-A five-request route inside the editor without Stop for scene changes; independent review. | 1 d |
+
+**Order:** R1 + R4 + R6 accepted → AI-A → (go) → AI-B. **Stop conditions:** if AI-A shows that most requests need manual repair, drop or reshape the idea before AI-B; AI-B never weakens authored-data invariants to make a patch apply live.
+
+[↑ Back to the complete route](#map)
 
 <a id="usability"></a>
 
