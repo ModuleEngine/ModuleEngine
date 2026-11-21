@@ -376,7 +376,7 @@ Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
 | R0.3 | Added GPU timestamp queries per render-graph pass and CPU spans for tick, extraction, recording and submission. | [Frame timings](bench.md#frame-timings) are available in Editor Game and benchmark JSON. | Done |
 | R0.4 | [Hardware tiers and device evidence](hardware-tiers.md). RTX 4080 SUPER is the development reference. GTX 1660 SUPER 6 GB is the candidate for minimum Windows tier A hardware. | Tier table and full Vulkan dump recorded in `docs/`. Physical qualification is on the [pre-release checklist](hardware-tiers.md#minimum-gpu). | Done |
 | R0.5 | Hygiene prerequisites: GPU and DXC tests skip with a clear message when unavailable; Vulkan validation layers and debug names in debug builds; typed errors with `thiserror` in `render-vulkan` instead of `String`. | `verify` passes on a machine without DXC/GPU with explicit skips; a debug run shows no validation errors on S1. | Done |
-| R0.6 | Baseline report: S1–S5 on the current code. | Report linked from this section; it is the reference for every later "not worse" criterion. | 1 d |
+| R0.6 | [S1–S5 baseline report](bench-r06-20261122.md) on post-R0.5 `main` (22 November 2026). All 15 runs completed with a maximum declared spread of 2.39 %. | The report is the reference for later "not worse" comparisons of these metrics. | Done |
 
 <a id="rebuild-r1"></a>
 
