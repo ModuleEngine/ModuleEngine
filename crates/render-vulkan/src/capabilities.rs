@@ -1,6 +1,9 @@
 use ash::vk;
 use std::ffi::CStr;
 
+// One descriptor is reserved for untextured geometry.
+pub(crate) const MATERIAL_IMAGE_COUNT: u32 = 1024;
+
 /// Capabilities reported by the selected physical device. Optional tiers share
 /// the tier A baseline and can be present independently.
 #[derive(Clone, Copy, Debug, serde::Serialize)]
@@ -11,6 +14,8 @@ pub struct DeviceCapabilities {
     pub ray_tracing_pipeline: bool,
     pub timeline_semaphore: bool,
     pub synchronization2: bool,
+    pub bindless_materials: bool,
+    pub max_material_anisotropy: f32,
     pub graphics_family: u32,
     pub dedicated_transfer_family: Option<u32>,
 }
@@ -54,6 +59,7 @@ impl DeviceCapabilities {
             features = features.push_next(&mut ray_pipeline);
         }
         unsafe { instance.get_physical_device_features2(physical, &mut features) };
+        let sampler_anisotropy = features.features.sampler_anisotropy != 0;
         if core13.dynamic_rendering == 0 {
             return None;
         }
@@ -63,6 +69,30 @@ impl DeviceCapabilities {
             && core12.descriptor_indexing != 0
             && core12.shader_sampled_image_array_non_uniform_indexing != 0
             && core12.runtime_descriptor_array != 0;
+        let limits = unsafe { instance.get_physical_device_properties(physical) }.limits;
+        let texture_format = unsafe {
+            instance.get_physical_device_format_properties(physical, vk::Format::R8G8B8A8_SRGB)
+        };
+        let texture_features = vk::FormatFeatureFlags::SAMPLED_IMAGE
+            | vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR
+            | vk::FormatFeatureFlags::TRANSFER_SRC
+            | vk::FormatFeatureFlags::TRANSFER_DST
+            | vk::FormatFeatureFlags::BLIT_SRC
+            | vk::FormatFeatureFlags::BLIT_DST;
+        let bindless_materials = tier_a
+            && core12.timeline_semaphore != 0
+            && sampler_anisotropy
+            && limits.max_bound_descriptor_sets >= 2
+            && limits.max_per_stage_descriptor_sampled_images >= MATERIAL_IMAGE_COUNT
+            && limits.max_descriptor_set_sampled_images >= MATERIAL_IMAGE_COUNT
+            && limits.max_per_stage_resources >= MATERIAL_IMAGE_COUNT + 2
+            && limits.max_per_stage_descriptor_storage_buffers >= 1
+            && limits.max_descriptor_set_storage_buffers >= 1
+            && limits.max_per_stage_descriptor_samplers >= 1
+            && limits.max_descriptor_set_samplers >= 1
+            && texture_format
+                .optimal_tiling_features
+                .contains(texture_features);
         Some(Self {
             tier_a,
             tier_b: tier_a && mesh.task_shader != 0 && mesh.mesh_shader != 0,
@@ -72,6 +102,12 @@ impl DeviceCapabilities {
                 && ray_pipeline.ray_tracing_pipeline != 0,
             timeline_semaphore: core12.timeline_semaphore != 0,
             synchronization2,
+            bindless_materials,
+            max_material_anisotropy: if bindless_materials {
+                limits.max_sampler_anisotropy.min(16.0)
+            } else {
+                1.0
+            },
             graphics_family,
             dedicated_transfer_family: families
                 .iter()

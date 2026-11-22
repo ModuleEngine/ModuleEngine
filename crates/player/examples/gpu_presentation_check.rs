@@ -11,7 +11,8 @@ use module_engine_player::gpu_presentation::{
 };
 use module_engine_vulkan::presentation::{AdapterIdentity, VulkanPresentationTarget};
 use module_engine_vulkan::{
-    RenderPath, builtin_hlsl_source, builtin_manifest, default_graph, remove_pass_with_bypass,
+    RenderPath, VulkanRenderer, builtin_hlsl_source, builtin_manifest, default_graph,
+    remove_pass_with_bypass,
 };
 use serde_json::{Value, json};
 use std::{
@@ -426,6 +427,7 @@ fn run(report: &Arc<Mutex<Value>>, report_path: &Path, png: bool) -> Result<Fram
 
     fixture.pool_check(&alpha_document)?;
     fixture.async_check(&alpha_document, &render_state)?;
+    fixture.material_replacement_check(&root)?;
     // Publishing a replacement shares the actual backend; replacing authored
     // configuration never substitutes synthetic pixels for graph output.
     alpha_document = custom_alpha_document(RenderPath::Deferred)?;
@@ -516,6 +518,130 @@ fn custom_alpha_document(path: RenderPath) -> Result<GraphDocument, String> {
 }
 
 impl Fixture<'_> {
+    fn material_replacement_check(&self, root: &Path) -> Result<(), String> {
+        // The FrameRenderer adapter admits one pending request per caller.
+        // Exercise the same direct two-slot producer used by the native S3 window.
+        let mut renderer = VulkanRenderer::new_at(root.to_owned()).map_err(|e| e.to_string())?;
+        let target = self.bridge.target();
+        let target = target
+            .as_any()
+            .downcast_ref::<VulkanPresentationTarget>()
+            .ok_or("Vulkan presentation target is required")?;
+        renderer
+            .set_presentation_target(Some(Arc::new(VulkanPresentationTarget {
+                identity: target.identity.clone(),
+                allocator: target.allocator.clone(),
+            })))
+            .map_err(|e| e.to_string())?;
+        if !renderer.capabilities().bindless_materials {
+            record(
+                self.report,
+                json!({"case":"bindless_material_replacement", "skipped":"Adapter lacks indexed materials"}),
+            );
+            return Ok(());
+        }
+        ensure(
+            renderer.frame_capacity() == 2 && self.scene.items.len() >= 2,
+            "Replacement requires two slots and two material users",
+        )?;
+        let solid = |color: [u8; 4]| {
+            Arc::new(TextureImage {
+                width: 9,
+                height: 5,
+                rgba8: color.repeat(45),
+            })
+        };
+        let mut a = self.scene.clone();
+        let original = solid([239, 18, 62, 255]);
+        for item in &mut a.items {
+            item.material.base_color_texture = Some(original.clone());
+        }
+        let mut b = a.clone();
+        b.items[0].material.base_color_texture = Some(solid([35, 238, 69, 255]));
+        let camera = Camera::default();
+        let size = [160, 96];
+        let graph = default_graph(RenderPath::Forward);
+        let sources = BTreeMap::new();
+        let controls = RenderOverrides::default();
+        let mut reference = VulkanRenderer::new_at(root.to_owned()).map_err(|e| e.to_string())?;
+        let expected = [&a, &b].map(|scene| {
+            reference
+                .render(scene, camera, size[0], size[1], &graph, &sources, &controls)
+                .map(|frame| {
+                    egui::ColorImage::from_rgba_unmultiplied(size, &frame.rgba)
+                        .pixels
+                        .iter()
+                        .flat_map(|p| p.to_array())
+                        .collect::<Vec<_>>()
+                })
+                .map_err(|e| e.to_string())
+        });
+        let [expected_a, expected_b] = expected;
+        let (expected_a, expected_b) = (expected_a?, expected_b?);
+        ensure(
+            expected_a != expected_b,
+            "Material replacement positive control did not change pixels",
+        )?;
+        let mut submit = |scene| match renderer
+            .render_presented(scene, camera, size[0], size[1], &graph, &sources, &controls)
+            .map_err(|e| e.to_string())?
+        {
+            RenderSubmission::Pending(ticket) => Ok(ticket),
+            _ => Err("Both material generations must be admitted before polling".to_owned()),
+        };
+        let a_ticket = submit(&a)?;
+        let b_ticket = submit(&b)?;
+        let mut display = GpuTexture::default();
+        for (ticket, expected, images, uploads) in
+            [(b_ticket, &expected_b, 2, 1), (a_ticket, &expected_a, 1, 2)]
+        {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let frame = loop {
+                if let Some(frame) = renderer.poll_presented(ticket).map_err(|e| e.to_string())? {
+                    break frame;
+                }
+                ensure(
+                    Instant::now() < deadline,
+                    "Material generation completion timed out",
+                )?;
+                std::thread::sleep(Duration::from_millis(1));
+            };
+            let work = renderer
+                .last_frame_work()
+                .ok_or("Missing material submission work")?;
+            ensure(
+                work.material_images == images
+                    && work.material_uploaded_images == uploads
+                    && work.atlas_upload_bytes == 0,
+                format!("Material generations did not reuse their shared resident image: {work:?}"),
+            )?;
+            ensure(
+                display.update(&self.bridge, &frame)?.is_some()
+                    && display.diagnostic_readback()? == *expected,
+                "Published material generation does not match its individual reference",
+            )?;
+            self.reap(&mut display)?;
+        }
+        ensure(
+            renderer.performance().cpu_readback_bytes == 0,
+            "Async materials performed a producer readback",
+        )?;
+        record(
+            self.report,
+            json!({
+                "case":"bindless_material_replacement",
+                "passed":true,
+                "admitted_before_polling":2,
+                "first_slot_uploaded_images_including_white":2,
+                "second_slot_uploaded_images":1,
+                "second_slot_reused_material_images":1,
+                "differing_bytes":0,
+                "producer_cpu_readback_bytes":0,
+            }),
+        );
+        Ok(())
+    }
+
     fn async_check(
         &self,
         document: &GraphDocument,

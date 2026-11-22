@@ -11,6 +11,13 @@ hierarchy resolution, interpolation and material projection. A receiver
 with a missing base revision gets a fresh snapshot. See the
 [scene update contract and S3 check](shared-game-host.md#r16-scene-updates).
 
+**22 November 2026 — R2.2 adds indexed Vulkan materials.** Forward and G-buffer
+sample separate sRGB images with mipmaps and anisotropy on qualifying hardware.
+S4 loads its original base-color images on that path. Older `scene_materials`
+passes retain the atlas ABI, and new Built-in → Custom conversions carry
+both variants. See the [device contract](hardware-tiers.md#r22-materials) and
+[1,000-texture and S4 checks](bench.md#r22-material-checks).
+
 **22 November 2026 — R1.5 completed. Saved game nodes run in a Bevy schedule at 60 Hz.**
 Core and ARPG use the same single-threaded schedule in saved stage and node
 order. Two Windows runs match the pre-change event log for all ten Crate Garden

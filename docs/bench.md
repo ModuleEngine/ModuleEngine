@@ -45,14 +45,34 @@ Sponza is not redistributed: its model files are under the
 pins all 71 files (about 53 MB) by SHA-256 at the same Khronos commit.
 `scripts/bench.py` downloads missing files into the Git-ignored
 `.tools/bench-assets/sponza/`, and the fixture checks every hash again before
-loading. Two fixture adaptations are needed for the legacy renderer. Its static
-importer accepts only opaque materials, so the three alpha-mask materials
+loading. The static importer accepts only opaque materials, so the three alpha-mask materials
 (leaves, chains, plant) are drawn opaque from a derived `Sponza.bench.gltf`
-beside the download. Its base-color atlas is at most 8192 px high, so every S4
-base-color texture is box-filtered to at most 256 px per edge. Geometry is
-unchanged. `cargo test -p module-engine-editor --features bench bench::`
+beside the download. S4 uses original base-color dimensions on the
+[indexed path](hardware-tiers.md#r22-materials). On the compatibility path
+the fixture box-filters them to at most 256 px per edge to fit the atlas.
+Geometry is unchanged. `cargo test -p module-engine-editor --features bench bench::`
 checks the S3–S5 fixture contracts without a GPU; the S4 test skips with a
 message when Sponza has not been downloaded.
+
+<a id="r22-material-checks"></a>
+
+## R2.2 material checks
+
+Build the Editor with `cargo build --release --features bench -p module-engine-editor`.
+Run it with the following options, supplying a new output directory for each.
+These commands use the stock Vulkan renderer with explicit PNG readback.
+
+- `--bench-scene R2-textures <output>` renders a grid of 1,000 unique 16×16
+  source images. It checks every tile center against a linear material color
+  control and records image, upload and pixel counts in `materials.json`.
+- `--bench-scene S4-floor <output>` captures a 32-frame floor-level camera
+  path on S4. `--bench-scene S4-floor-atlas <other-output>` replays that path
+  using the original 256 px atlas fixture and the original Custom HLSL
+  material ABI. Both directories contain the exact camera parameters and PNGs.
+
+The Player example `gpu_presentation_check` exercises native interop and
+checks that two in-flight material versions produce their individual reference
+pixels while the second submission reuses the unchanged texture.
 
 ## Measurement and repeatability
 

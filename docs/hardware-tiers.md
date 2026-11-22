@@ -13,7 +13,7 @@ The R0.4 snapshot came from
 
 | Tier | Required device capabilities | Path and fallback | RTX 4080 SUPER on Windows |
 | --- | --- | --- | --- |
-| A — base raster | Vulkan ≥1.3 with a graphics + compute queue and `dynamicRendering`, `synchronization2`, `bufferDeviceAddress`, `descriptorIndexing`, `shaderSampledImageArrayNonUniformIndexing`, `runtimeDescriptorArray`. These use core Vulkan. The current Player also needs the platform interop described below. | The current path uses fixed descriptor bindings per pass, a texture atlas, conventional draws and barriers. R2 builds the GPU-driven raster path. On devices missing the new A capabilities the existing path remains available during R2 parity where its own requirements pass. The final Vulkan baseline has no promised lower tier. | All listed bits reported. The existing raster path and DX12 bridge ran S1/S2. R2's path is pending. |
+| A — base raster | Vulkan ≥1.3 with a graphics + compute queue and `dynamicRendering`, `synchronization2`, `bufferDeviceAddress`, `descriptorIndexing`, `shaderSampledImageArrayNonUniformIndexing`, `runtimeDescriptorArray`. These use core Vulkan. The current Player also needs the platform interop described below. | R2.1 adds [two frame slots](#r21-device). R2.2 adds [indexed material images](#r22-materials) on qualifying devices. The compatibility path retains the atlas. During R2 parity it remains available wherever its own requirements pass. The final Vulkan baseline has no promised lower tier. | All listed bits reported. The Windows DX12 bridge and R2.2 indexed material path were exercised on this adapter. |
 | B — mesh shaders | A plus `VK_EXT_mesh_shader` with `meshShader` and `taskShader` for R8's task/mesh pipeline. | R8 falls back to compute culling and indexed indirect drawing on A using the same meshlet data. | Extension and both bits reported. R8 and its fallback are pending. |
 | C — hybrid rays | A plus `VK_KHR_acceleration_structure` (`accelerationStructure`), its dependency `VK_KHR_deferred_host_operations`, and `VK_KHR_ray_query` (`rayQuery`). A separate ray-tracing pipeline also needs `VK_KHR_ray_tracing_pipeline` (`rayTracingPipeline`). | R9 falls back to raster shadow maps, SSAO, screen-space reflections and IBL as applicable. B and C are independent upgrades over A. | All listed extensions and bits reported. R9 and its GPU timings are pending. |
 
@@ -130,6 +130,34 @@ records the dedicated upload signal when that family is available.
 Local evidence, including the [S3 prototype measurements](decisions.md#r21-device-prototype),
 is under `outputs/r21/`. The published hardware qualification limits below
 still apply.
+
+<a id="r22-materials"></a>
+
+## R2.2 indexed materials
+
+The indexed path requires the R2.1 timeline and allocator path,
+`shaderSampledImageArrayNonUniformIndexing`, `runtimeDescriptorArray` and
+`samplerAnisotropy`. The renderer checks the regular sampled-image limits
+per fragment stage and descriptor set for 1,024 descriptors, the aggregate
+stage limit, room for a sampler and a storage buffer, and two bound sets.
+`R8G8B8A8_SRGB` must support optimal-tiled sampling, linear filtering,
+transfer and blits. The sampler uses repeat addressing, linear filtering
+between texels and mip levels, and up to 16× anisotropy within device limits.
+
+A material descriptor set contains 1,023 usable image slots and a white
+fallback. The graphics queue uploads the original level and generates the
+remaining mip levels by linear blits in sRGB images. Each image uses its own
+device extent limit. A replacement descriptor set shares unchanged images
+and retains its own object-to-texture index buffer. Submitted frames keep
+their set, images and staging buffer until GPU completion. Descriptor sets
+are populated before submission and stay immutable, so this path needs no
+update-after-bind, partially-bound or variable-count binding features.
+
+The atlas path applies on devices that fail the indexed checks, for Custom
+passes using the original material ABI, and when a scene exceeds the indexed
+table capacity. An atlas must fit within 8192 pixels on each axis. See the
+[pass ABI](gpu-hlsl.md#hlsl-abi) and
+[reproduction](bench.md#r22-material-checks).
 
 <a id="reference-gpu"></a>
 

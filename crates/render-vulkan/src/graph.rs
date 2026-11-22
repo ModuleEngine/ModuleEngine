@@ -40,6 +40,9 @@ pub struct PassManifest {
     /// Scene raster pass accepts the native UV/base-color image atlas ABI.
     #[serde(default)]
     pub scene_materials: bool,
+    /// Also compile the fragment's indexed material interface when supported.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub bindless_materials: bool,
     #[serde(default = "groups")]
     pub workgroup: [u32; 3],
     #[serde(default)]
@@ -50,6 +53,9 @@ pub struct PassManifest {
 }
 fn main_entry() -> String {
     "main".into()
+}
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 fn fullscreen() -> String {
     "fullscreen".into()
@@ -73,6 +79,9 @@ impl Pass {
     }
     pub fn geometry(&self) -> bool {
         self.manifest.stage == "raster" && self.manifest.raster_mode == "scene"
+    }
+    pub fn has_bindless_variant(&self) -> bool {
+        self.manifest.bindless_materials
     }
 }
 #[derive(Clone, Debug)]
@@ -107,6 +116,7 @@ fn manifest(
         }
         .into(),
         scene_materials: false,
+        bindless_materials: false,
         workgroup: groups(),
         inputs,
         outputs,
@@ -146,6 +156,7 @@ pub fn builtin_manifest(module: &str) -> Option<PassManifest> {
                 &[],
             );
             result.scene_materials = module != "gpu.depth_normal";
+            result.bindless_materials = result.scene_materials;
             result
         }
         "gpu.deferred" => manifest(
@@ -778,6 +789,15 @@ fn validate_manifest(m: &PassManifest) -> Result<(), VulkanError> {
     if m.scene_materials && (m.stage != "raster" || m.raster_mode != "scene") {
         return Err(VulkanError::Graph(
             "scene_materials is available only for scene raster passes".into(),
+        ));
+    }
+    if m.bindless_materials
+        && (!m.scene_materials
+            || m.inputs.iter().any(|s| s.format != "scene")
+            || m.parameters.len() > 15)
+    {
+        return Err(VulkanError::Graph(
+            "bindless_materials requires scene_materials, only a Scene3D input and at most 15 scalar parameters".into(),
         ));
     }
     if m.stage == "compute"

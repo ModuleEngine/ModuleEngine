@@ -14,7 +14,7 @@ Supported formats are glTF 2.0 `.gltf` and `.glb`: indexed and nonindexed triang
 
 This is limited static content import, not a claim of full glTF conformance. Skins, animations, morph targets, sparse accessors, nontriangle primitives, required extensions, transparent materials, and texturing through another UV set are rejected with a message. Metallic, roughness, normal/emissive/occlusion maps do not yet contribute to lighting. The renderer uses a flat triangle normal and simple built-in lighting.
 
-PNG/JPEG can be loaded separately and assigned to existing geometry. Base-color texture RGB is treated as sRGB and converted to linear color in the GPU shader. The material factor and object color multiply the result. Current sampling is nearest with repeat; arbitrary glTF sampler/filter modes and mipmaps are not yet executed.
+PNG/JPEG can be loaded separately and assigned to existing geometry. The material factor and object color multiply the linear RGB sample. The indexed Vulkan path samples per-texture sRGB images with repeat addressing, mipmaps generated during GPU upload, and anisotropic filtering. The compatibility atlas path uses a nearest texel and explicitly decodes sRGB in HLSL. The importer still uses UV0 and the renderer uses its own sampler settings. [Vulkan material paths](hardware-tiers.md#r22-materials).
 
 <a id="ссылка-из-сцены"></a>
 
@@ -52,7 +52,7 @@ Game resource paths are relative to the selected package. Absolute paths and URL
 
 `dependencies(model_paths)` returns the complete set of model, buffer, and image files for export. For a `.glb` with all content embedded, this is one file; for an external `.gltf`, the document and its actual dependencies. The exporter adds separate material override textures from component references. Player uses its own files and does not access the authored checkout.
 
-Loading limits: 128 MiB per model/buffer/encoded texture file; textures up to 4096×4096, decoding limit 128 MiB; up to one million vertices per primitive and three million accessor elements; up to 4096 nodes and 128 hierarchy levels. Binary ranges are validated before iterator creation. The current renderer's GPU atlas allows up to 8192 on each axis. A large game needs streaming, mipmaps, and a broader material/resource contract.
+Loading limits: 128 MiB per model/buffer/encoded texture file; textures up to 4096×4096, decoding limit 128 MiB; up to one million vertices per primitive and three million accessor elements; up to 4096 nodes and 128 hierarchy levels. Binary ranges are validated before iterator creation. The indexed renderer uses distinct GPU images within device limits. The compatibility atlas still allows up to 8192 pixels on each axis. Large-game texture streaming is a separate concern.
 
 <a id="проверка"></a>
 
