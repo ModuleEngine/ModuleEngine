@@ -71,7 +71,7 @@ impl Fixture {
         let tick_ms = started.elapsed().as_secs_f64() * 1000.;
         let started = std::time::Instant::now();
         for &id in &entities[..S3_MOVING] {
-            self.scene.items[id as usize - 1].model = world.object(id).unwrap().transform.matrix();
+            self.scene.items[id as usize - 1].model = world.transform(id).unwrap().matrix();
         }
         self.scene.time = s3_ecs::time(frame);
         Some(EcsWork {
