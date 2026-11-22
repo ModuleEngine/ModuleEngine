@@ -4,6 +4,14 @@
 
 [English](current-status.md) | [Русский](ru/current-status.md) | [Documentation](README.md)
 
+**22 November 2026 — R2.1 adds a Vulkan device layer.** Tier A adapters
+with timeline support get two frame slots, gpu-allocator, a staging ring
+and the dedicated transfer route when available. Existing compatible devices
+can use the single-slot fence path. The S3 prototype measured a lower
+window-observed frame interval and higher peak working set with two slots.
+See the [measured decision](decisions.md#r21-device-prototype) and the
+[device contract and native S1–S3 check](hardware-tiers.md#r21-device).
+
 **22 November 2026 — R1.4 stages fixed-tick writes without cloning `GameState`.**
 Systems see earlier writes in schedule order. Late rejection discards the ECS
 journal and retains the accepted state for retry. On the 2,000-entity S3 CPU

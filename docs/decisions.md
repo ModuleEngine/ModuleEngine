@@ -26,13 +26,65 @@ This log separates the accepted product scope from selected implementation detai
 
 ## Selected Implementation Details
 
-- Native Vulkan presentation uses opaque Core GPU leases and explicit application-supplied targets to remove the GPU→CPU→GPU pixel roundtrip while keeping Host/Core independent of native APIs. Windows uses shared D3D12 resources with WGPU/DX12; Linux uses dedicated OPAQUE_FD memory with WGPU/Vulkan and exact device/driver UUIDs. Four producer leases and actual consumer GPU completion bound reuse. Normal native presentation admits one `RenderSubmission::Pending(ticket)` at a time, polls that exact request without waiting, and reports `Busy` without accepting work; `Ready(Frame)` supports immediate CPU/software output. Completed pixels retain their submitted metadata. Pending work, cancellation and background retirement preserve native resource ownership until real GPU completion. Interop failures preserve the last image and report an error without implicit readback fallback. Explicit CPU/software/diagnostic rendering and its synchronous readback remain available; conflicting CPU rendering is rejected while native work is pending. Cancellation drops publication without waiting; renderer destruction transfers unfinished work to an owned background retirement job with a bounded fence wait and explicit failed/unconfirmed reporting. A game-renderer swapchain and several simultaneous producer submissions remain separate work. The [async GPU stage](gpu-async-20261018.md) requires its own final source-bound evidence and independent conclusion; no acceptance follows from this decision alone. [Historical source-bound results](gpu-presentation-20261018.md) record Windows source15 21 cases/16 exact-image checks, Host 64 ordinary/one ignored, selected 18-file Player export/relocation and all 12 normal A/B processes passing unchanged gates with preserved data. Linux 21/16interop evidence remains separately bound to source11/WSL llvmpipe; it is not a current15Linux build or hardware certification. Source11 strict p95/shutdown failures remain historical failures. Small current samples confirm the agreed normal criteria, not uniform improvement, statistical non-inferiority or all-frame maximum latency. Cold ≤45 s remains OPEN; final source/documentation binding and independent conclusion are recorded separately in the report. The small observed-collision/reset-only phase policy is defined in [GameWorker](game-worker.md); diagnostic14 is not production-fixture acceptance.
+- Native Vulkan presentation uses opaque Core GPU leases and explicit application-supplied targets to remove the GPU→CPU→GPU pixel roundtrip while keeping Host/Core independent of native APIs. Windows uses shared D3D12 resources with WGPU/DX12. Linux uses dedicated OPAQUE_FD memory with WGPU/Vulkan and exact device and driver UUIDs. Four producer leases and actual consumer GPU completion bound reuse. The [Player contract](player.md#native-gpu-presentation) defines publication, cancellation and diagnostics. The [R2.1 device decision](#r21-device-prototype) defines the producer's slots and deletion. The [historical October async stage](gpu-async-20261018.md) and [GPU presentation report](gpu-presentation-20261018.md) give source-bound checks and their limits.
 - Rust compiles into a worker executable and exchanges owned JSON packets without a Rust DLL ABI. In 0.2/0.3, a worker was created on every tick. In 0.4, the process is persistent, state is explicitly declared and owned by the host; a timeout stops the worker, and the next tick restores the last accepted state. This does not isolate OS access or promise migration of globals.
 - The root Cargo.lock is authoritative for worker dependencies as well. The generated worker build checks package versions and sources before an offline --locked build; its own package has the technical version 0.0.0.
 - Tools are pinned in toolchain-manifest.json: Rust 1.99.0, DXC 1.9.2609.5. Doctor does not modify the system; explicit Restore installs tools into the project directory and verifies DXC hashes.
 - History stores document snapshots, and merge normalizes nodes by ID and connections by input. A conflict leaves the base value in the preview document and both alternatives in the report.
 - Resources use AssetId, a relative path, and SHA-256. HLSL include dependencies are exported recursively; a macro in place of an include name is rejected.
 - The 0.1 software renderer is retained as a separate module.
+
+
+<a id="r21-device-prototype"></a>
+
+## R2.1 Vulkan device choice — 22 November 2026
+
+Use gpu-allocator 0.28 for producer-owned resources and two graphics slots
+with a timeline semaphore on tier A devices with timeline support. The
+second slot allocates frame resources only when a caller has two requests
+outstanding. Keep the single-slot fence path for other compatible adapters
+and keep the GUI's external allocations dedicated as required by interop.
+Select a dedicated transfer family for atlas uploads when one is exposed.
+Retain the graphics queue fallback, the current graph and shader bindings,
+the direct-mapped vertex stream, and the existing native presentation lease
+contract. Resource bindings and the GPU scene representation belong to R2.2
+and R2.3.
+
+The prototype used native S3 at 1920×1080 on an RTX 4080 SUPER, driver 617.42,
+with WGPU/DX12 GUI, Vulkan producer, and Immediate present mode. Each of
+three modes ran five interleaved scored processes with 30 warmup and 240
+measured frames after one prewarm per mode. Validation and profiling were
+off during timing. The launcher checked for competing builds and Editor
+processes between runs. The table gives medians of per-run means and p95s.
+
+| S3 metric | 99884e6 original | Allocator, one slot | Allocator, two slots |
+| --- | ---: | ---: | ---: |
+| Frame interval mean / p95, ms | 26.938 / 35.262 | 27.812 / 31.390 | 24.504 / 26.815 |
+| CPU render and submission mean / p95, ms | 20.732 / 22.473 | 21.962 / 23.972 | 21.587 / 23.376 |
+| Peak process working set, MiB | 306.2 | 315.6 | 380.4 |
+| Allocator Vulkan blocks, in use / reserved, MiB | — | 2, 248.7 / 320 | 4, 497.4 / 640 |
+
+The two-slot run reached two pending tickets and reduced the observed
+median frame interval by 9.03%, within the tolerance from this series'
+baseline spread. CPU submission changed by +4.12%. Peak working set changed
+by +24.26%. The existing comparison rule flagged that memory result as
+worse and borderline. This prototype series was run once and establishes
+the tradeoff for R2.1, with no general performance or memory parity claim.
+One-slot allocation alone did not show a frame-time gain in this series.
+Retain two slots to allow CPU recording and GPU work to overlap, and keep
+the normal caller's single outstanding request where it owns one frame
+transaction. Allocator reserved bytes include host-visible heaps and do not
+measure total process VRAM.
+
+Baseline HEAD was 99884e6794737a3e40f3128fe14d3a919388dc23. The prototype
+was built at that HEAD with source digest
+`fd3b3fb0fd0826edb0895b1ef3f1ddb3305d721ef87f3a6dc64b1deeec16ca1a`.
+The local `outputs/r21/s3-matched/` contains the source snapshot, binary
+hashes, comparison, raw reports and GPU telemetry.
+`outputs/r21/prototype/` preserves the prototype executable, changed sources
+and launcher. This decision precedes migration of the default device path.
+The numbers above do not cover dedicated transfer or final validation.
+
 
 <a id="рабочие-допущения"></a>
 

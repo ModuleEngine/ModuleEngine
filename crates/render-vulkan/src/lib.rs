@@ -1,14 +1,20 @@
 //! Native Vulkan renderer. All shading, postprocessing, and Custom passes execute
 //! on the GPU. Scene vertex preparation and final frame readback are CPU work.
 mod adapter;
+mod capabilities;
 mod compiler;
+mod frames;
 mod geometry;
 mod graph;
+mod memory;
 pub mod presentation;
 mod profiling;
 mod retirement;
+mod staging;
+mod transfer;
 mod vulkan;
 pub use adapter::{VulkanAdapter, install};
+pub use capabilities::DeviceCapabilities;
 pub use compiler::shader_dependency_revision_at;
 pub use compiler::{
     ShaderArtifact, ShaderPerformance, compile_hlsl, compile_hlsl_at, dxc_path,

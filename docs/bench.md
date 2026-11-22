@@ -72,10 +72,13 @@ measures 30. No authored project or installed Editor or Player is used.
 | S4, S5 | Window-observed frame interval and CPU render/submission time |
 
 S3–S5 exercise the current Vulkan graph, GPU completion and the Player's
-native GPU texture bridge in a real window. Their diagnostic app admits one
-submission at a time on the window thread, observes completion on a later UI
-callback and submits the next frame in that same callback. This includes window
-scheduling. The launcher requests `MODULE_ENGINE_GUI_VSYNC=off` for every scene.
+native GPU texture bridge in a real window. S3 can pipeline two producer
+requests on [R2.1-capable devices](hardware-tiers.md#r21-device). S4 and S5
+use one request at a time. The window thread observes at most one completion
+per UI callback and refills available requests in that callback. The timing
+includes window scheduling. S3 records the producer slot count, observed
+maximum pending tickets and allocator totals in the raw scene report.
+The launcher requests `MODULE_ENGINE_GUI_VSYNC=off` for every scene.
 WGPU can fall back to display pacing when an unsynchronized mode is unavailable.
 `--vsync` explicitly requests the display-paced mode. Each scene records the
 request separately from `effective_present_mode`, the concrete mode selected by
