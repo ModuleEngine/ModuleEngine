@@ -68,9 +68,13 @@ def find_ref(title: str, extra: str, tasks: set[str], phases: set[str]) -> tuple
 
 
 def parse_time(value: object) -> dt.datetime | None:
+    """A UTC ISO time such as 2026-11-22T12:00:00Z; None for anything else, including dates that do not exist."""
     if not isinstance(value, str) or not ISO.match(value):
         return None
-    return dt.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc)
+    try:
+        return dt.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc)
+    except ValueError:
+        return None
 
 
 def collect(repo: str, tasks: set[str], phases: set[str], now: dt.datetime, get: Getter,
@@ -123,38 +127,64 @@ def collect(repo: str, tasks: set[str], phases: set[str], now: dt.datetime, get:
     return sanitize({"events": raw}, repo, tasks, phases, now, days), warnings
 
 
-def sanitize(data: object, repo: str, tasks: set[str], phases: set[str], now: dt.datetime | None = None,
-             days: int = WINDOW_DAYS) -> list[dict]:
-    """The trust boundary: only known event kinds, ISO times, known roadmap ids and github.com links survive."""
+def _text_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def sanitize_report(data: object, repo: str, tasks: set[str], phases: set[str], now: dt.datetime | None = None,
+                    days: int = WINDOW_DAYS) -> tuple[list[dict], int]:
+    """The trust boundary: only known event kinds, ISO times, known roadmap ids and github.com links survive.
+
+    Returns the events and how many were malformed (wrong types, unknown kind, impossible time); those are
+    omitted. Events outside the time window, unknown ids and foreign links are not malformed: the event or
+    the field is dropped quietly."""
     events = data.get("events") if isinstance(data, dict) else None
     out: list[dict] = []
+    malformed = 0
     for e in events if isinstance(events, list) else []:
-        if not isinstance(e, dict) or e.get("type") not in TYPES:
+        if not isinstance(e, dict) or e.get("type") not in TYPES or not isinstance(e.get("type"), str):
+            malformed += 1
             continue
         when = parse_time(e.get("at"))
-        if when is None or (now is not None and not now - dt.timedelta(days=days) <= when <= now + dt.timedelta(hours=1)):
+        if when is None:
+            malformed += 1
             continue
-        task = e.get("task") if e.get("task") in tasks else None
-        phase = e.get("phase") if e.get("phase") in phases else None
+        if now is not None and not now - dt.timedelta(days=days) <= when <= now + dt.timedelta(hours=1):
+            continue
+        fields = {k: e.get(k) for k in ("task", "phase", "url", "title")}
+        num = e.get("num")
+        if any(v is not None and not isinstance(v, str) for v in fields.values()) or \
+                (num is not None and (not isinstance(num, int) or isinstance(num, bool))):
+            malformed += 1
+            continue
+        task = fields["task"] if fields["task"] in tasks else None
+        phase = fields["phase"] if fields["phase"] in phases else None
         if task:
             phase = task.rsplit(".", 1)[0]
-        url = e.get("url") if isinstance(e.get("url"), str) and e["url"].startswith(f"https://github.com/{repo}/") else None
-        num = e.get("num") if isinstance(e.get("num"), int) and not isinstance(e.get("num"), bool) else None
-        out.append({"type": e["type"], "at": e["at"], "title": clip(e.get("title")), "num": num,
+        url = fields["url"] if fields["url"] and fields["url"].startswith(f"https://github.com/{repo}/") else None
+        out.append({"type": e["type"], "at": e["at"], "title": clip(fields["title"]), "num": num,
                     "task": task, "phase": phase, "url": url})
     out.sort(key=lambda e: e["at"], reverse=True)
-    return out[:MAX_EVENTS]
+    return out[:MAX_EVENTS], malformed
+
+
+def sanitize(data: object, repo: str, tasks: set[str], phases: set[str], now: dt.datetime | None = None,
+             days: int = WINDOW_DAYS) -> list[dict]:
+    return sanitize_report(data, repo, tasks, phases, now, days)[0]
 
 
 def load_events(path: Path, repo: str, tasks: set[str], phases: set[str]) -> tuple[dict | None, list[str]]:
-    """The page payload (repo, fetch time, events) from a file written by this script; a bad file gives None and a warning."""
+    """The page payload (repo, fetch time, events) from a file written by this script.
+
+    An unreadable file gives None and a warning; malformed events are omitted with a warning. Neither stops the build."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as err:
         return None, [f"events file {path} is not usable ({type(err).__name__}); the map is built without events"]
+    events, malformed = sanitize_report(data, repo, tasks, phases)
+    warnings = [f"{malformed} malformed event(s) in {path} were left out of the map"] if malformed else []
     fetched = data.get("fetched") if isinstance(data, dict) else None
-    return {"repo": repo, "fetched": fetched if parse_time(fetched) else None,
-            "events": sanitize(data, repo, tasks, phases)}, []
+    return {"repo": repo, "fetched": fetched if parse_time(fetched) else None, "events": events}, warnings
 
 
 def http_getter(token: str) -> Getter:

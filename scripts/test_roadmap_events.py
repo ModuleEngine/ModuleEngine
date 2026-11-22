@@ -219,6 +219,41 @@ class WorldEventsBuildTest(unittest.TestCase):
         self.assertTrue(any("events file" in w for w in warnings))
         self.assertIn("const EVD = null;", page)
 
+    def good(self, **over):
+        return {"type": "commit", "at": stamp(1), "title": "R1.6 fine", "num": None, "task": "R1.6", "phase": "R1",
+                "url": None, **over}
+
+    def assert_built_without(self, bad):
+        """The page is generated, the good event is kept, the malformed one is omitted with a warning."""
+        page, errors, warnings = self.build({"fetched": stamp(0), "events": [bad, self.good()]})
+        self.assertEqual(errors, [])
+        self.assertTrue(any("malformed event" in w for w in warnings), warnings)
+        self.assertIn("R1.6 fine", page)
+        payload = json.loads(re.search(r'const EVD = (\{.*?\});\n', page).group(1))
+        self.assertEqual([e["title"] for e in payload["events"]], ["R1.6 fine"])
+
+    def test_a_date_that_does_not_exist_is_omitted_with_a_warning(self):
+        self.assert_built_without(self.good(at="2026-11-31T09:00:00Z", title="impossible date"))
+
+    def test_a_task_of_the_wrong_type_is_omitted_with_a_warning(self):
+        self.assert_built_without(self.good(task=[], title="list task"))
+
+    def test_other_malformed_fields_are_omitted_with_a_warning(self):
+        for field, value in (("phase", {}), ("url", 5), ("num", "7"), ("num", True), ("title", ["x"]), ("type", [])):
+            self.assert_built_without(self.good(**{field: value}))
+        self.assert_built_without("not an object")
+
+    def test_the_build_cli_survives_malformed_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            events = Path(tmp) / "events.json"
+            events.write_text(json.dumps({"events": [self.good(at="2026-02-30T00:00:00Z"), self.good(task=[])]}), encoding="utf-8")
+            out = Path(tmp) / "site" / "index.html"
+            result = subprocess.run([sys.executable, "-B", str(Path(roadmap_map.__file__)), "--out", str(out),
+                                     "--events", str(events), "--repo", REPO], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("malformed event", result.stderr)
+            self.assertTrue((out.parent / "world" / "index.html").exists())
+
     def test_event_text_cannot_close_the_script_block(self):
         evil = "</script><script>alert(1)</script><!--"
         fetched = stamp(0)
