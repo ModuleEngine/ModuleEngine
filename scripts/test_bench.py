@@ -206,6 +206,14 @@ class NotWorseRuleTest(unittest.TestCase):
         slower = side_runs("baseline", [1.0] * 5) + side_runs("candidate", [1.2] * 5, signature=vulkan)
         self.assertFalse(bench.compare_sides(slower, ["S2"], ("gui_graphics.backend",))["S2"]["passed"])
 
+        unobserved = side_runs("baseline", [1.0] * 5) + side_runs(
+            "candidate", [1.0] * 5, signature=recorded_signature(gui_backend=None))
+        item = bench.compare_sides(unobserved, ["S2"], ("gui_graphics.backend",))["S2"]
+        self.assertFalse(item["comparable"] or item["passed"])
+        self.assertTrue(any("candidate run 1" in r and "gui_graphics.backend (declared)" in r
+                            for r in item["reasons"]))
+        self.assertIn("INCOMPARABLE", bench.render_table({"S2": item}))
+
         for change in ({"gui_adapter_name": "GTX 1660"}, {"vulkan_device": "GTX 1660"},
                        {"offscreen_render_pixels": [2560, 1440]}, {"measured_requested": 120},
                        {"effective_present_mode": "Fifo"}):
@@ -293,6 +301,13 @@ class CompareSeriesTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(report["scenes"]["S3"]["declared_changes"]["gui_graphics.backend"],
                          {"baseline": "Dx12", "candidate": "Vulkan"})
+
+    def test_declared_backend_must_be_observed_on_both_sides(self):
+        code, report, _ = self.run_series(lambda number: 1.0, ("gui_graphics.backend",),
+                                          signature=recorded_signature(gui_backend=None))
+        self.assertEqual(code, 1)
+        self.assertFalse(report["accepted"])
+        self.assertIn("candidate run", report["scenes"]["S2"]["reasons"][0])
 
     def test_clear_regression_fails_without_rerun(self):
         code, report, calls = self.run_series(lambda number: 1.2)

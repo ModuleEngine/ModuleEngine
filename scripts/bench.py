@@ -595,12 +595,18 @@ def run_label(case):
     return f"{case.get('side', '?')} run {case.get('run', '?')}"
 
 
-def missing_evidence(cases):
-    """Runs whose presentation evidence is unknown, e.g. a null or changing present mode."""
+def missing_evidence(cases, declared=()):
+    """Runs whose presentation evidence is unknown, e.g. a null or changing present mode.
+
+    A declared change must be observed in every run, otherwise the report
+    could accept a migration without knowing what the candidate used."""
     problems = []
     for case in cases:
         signature = case.get("signature") or {}
+        fields = flatten(signature, "signature")
         unknown = [key for key in REQUIRED_EVIDENCE if signature.get(key) is None]
+        unknown += [f"signature.{field} (declared)" for field in declared
+                    if fields.get(f"signature.{field}") is None]
         if unknown:
             problems.append(f"{run_label(case)}: {', '.join(unknown)} unknown or changed")
     return problems
@@ -615,7 +621,7 @@ def compare_scene(scene, baseline_cases, candidate_cases, declared=()):
                   for case in cases if case["status"] != "complete"]
     if incomplete:
         reasons.append("Incomplete runs: " + ", ".join(incomplete))
-    if evidence := missing_evidence(cases):
+    if evidence := missing_evidence(cases, declared):
         reasons.append("Missing run evidence: " + "; ".join(evidence))
     for side_cases in (baseline_cases, candidate_cases):
         if side_cases and (differences := signature_differences(side_cases)):

@@ -173,8 +173,8 @@ change under test (R2.6: the current WGPU path against the direct Vulkan
 swapchain), declare each field that may differ between the sides:
 `--declare-change gui_graphics.backend` (also `gui_graphics.renderer`,
 `gui_graphics.requested_renderer`, `gui_graphics.requested_gpu_backend`; the
-option repeats). Only these fields can be declared. A declared field must still
-be identical across all runs of one side, both values are written to
+option repeats). Only these fields can be declared. A declared field must be
+reported (non-null) in every run on both sides and identical across all runs of one side, both values are written to
 `compare.json` and `compare.md`, and every other field stays strict: a
 different adapter, resolution, workload or effective present mode is still
 incomparable. Without the option the comparison is fully strict.
