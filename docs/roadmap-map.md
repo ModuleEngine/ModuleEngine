@@ -18,9 +18,11 @@ The last column of every phase task table in the roadmap is the status:
 | --- | --- | --- |
 | `Done` | `Сделано` (also `Выполнено` or `Готово`) | Task done |
 | `In progress`, optionally `In progress (2–3 d)` | `В работе`, optionally `В работе (2–3 д)` | Task in progress |
-| Anything else, usually the estimate (`2–3 d`) | Anything else (`2–3 д`) | Not started |
+| An estimate such as `2–3 d` or `1.5 w` | An estimate such as `2–3 д` or `1,5 н` | Not started |
 
-Change the cell in both language versions in the same pull request that starts or completes the task. The phase colour, the “Done / Now / Next” cards, the progress bar, the header label and the column headers are derived from these statuses:
+The dedicated roadmap chat records status transitions. Implementation chats pass along accepted results and verification evidence and update technical contracts in their own pull requests. When a transition is ready, the planning chat compares `main` with the working chats and proposes one status pull request for the confirmed completions and work that has actually started. Apply the proposal from the dedicated roadmap chat and edit both language tables together. Keep the original estimate in parentheses when marking a task in progress if the estimate still applies.
+
+The phase colour, the “Done / Now / Next” cards, the progress bar, the header label and the column headers are derived from these statuses:
 
 - a phase is done when all its tasks are done, and current when at least one is done or in progress;
 - a phase is next when every phase it depends on is done or current;
@@ -77,4 +79,6 @@ python scripts/roadmap_events.py --repo owner/name --out events.json   # optiona
 python scripts/roadmap_map.py --events events.json --repo owner/name   # build with that activity
 ```
 
-The build fails when the English and Russian tables list different tasks or different statuses. Pull requests that touch the roadmap run the same check, and `scripts/test_roadmap_map.py` and `scripts/test_roadmap_events.py` run with the other script tests in CI.
+The build fails when the English and Russian tables list different tasks or states, or a task has an unsupported status or estimate. Estimates use days (`d`/`д`) or weeks (`w`/`н`), with an optional range. Use a decimal point in English and a comma in Russian.
+
+`ModuleEngine CI` uses the `Roadmap status checks` job for a nonempty change limited to existing task status cells in both exact roadmap files. It validates both tables, runs the generator tests and their Node model, checks without writing, and builds both pages. Other changes use the ordinary OS matrix and its existing route selection. `CI required` requires successful planning and all jobs required by the selected route. The separate Roadmap map workflow retains the Chromium regression and GitHub Pages publication.

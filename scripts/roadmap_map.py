@@ -43,6 +43,11 @@ STATUS_WORDS = {
     "ru": {"done": ("сделано", "выполнено", "готово"), "cur": ("в работе",)},
 }
 DONE_PREFIX = re.compile(r"^(done|сделано|выполнено|готово)\b[^:]{0,40}:\s*", re.IGNORECASE)
+ESTIMATE = {
+    lang: re.compile(rf"{number}(?:\s*[–-]\s*{number})?\s+{unit}")
+    for lang, number, unit in (("en", r"[0-9]+(?:\.[0-9]+)?", "[dw]"),
+                               ("ru", r"[0-9]+(?:,[0-9]+)?", "[дн]"))
+}
 
 
 @dataclass
@@ -83,10 +88,15 @@ def short(text: str, limit: int = 150) -> str:
 
 def classify(cell: str, lang: str) -> str:
     low = plain(cell).lower()
-    for state, words in STATUS_WORDS[lang].items():
-        if any(low.startswith(word) for word in words):
-            return state
-    return "todo"
+    if low in STATUS_WORDS[lang]["done"]:
+        return "done"
+    for word in STATUS_WORDS[lang]["cur"]:
+        if low == word or (low.startswith(word + " (") and low.endswith(")")
+                           and ESTIMATE[lang].fullmatch(low[len(word) + 2:-1])):
+            return "cur"
+    if ESTIMATE[lang].fullmatch(low):
+        return "todo"
+    raise ValueError(f"unsupported {lang} roadmap status or estimate: {cell!r}")
 
 
 def split_row(line: str) -> list[str]:
@@ -98,35 +108,48 @@ def split_row(line: str) -> list[str]:
     return [cell.strip() for cell in re.split(r"(?<!\\)\|", body)]
 
 
-def parse(markdown: str, lang: str) -> list[Phase]:
-    phases: list[Phase] = []
-    current: Phase | None = None
-    for line in markdown.splitlines():
+def task_rows(markdown: str):
+    """Yield each recognized row with its line and the containing phase heading."""
+    section = None
+    for line_number, line in enumerate(markdown.splitlines(keepends=True)):
         heading = HEADING.match(line)
         if heading:
-            current = Phase(heading["id"], plain(heading["title"]))
-            phases.append(current)
+            section = (line_number, heading["id"], plain(heading["title"]))
             continue
         if ANY_HEADING.match(line):
-            current = None
+            section = None
             continue
-        if current is None or not line.lstrip().startswith("|"):
+        if section is None or not line.lstrip().startswith("|"):
             continue
         cells = split_row(line)
         task_id = TASK_ID.match(plain(cells[0]))
-        if not task_id or task_id["phase"] != current.id or len(cells) < 3:
-            continue
+        if task_id and task_id["phase"] == section[1] and len(cells) >= 3:
+            yield line_number, section, cells
+
+
+def parse(markdown: str, lang: str) -> list[Phase]:
+    phases: list[Phase] = []
+    current_section = None
+    for _, section, cells in task_rows(markdown):
+        if current_section != section:
+            current_section = section
+            phases.append(Phase(section[1], section[2]))
         status = cells[-1]
-        current.tasks.append(Task(
-            id=plain(cells[0]),
-            state=classify(status, lang),
+        task_id = plain(cells[0])
+        try:
+            state = classify(status, lang)
+        except ValueError as exc:
+            raise ValueError(f"{EN_PATH if lang == 'en' else RU_PATH}: {task_id}: {exc}") from exc
+        phases[-1].tasks.append(Task(
+            id=task_id,
+            state=state,
             effort=plain(status),
             text=short(plain(cells[1])),
             acceptance=short(plain(cells[2])) if len(cells) > 3 else "",
             detail=plain(cells[1]),
             criteria=plain(cells[2]) if len(cells) > 3 else "",
         ))
-    return [phase for phase in phases if phase.tasks]
+    return phases
 
 
 def compare(en: list[Phase], ru: list[Phase]) -> list[str]:
@@ -271,8 +294,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true", help="only validate the roadmap; write nothing")
     args = parser.parse_args(argv)
 
-    page, errors, warnings = build(ROOT)
-    world, world_errors, world_warnings = build_world(ROOT, Path(args.events) if args.events else None, args.repo)
+    try:
+        page, errors, warnings = build(ROOT)
+        world, world_errors, world_warnings = build_world(ROOT, Path(args.events) if args.events else None, args.repo)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     errors += world_errors
     warnings += world_warnings
     for warning in warnings:

@@ -2,34 +2,41 @@
 
 [English](../ci.md) | [Русский](ci.md) | [Документация](README.md)
 
-Цель: каждый PR получает отдельные проверки `contracts` и `clippy` на Windows и Linux; изменение исполняемых
-исходников добавляет native и package проверки. Документационный PR не получает
-дорогие native/package сборки. Нецели: performance, desktop dialogs, hardware GPU
-и полная Full/Team/Player поставка. Критерий: `CI required` успешен только после
-успеха планирования и обеих платформ, включая выбранные дополнительные маршруты.
+Обычные PR получают отдельные проверки `contracts` и `clippy` на Windows и Linux.
+Изменение исполняемых исходников добавляет проверки native и package. Для переходов
+только по статусам дорожной карты предусмотрена отдельная проверка. `CI required`
+успешен после планирования и всех обязательных заданий выбранного маршрута.
+Производительность, диалоги рабочего стола, аппаратный GPU и полная поставка
+Full/Team/Player находятся за пределами этого CI.
 
 ## Что выполняется
 
 [Workflow](../../.github/workflows/ci.yml) запускается для всех PR, push в `main`, merge queue
 и вручную; workflow-level path filters отсутствуют. [ci_plan.py](../../scripts/ci_plan.py)
-читает Git diff, включая удалённые файлы и обе стороны rename. Только изменения
-в `docs/`, Markdown, `LICENSE-MIT`, `LICENSE-APACHE` и `.gitignore` пропускают дополнительные маршруты;
-неизвестный новый source path включает их. Initial push/manual run включает всё.
-Ошибка определения diff завершает планирование ошибкой.
+читает Git diff, включая удалённые файлы и обе стороны переименований. Непустая
+правка только статусных ячеек существующих задач в обеих [таблицах карты](roadmap-map.md)
+может использовать `Roadmap status checks` после проверки согласованности языков.
+Задание запускает тесты генератора и модели Node, `--check` и сборку обеих страниц.
+Отдельный workflow Roadmap map сохраняет проверку Chromium и публикацию в Pages.
 
-| Runner | Всегда | При изменении исходников |
+Остальные изменения проходят обычную матрицу. В ней правки только в `docs/`,
+Markdown, `LICENSE-MIT`, `LICENSE-APACHE` или `.gitignore` пропускают native и
+package. Неизвестные исходные пути, пустой diff, первый push и ручной запуск
+включают эти маршруты. Ошибка определения diff завершает планирование ошибкой.
+
+| Runner | Обычная матрица | При изменении исходников |
 | --- | --- | --- |
 | `windows-2022` | Python unit checks, [проверка лицензий](licensing.md#third-party-code), `contracts`, `clippy` | `native-tools`, затем `package` |
 | `ubuntu-24.04` | Python unit checks, [проверка лицензий](licensing.md#third-party-code), `contracts`, `clippy` | `native` на явно выбранном Mesa lavapipe, затем `package` |
 
-Существующий checks job всегда отдельно планирует и выполняет `clippy` на обеих
-платформах, включая документационные PR. Команда:
+Обычная матрица отдельно планирует и выполняет `clippy` на обеих платформах,
+включая документационные PR вне маршрута только по статусам. Команда:
 `cargo clippy --offline --locked --target {native_host} --workspace --all-targets --all-features -- -D warnings`.
 Launcher определяет `{native_host}` по фактическому verbose выводу Rust toolchain
 и отклоняет несовпадение release/target с manifest платформы до Cargo metadata.
 Clippy не выполняет formatting, tests или runtime-сценарии; `contracts` по-прежнему
-проверяет formatting ровно один раз. Fail-closed aggregate `CI required` не изменён.
-Для этого изменения workflow требуются новые hosted результаты на его SHA.
+проверяет formatting ровно один раз. Изменение workflow требует новых hosted
+результатов на его SHA.
 
 `native-tools` — три существующие проверки native linker/cache/executable
 spellings без GPU или UI. Это часть `native`, а не замена его двух GameUI tests.
@@ -73,9 +80,10 @@ workflow в целевом GitHub repository и первого успешног�
 3. Проверить отказ теста в отдельном PR: failed prerequisite обязан блокировать
    `CI required`. Новая версия PR должна пройти повторно; старый SHA не подходит.
 
-Aggregate с `if: always()` явно отвергает `failure`, `cancelled`, `skipped` и
-отсутствующие route outputs. Отдельные условные native/package steps не объявляются
-пройденными, если их маршрут не выбран. Если branch protection/ruleset ещё не
+Итоговый шлюз с `if: always()` отвергает любой результат обязательного задания,
+кроме `success`, и отсутствующие данные о маршруте. От невыбранного задания он
+ожидает `skipped`. Обычная матрица требует успеха обеих ОС, включая выбранные
+шаги native/package. Если branch protection/ruleset ещё не
 применён, CI даёт сигнал, но технически не запрещает merge. Включение правила
 требует известного repository и соответствующих прав; локальные unit checks
 не доказывают выполнение GitHub Actions.
