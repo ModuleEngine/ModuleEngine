@@ -423,11 +423,31 @@ impl GameSession {
         snapshot.time = self.state.time as f32;
         snapshot
     }
+    /// The canonical ECS can stream accepted changes. A compatibility provider
+    /// remains authoritative for its own drawables and supplies a full snapshot.
+    pub fn has_render_changes(&self) -> bool {
+        self.provider.is_none()
+    }
+
+    pub fn read_render_changes(
+        &mut self,
+        cursor: &mut crate::RenderChangeCursor,
+    ) -> Option<crate::WorldRenderChanges> {
+        self.has_render_changes()
+            .then(|| self.state.world.read_render_changes(cursor))
+    }
     /// Source visual poses on a fresh raw snapshot, before interpolation/content.
     /// The compatibility `snapshot` remains the canonical provider projection.
     /// A rejected visual projection never mutates or rolls back gameplay.
     pub fn presentation_snapshot(&self) -> Result<SceneSnapshot, String> {
         let mut snapshot = self.snapshot();
+        self.project_presentation_models(&mut snapshot)?;
+        Ok(snapshot)
+    }
+
+    /// Apply the pose hooks to all provided raw drawables. A partial input
+    /// requires the active hooks to have registered a presentation scope.
+    pub fn project_presentation_models(&self, snapshot: &mut SceneSnapshot) -> Result<(), String> {
         let mut written = BTreeSet::new();
         for contribution in self
             .registry
@@ -436,7 +456,7 @@ impl GameSession {
             let Some(project) = self.registry.pose_projection(&contribution.id) else {
                 continue;
             };
-            let models = project(&snapshot, &self.state)
+            let models = project(snapshot, &self.state)
                 .map_err(|error| format!("Pose projection '{}': {error}", contribution.id))?;
             for (id, model) in &models {
                 if snapshot.items.iter().filter(|item| item.id == *id).count() != 1 {
@@ -465,7 +485,7 @@ impl GameSession {
                 }
             }
         }
-        Ok(snapshot)
+        Ok(())
     }
     pub fn world_kind(&self) -> WorldKind {
         self.kind
@@ -473,8 +493,21 @@ impl GameSession {
     /// Useful for host Custom packets: components remain with stable object IDs.
     pub fn apply_commands(&mut self, commands: &[WorldCommand]) -> Result<(), String> {
         self.bootstrap_open = false;
-        let mut candidate = self.state.clone();
-        candidate.apply_commands(commands)?;
+        let original = self.state.checkpoint_tick(true);
+        match self.apply_staged_commands(commands) {
+            Ok(()) => {
+                self.state.world.finish_tick(original.world);
+                Ok(())
+            }
+            Err(error) => {
+                self.state = original;
+                Err(error)
+            }
+        }
+    }
+
+    fn apply_staged_commands(&mut self, commands: &[WorldCommand]) -> Result<(), String> {
+        self.state.apply_commands(commands)?;
         let context = ComponentValidationContext {
             scenes: &self.project.scenes,
             modules: &self.validation_modules,
@@ -492,12 +525,11 @@ impl GameSession {
             self.world_factory.as_ref(),
             true,
         )?;
-        transaction.validate(&candidate)?;
-        if let Err(error) = transaction.commit(&candidate) {
+        transaction.validate(&self.state)?;
+        if let Err(error) = transaction.commit(&self.state) {
             transaction.rollback()?;
             return Err(error);
         }
-        self.state = candidate;
         Ok(())
     }
     /// Advance in 1/60s increments independently of render cadence. Catchup is

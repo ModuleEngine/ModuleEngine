@@ -52,6 +52,13 @@ pub fn install(registry: &mut SystemRegistry) -> Result<(), String> {
     systems::register_arpg_systems(registry);
     install_project_contracts(registry)?;
     registry.register_game_contribution(host_contribution())?;
+    registry.register_presentation_scope(
+        "arpg.presentation",
+        module_engine_core::GamePresentationScope {
+            appearance_objects: presentation::hit_flash_objects,
+            ..Default::default()
+        },
+    )?;
     for (id, label, purpose) in [
         (
             "game.input",

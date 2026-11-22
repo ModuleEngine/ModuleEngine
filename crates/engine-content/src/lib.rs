@@ -120,9 +120,17 @@ impl ContentLibrary {
         snapshot: &mut SceneSnapshot,
         bindings: &BTreeMap<u64, String>,
     ) -> Result<(), String> {
+        self.enrich_items(snapshot, |id| bindings.get(&id).map(String::as_str))
+    }
+
+    pub fn enrich_items<'a>(
+        &mut self,
+        snapshot: &mut SceneSnapshot,
+        binding: impl Fn(u64) -> Option<&'a str>,
+    ) -> Result<(), String> {
         let mut result = vec![];
         for item in &snapshot.items {
-            if let Some(path) = bindings.get(&item.id) {
+            if let Some(path) = binding(item.id) {
                 let model = self.load_model(path)?;
                 for primitive in &model.primitives {
                     result.push(RenderItem {

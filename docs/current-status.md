@@ -4,6 +4,13 @@
 
 [English](current-status.md) | [Русский](ru/current-status.md) | [Documentation](README.md)
 
+**22 November 2026 — R1.6 streams changes in the accepted ECS scene to Vulkan.**
+Game, Scene and the Player use the retained CPU scene through GameHost.
+Bevy change tracking supplies candidates, and Host sends drawable edits after
+hierarchy resolution, interpolation and material projection. A receiver
+with a missing base revision gets a fresh snapshot. See the
+[scene update contract and S3 check](shared-game-host.md#r16-scene-updates).
+
 **22 November 2026 — R2.2 adds indexed Vulkan materials.** Forward and G-buffer
 sample separate sRGB images with mipmaps and anisotropy on qualifying hardware.
 S4 loads its original base-color images on that path. Older `scene_materials`
@@ -32,7 +39,8 @@ Systems see earlier writes in schedule order. Late rejection discards the ECS
 journal and retains the accepted state for retry. On the 2,000-entity S3 CPU
 fixture, the empty fixed tick averaged 17.25 ms before and 3.88 µs after, while
 the surrounding `GameHost::step` averaged 22.16 ms and 2.63 ms respectively.
-Presentation extraction still scales with world size. See [R1.4 verification](ecs-world.md#r14-verification).
+That measurement includes the pre-R1.6 full-snapshot extraction.
+See [R1.4 verification](ecs-world.md#r14-verification).
 
 **22 November 2026 — R1.3 connects component codecs to Inspector, save,
 validation and gameplay Rust IPC.** Core's registry provides the reflected
