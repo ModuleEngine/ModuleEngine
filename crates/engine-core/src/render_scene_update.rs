@@ -86,10 +86,23 @@ impl RenderScene {
                 if self.revision != Some(base) {
                     return Err("Retained render scene has a different base revision".into());
                 }
+                let mut next_group = 0;
                 for change in changes {
-                    let start = self.scene.items.partition_point(|item| item.id < change.id);
+                    let items = &self.scene.items;
+                    let start = if items
+                        .get(next_group)
+                        .is_some_and(|item| item.id == change.id)
+                    {
+                        next_group
+                    } else {
+                        items.partition_point(|item| item.id < change.id)
+                    };
                     let end = start
-                        + self.scene.items[start..].partition_point(|item| item.id == change.id);
+                        + items[start..]
+                            .iter()
+                            .take_while(|item| item.id == change.id)
+                            .count();
+                    next_group = end;
                     match change.kind {
                         SceneChangeKind::Edited {
                             moved,
@@ -119,6 +132,7 @@ impl RenderScene {
                             self.scene
                                 .items
                                 .splice(start..end, change.items.iter().cloned());
+                            next_group = start + change.items.len();
                         }
                     }
                 }

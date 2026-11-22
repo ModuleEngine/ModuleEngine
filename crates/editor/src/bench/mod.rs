@@ -1,9 +1,9 @@
 //! Source-only R0.2 fixtures using the existing native renderer and Player bridge.
 mod fixtures;
 mod materials;
-mod structure;
 #[path = "../../../../examples/bench/s3_ecs.rs"]
 mod s3_ecs;
+mod structure;
 
 use eframe::egui;
 use fixtures::Fixture;
@@ -330,6 +330,8 @@ struct Sample {
     frame_interval_ms: f64,
     cpu_submit_ms: f64,
     ecs_tick_ms: Option<f64>,
+    ecs_query_ms: Option<f64>,
+    ecs_motion_update_ms: Option<f64>,
     transform_extract_ms: Option<f64>,
     scene_update_ms: f64,
     cpu_scene_frame_ms: f64,
@@ -348,7 +350,7 @@ struct Flight {
 
 #[derive(Default)]
 struct TickWork {
-    ecs: Option<(f64, f64)>,
+    ecs: Option<fixtures::EcsWork>,
     scene_update_ms: f64,
 }
 
@@ -439,10 +441,10 @@ impl SceneApp {
                     ));
                 }
                 if let Some(timings) = &mut frame.timings
-                    && let Some((tick_ms, extract_ms)) = flight.tick.ecs
+                    && let Some(ecs) = flight.tick.ecs
                 {
-                    timings.cpu_tick_ms = Some(tick_ms);
-                    timings.cpu_extract_ms = Some(extract_ms);
+                    timings.cpu_tick_ms = Some(ecs.tick_ms);
+                    timings.cpu_extract_ms = Some(ecs.extract_ms);
                 }
                 self.samples.push(Sample {
                     frame_interval_ms: now
@@ -454,9 +456,14 @@ impl SceneApp {
                     cpu_scene_frame_ms: flight.tick.scene_update_ms + flight.cpu_submit_ms,
                     cpu_fixture_frame_ms: flight.tick.scene_update_ms
                         + flight.cpu_submit_ms
-                        + flight.tick.ecs.map_or(0., |(tick, extract)| tick + extract),
-                    ecs_tick_ms: flight.tick.ecs.map(|(tick, _)| tick),
-                    transform_extract_ms: flight.tick.ecs.map(|(_, extract)| extract),
+                        + flight
+                            .tick
+                            .ecs
+                            .map_or(0., |ecs| ecs.tick_ms + ecs.extract_ms),
+                    ecs_tick_ms: flight.tick.ecs.map(|ecs| ecs.tick_ms),
+                    ecs_query_ms: flight.tick.ecs.map(|ecs| ecs.query_ms),
+                    ecs_motion_update_ms: flight.tick.ecs.map(|ecs| ecs.tick_ms - ecs.query_ms),
+                    transform_extract_ms: flight.tick.ecs.map(|ecs| ecs.extract_ms),
                     observed_producer_latency_ms: now.duration_since(flight.started).as_secs_f64()
                         * 1000.,
                     work,

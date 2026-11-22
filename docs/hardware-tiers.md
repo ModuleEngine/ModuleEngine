@@ -180,9 +180,19 @@ instance buffer holds the transforms and material row indices. Persistent
 material rows hold the effective color and the R2.2 image index. The renderer
 keeps texture slots for unchanged images when it builds a new descriptor set.
 The mesh pool grows by copying its populated prefix on the GPU and recording
-only new mesh payloads from the CPU. Draw commands preserve scene order.
-Topology and mesh-size changes can shift ordered rows, and buffer growth
-initializes the new row allocation.
+only new mesh payloads from the CPU. Each stable object ID and primitive
+ordinal keeps its GPU slot while that drawable is present. Removing one
+drawable omits its slot from the ordered draw runs. Insertion can reuse a
+vacant slot, and changing a mesh updates the rows of that object. Unchanged
+buffer regions are copied on the GPU when an allocation grows.
+
+Draw runs preserve the published order and IDs. A run covers consecutive
+physical slots that share the same differences between physical and
+published object and triangle IDs. Three stock-pass constants restore the
+published IDs and map material reads back to physical slots. A structural
+edit still traverses the ordered scene on the CPU to assemble runs. Churn
+can fragment runs and increase the number of indirect commands. The
+[structural benchmark](bench.md#r23-scene-checks) measures those boundaries.
 
 Both frame slots use the same resident buffers. Queue barriers order
 previous vertex, fragment and indirect reads before transfer writes and

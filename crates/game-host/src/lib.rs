@@ -5,3 +5,7 @@ pub mod game_worker;
 pub use game_host::*;
 #[cfg(test)]
 mod neutral_tests;
+
+#[cfg(test)]
+#[path = "../../../examples/bench/s3_ecs.rs"]
+mod s3;

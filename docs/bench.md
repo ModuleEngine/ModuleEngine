@@ -100,10 +100,22 @@ preparation, command recording, queue submit, and any blocking diagnostic
 GPU wait. The native producer polls asynchronously. Its observed ticket
 latency and the window-observed interval are separate measurements.
 `cpu_fixture_frame_ms` also includes the Core ECS fixture tick and
-standalone transform extraction. The render-call boundary is the one
+standalone transform extraction. The roadmap's **S3 CPU frame** uses this
+full measured boundary. The S3 report also breaks down the same ECS tick
+into its eight-column query and motion writes. The render-call boundary is the one
 reported in the baseline `cpu_submit_ms`. The benchmark emits its own deltas,
 so the [GameHost acceptance fixture](shared-game-host.md#r16-scene-updates)
 separately checks the production path and its upload counters.
+
+Run `--bench-scene R23-structure <new output folder>` for the offscreen
+structural comparison. It applies one insertion, removal or triangle-count
+change at the start, middle and end of scenes with 1,000 and 11,000
+drawables. Each case warms both mesh/material states, records 24 edit
+samples with an unchanged control, and checks exact RGBA and render stats
+against the expanded snapshot. Compare delta application, Vulkan
+preparation, recording and queue submit as CPU work. Diagnostic GPU wait
+is recorded separately. The benchmark does not exercise ECS changes or
+the native window.
 
 ## Measurement and repeatability
 

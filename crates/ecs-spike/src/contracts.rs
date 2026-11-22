@@ -11,7 +11,7 @@ fn s3_tick_matches_core_and_respects_membership_and_stable_order() {
     let mut baseline = EcsWorld::from_entities(seed.clone()).unwrap();
     let mut stores = ENCODINGS.map(|mode| BevyStore::restore(mode, seed.clone()).unwrap());
     for frame in 0..crate::TICK_WARMUP + crate::TICK_SAMPLES {
-        let expected = s3::tick(&mut baseline, frame);
+        let expected = s3::tick(&mut baseline, frame, None);
         assert_eq!(expected.len(), 2_000);
         for store in &mut stores {
             let result = store.tick(frame);
@@ -30,7 +30,7 @@ fn s3_tick_matches_core_and_respects_membership_and_stable_order() {
     // Force the first selected ID and the 1,000th write to change after a missing component.
     seed[0].components.remove("bench.flags");
     let mut baseline = EcsWorld::from_entities(seed.clone()).unwrap();
-    let expected = s3::tick(&mut baseline, 0);
+    let expected = s3::tick(&mut baseline, 0, None);
     assert_eq!(expected.len(), 1_999);
     assert_eq!(expected[0], 2);
     assert_eq!(expected[s3::MOVING - 1], 1_001);

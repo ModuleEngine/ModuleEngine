@@ -1,8 +1,7 @@
 //! S3 render-extraction acceptance through GameSession and GameHost.
 use super::*;
 
-#[path = "../../../examples/bench/s3_ecs.rs"]
-mod s3;
+use crate::s3;
 
 const W: usize = 192;
 const H: usize = 108;
@@ -15,7 +14,7 @@ struct Motion;
 impl ExecutableSystem for Motion {
     fn step(&mut self, ctx: &mut SystemContext<'_>, _: &mut Value) -> Result<(), String> {
         if ctx.input.pressed("motion") {
-            s3::tick(&mut ctx.game.world, ctx.game.tick as usize);
+            s3::tick(&mut ctx.game.world, ctx.game.tick as usize, None);
         }
         if ctx.input.pressed("schema") {
             ctx.game
@@ -520,6 +519,7 @@ fn retained_hierarchy_rollback_interpolation_and_scene_switch() {
 #[test]
 #[ignore = "requires native Vulkan and DXC"]
 fn retained_vulkan_hierarchy_rollback_interpolation_and_scene_switch() {
+    module_engine_vulkan::requires_capabilities!(Vulkan, Dxc);
     hierarchy_rollback_interpolation_and_scene_switch(true);
 }
 

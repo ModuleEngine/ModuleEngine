@@ -137,7 +137,7 @@ fn main() -> Result<(), String> {
         "core" => {
             let mut world = EcsWorld::from_entities(seed.clone())?;
             (
-                measure_ticks(|frame| s3::tick(&mut world, frame)),
+                measure_ticks(|frame| s3::tick(&mut world, frame, None)),
                 measure_batches::<EcsWorld>(&seed, Encoding::Dynamic),
             )
         }

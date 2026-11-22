@@ -2579,7 +2579,8 @@ impl VulkanRenderer {
                             resident.buffers.draw(
                                 &self.device,
                                 command,
-                                resident.draws,
+                                pipeline.layout,
+                                &resident.runs,
                                 self.max_indirect_draws,
                             )
                         } else {

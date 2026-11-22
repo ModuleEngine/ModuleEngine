@@ -23,10 +23,8 @@ use std::{
 const WAIT: Duration = Duration::from_secs(10);
 const DT: f64 = 1. / 60.;
 
-#[allow(dead_code)]
 #[cfg(not(debug_assertions))]
-#[path = "../../../examples/bench/s3_ecs.rs"]
-mod s3;
+use crate::s3;
 
 #[test]
 #[cfg(not(debug_assertions))]

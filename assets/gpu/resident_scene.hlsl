@@ -63,7 +63,8 @@ SceneVarying mainVS(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID
     o.normal = length > 0.00001 ? face / length : float3(0, 1, 0);
     o.color = colors[instance.material];
     o.depth = p.z;
-    o.ids = float2(vertexId / 3 + instance.triangleBias, instanceId + 1);
+    o.ids = float2(vertexId / 3 + instance.triangleBias + asuint(config.values[3].z),
+                   instanceId + 1 + asuint(config.values[3].y));
     o.uv = asfloat(vertices.Load2(vertex * 20 + 12));
     return o;
 }

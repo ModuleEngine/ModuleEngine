@@ -89,7 +89,10 @@ vertex shader with storage buffers in set 0 at bindings 1–4 for positions
 and UVs, indices, instances, and colors. It produces the stock varyings,
 including the existing triangle and object IDs. The indexed fragment
 interface in set 1 stays the same, with the R2.2 image indices now read from
-the persistent scene buffer. Changing a stock pass to Custom selects the
+the persistent scene buffer. A resident draw run uses `values[3].y/z` as
+unsigned bit patterns to restore the object and triangle IDs for the current
+published order. The row base at `values[3].w` maps the published object ID
+back into its persistent material slot. Changing a stock pass to Custom selects the
 published expanded vertex interface. Player export seals the internal vertex
 stage alongside the stock compatibility stage.
 

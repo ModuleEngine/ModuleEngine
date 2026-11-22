@@ -107,6 +107,7 @@ pub(super) fn run(root: &Path, output: &Path) -> Result<(), String> {
                 let mut samples = Vec::with_capacity(REPEATS);
                 let mut fixed = Vec::with_capacity(REPEATS);
                 let mut parity = false;
+                let mut first_edit = None;
                 for i in 0..=REPEATS {
                     let at = Instant::now();
                     retained.apply(SceneUpdate::Delta {
@@ -125,6 +126,7 @@ pub(super) fn run(root: &Path, output: &Path) -> Result<(), String> {
                         ));
                     }
                     if i == 0 {
+                        first_edit = Some(json!({"apply_ms":apply_ms,"work":work}));
                         let (reference, _) =
                             render(&mut renderer, SceneInput::Snapshot(retained.snapshot()?))?;
                         parity = frame.rgba == reference.rgba && frame.stats == reference.stats;
@@ -142,11 +144,14 @@ pub(super) fn run(root: &Path, output: &Path) -> Result<(), String> {
                 }
                 cases.push(json!({
                     "drawables":count,"position":position,"operation":operation,"pixel_and_stats_parity":parity,
-                    "edited":samples,"unchanged":fixed,
+                    "first_edit":first_edit,"edited":samples,"unchanged":fixed,
                 }));
             }
         }
     }
+    let parity = cases
+        .iter()
+        .all(|case| case["pixel_and_stats_parity"] == true);
     super::write(
         &output.join("structure.json"),
         &json!({
@@ -154,5 +159,12 @@ pub(super) fn run(root: &Path, output: &Path) -> Result<(), String> {
             "device":renderer.device_name(), "viewport":SIZE, "samples_per_case":REPEATS, "cases":cases,
         }),
     )?;
-    Ok(())
+    if parity {
+        Ok(())
+    } else {
+        Err(
+            "At least one structural edit changed RGBA or render stats versus the full snapshot"
+                .into(),
+        )
+    }
 }

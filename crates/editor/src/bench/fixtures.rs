@@ -11,6 +11,13 @@ use std::{collections::BTreeMap, path::Path, sync::Arc};
 const S3_MESHES: usize = 200;
 const S3_TEXTURES: usize = 500;
 
+#[derive(Clone, Copy)]
+pub(super) struct EcsWork {
+    pub tick_ms: f64,
+    pub query_ms: f64,
+    pub extract_ms: f64,
+}
+
 pub struct Fixture {
     pub scene: SceneSnapshot,
     pub camera: Camera,
@@ -56,17 +63,22 @@ impl Fixture {
 
     /// Workload for the present Core storage: query eight columns, update the
     /// motion payload and Transform for 1,000 matches, then extract transforms.
-    pub fn tick(&mut self, frame: usize) -> Option<(f64, f64)> {
+    pub(super) fn tick(&mut self, frame: usize) -> Option<EcsWork> {
         let world = self.ecs.as_mut()?;
         let started = std::time::Instant::now();
-        let entities = s3_ecs::tick(world, frame);
+        let mut query_ms = 0.;
+        let entities = s3_ecs::tick(world, frame, Some(&mut query_ms));
         let tick_ms = started.elapsed().as_secs_f64() * 1000.;
         let started = std::time::Instant::now();
         for &id in &entities[..S3_MOVING] {
             self.scene.items[id as usize - 1].model = world.object(id).unwrap().transform.matrix();
         }
         self.scene.time = s3_ecs::time(frame);
-        Some((tick_ms, started.elapsed().as_secs_f64() * 1000.))
+        Some(EcsWork {
+            tick_ms,
+            query_ms,
+            extract_ms: started.elapsed().as_secs_f64() * 1000.,
+        })
     }
 }
 
