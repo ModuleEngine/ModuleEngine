@@ -235,8 +235,9 @@ or a successful small test change without a new reason is unnecessary.
 
 ## Ignored Test Inventory
 
-All fifteen `#[ignore]` entries are listed in the registry with their purpose. Seven are included in
-`native`/`package`; eight are intentionally excluded:
+All 23 `#[ignore]` entries are listed in the registry with their purpose. Seven are included in
+`native`/`package`. The other 16 have separate execution instructions in the
+[registry](../scripts/verification.json). Examples include:
 
 - `runtime_delivery::tests::emit_stage4_software_inactive_vulkan_fixture` — only
   fixture preparation; requires a new absolute `MODULE_ENGINE_STAGE4_FIXTURE_PATH`.
@@ -252,13 +253,16 @@ All fifteen `#[ignore]` entries are listed in the registry with their purpose. S
 - `tests::diagnostic_long_attempt_and_idle_cpu_cost` in `module-engine-g1` is an
   opt-in release CPU timing diagnostic requiring an uncontended run. Its results
   do not establish rendered-frame or native audio/storage performance.
+- The two [R1.2 integration cases](ecs-world.md#r12-verification) run sequentially
+  from the Full checkout. They compile Rust workers for the migrated game
+  round trip and the standalone Player export.
 
 These six G1 checks retain their separately recorded execution and scope in the
 [G1 delivery](g1-delivery-20261027.md) and [continuation](g1-verification-20261101.md).
 Registering them does not add them to an automatic profile or establish a new pass.
 
 The registry does not provide an arbitrary `--step` that could silently enable the emitter.
-A new ignored test must be deliberately added to the inventory and appropriate profile.
+For each new ignored test, record its purpose and select a profile or an explicit exclusion.
 
 <a id="сохранность-сериализация-и-результат"></a>
 
