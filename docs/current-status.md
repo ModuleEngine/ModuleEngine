@@ -11,6 +11,10 @@ export and compiled Rust IPC. The checked-in game passed the byte comparison
 on a migrated copy. See [R1.2 verification](ecs-world.md#r12-verification).
 R1.3 covers the native component codecs.
 
+The R1.2 memory fix advances Bevy's removal message buffers after a batch
+despawns entities in `EcsWorld`. The Core regression covers successive
+`WorldCommand::Remove` and `clear()` operations in long-lived worlds.
+
 **22 November 2026 — R1.1 selected hybrid Bevy storage for R1.2.** In
 matched Release runs on the CPU, the S3 tick averaged 0.5363 ms in Core,
 0.1168 ms in Bevy with dynamic JSON, and 0.0154 ms in hybrid Bevy. The
