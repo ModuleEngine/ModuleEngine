@@ -609,6 +609,12 @@ pub fn precompile_graph_at(
             jobs.insert(shader_key(root, source, entry, "vs_6_0")?, shader.words);
         }
     }
+    if plan.passes.iter().any(Pass::resident_geometry) {
+        let source = crate::vulkan::resident::VERTEX_SHADER;
+        let shader = compile_hlsl_at(root, source, "mainVS", "vs_6_0")?;
+        verify_resident_vertex(&shader.words)?;
+        jobs.insert(shader_key(root, source, "mainVS", "vs_6_0")?, shader.words);
+    }
     let output = destination.join(".spirv");
     std::fs::create_dir_all(&output)
         .map_err(|source| ShaderError::io("Create Player shader directory", &output, source))?;
@@ -632,8 +638,14 @@ pub(crate) fn bindless_source(pass: &Pass) -> String {
 }
 
 pub(crate) fn verify_bindless_shader(pass: &Pass, words: &[u32]) -> Result<(), ShaderError> {
-    // The indexed variant has no pass-local descriptors. Its resources are
-    // sampled images, a sampler, and a read-only index buffer.
+    verify_scene_descriptors(&pass.id, words, false)
+}
+
+pub(crate) fn verify_resident_vertex(words: &[u32]) -> Result<(), ShaderError> {
+    verify_scene_descriptors("resident vertex", words, true)
+}
+
+fn verify_scene_descriptors(name: &str, words: &[u32], resident: bool) -> Result<(), ShaderError> {
     let mut bindings = BTreeMap::new();
     let mut sets = BTreeMap::new();
     let mut types = BTreeMap::new();
@@ -678,6 +690,22 @@ pub(crate) fn verify_bindless_shader(pass: &Pass, words: &[u32]) -> Result<(), S
             return None;
         };
         let (opcode, operands) = types.get(element).copied()?;
+        let storage_array = || {
+            let (12, 30, [rows]) = (storage, opcode, operands) else {
+                return None;
+            };
+            read_only_rows.contains(element).then_some(*rows)
+        };
+        if resident {
+            let rows = storage_array()?;
+            let stride = match binding {
+                1 | 2 => 4,
+                3 => 64,
+                4 => 16,
+                _ => return None,
+            };
+            return (strides.get(&rows) == Some(&stride)).then_some(());
+        }
         match (binding, storage, opcode, operands) {
             (0, 0, 29, [image]) => {
                 let (25, [component, 1, _, 0, 0, 1, ..]) = types.get(image).copied()? else {
@@ -686,13 +714,14 @@ pub(crate) fn verify_bindless_shader(pass: &Pass, words: &[u32]) -> Result<(), S
                 (types.get(component).copied() == Some((22, &[32]))).then_some(())
             }
             (1, 0, 26, []) => Some(()),
-            (2, 12, 30, [rows])
-                if read_only_rows.contains(element) && strides.get(rows) == Some(&4) =>
-            {
-                let (29, [component]) = types.get(rows).copied()? else {
+            (2, ..) => {
+                let rows = storage_array()?;
+                let (29, [component]) = types.get(&rows).copied()? else {
                     return None;
                 };
-                (types.get(component).copied() == Some((21, &[32, 0]))).then_some(())
+                (strides.get(&rows) == Some(&4)
+                    && types.get(component).copied() == Some((21, &[32, 0])))
+                .then_some(())
             }
             _ => None,
         }
@@ -701,15 +730,19 @@ pub(crate) fn verify_bindless_shader(pass: &Pass, words: &[u32]) -> Result<(), S
         .values()
         .copied()
         .collect::<std::collections::BTreeSet<_>>();
-    if bindings.len() != 3
-        || actual != [0, 1, 2].into_iter().collect()
+    let (set, expected): (u32, &[u32]) = if resident {
+        (0, &[1, 2, 3, 4])
+    } else {
+        (1, &[0, 1, 2])
+    };
+    if bindings.len() != expected.len()
+        || !actual.iter().copied().eq(expected.iter().copied())
         || bindings
             .iter()
-            .any(|(id, binding)| sets.get(id) != Some(&1) || matches(id, *binding).is_none())
+            .any(|(id, binding)| sets.get(id) != Some(&set) || matches(id, *binding).is_none())
     {
         return Err(ShaderError::ShaderInterface(format!(
-            "Built-in {} has an invalid bindless material descriptor interface",
-            pass.id
+            "Pass {name} has an invalid scene descriptor interface"
         )));
     }
     Ok(())

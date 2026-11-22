@@ -82,6 +82,10 @@ impl FramePools {
             .transpose()?;
         let sizes = [
             vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::STORAGE_BUFFER,
+                descriptor_count: 256,
+            },
+            vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::SAMPLED_IMAGE,
                 descriptor_count: 1024,
             },

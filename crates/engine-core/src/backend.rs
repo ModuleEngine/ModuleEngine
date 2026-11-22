@@ -9,6 +9,9 @@ use std::{collections::BTreeSet, sync::Arc};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RendererPerformance {
+    pub mesh_upload_bytes: u64,
+    pub instance_upload_bytes: u64,
+    pub material_row_upload_bytes: u64,
     pub render_calls: u64,
     pub prepare_calls: u64,
     pub plan_builds: u64,

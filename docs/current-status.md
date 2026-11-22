@@ -4,6 +4,13 @@
 
 [English](current-status.md) | [Русский](ru/current-status.md) | [Documentation](README.md)
 
+**22 November 2026 — R2.3 keeps the accepted ECS scene in Vulkan buffers.**
+On eligible devices stock geometry shares a GPU mesh pool and updates the
+instance and material rows from GameHost's retained scene. The internal
+vertex shader applies transforms. Custom scene shaders retain their
+published vertex interface. See the [device and lifetime contract](hardware-tiers.md#r23-scene)
+and [S3 measurements and boundaries](bench.md#r23-scene-checks).
+
 **22 November 2026 — R1.6 streams changes in the accepted ECS scene to Vulkan.**
 Game, Scene and the Player use the retained CPU scene through GameHost.
 Bevy change tracking supplies candidates, and Host sends drawable edits after

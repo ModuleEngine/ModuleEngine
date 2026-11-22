@@ -95,13 +95,18 @@ pub(super) struct MaterialSet {
     rows: Vec<usize>,
     textures: BTreeMap<usize, Arc<MaterialTexture>>,
     white: Arc<MaterialTexture>,
-    _indices: Buffer,
+    indices: Arc<Buffer>,
+    slots: BTreeMap<usize, u32>,
     layout: Arc<MaterialLayout>,
 }
 
 impl MaterialSet {
     pub(super) fn image_count(&self) -> usize {
         self.textures.len()
+    }
+
+    pub(super) fn index(&self, source: Option<&Arc<TextureImage>>) -> u32 {
+        source.map_or(0, |image| self.slots[&(Arc::as_ptr(image) as usize)])
     }
 }
 
@@ -172,7 +177,6 @@ impl VulkanRenderer {
     pub(super) fn prepare_materials(
         &self,
         scene: &SceneSnapshot,
-        layout: &Arc<MaterialLayout>,
     ) -> Result<Option<(Arc<MaterialSet>, MaterialUploads)>, VulkanError> {
         let image_key = |image: &Arc<TextureImage>| Arc::as_ptr(image) as usize;
         let rows: Vec<_> = scene
@@ -189,12 +193,31 @@ impl VulkanRenderer {
         if let Some(previous) = previous.filter(|set| set.rows == rows) {
             return Ok(Some((previous.clone(), MaterialUploads::default())));
         }
+        self.prepare_material_set(scene, previous, rows, None)
+    }
+
+    pub(super) fn prepare_resident_materials(
+        &self,
+        scene: &SceneSnapshot,
+        previous: Option<&Arc<MaterialSet>>,
+        indices: Arc<Buffer>,
+    ) -> Result<Option<(Arc<MaterialSet>, MaterialUploads)>, VulkanError> {
+        self.prepare_material_set(scene, previous, Vec::new(), Some(indices))
+    }
+
+    fn prepare_material_set(
+        &self,
+        scene: &SceneSnapshot,
+        previous: Option<&Arc<MaterialSet>>,
+        rows: Vec<usize>,
+        resident_indices: Option<Arc<Buffer>>,
+    ) -> Result<Option<(Arc<MaterialSet>, MaterialUploads)>, VulkanError> {
         let properties = unsafe { self.instance.get_physical_device_properties(self.physical) };
         let limits = properties.limits;
         let byte_count = (rows.len() as u64 + u64::from(FIRST_MATERIAL_ROW)) * 4;
-        // ids.y is part of the existing scene ABI and carries an exact integer
-        // as a float. A storage-buffer index must not alias a different object.
-        if rows.len() > (1 << 24) || byte_count > u64::from(limits.max_storage_buffer_range) {
+        // The scene ABI carries the exact, one-based object row as a float.
+        if scene.items.len() > (1 << 24) || byte_count > u64::from(limits.max_storage_buffer_range)
+        {
             return Err(VulkanError::Resource(
                 "Scene material index buffer exceeds device limits".into(),
             ));
@@ -205,7 +228,17 @@ impl VulkanRenderer {
             .iter()
             .filter_map(|item| item.material.base_color_texture.as_ref())
         {
-            sources.entry(image_key(source)).or_insert(source);
+            sources
+                .entry(Arc::as_ptr(source) as usize)
+                .or_insert(source);
+        }
+        if let Some(previous) = previous.filter(|set| {
+            resident_indices
+                .as_ref()
+                .is_some_and(|indices| Arc::ptr_eq(indices, &set.indices))
+                && set.textures.keys().eq(sources.keys())
+        }) {
+            return Ok(Some((previous.clone(), MaterialUploads::default())));
         }
         if sources.len() >= MATERIAL_IMAGE_COUNT as usize {
             // More tiny textures can still fit in the compatibility atlas.
@@ -234,27 +267,47 @@ impl VulkanRenderer {
             };
             textures.insert(key, texture);
         }
-        let texture_indices: BTreeMap<_, _> = textures
-            .keys()
-            .enumerate()
-            .map(|(index, key)| (*key, index as u32 + 1))
-            .collect();
-        let indices = self.buffer(byte_count, vk::BufferUsageFlags::STORAGE_BUFFER)?;
-        unsafe {
-            indices
-                .memory
-                .as_ref()
-                .unwrap()
-                .access(indices.size, |mapped| {
-                    let indices = mapped.cast::<u32>();
-                    indices.write(0);
-                    for (row, key) in rows.iter().enumerate() {
-                        indices
-                            .add(FIRST_MATERIAL_ROW as usize + row)
-                            .write(texture_indices.get(key).copied().unwrap_or(0));
-                    }
-                })?;
+        let mut slots = BTreeMap::new();
+        let mut used = [false; MATERIAL_IMAGE_COUNT as usize];
+        used[0] = true;
+        // Keep image slots across immutable descriptor generations so a texture
+        // replacement only changes rows that reference a different image.
+        if let Some(previous) = previous {
+            for key in textures.keys() {
+                if let Some(&index) = previous.slots.get(key) {
+                    slots.insert(*key, index);
+                    used[index as usize] = true;
+                }
+            }
         }
+        let mut free = used.iter().enumerate().filter(|(_, used)| !**used);
+        for key in textures.keys() {
+            slots
+                .entry(*key)
+                .or_insert_with(|| free.next().unwrap().0 as u32);
+        }
+        let indices = if let Some(indices) = resident_indices {
+            indices
+        } else {
+            let indices = self.buffer(byte_count, vk::BufferUsageFlags::STORAGE_BUFFER)?;
+            unsafe {
+                indices
+                    .memory
+                    .as_ref()
+                    .unwrap()
+                    .access(indices.size, |mapped| {
+                        let indices = mapped.cast::<u32>();
+                        indices.write(0);
+                        for (row, key) in rows.iter().enumerate() {
+                            indices
+                                .add(FIRST_MATERIAL_ROW as usize + row)
+                                .write(slots.get(key).copied().unwrap_or(0));
+                        }
+                    })?;
+            }
+            Arc::new(indices)
+        };
+        let layout = self.material_layout.as_ref().unwrap();
         let sizes = DESCRIPTORS.map(|(ty, count)| vk::DescriptorPoolSize {
             ty,
             descriptor_count: count,
@@ -275,7 +328,8 @@ impl VulkanRenderer {
                 rows,
                 textures,
                 white,
-                _indices: indices,
+                indices,
+                slots,
                 layout: layout.clone(),
             };
             result.set = self
@@ -292,14 +346,14 @@ impl VulkanRenderer {
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             };
             let white = sampled_image(&result.white);
-            let mut image_infos = Vec::with_capacity(MATERIAL_IMAGE_COUNT as usize);
-            image_infos.push(white);
-            image_infos.extend(result.textures.values().map(|image| sampled_image(image)));
-            image_infos.resize(MATERIAL_IMAGE_COUNT as usize, white);
+            let mut image_infos = vec![white; MATERIAL_IMAGE_COUNT as usize];
+            for (key, image) in &result.textures {
+                image_infos[result.slots[key] as usize] = sampled_image(image);
+            }
             let sampler_info = [vk::DescriptorImageInfo::default().sampler(layout.sampler)];
             let buffer_info = [vk::DescriptorBufferInfo::default()
-                .buffer(result._indices.buffer)
-                .range(byte_count)];
+                .buffer(result.indices.buffer)
+                .range(result.indices.size)];
             let writes = [
                 vk::WriteDescriptorSet::default()
                     .dst_set(result.set)

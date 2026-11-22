@@ -62,6 +62,16 @@ impl RenderScene {
     }
 
     pub fn apply(&mut self, update: SceneUpdate<'_>) -> Result<(), String> {
+        self.apply_with_edits(update, |_| {})
+    }
+
+    /// Reports in-place model-only edits in draw order. The caller handles
+    /// resets and edits that can change geometry, materials or draw order.
+    pub fn apply_with_edits(
+        &mut self,
+        update: SceneUpdate<'_>,
+        mut report_moved: impl FnMut(std::ops::Range<usize>),
+    ) -> Result<(), String> {
         match update {
             SceneUpdate::Reset { revision, snapshot } => {
                 self.scene = snapshot;
@@ -87,6 +97,9 @@ impl RenderScene {
                             mesh_changed,
                         } => {
                             debug_assert_eq!(end - start, change.items.len());
+                            if moved && !material_changed && !mesh_changed {
+                                report_moved(start..end);
+                            }
                             for (item, next) in
                                 self.scene.items[start..end].iter_mut().zip(change.items)
                             {

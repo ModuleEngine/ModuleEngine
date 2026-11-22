@@ -80,6 +80,13 @@ impl Pass {
     pub fn geometry(&self) -> bool {
         self.manifest.stage == "raster" && self.manifest.raster_mode == "scene"
     }
+    pub fn resident_geometry(&self) -> bool {
+        matches!(
+            self.module.as_str(),
+            "gpu.forward" | "gpu.gbuffer" | "gpu.depth_normal"
+        )
+    }
+
     pub fn has_bindless_variant(&self) -> bool {
         self.manifest.bindless_materials
     }

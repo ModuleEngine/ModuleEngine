@@ -2,13 +2,13 @@
 use crate::VulkanError;
 
 use crate::{
-    RenderGraphValidator, VulkanRenderer, module_descriptors, render_graph_targets,
-    shader_dependency_revision_at,
+    RenderGraphValidator, ResidentScene, SceneInput, VulkanRenderer, module_descriptors,
+    render_graph_targets, shader_dependency_revision_at,
 };
 use module_engine_core::{
     Camera, Frame, FrameRenderer, Graph, GraphDocument, ModuleDescriptor, ModuleRegistry, Node,
-    PortDescriptor, RenderControlTargets, RenderOverrides, RenderScene, RenderSubmission,
-    RendererAdapter, RendererPerformance, SceneSnapshot, SceneSync, SceneUpdate,
+    PortDescriptor, RenderControlTargets, RenderOverrides, RenderSubmission, RendererAdapter,
+    RendererPerformance, SceneSnapshot, SceneSync, SceneUpdate,
 };
 use std::{
     collections::BTreeMap,
@@ -185,7 +185,7 @@ struct VulkanFrameRenderer {
     pending: Option<(u64, Arc<AtomicBool>)>,
     busy_skips: u64,
     frame_profiling: bool,
-    scene: RenderScene,
+    scene: ResidentScene,
 }
 
 impl VulkanFrameRenderer {
@@ -207,8 +207,51 @@ impl VulkanFrameRenderer {
             pending: None,
             busy_skips: 0,
             frame_profiling: false,
-            scene: RenderScene::default(),
+            scene: ResidentScene::default(),
         })
+    }
+    fn submit(
+        &mut self,
+        snapshot: Option<&SceneSnapshot>,
+        camera: Camera,
+        width: usize,
+        height: usize,
+        overrides: &RenderOverrides,
+    ) -> Result<RenderSubmission, String> {
+        if self.pending.is_some() {
+            self.busy_skips += 1;
+            return Ok(RenderSubmission::Busy);
+        }
+        let mut backend = match self.backend.try_lock() {
+            Ok(backend) => backend,
+            Err(TryLockError::WouldBlock) => {
+                self.busy_skips += 1;
+                return Ok(RenderSubmission::Busy);
+            }
+            Err(_) => return Err("Vulkan device lock is poisoned".into()),
+        };
+        backend.set_frame_profiling(self.frame_profiling);
+        let submitted = backend
+            .render_scene_presented(
+                match snapshot {
+                    Some(scene) => SceneInput::Snapshot(scene),
+                    None => SceneInput::Retained(&mut self.scene),
+                },
+                camera,
+                width,
+                height,
+                &self.graph,
+                &self.sources,
+                overrides,
+            )
+            .map_err(|error| error.to_string())?;
+        if let RenderSubmission::Pending(ticket) = submitted {
+            let cancel = backend
+                .cancellation(ticket)
+                .expect("accepted producer owns a cancellation flag");
+            self.pending = Some((ticket, cancel));
+        }
+        Ok(submitted)
     }
 }
 impl Drop for VulkanFrameRenderer {
@@ -237,12 +280,21 @@ impl FrameRenderer for VulkanFrameRenderer {
         height: usize,
         overrides: &RenderOverrides,
     ) -> Result<Frame, String> {
-        let scene = std::mem::take(&mut self.scene);
-        let result = scene
-            .snapshot()
-            .and_then(|snapshot| self.render(snapshot, camera, width, height, overrides));
-        self.scene = scene;
-        result
+        let mut backend = self.backend.try_lock().map_err(|_| {
+            "GPU is preparing a new configuration; showing the last frame".to_string()
+        })?;
+        backend.set_frame_profiling(self.frame_profiling);
+        backend
+            .render_scene(
+                SceneInput::Retained(&mut self.scene),
+                camera,
+                width,
+                height,
+                &self.graph,
+                &self.sources,
+                overrides,
+            )
+            .map_err(|error| error.to_string())
     }
 
     fn render_retained_presented(
@@ -252,12 +304,7 @@ impl FrameRenderer for VulkanFrameRenderer {
         height: usize,
         overrides: &RenderOverrides,
     ) -> Result<RenderSubmission, String> {
-        let scene = std::mem::take(&mut self.scene);
-        let result = scene
-            .snapshot()
-            .and_then(|snapshot| self.render_presented(snapshot, camera, width, height, overrides));
-        self.scene = scene;
-        result
+        self.submit(None, camera, width, height, overrides)
     }
 
     fn render(
@@ -324,37 +371,7 @@ impl FrameRenderer for VulkanFrameRenderer {
         height: usize,
         overrides: &RenderOverrides,
     ) -> Result<RenderSubmission, String> {
-        if self.pending.is_some() {
-            self.busy_skips += 1;
-            return Ok(RenderSubmission::Busy);
-        }
-        let mut backend = match self.backend.try_lock() {
-            Ok(backend) => backend,
-            Err(TryLockError::WouldBlock) => {
-                self.busy_skips += 1;
-                return Ok(RenderSubmission::Busy);
-            }
-            Err(_) => return Err("Vulkan device lock is poisoned".into()),
-        };
-        backend.set_frame_profiling(self.frame_profiling);
-        let submitted = backend
-            .render_presented(
-                scene,
-                camera,
-                width,
-                height,
-                &self.graph,
-                &self.sources,
-                overrides,
-            )
-            .map_err(|error| error.to_string())?;
-        if let RenderSubmission::Pending(ticket) = submitted {
-            let cancel = backend
-                .cancellation(ticket)
-                .expect("accepted producer owns a cancellation flag");
-            self.pending = Some((ticket, cancel));
-        }
-        Ok(submitted)
+        self.submit(Some(scene), camera, width, height, overrides)
     }
 
     fn poll_presented(&mut self, ticket: u64) -> Result<Option<Frame>, String> {
@@ -430,7 +447,7 @@ impl FrameRenderer for VulkanFrameRenderer {
             pending: None,
             busy_skips: 0,
             frame_profiling: self.frame_profiling,
-            scene: RenderScene::default(),
+            scene: ResidentScene::default(),
         })))
     }
 

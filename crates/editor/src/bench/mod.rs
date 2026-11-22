@@ -1,19 +1,24 @@
 //! Source-only R0.2 fixtures using the existing native renderer and Player bridge.
 mod fixtures;
 mod materials;
+mod structure;
 #[path = "../../../../examples/bench/s3_ecs.rs"]
 mod s3_ecs;
 
 use eframe::egui;
 use fixtures::Fixture;
-use module_engine_core::{FrameTimings, Graph, RenderOverrides, RenderSubmission};
+use module_engine_core::{
+    FrameTimings, Graph, RenderOverrides, RenderSubmission, SceneChange, SceneChangeKind,
+    SceneUpdate,
+};
 use module_engine_host::{GameHost, HostOptions, RenderMode};
 use module_engine_player::{
     gpu_presentation::{GpuPresentationBridge, GpuTexture},
     ui,
 };
 use module_engine_vulkan::{
-    FrameWork, RenderPath, VulkanRenderer, builtin_hlsl_source, builtin_manifest, default_graph,
+    FrameWork, RenderPath, ResidentScene, SceneInput, VulkanRenderer, builtin_hlsl_source,
+    builtin_manifest, default_graph,
 };
 use serde_json::{Value, json};
 use std::{
@@ -41,6 +46,7 @@ pub fn run(id: &str, folder: &Path) -> Result<(), String> {
         "S3" | "S4" | "S5" => scene(id, &root, &folder),
         "S4-floor" | "S4-floor-atlas" => s4_floor(&root, &folder, id == "S4-floor-atlas"),
         "R2-textures" => materials::check(&root, &folder),
+        "R23-structure" => structure::run(&root, &folder),
         _ => Err(format!("Unknown benchmark scene {id}")),
     }
 }
@@ -184,7 +190,19 @@ fn scene(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
     };
     let gui_vsync = ui::gui_vsync_requested()?;
     let frame_profiling = ui::benchmark_profiling_enabled()?;
+    let static_s3 = id == "S3" && std::env::var_os("MODULE_ENGINE_BENCHMARK_S3_STATIC").is_some();
+    let retained = if id == "S3" {
+        let mut scene = ResidentScene::default();
+        scene.apply(SceneUpdate::Reset {
+            revision: 0,
+            snapshot: fixture.scene.clone(),
+        })?;
+        Some(scene)
+    } else {
+        None
+    };
     let report = json!({
+        "static_s3":static_s3,
         "version":1,"scene":id,"status":"incomplete","fixture":fixture.inventory,"gui_vsync":gui_vsync,
         "frame_profiling":frame_profiling,
         "loaded_draw_items":fixture.scene.items.len(),"loaded_triangles":triangles,"camera":fixture.camera,
@@ -275,7 +293,7 @@ fn scene(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
                 write(&preflight_path, &report)?;
             }
             Ok(Box::new(SceneApp {
-                fixture, renderer, bridge, blocked, warmup, frames, triangles, report,
+                fixture, retained, static_s3, renderer, bridge, blocked, warmup, frames, triangles, report,
                 window_state: Box::new(move || (window.inner_size().into(), window.is_minimized())),
                 graph: default_graph(RenderPath::Forward), texture: GpuTexture::default(),
                 started: Instant::now(), completed: 0, submitted: 0,
@@ -313,6 +331,9 @@ struct Sample {
     cpu_submit_ms: f64,
     ecs_tick_ms: Option<f64>,
     transform_extract_ms: Option<f64>,
+    scene_update_ms: f64,
+    cpu_scene_frame_ms: f64,
+    cpu_fixture_frame_ms: f64,
     observed_producer_latency_ms: f64,
     work: FrameWork,
     timings: Option<Box<FrameTimings>>,
@@ -322,11 +343,19 @@ struct Flight {
     ticket: u64,
     started: Instant,
     cpu_submit_ms: f64,
+    tick: TickWork,
+}
+
+#[derive(Default)]
+struct TickWork {
     ecs: Option<(f64, f64)>,
+    scene_update_ms: f64,
 }
 
 struct SceneApp {
     fixture: Fixture,
+    retained: Option<ResidentScene>,
+    static_s3: bool,
     graph: Graph,
     renderer: VulkanRenderer,
     bridge: Arc<GpuPresentationBridge>,
@@ -340,7 +369,7 @@ struct SceneApp {
     completed: usize,
     submitted: usize,
     in_flight: std::collections::VecDeque<Flight>,
-    retry_tick: Option<(f64, f64)>,
+    retry_tick: Option<TickWork>,
     max_pending: usize,
     frame_window: usize,
     last_painted: Option<Instant>,
@@ -410,7 +439,7 @@ impl SceneApp {
                     ));
                 }
                 if let Some(timings) = &mut frame.timings
-                    && let Some((tick_ms, extract_ms)) = flight.ecs
+                    && let Some((tick_ms, extract_ms)) = flight.tick.ecs
                 {
                     timings.cpu_tick_ms = Some(tick_ms);
                     timings.cpu_extract_ms = Some(extract_ms);
@@ -421,8 +450,13 @@ impl SceneApp {
                         .as_secs_f64()
                         * 1000.,
                     cpu_submit_ms: flight.cpu_submit_ms,
-                    ecs_tick_ms: flight.ecs.map(|(tick, _)| tick),
-                    transform_extract_ms: flight.ecs.map(|(_, extract)| extract),
+                    scene_update_ms: flight.tick.scene_update_ms,
+                    cpu_scene_frame_ms: flight.tick.scene_update_ms + flight.cpu_submit_ms,
+                    cpu_fixture_frame_ms: flight.tick.scene_update_ms
+                        + flight.cpu_submit_ms
+                        + flight.tick.ecs.map_or(0., |(tick, extract)| tick + extract),
+                    ecs_tick_ms: flight.tick.ecs.map(|(tick, _)| tick),
+                    transform_extract_ms: flight.tick.ecs.map(|(_, extract)| extract),
                     observed_producer_latency_ms: now.duration_since(flight.started).as_secs_f64()
                         * 1000.,
                     work,
@@ -451,15 +485,50 @@ impl SceneApp {
         }
         while self.submitted < self.warmup + self.frames && self.in_flight.len() < self.frame_window
         {
-            let ecs = self
-                .retry_tick
-                .take()
-                .or_else(|| self.fixture.tick(self.submitted));
+            let tick = if let Some(retry) = self.retry_tick.take() {
+                retry
+            } else if self.static_s3 {
+                TickWork::default()
+            } else {
+                let ecs = self.fixture.tick(self.submitted);
+                let scene_update_ms = if let Some(retained) = &mut self.retained {
+                    let started = Instant::now();
+                    // S3 owns a standalone draw list, separate from GameHost.
+                    let edits: Vec<_> = self.fixture.scene.items[..s3_ecs::MOVING]
+                        .iter()
+                        .map(|item| SceneChange {
+                            id: item.id,
+                            kind: SceneChangeKind::Edited {
+                                moved: true,
+                                material_changed: false,
+                                mesh_changed: false,
+                            },
+                            items: std::slice::from_ref(item),
+                        })
+                        .collect();
+                    retained.apply(SceneUpdate::Delta {
+                        base: self.submitted as u64,
+                        revision: self.submitted as u64 + 1,
+                        time: self.fixture.scene.time,
+                        changes: &edits,
+                    })?;
+                    started.elapsed().as_secs_f64() * 1000.
+                } else {
+                    0.
+                };
+                TickWork {
+                    ecs,
+                    scene_update_ms,
+                }
+            };
             let started = Instant::now();
             let submission = self
                 .renderer
-                .render_presented(
-                    &self.fixture.scene,
+                .render_scene_presented(
+                    match &mut self.retained {
+                        Some(scene) => SceneInput::Retained(scene),
+                        None => SceneInput::Snapshot(&self.fixture.scene),
+                    },
                     self.fixture.camera,
                     SIZE[0],
                     SIZE[1],
@@ -475,13 +544,13 @@ impl SceneApp {
                         ticket,
                         started,
                         cpu_submit_ms,
-                        ecs,
+                        tick,
                     });
                     self.submitted += 1;
                     self.max_pending = self.max_pending.max(self.in_flight.len());
                 }
                 RenderSubmission::Busy => {
-                    self.retry_tick = ecs;
+                    self.retry_tick = Some(tick);
                     break;
                 }
                 RenderSubmission::Ready(_) => {
