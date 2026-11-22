@@ -1,5 +1,6 @@
 //! Source-only R0.2 fixtures using the existing native renderer and Player bridge.
 mod fixtures;
+mod materials;
 #[path = "../../../../examples/bench/s3_ecs.rs"]
 mod s3_ecs;
 
@@ -11,7 +12,9 @@ use module_engine_player::{
     gpu_presentation::{GpuPresentationBridge, GpuTexture},
     ui,
 };
-use module_engine_vulkan::{FrameWork, RenderPath, VulkanRenderer, default_graph};
+use module_engine_vulkan::{
+    FrameWork, RenderPath, VulkanRenderer, builtin_hlsl_source, builtin_manifest, default_graph,
+};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -36,8 +39,80 @@ pub fn run(id: &str, folder: &Path) -> Result<(), String> {
     match id {
         "S1" | "S2" => game(id, &root, &folder),
         "S3" | "S4" | "S5" => scene(id, &root, &folder),
+        "S4-floor" | "S4-floor-atlas" => s4_floor(&root, &folder, id == "S4-floor-atlas"),
+        "R2-textures" => materials::check(&root, &folder),
         _ => Err(format!("Unknown benchmark scene {id}")),
     }
+}
+
+// A fixed camera path through the same Forward graph as S4. Explicit readback
+// makes consecutive PNGs reproducible without involving the desktop compositor.
+fn s4_floor(root: &Path, folder: &Path, atlas_control: bool) -> Result<(), String> {
+    const FRAMES: usize = 32;
+    let mut fixture = Fixture::load("S4", root)?;
+    let mut graph = default_graph(RenderPath::Forward);
+    let mut sources = BTreeMap::new();
+    let mut renderer = VulkanRenderer::new_at(root.to_owned()).map_err(|e| e.to_string())?;
+    let capabilities = renderer.capabilities();
+    if atlas_control || !capabilities.bindless_materials {
+        fixture.use_legacy_s4_textures()?;
+    }
+    if atlas_control {
+        // Replay the original material ABI on the same device, graph and pose.
+        let geometry = graph
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == "geometry")
+            .ok_or("S4 Forward geometry pass is missing")?;
+        let mut manifest =
+            builtin_manifest(&geometry.module).ok_or("S4 Forward manifest is missing")?;
+        manifest.bindless_materials = false;
+        manifest.vertex_entry = Some("mainVS".into());
+        sources.insert(
+            "legacy_forward".into(),
+            builtin_hlsl_source(&geometry.module)
+                .ok_or("S4 Forward shader is missing")?
+                .into(),
+        );
+        geometry.module = "gpu.custom".into();
+        geometry.params["source_id"] = json!("legacy_forward");
+        geometry.params["manifest"] = serde_json::to_value(manifest).map_err(|e| e.to_string())?;
+    }
+    let mut cameras = Vec::with_capacity(FRAMES);
+    for index in 0..FRAMES {
+        let mut camera = fixture.camera;
+        camera.pitch = 0.10;
+        camera.target = [-5.0 - index as f32 * 0.025, 0.45, index as f32 * 0.0125];
+        cameras.push(camera);
+    }
+    write(
+        &folder.join("capture.json"),
+        &json!({
+            "fixture": fixture.inventory,
+            "render_pixels": SIZE,
+            "graph": "Forward",
+            "materials": if atlas_control || !capabilities.bindless_materials { "atlas" } else { "bindless" },
+            "cameras": cameras,
+            "adapter": renderer.device_name(),
+            "device_capabilities": capabilities,
+            "presentation": "Vulkan renderer with explicit diagnostic readback",
+        }),
+    )?;
+    for (index, camera) in cameras.into_iter().enumerate() {
+        let frame = renderer
+            .render(
+                &fixture.scene,
+                camera,
+                SIZE[0],
+                SIZE[1],
+                &graph,
+                &sources,
+                &RenderOverrides::default(),
+            )
+            .map_err(|e| e.to_string())?;
+        crate::write_png(&folder.join(format!("frame-{index:03}.png")), &frame)?;
+    }
+    Ok(())
 }
 
 fn game(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
@@ -95,7 +170,7 @@ fn write(path: &Path, value: &Value) -> Result<(), String> {
 }
 
 fn scene(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
-    let fixture = Fixture::load(id, root)?;
+    let mut fixture = Fixture::load(id, root)?;
     let triangles = fixture
         .scene
         .items
@@ -157,6 +232,10 @@ fn scene(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
                     allocator: Arc::clone(&target.allocator),
                 },
             )))?;
+            if id == "S4" && !renderer.capabilities().bindless_materials {
+                fixture.use_legacy_s4_textures()?;
+                report.lock().unwrap()["fixture"] = fixture.inventory.clone();
+            }
             renderer.set_detailed_stats(false);
             renderer.set_frame_profiling(frame_profiling);
             // S3 measures overlap. S4 and S5 keep the original one-request
