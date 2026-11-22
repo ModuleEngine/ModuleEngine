@@ -1084,6 +1084,141 @@ mod tests {
     }
 
     #[test]
+    fn component_codec_corpus_roundtrips_through_editor_source_files() {
+        use crate::engine_profiles::{ProfileKind, migration_candidate};
+        use module_engine_core::{ComponentValidationContext, EcsWorld, GameEntity};
+        use module_engine_project::{ProjectFileState, externalize_scenes};
+
+        // Order-insensitive for JSON objects, but exact for array order, key
+        // spelling, numbers, null and presence. Compare new writes so retained
+        // raw source bytes cannot mask a lossy encoder.
+        fn json_bytes(bytes: &[u8]) -> Vec<u8> {
+            let value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+            serde_json::to_vec(&value).unwrap()
+        }
+        fn run(label: &str, backend: &Path, folder: &Path, initial: GraphDocument) {
+            let incoming = folder.join("incoming");
+            let outgoing = folder.join("outgoing");
+            fs::create_dir_all(&incoming).unwrap();
+            fs::create_dir_all(&outgoing).unwrap();
+            let source = incoming.join("project.json");
+            let state = ProjectFileState::observe(&source, &initial).unwrap();
+            crate::project::save_with_source_state(&source, &initial, &state)
+                .unwrap_or_else(|error| panic!("{label}: first save: {error}"));
+            let loaded = crate::project::read_with_source_state(&source)
+                .unwrap_or_else(|error| panic!("{label}: open: {error}"));
+            assert_eq!(initial, loaded.document, "{label}: typed authored data");
+
+            let composition = crate::host::composition_at(backend).unwrap();
+            assert!(
+                composition
+                    .validate_document(&loaded.document)
+                    .iter()
+                    .all(|diagnostic| diagnostic.severity != module_engine_core::Severity::Error),
+                "{label}: full document validation"
+            );
+            let mut files = vec!["project.json"];
+            if let Some(game) = &loaded.document.game {
+                let activity = composition.activity(&loaded.document).unwrap();
+                let assets =
+                    module_engine_core::component_asset_paths(&loaded.document.asset_manifest)
+                        .unwrap();
+                let validation = ComponentValidationContext {
+                    scenes: &game.scenes,
+                    modules: &activity.modules,
+                    asset_paths: Some(&assets),
+                    active_components: Some(&activity.components),
+                };
+                for id in game.scenes.keys() {
+                    let entities = game
+                        .resolve_scene_with_context(id, &composition.systems, &validation)
+                        .unwrap_or_else(|error| panic!("{label}/{id}: {error}"));
+                    let expected = serde_json::to_vec(&entities).unwrap();
+                    let mut entities: Vec<GameEntity> = serde_json::from_slice(&expected).unwrap();
+                    entities.sort_by_key(|entity| entity.object.id);
+                    let rebuilt = EcsWorld::from_entities(entities.clone())
+                        .unwrap()
+                        .entities_snapshot();
+                    assert_eq!(
+                        serde_json::to_vec(&entities).unwrap(),
+                        serde_json::to_vec(&rebuilt).unwrap(),
+                        "{label}/{id}: resolved values after native ECS round-trip"
+                    );
+                    if let Some(binding) = game.scene_assets.get(id) {
+                        files.push(&binding.path);
+                    }
+                    println!("R1.3 {label}/{id}: {} objects", rebuilt.len());
+                }
+            } else {
+                println!("R1.3 {label}: graph-only");
+            }
+            let saved = outgoing.join("project.json");
+            let state = ProjectFileState::observe(&saved, &loaded.document).unwrap();
+            crate::project::save_with_source_state(&saved, &loaded.document, &state)
+                .unwrap_or_else(|error| panic!("{label}: fresh save: {error}"));
+            for file in files {
+                let first = json_bytes(&fs::read(incoming.join(file)).unwrap());
+                let second = json_bytes(&fs::read(outgoing.join(file)).unwrap());
+                assert!(first == second, "{label}/{file}: exact JSON");
+            }
+        }
+
+        let backend = backend_root();
+        let folder = fixture();
+        println!("R1.3 corpus: {}", folder.display());
+        let mut example_count = 0;
+        for entry in fs::read_dir(backend.join("examples")).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            let raw = fs::read(&path).unwrap();
+            let label = path.file_name().unwrap().to_str().unwrap();
+            // These shipped examples predate the current format. Exercise the
+            // explicit migration decoder and compare writes of its accepted v4
+            // state. The checked-in legacy inputs must keep their original bytes.
+            let candidate = migration_candidate(&raw, ProfileKind::Neutral, &backend)
+                .unwrap_or_else(|error| panic!("{label}: migration: {error}"));
+            run(label, &backend, &folder.join(label), candidate.document);
+            assert_eq!(fs::read(&path).unwrap(), raw);
+            example_count += 1;
+        }
+        assert_eq!(
+            example_count, 12,
+            "account for changes to the example corpus"
+        );
+
+        for (label, document) in [
+            ("G1 Crate Garden", crate::game_templates::g1_document()),
+            (
+                "G2 Two Arenas baseline",
+                crate::game_templates::demo_document(),
+            ),
+        ] {
+            let document = externalize_scenes(&document, false).unwrap();
+            run(label, &backend, &folder.join(label), document);
+        }
+
+        let path = backend.join("game-project.json");
+        let raw = fs::read(&path).unwrap();
+        let candidate = migration_candidate(&raw, ProfileKind::Arpg, &backend).unwrap();
+        run(
+            "game-project.json (migrated)",
+            &backend,
+            &folder.join("game-project-v3"),
+            externalize_scenes(&candidate.document, false).unwrap(),
+        );
+        assert_eq!(fs::read(&path).unwrap(), raw);
+
+        let raw = fs::read(backend.join("game-project-v4.json")).unwrap();
+        let old_pin = folder.join("old-sdk-pin.json");
+        fs::write(&old_pin, &raw).unwrap();
+        let error = crate::project::read(&old_pin).unwrap_err();
+        assert!(error.contains("module-engine-data-api/v3"), "{error}");
+        assert_eq!(fs::read(old_pin).unwrap(), raw);
+    }
+
+    #[test]
     #[ignore = "explicitly migrates a copy of the checked-in v3 game and compiles its worker"]
     fn existing_game_project_save_load_save_keeps_exact_bytes() {
         let source = backend_root().join("game-project.json");
@@ -1136,6 +1271,9 @@ mod tests {
         const TARGET: u64 = 9_007_199_254_740_993;
         const CHILD: u64 = 9_007_199_254_740_994;
         const PREFAB_COLOR: [u8; 4] = [17, 39, 61, 255];
+        const SPIN: &str = "example.spin";
+        const UNKNOWN: &str = "example.spin.Other";
+        const PAYLOAD: &str = r#"{"Exact-Key":{"0":null,"a.b":18446744073709551615},"list":[0,0.0,-0.0,0.5084457492070562],"speed":4.0}"#;
         let backend = backend_root();
         let folder = fixture();
         println!("R1.2 fixture: {}", folder.display());
@@ -1146,16 +1284,22 @@ mod tests {
             "target".into(),
             Prefab {
                 color: PREFAB_COLOR,
-                components: BTreeMap::new(),
+                components: BTreeMap::from([(SPIN.into(), serde_json::from_str(PAYLOAD).unwrap())]),
             },
         );
         let mut target = AuthoredObject::new(WorldObject {
             id: TARGET,
             parent: None,
-            transform: Transform::default(),
+            transform: Transform {
+                scale: [-0.0, 1.0, 1.0],
+                ..Transform::default()
+            },
             color: [255; 4],
         });
         target.prefab = Some("target".into());
+        target
+            .components
+            .insert(UNKNOWN.into(), json!({"opaque":true}));
         let mut child = AuthoredObject::new(WorldObject {
             id: CHILD,
             parent: Some(TARGET),
@@ -1183,7 +1327,7 @@ mod tests {
                 nodes: vec![SystemNode {
                     id: "stable-id-probe".into(),
                     module: "custom.rust.update".into(),
-                    params: json!({"source_id":"stable-id-probe","components":[]}),
+                    params: json!({"source_id":"stable-id-probe","components":[SPIN]}),
                     bindings: ["world", "input", "events"]
                         .into_iter()
                         .map(|name| (name.into(), name.into()))
@@ -1203,6 +1347,19 @@ mod tests {
     assert_eq!(parent, {TARGET});
     assert_eq!(owner, parent);
     assert_eq!(ctx.object(owner).unwrap().color, {PREFAB_COLOR:?});
+    assert_eq!(ctx.object(owner).unwrap().transform.scale[0].to_bits(), (-0.0_f32).to_bits());
+    let exact = ctx.component_property(owner, "{SPIN}", "Exact-Key").unwrap();
+    assert!(exact["0"].is_null());
+    assert_eq!(exact["a.b"].as_u64(), Some(u64::MAX));
+    assert!(exact.get("a").is_none());
+    let list = ctx.component_property(owner, "{SPIN}", "list").unwrap();
+    assert!(list[0].is_u64());
+    assert!(list[1].is_f64());
+    assert_eq!(list[2].as_f64().unwrap().to_bits(), (-0.0_f64).to_bits());
+    assert_eq!(list[3].as_f64().unwrap().to_bits(), 0.5084457492070562_f64.to_bits());
+    assert_eq!(ctx.component_property(owner, "{SPIN}", "axis").unwrap().as_str(), Some("y"));
+    assert!(ctx.component_property(owner, "{SPIN}", "axis.missing").is_none());
+    assert!(ctx.component_property(owner, "{UNKNOWN}", "opaque").is_none());
     ctx.set_position(owner, [2.0, 0.0, 0.0]);
 }}"#
             ),
@@ -1234,11 +1391,51 @@ mod tests {
         assert_eq!(resolved[1].object.color, PREFAB_COLOR);
         let saved = second.join("project.json");
         let initial = ProjectFileState::observe(&saved, &loaded.document).unwrap();
-        crate::project::save_with_source_state(&saved, &loaded.document, &initial).unwrap();
+        let second_accepted =
+            crate::project::save_with_source_state(&saved, &loaded.document, &initial).unwrap();
         let project_bytes = fs::read(&source).unwrap();
         let scene_bytes = fs::read(first.join(scene_path)).unwrap();
-        assert_eq!(project_bytes, fs::read(saved).unwrap());
+        assert_eq!(project_bytes, fs::read(&saved).unwrap());
         assert_eq!(scene_bytes, fs::read(second.join(scene_path)).unwrap());
+        let raw_project: serde_json::Value = serde_json::from_slice(&project_bytes).unwrap();
+        let raw_scene: serde_json::Value = serde_json::from_slice(&scene_bytes).unwrap();
+        assert_eq!(
+            serde_json::to_string(&raw_project["game"]["prefabs"]["target"]["components"][SPIN])
+                .unwrap(),
+            PAYLOAD,
+        );
+        assert_eq!(
+            raw_scene["scene"]["objects"][1]["object"]["id"].as_u64(),
+            Some(TARGET)
+        );
+        assert_eq!(
+            raw_scene["scene"]["objects"][1]["components"][UNKNOWN],
+            json!({"opaque":true})
+        );
+        assert!(
+            raw_scene["scene"]["objects"][1]["overrides"]
+                .as_object()
+                .unwrap()
+                .is_empty()
+        );
+
+        let mut invalid = loaded.document.clone();
+        invalid
+            .game
+            .as_mut()
+            .unwrap()
+            .prefabs
+            .get_mut("target")
+            .unwrap()
+            .components
+            .get_mut(SPIN)
+            .unwrap()["speed"] = serde_json::Value::Null;
+        let rejected = folder.join("rejected.json");
+        let initial = ProjectFileState::observe(&rejected, &invalid).unwrap();
+        let error =
+            crate::project::save_with_source_state(&rejected, &invalid, &initial).unwrap_err();
+        assert!(error.contains("example.spin.speed"), "{error}");
+        assert!(!rejected.exists());
 
         let exported = export(
             &loaded.document,
@@ -1270,9 +1467,36 @@ mod tests {
         assert_eq!(target.id, TARGET);
         assert_eq!(target.color, PREFAB_COLOR);
         assert_eq!(target.transform.translation, [2., 0., 0.]);
+        assert_eq!(target.transform.scale[0].to_bits(), (-0.0_f32).to_bits());
         let saved_state = serde_json::to_vec(&state).unwrap();
         let loaded_state: GameState = serde_json::from_slice(&saved_state).unwrap();
         assert_eq!(saved_state, serde_json::to_vec(&loaded_state).unwrap());
+
+        // Each changed file differs only in the sign bit of one number. The
+        // writer must publish it even though ordinary float equality matches.
+        let mut edited = loaded.document.clone();
+        let game = edited.game.as_mut().unwrap();
+        game.scenes.get_mut("empty").unwrap().objects[1]
+            .object
+            .transform
+            .scale[0] = 0.0;
+        game.prefabs
+            .get_mut("target")
+            .unwrap()
+            .components
+            .get_mut(SPIN)
+            .unwrap()["list"][2] = json!(0.0);
+        crate::project::save_with_source_state(&saved, &edited, &second_accepted).unwrap();
+        assert_ne!(fs::read(&saved).unwrap(), project_bytes);
+        assert_ne!(fs::read(second.join(scene_path)).unwrap(), scene_bytes);
+        let reloaded = crate::project::read(&saved).unwrap();
+        let game = reloaded.game.as_ref().unwrap();
+        let native_zero = game.scenes["empty"].objects[1].object.transform.scale[0];
+        let schema_zero = game.prefabs["target"].components[SPIN]["list"][2]
+            .as_f64()
+            .unwrap();
+        assert_eq!(native_zero.to_bits(), 0.0_f32.to_bits());
+        assert_eq!(schema_zero.to_bits(), 0.0_f64.to_bits());
         assert_eq!(fs::read(source).unwrap(), project_bytes);
         assert_eq!(fs::read(first.join(scene_path)).unwrap(), scene_bytes);
     }

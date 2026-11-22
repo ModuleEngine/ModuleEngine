@@ -1,5 +1,8 @@
 //! Source-owned component contracts, shared by authoring, runtime and export.
-use crate::{AuthoredScene, GameEntity, PropertySchema, PropertyScope, PropertyType};
+use crate::{
+    AuthoredScene, GameEntity, PropertySchema, PropertyScope, PropertyType, ScriptContext,
+};
+pub use native_transform::TransformCodec;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -65,6 +68,10 @@ pub struct ComponentRegistry {
     entries: BTreeMap<String, (ComponentSchema, Option<SemanticValidator>)>,
 }
 impl ComponentRegistry {
+    /// Core's mandatory native transform. Its wire field lives on WorldObject,
+    /// independently of the optional, source-owned schema component IDs.
+    pub const TRANSFORM: TransformCodec = TransformCodec { _private: () };
+
     pub fn register(&mut self, schema: ComponentSchema) -> Result<(), String> {
         self.insert(schema, None)
     }
@@ -129,6 +136,14 @@ impl ComponentRegistry {
         }
         result
     }
+
+    /// Store only changes from the effective view of an authored payload.
+    pub fn apply_component_edits(&self, id: &str, authored: &mut Value, edited: &Value) {
+        let effective = self.resolve_component(id, authored);
+        if !same_component_json(Some(&effective), Some(edited)) {
+            apply_json_edits(authored, &effective, edited);
+        }
+    }
     /// Fill only attached, active components. Inactive/unknown bytes stay exact.
     pub fn resolve_defaults(&self, entity: &mut GameEntity, active: &BTreeSet<String>) {
         for (id, value) in &mut entity.components {
@@ -138,6 +153,40 @@ impl ComponentRegistry {
                 merge_component_defaults(value, defaults);
             }
         }
+    }
+
+    /// Package the current ECS values for the gameplay Rust worker. Scene
+    /// resolution has already applied defaults. Preserve the values verbatim
+    /// in the existing script property envelope and omit inactive attachments.
+    pub fn script_context(
+        &self,
+        time: f64,
+        dt: f64,
+        entities: Vec<GameEntity>,
+        active: &BTreeSet<String>,
+    ) -> ScriptContext {
+        let mut packet = ScriptContext::new(time, dt, Vec::with_capacity(entities.len()));
+        for entity in entities {
+            let id = entity.object.id;
+            packet.objects.push(entity.object);
+            if !entity.references.is_empty() {
+                packet.references.insert(id, entity.references);
+            }
+            for (name, value) in entity.components {
+                if active.contains(&name)
+                    && self.schema(&name).is_some()
+                    && let Value::Object(fields) = value
+                {
+                    packet
+                        .properties
+                        .components
+                        .entry(id)
+                        .or_default()
+                        .insert(name, fields.into_iter().collect());
+                }
+            }
+        }
+        packet
     }
     pub fn validate_entities(
         &self,
@@ -262,6 +311,81 @@ impl ComponentRegistry {
     }
 }
 
+/// Component equality retains number type and the sign of a floating zero.
+/// Option distinguishes a missing JSON member from explicit null.
+pub fn same_component_json(left: Option<&Value>, right: Option<&Value>) -> bool {
+    match (left, right) {
+        (Some(Value::Number(left)), Some(Value::Number(right)))
+            if left.is_f64() && right.is_f64() =>
+        {
+            left.as_f64().map(f64::to_bits) == right.as_f64().map(f64::to_bits)
+        }
+        (Some(Value::Object(left)), Some(Value::Object(right))) => {
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .all(|(key, value)| same_component_json(Some(value), right.get(key)))
+        }
+        (Some(Value::Array(left)), Some(Value::Array(right))) => {
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .zip(right)
+                    .all(|(left, right)| same_component_json(Some(left), Some(right)))
+        }
+        _ => left == right,
+    }
+}
+
+pub fn same_component_payloads(
+    left: &BTreeMap<String, Value>,
+    right: &BTreeMap<String, Value>,
+) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .all(|(key, value)| same_component_json(Some(value), right.get(key)))
+}
+
+fn apply_json_edits(authored: &mut Value, effective: &Value, edited: &Value) {
+    match (authored, effective, edited) {
+        (Value::Object(authored), Value::Object(effective), Value::Object(edited)) => {
+            authored.retain(|key, _| edited.contains_key(key));
+            for (key, next) in edited {
+                let before = effective.get(key);
+                if same_component_json(before, Some(next)) {
+                    continue;
+                }
+                match (authored.get_mut(key), before) {
+                    (Some(local), Some(before)) => apply_json_edits(local, before, next),
+                    (None, Some(before @ Value::Object(_))) if next.is_object() => {
+                        let mut local = Value::Object(Default::default());
+                        apply_json_edits(&mut local, before, next);
+                        authored.insert(key.clone(), local);
+                    }
+                    _ => {
+                        authored.insert(key.clone(), next.clone());
+                    }
+                }
+            }
+        }
+        (Value::Array(authored), Value::Array(effective), Value::Array(edited))
+            if effective.len() == edited.len() =>
+        {
+            for (index, (before, next)) in effective.iter().zip(edited).enumerate() {
+                if same_component_json(Some(before), Some(next)) {
+                    continue;
+                }
+                if index >= authored.len() {
+                    authored.extend_from_slice(&effective[authored.len()..=index]);
+                }
+                apply_json_edits(&mut authored[index], before, next);
+            }
+        }
+        (authored, _, edited) => *authored = edited.clone(),
+    }
+}
+
 fn validate_dependencies(
     entity: &GameEntity,
     active: &BTreeSet<String>,
@@ -337,7 +461,7 @@ pub fn validate_component_schema(schema: &ComponentSchema) -> Result<(), String>
         }
         let default = component_field(&schema.defaults, path)
             .ok_or_else(|| format!("Field '{}' is missing aggregate default", field.id))?;
-        if default != &field.default {
+        if !same_component_json(Some(default), Some(&field.default)) {
             return Err(format!(
                 "Field '{}' has conflicting aggregate/field defaults",
                 field.id
@@ -520,6 +644,140 @@ pub fn register_builtin_component_schemas(registry: &mut ComponentRegistry) -> R
     Ok(())
 }
 
+mod native_transform {
+    //! Portable codec for the native, mandatory object transform.
+
+    use crate::{ComponentRegistry, Transform};
+    use bevy_reflect::{GetTypeRegistration, TypeRegistration};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    /// The stable scene and script shape. Bevy reflection is available to tools
+    /// independently of the format used by those two boundaries.
+    #[derive(Serialize, Deserialize)]
+    #[serde(remote = "Transform")]
+    struct TransformWire {
+        translation: [f32; 3],
+        rotation: [f32; 3],
+        scale: [f32; 3],
+    }
+
+    pub struct TransformCodec {
+        pub(crate) _private: (),
+    }
+
+    impl TransformCodec {
+        pub fn reflection(&self) -> TypeRegistration {
+            Transform::get_type_registration()
+        }
+
+        pub fn fields_mut<'a>(
+            &self,
+            transform: &'a mut Transform,
+        ) -> [(&'static str, &'a mut [f32; 3]); 3] {
+            [
+                ("Position", &mut transform.translation),
+                ("Rotation (radians)", &mut transform.rotation),
+                ("Scale", &mut transform.scale),
+            ]
+        }
+
+        pub(crate) fn is_finite(&self, transform: &Transform) -> bool {
+            coordinates(transform).all(|field| field.is_finite())
+        }
+
+        pub(crate) fn same_wire_value(&self, left: &Transform, right: &Transform) -> bool {
+            coordinates(left)
+                .zip(coordinates(right))
+                .all(|(left, right)| left.to_bits() == right.to_bits())
+        }
+
+        fn encode<S: Serializer>(
+            &self,
+            transform: &Transform,
+            serializer: S,
+        ) -> Result<S::Ok, S::Error> {
+            if !self.is_finite(transform) {
+                return Err(serde::ser::Error::custom("Transform must be finite"));
+            }
+            TransformWire::serialize(transform, serializer)
+        }
+
+        fn decode<'de, D: Deserializer<'de>>(
+            &self,
+            deserializer: D,
+        ) -> Result<Transform, D::Error> {
+            let transform = TransformWire::deserialize(deserializer)?;
+            if !self.is_finite(&transform) {
+                return Err(serde::de::Error::custom("Transform must be finite"));
+            }
+            Ok(transform)
+        }
+    }
+
+    fn coordinates(transform: &Transform) -> impl Iterator<Item = &f32> {
+        transform
+            .translation
+            .iter()
+            .chain(&transform.rotation)
+            .chain(&transform.scale)
+    }
+
+    impl Serialize for Transform {
+        fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            ComponentRegistry::TRANSFORM.encode(self, serializer)
+        }
+    }
+
+    impl<'de> Deserialize<'de> for Transform {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            ComponentRegistry::TRANSFORM.decode(deserializer)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use bevy_ecs::reflect::ReflectComponent;
+        use bevy_ecs::world::World;
+
+        #[test]
+        fn native_transform_codec_keeps_the_wire_shape_and_exposes_typed_fields() {
+            let input = r#"{"translation":[-0.0,0.1,10.25],"rotation":[0.0,0.0,0.0],"scale":[1.0,2.0,1.0]}"#;
+            let transform: Transform = serde_json::from_str(input).unwrap();
+            assert_eq!(transform.translation[0].to_bits(), (-0.0_f32).to_bits());
+            assert_eq!(serde_json::to_string(&transform).unwrap(), input);
+
+            let mut world = World::new();
+            let entity = world.spawn(transform);
+            let registration = ComponentRegistry::TRANSFORM.reflection();
+            let reflected = registration
+                .data::<ReflectComponent>()
+                .unwrap()
+                .reflect(entity)
+                .unwrap();
+            let bevy_reflect::ReflectRef::Struct(fields) = reflected.reflect_ref() else {
+                panic!("Expected reflected struct fields");
+            };
+            assert_eq!(
+                fields.field("translation").unwrap().try_downcast_ref(),
+                Some(&[-0.0_f32, 0.1, 10.25])
+            );
+
+            for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                let invalid = Transform {
+                    scale: [value, 1., 1.],
+                    ..transform
+                };
+                assert!(serde_json::to_value(invalid).is_err());
+            }
+            let overflow = input.replace("10.25", "1e100");
+            assert!(serde_json::from_str::<Transform>(&overflow).is_err());
+            let overflow: serde_json::Value = serde_json::from_str(&overflow).unwrap();
+            assert!(serde_json::from_value::<Transform>(overflow).is_err());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -614,6 +872,62 @@ mod tests {
     }
     fn active() -> BTreeSet<String> {
         BTreeSet::from(["external.settings".into()])
+    }
+
+    #[test]
+    fn component_codec_preserves_sparse_authored_json_and_filters_script_packet() {
+        let mut registry = ComponentRegistry::default();
+        registry.register(schema()).unwrap();
+        let mut disabled = schema();
+        disabled.id = "external.settings.disabled".into();
+        disabled.fields.clear();
+        registry.register(disabled).unwrap();
+
+        let source = r#"{"Exact.Key":{"0":null,"id":18446744073709551615},"direction":[-0.0],"pairs":[0,0.0,0.5084457492070562]}"#;
+        let mut authored: Value = serde_json::from_str(source).unwrap();
+        let effective = registry.resolve_component("external.settings", &authored);
+        assert!(authored.get("speed").is_none());
+        assert_eq!(effective["speed"], 2.);
+        assert_eq!(effective["direction"][1], 1.);
+        registry.apply_component_edits("external.settings", &mut authored, &effective);
+        assert_eq!(serde_json::to_string(&authored).unwrap(), source);
+
+        let mut edited = effective;
+        edited["direction"][0] = json!(0.0);
+        registry.apply_component_edits("external.settings", &mut authored, &edited);
+        assert_eq!(
+            serde_json::to_string(&authored).unwrap(),
+            source.replace("-0.0", "0.0")
+        );
+
+        let id = u64::MAX;
+        let mut entity = entity(
+            id,
+            json!({
+                "external.settings": authored,
+                "external.settings.disabled": {"kept": true},
+                "external.settings.Unknown": {"kept": null},
+            }),
+        );
+        registry.resolve_defaults(&mut entity, &active());
+        let packet = registry.script_context(0., 0., vec![entity], &active());
+        let packet: ScriptContext =
+            serde_json::from_slice(&serde_json::to_vec(&packet).unwrap()).unwrap();
+        let value = |key| packet.component_property(id, "external.settings", key);
+        let exact = value("Exact.Key").unwrap();
+        assert_eq!(exact.get("0"), Some(&Value::Null));
+        assert_eq!(exact["id"].as_u64(), Some(u64::MAX));
+        assert!(value("Exact").is_none());
+        assert!(value("missing").is_none());
+        let pairs = value("pairs").unwrap();
+        assert!(pairs[0].is_u64());
+        assert!(pairs[1].is_f64());
+        assert_eq!(
+            pairs[2].as_f64().unwrap().to_bits(),
+            0.5084457492070562_f64.to_bits()
+        );
+        assert!(!packet.properties.components[&id].contains_key("external.settings.disabled"));
+        assert!(!packet.properties.components[&id].contains_key("external.settings.Unknown"));
     }
 
     #[test]

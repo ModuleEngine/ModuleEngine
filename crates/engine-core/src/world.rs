@@ -1,5 +1,7 @@
 use crate::{WorldCommand, WorldObject};
 use bevy_ecs::prelude::{Component, Entity, World};
+use bevy_ecs::reflect::ReflectComponent;
+use bevy_reflect::Reflect;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -119,7 +121,8 @@ pub trait WorldProvider: Send {
 }
 
 /// Local translation, Euler rotation in radians and scale.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Component, Reflect)]
+#[reflect(Component)]
 pub struct Transform {
     pub translation: [f32; 3],
     pub rotation: [f32; 3],
@@ -409,13 +412,12 @@ impl WorldProvider for ObjectsWorld {
     }
 }
 
-#[derive(Component)]
+#[derive(Component, Reflect)]
 #[component(immutable)]
 struct StableId(u64);
 
-#[derive(Clone, Component, PartialEq)]
+#[derive(Clone, Component, PartialEq, Reflect)]
 struct ObjectData {
-    transform: Transform,
     parent: Option<u64>,
     color: [u8; 4],
     angular_velocity: [f32; 3],
@@ -425,7 +427,6 @@ struct ObjectData {
 impl ObjectData {
     fn from_object(object: WorldObject) -> Self {
         Self {
-            transform: object.transform,
             parent: object.parent,
             color: object.color,
             angular_velocity: [0.; 3],
@@ -434,7 +435,7 @@ impl ObjectData {
     }
 }
 
-#[derive(Component)]
+#[derive(Component, Reflect)]
 #[component(immutable)]
 struct EntityLifetime(u64);
 
@@ -467,6 +468,7 @@ impl Clone for EcsWorld {
             .spawn_batch(self.index.iter().map(|(&id, &handle)| {
                 (
                     StableId(id),
+                    *self.world.get::<Transform>(handle).unwrap(),
                     self.world.get::<ObjectData>(handle).unwrap().clone(),
                     EntityLifetime(self.world.get::<EntityLifetime>(handle).unwrap().0),
                 )
@@ -488,9 +490,10 @@ impl PartialEq for EcsWorld {
         self.time == other.time
             && self.components == other.components
             && self.entity_ids().eq(other.entity_ids())
-            && self
-                .entity_ids()
-                .all(|id| self.object_data(id) == other.object_data(id))
+            && self.entity_ids().all(|id| {
+                self.object_data(id) == other.object_data(id)
+                    && self.transform(id) == other.transform(id)
+            })
     }
 }
 
@@ -501,6 +504,7 @@ impl EcsWorld {
             .world
             .spawn((
                 StableId(id),
+                object.transform,
                 ObjectData::from_object(object),
                 EntityLifetime(new_entity_lifetime()),
             ))
@@ -603,15 +607,20 @@ impl EcsWorld {
         Some(WorldObject {
             id: stable_id,
             parent: data.parent,
-            transform: data.transform,
+            transform: *entity.get::<Transform>()?,
             color: data.color,
         })
     }
     pub fn objects_snapshot(&self) -> Vec<WorldObject> {
         self.entity_ids().filter_map(|id| self.object(id)).collect()
     }
+    fn transform(&self, id: u64) -> Option<&Transform> {
+        self.world.get(*self.index.get(&id)?)
+    }
     pub fn transform_mut(&mut self, id: u64) -> Option<&mut Transform> {
-        Some(&mut self.object_data_mut(id)?.transform)
+        self.world
+            .get_mut::<Transform>(*self.index.get(&id)?)
+            .map(|value| value.into_inner())
     }
     pub fn component(&self, id: u64, name: &str) -> Option<&serde_json::Value> {
         self.components.get(name)?.get(&id)
@@ -681,9 +690,9 @@ impl EcsWorld {
         objects.insert(id, entity.object.clone());
         crate::validate_world_commands(&objects.into_values().collect::<Vec<_>>(), &[])?;
         if let Some(data) = self.object_data_mut(id) {
-            data.transform = entity.object.transform;
             data.parent = entity.object.parent;
             data.color = entity.object.color;
+            *self.transform_mut(id).unwrap() = entity.object.transform;
         } else {
             self.spawn_object(entity.object);
         }
@@ -803,9 +812,9 @@ impl WorldProvider for EcsWorld {
         self.components.retain(|_, column| !column.is_empty());
         for object in objects.into_values() {
             if let Some(data) = self.object_data_mut(object.id) {
-                data.transform = object.transform;
                 data.parent = object.parent;
                 data.color = object.color;
+                *self.transform_mut(object.id).unwrap() = object.transform;
             } else {
                 self.spawn_object(object);
             }
@@ -817,17 +826,13 @@ impl WorldProvider for EcsWorld {
         self.time += dt;
         let amount = dt * speed;
         for &handle in self.index.values() {
-            let data = self
+            let velocity = self
                 .world
-                .get_mut::<ObjectData>(handle)
+                .get::<ObjectData>(handle)
                 .unwrap()
-                .into_inner();
-            for (rotation, velocity) in data
-                .transform
-                .rotation
-                .iter_mut()
-                .zip(data.angular_velocity)
-            {
+                .angular_velocity;
+            let mut transform = self.world.get_mut::<Transform>(handle).unwrap();
+            for (rotation, velocity) in transform.rotation.iter_mut().zip(velocity) {
                 *rotation += velocity * amount;
             }
         }
@@ -846,7 +851,7 @@ impl WorldProvider for EcsWorld {
             let parent = data
                 .parent
                 .map_or_else(identity_matrix, |id| resolve(id, world, cache));
-            let model = multiply_matrices(parent, data.transform.matrix());
+            let model = multiply_matrices(parent, world.transform(entity).unwrap().matrix());
             cache.insert(entity, model);
             model
         }

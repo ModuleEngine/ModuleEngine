@@ -6,7 +6,20 @@
 `SystemRegistry`. The system registry owns a cloneable `ComponentRegistry`.
 Register a source extension once in the host composition root, with its component
 schemas, implementation versions and executable system factories. Inspector,
-document validation, Play, CLI and export consume that same context.
+project save validation, Play, gameplay Rust IPC, CLI and export use that
+registry and the activity derived from the composition.
+
+Core also supplies the mandatory native `ComponentRegistry::TRANSFORM` codec.
+Inspector uses its typed fields and the authored scene and Rust worker use its
+portable `translation`, `rotation` and `scale` representation. Native world
+validation checks the same codec. The reflected Bevy component lives on the
+stable object's ECS row. Its data travels in `object.transform` outside the
+optional component ID map, so existing schema namespaces and pins retain their
+meaning. See [gameplay storage](ecs-world.md).
+
+Transform coordinates must be finite `f32` values. The codec rejects overflow
+such as `1e100` when decoding a scene and rejects nonfinite native values when
+encoding. World validation has required finite transforms since before R1.3.
 
 `ComponentSchema` declares a stable component ID, one owning source module,
 schema version, label, aggregate defaults, typed `PropertySchema` fields and
@@ -41,6 +54,17 @@ each field default. Resolution fills missing values in attached active component
 without changing authored records or overwriting present values. Prefab values,
 local values and field overrides retain precedence. Unknown/inactive records are
 preserved in authoring and omitted from stripped runtime data.
+
+Schema payloads go to disk as JSON. Field names, literal dots, numeric object
+keys, nulls and unknown members stay in their original objects or arrays. JSON
+integer values through `u64::MAX` and finite floating-point values in the
+engine's `f64` representation retain their type and precision. Inspector keeps
+authored omissions when applying a clean draft, including a prefab draft.
+GameHost projects the current values of active schemas into the existing
+`ScriptContext.properties.components` wire field. This view can include
+effective defaults. `ctx.component_property(id, component, key)` reads an
+exact top-level key, returning `None` for absence and `Some(Value::Null)`
+for explicit null.
 
 Numbers, booleans, enums and bounded text reuse the legacy property types.
 `ObjectReference { required_components, optional }` stores a nonzero scene-local

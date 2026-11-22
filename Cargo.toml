@@ -9,7 +9,7 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive", "rc"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["float_roundtrip"] }
 thiserror = "2"
 syn = { version = "2", features = ["full", "extra-traits", "visit"] }
 quote = "1"

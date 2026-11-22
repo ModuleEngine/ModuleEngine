@@ -4,12 +4,18 @@
 
 [English](current-status.md) | [Русский](ru/current-status.md) | [Documentation](README.md)
 
+**22 November 2026 — R1.3 connects component codecs to Inspector, save,
+validation and gameplay Rust IPC.** Core's registry provides the reflected
+native Transform codec and the source-owned schema contracts. The Windows
+round-trip covers the 12 legacy example graphs, all ten Crate Garden levels
+and both Two Arenas scenes, including the migrated checked-in ARPG project.
+The completed G2 campaign is pending. See [R1.3 verification](ecs-world.md#r13-verification).
+
 **22 November 2026 — R1.2 integrated stable IDs into the gameplay ECS.** The
 Windows integration case preserved the object ID `9007199254740993`, its
 prefab instance and both links through scene files, repeated saves, Player
 export and compiled Rust IPC. The checked-in game passed the byte comparison
 on a migrated copy. See [R1.2 verification](ecs-world.md#r12-verification).
-R1.3 covers the native component codecs.
 
 The R1.2 memory fix advances Bevy's removal message buffers after a batch
 despawns entities in `EcsWorld`. The Core regression covers successive

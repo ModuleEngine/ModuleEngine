@@ -1,4 +1,5 @@
 //! Object-scoped, source-aware Inspector drafts; never serialized into a scene.
+use module_engine_core::{same_component_json, same_component_payloads};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -55,8 +56,8 @@ impl InspectorDrafts {
             .cloned()
             .collect();
         for name in names {
-            let clean = entry.values.get(&name) == entry.base.get(&name);
-            let accepted = entry.values.get(&name) == base.get(&name);
+            let clean = same_component_json(entry.values.get(&name), entry.base.get(&name));
+            let accepted = same_component_json(entry.values.get(&name), base.get(&name));
             if clean || accepted {
                 if let Some(value) = base.get(&name) {
                     entry.base.insert(name.clone(), value.clone());
@@ -66,7 +67,7 @@ impl InspectorDrafts {
                     entry.values.remove(&name);
                 }
                 entry.conflicts.remove(&name);
-            } else if base.get(&name) != entry.base.get(&name)
+            } else if !same_component_json(base.get(&name), entry.base.get(&name))
                 || schemas.get(&name) != entry.schemas.get(&name)
             {
                 entry.conflicts.insert(name.clone());
@@ -86,7 +87,9 @@ impl InspectorDrafts {
         // Browsing many objects must not retain a second copy of every clean
         // object/schema. Only pending drafts and the current baseline survive.
         self.entries.retain(|cached, entry| {
-            cached == &key || entry.values != entry.base || entry.raw != entry.raw_base
+            cached == &key
+                || !same_component_payloads(&entry.values, &entry.base)
+                || entry.raw != entry.raw_base
         });
     }
     pub fn has_drafts(&self, values: &Values, raw: &str) -> bool {
@@ -96,14 +99,14 @@ impl InspectorDrafts {
             } else {
                 (&entry.values, entry.raw.as_str())
             };
-            values != &entry.base || raw != entry.raw_base
+            !same_component_payloads(values, &entry.base) || raw != entry.raw_base
         })
     }
     pub fn changed(&self, name: &str, values: &Values) -> bool {
         self.active
             .as_ref()
             .and_then(|k| self.entries.get(k))
-            .is_some_and(|e| e.base.get(name) != values.get(name))
+            .is_some_and(|e| !same_component_json(e.base.get(name), values.get(name)))
     }
     pub fn conflict(&self, name: &str) -> bool {
         self.active

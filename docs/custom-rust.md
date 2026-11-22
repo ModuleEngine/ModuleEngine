@@ -61,6 +61,18 @@ JSON field. Updated workers read an absent field as empty, including for legacy
 Update and Speed. A script using `ctx.reference` needs the updated SDK sources.
 The existing v3 SDK pin and world command set still apply.
 
+The same snapshot supplies the native local transform through
+`ctx.object(id)?.transform` and only active, registered schema components through
+`ctx.component_property(id, component, key)`. The latter looks up an exact
+top-level JSON key, including a key containing a dot. Read nested objects and
+arrays from the returned JSON value. Absence returns `None`, and a present null
+returns `Some(Value::Null)`. Scene validation and the worker packet use the
+same [component registry](component-schemas.md), so values may include effective
+schema defaults. Saving a scene writes its authored component data.
+
+A nonfinite Transform in a request or returned command produces a packet
+error. The host discards that tick and retains the last committed script state.
+
 | World | Renderer |
 | --- | --- |
 | object(id) — read local state. | set_render_parameter(pass, name, value) — a finite numeric scalar. |

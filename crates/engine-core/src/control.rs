@@ -1,7 +1,7 @@
 //! Owned, portable command packets shared by world implementations and compiled
 //! Rust workers. Commands use stable object/pass/resource IDs, not Rust pointers.
 
-use crate::Transform;
+use crate::{ComponentRegistry, Transform};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -375,15 +375,6 @@ fn validate_name(name: &str) -> Result<(), String> {
     }
 }
 
-fn valid_transform(transform: &Transform) -> bool {
-    transform
-        .translation
-        .iter()
-        .chain(&transform.rotation)
-        .chain(&transform.scale)
-        .all(|v| v.is_finite())
-}
-
 /// Common transactional semantics, using temporary DTOs rather than dictating
 /// either provider's persistent storage representation.
 pub(crate) fn apply_object_commands(
@@ -418,7 +409,7 @@ pub(crate) fn apply_object_commands(
                 }
             }
             WorldCommand::SetTransform { id, transform } => {
-                if !valid_transform(transform) {
+                if !ComponentRegistry::TRANSFORM.is_finite(transform) {
                     return Err("Transform must be finite".into());
                 }
                 candidate
@@ -465,7 +456,7 @@ pub(crate) fn apply_object_commands(
         return Err("Built-in editable world exceeds 65536 objects".into());
     }
     for object in candidate.values() {
-        if !valid_transform(&object.transform) {
+        if !ComponentRegistry::TRANSFORM.is_finite(&object.transform) {
             return Err(format!("Object {} has a nonfinite transform", object.id));
         }
         let mut visited = BTreeSet::from([object.id]);
