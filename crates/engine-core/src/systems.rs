@@ -260,6 +260,7 @@ pub struct SystemRegistry {
     project_contracts: BTreeMap<String, (ProjectValidator, ProjectPreparer)>,
     game_contributions: BTreeMap<String, crate::GameContribution>,
     pose_projections: BTreeMap<String, crate::GamePoseProjection>,
+    presentation_scopes: BTreeMap<String, crate::GamePresentationScope>,
     capability_metadata: BTreeMap<String, crate::CapabilityMetadata>,
     contribution_metadata: BTreeMap<String, crate::CapabilityMetadata>,
 }
@@ -396,6 +397,26 @@ impl SystemRegistry {
     }
     pub fn pose_projection(&self, contribution_id: &str) -> Option<crate::GamePoseProjection> {
         self.pose_projections.get(contribution_id).copied()
+    }
+    pub fn register_presentation_scope(
+        &mut self,
+        contribution_id: &str,
+        scope: crate::GamePresentationScope,
+    ) -> Result<(), String> {
+        if !self.game_contributions.contains_key(contribution_id)
+            || self.presentation_scopes.contains_key(contribution_id)
+        {
+            return Err("Presentation scope needs a unique registered contribution owner".into());
+        }
+        self.presentation_scopes
+            .insert(contribution_id.into(), scope);
+        Ok(())
+    }
+    pub fn presentation_scope(
+        &self,
+        contribution_id: &str,
+    ) -> Option<crate::GamePresentationScope> {
+        self.presentation_scopes.get(contribution_id).copied()
     }
     pub fn game_contributions(&self) -> impl Iterator<Item = &crate::GameContribution> {
         self.game_contributions.values()

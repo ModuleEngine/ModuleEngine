@@ -7,8 +7,8 @@ use crate::{
 };
 use module_engine_core::{
     Camera, Frame, FrameRenderer, Graph, GraphDocument, ModuleDescriptor, ModuleRegistry, Node,
-    PortDescriptor, RenderControlTargets, RenderOverrides, RenderSubmission, RendererAdapter,
-    RendererPerformance, SceneSnapshot,
+    PortDescriptor, RenderControlTargets, RenderOverrides, RenderScene, RenderSubmission,
+    RendererAdapter, RendererPerformance, SceneSnapshot, SceneSync, SceneUpdate,
 };
 use std::{
     collections::BTreeMap,
@@ -185,6 +185,7 @@ struct VulkanFrameRenderer {
     pending: Option<(u64, Arc<AtomicBool>)>,
     busy_skips: u64,
     frame_profiling: bool,
+    scene: RenderScene,
 }
 
 impl VulkanFrameRenderer {
@@ -206,6 +207,7 @@ impl VulkanFrameRenderer {
             pending: None,
             busy_skips: 0,
             frame_profiling: false,
+            scene: RenderScene::default(),
         })
     }
 }
@@ -220,6 +222,44 @@ impl Drop for VulkanFrameRenderer {
 }
 
 impl FrameRenderer for VulkanFrameRenderer {
+    fn scene_sync(&self) -> SceneSync {
+        self.scene.sync()
+    }
+
+    fn update_scene(&mut self, update: SceneUpdate<'_>) -> Result<(), String> {
+        self.scene.apply(update)
+    }
+
+    fn render_retained(
+        &mut self,
+        camera: Camera,
+        width: usize,
+        height: usize,
+        overrides: &RenderOverrides,
+    ) -> Result<Frame, String> {
+        let scene = std::mem::take(&mut self.scene);
+        let result = scene
+            .snapshot()
+            .and_then(|snapshot| self.render(snapshot, camera, width, height, overrides));
+        self.scene = scene;
+        result
+    }
+
+    fn render_retained_presented(
+        &mut self,
+        camera: Camera,
+        width: usize,
+        height: usize,
+        overrides: &RenderOverrides,
+    ) -> Result<RenderSubmission, String> {
+        let scene = std::mem::take(&mut self.scene);
+        let result = scene
+            .snapshot()
+            .and_then(|snapshot| self.render_presented(snapshot, camera, width, height, overrides));
+        self.scene = scene;
+        result
+    }
+
     fn render(
         &mut self,
         scene: &SceneSnapshot,
@@ -390,6 +430,7 @@ impl FrameRenderer for VulkanFrameRenderer {
             pending: None,
             busy_skips: 0,
             frame_profiling: self.frame_profiling,
+            scene: RenderScene::default(),
         })))
     }
 
