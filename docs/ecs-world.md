@@ -70,6 +70,33 @@ the corresponding integration paths. Run native checks sequentially.
 cargo test --offline --locked --release --target x86_64-pc-windows-msvc --workspace --all-features -- --test-threads=1
 ```
 
+<a id="r18-storage-audit"></a>
+
+## R1.8 storage audit
+
+The R1.2 storage change replaced the separate maps for native fields in the
+R0.6 `EcsWorld` with Bevy rows. Core still owns the stable-ID index and the
+JSON columns used by component queries, codecs and tick publication. The
+`entities` map belongs to the saved DTO format. The tick journal holds pending
+writes, and the Object provider retains its recursive hierarchy for explicitly
+selected compatibility sessions.
+
+The production `GameSession` factory creates an `ObjectsWorld` for the Object
+kind and uses the canonical `EcsWorld` directly for ECS gameplay. Tests still
+construct explicit compatibility projections to exercise rejection and retry
+with either built-in provider. The graph-only runtime can still construct the
+demo ECS provider through `ModuleRegistry`.
+
+The native [paired benchmark](bench.md#not-worse) uses the R0.6 S2 reference,
+`game_step`: the UI-observed distribution of `GameHost::step` durations from
+the player worker. A host call can service zero or several fixed ticks and
+includes presentation bookkeeping. S3's `ecs_tick_ms` times the eight-column
+query and 1,000 motion-payload and transform updates in the fixture. The
+transform extraction and render submission have separate timers. A second
+S3 probe uses `GameHost` and records the actual checkpoint metadata clones
+and the entire fixed transaction separately. The two S3 routes measure
+different scopes.
+
 ## Lifetime and transactions
 
 Subtree removal clears every removed object's columns and outgoing references.
