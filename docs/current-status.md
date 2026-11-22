@@ -4,6 +4,14 @@
 
 [English](current-status.md) | [Русский](ru/current-status.md) | [Documentation](README.md)
 
+**22 November 2026 — R1.5 runs saved game nodes in a Bevy schedule at 60 Hz.**
+Core and ARPG use the same single-threaded schedule in saved stage and node
+order. Two Windows runs match the pre-change event log for all ten Crate Garden
+levels and the Small monsters encounter from the checked-in ARPG project.
+The Crate Garden run uses a composition without ARPG, and the `GameHost`
+late-rejection test confirms whole-tick rollback and retry.
+See [R1.5 verification](module-execution.md#r15-verification).
+
 **22 November 2026 — R1.4 stages fixed-tick writes without cloning `GameState`.**
 Systems see earlier writes in schedule order. Late rejection discards the ECS
 journal and retains the accepted state for retry. On the 2,000-entity S3 CPU

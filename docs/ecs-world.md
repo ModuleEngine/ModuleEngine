@@ -25,8 +25,8 @@ for id in world.entities_with(&["example.spin"]) {
 
 `entities_with` intersects component columns, starting with the smallest column,
 and returns stable ID order. An empty requirement selects every entity. Dynamic
-values remain JSON described by registered component schemas. R1.5 covers
-the scheduler.
+values remain JSON described by registered component schemas. The
+[authored schedule](module-execution.md) runs nodes on the staged view of this world.
 
 `component_mut`, `insert_component`, `remove_component`, `transform_mut` and
 `references_mut` edit the tick's view of the canonical world. A native system may stage intermediate

@@ -32,6 +32,8 @@ mod scalar;
 mod scene_assets_verification;
 mod scene_tools;
 mod scene_view_ui;
+#[cfg(test)]
+mod schedule_replay;
 mod settings_verification;
 #[cfg(test)]
 mod source_modules;
