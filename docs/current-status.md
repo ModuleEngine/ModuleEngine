@@ -4,6 +4,13 @@
 
 [English](current-status.md) | [Русский](ru/current-status.md) | [Documentation](README.md)
 
+**22 November 2026 — R1.1 selected hybrid Bevy storage for R1.2.** In
+matched Release runs on the CPU, the S3 tick averaged 0.5363 ms in Core,
+0.1168 ms in Bevy with dynamic JSON, and 0.0154 ms in hybrid Bevy. The
+hybrid achieves 34.82× speedup and passed the spike's stable-ID, JSON,
+deterministic save and rejected-candidate cases. R1.2 is the next task.
+See the [storage decision and reproduction](ecs-storage-decision.md#r11).
+
 **22 November 2026 — R0.6 baseline recorded.** Three scored native S1–S5
 passes on the RTX 4080 SUPER after R0.5 passed repeatability (maximum
 declared spread 2.39 %). S1/S2 passed their frame and memory budgets.

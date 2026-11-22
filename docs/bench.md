@@ -131,6 +131,8 @@ python scripts/bench.py --no-profiling --compare <baseline commit> --scenes S2,S
 1. **Paired session.** Both sides are built in Release from their own
    sources: the baseline in a temporary Git worktree, the candidate from the
    current checkout including uncommitted changes, or from `--candidate <commit>`.
+   Each side has a separate Cargo target directory inside its series build
+   directory. The launcher only accepts the Editor artifact from that side's target.
    After one unscored prewarm pass per side, full passes alternate baseline,
    candidate, baseline, … until each side has five (`--rounds`, at least 3).
    Machine drift then affects both sides equally.
