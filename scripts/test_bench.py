@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -8,6 +9,36 @@ import bench
 
 
 class CargoArtifactTest(unittest.TestCase):
+    def test_compare_builds_each_side_in_its_own_target_and_rejects_foreign_artifacts(self):
+        host = "x86_64-pc-windows-msvc"
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            target_dirs = []
+
+            def cargo(command, *, cwd, env, stdout, stderr):
+                target_dir = Path(command[command.index("--target-dir") + 1])
+                target_dirs.append(target_dir)
+                artifact = target_dir / "release/module-engine-editor.exe"
+                artifact.parent.mkdir(parents=True, exist_ok=True)
+                if not artifact.exists():
+                    artifact.write_bytes(cwd.name.encode("ascii"))
+                event = {"reason": "compiler-artifact", "executable": str(artifact),
+                         "features": ["bench"], "target": {
+                             "name": "module-engine-editor", "kind": ["bin"],
+                             "src_path": str(cwd / "crates/editor/src/main.rs"),
+                         }}
+                stdout.write(json.dumps(event).encode("utf-8"))
+                return subprocess.CompletedProcess(command, 0)
+
+            baseline, candidate = (root / "baseline-build", root / "candidate-build")
+            with patch.object(bench, "ROOT", root), patch.object(bench.subprocess, "run", side_effect=cargo):
+                old, _ = bench.build_side(baseline, root / "old", {}, host)
+                new, _ = bench.build_side(candidate, root / "new", {}, host)
+            self.assertEqual(target_dirs, [baseline / "target", candidate / "target"])
+            self.assertEqual((old.read_bytes(), new.read_bytes()), (b"old", b"new"))
+            with self.assertRaisesRegex(ValueError, "non-native"):
+                bench.built_editor(candidate / "build.jsonl", host, root / "new", baseline / "target")
+
     def test_explicit_native_target_uses_artifact_even_with_stale_implicit_binary(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder).resolve()

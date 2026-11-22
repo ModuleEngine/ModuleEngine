@@ -4,489 +4,719 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
-<title>ModuleEngine — путь к самостоятельной команде</title>
+<title>ModuleEngine — дорожная карта</title>
 <style>
   :root {
     color-scheme: dark;
-    --bg: #141b25; --surface: #1b2533; --ink: #e5ecf5; --muted: #aab7c8;
+    --bg: #141b25; --surface: #1b2533; --surface-2: #212d3d; --ink: #e5ecf5; --muted: #aab7c8; --faint: #7d8ba0;
     --line: #4f6076; --soft: #2a384b; --blue: #86b0ff; --blue-soft: #243a5c;
     --teal: #67c9b7; --teal-soft: #203d3c; --purple: #be9be7; --purple-soft: #352d48;
-    --orange: #dab17a; --orange-soft: #3d352c; --good: #82be99;
-    --shadow: 0 16px 64px #1b2a4624;
+    --orange: #dab17a; --orange-soft: #3d352c; --good: #82be99; --good-soft: #213a2e;
     font-family: "Segoe UI", system-ui, sans-serif;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink); }
-  button, a { -webkit-tap-highlight-color: transparent; }
-  button { font: inherit; color: inherit; cursor: pointer; }
   a { color: var(--blue); text-underline-offset: 3px; }
-  button:focus-visible, a:focus-visible, .map-viewport:focus-visible { outline: 3px solid var(--blue); outline-offset: 4px; }
-  .shell { max-width: 1920px; margin: auto; padding: 30px 36px 24px; }
-  .eyebrow { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; letter-spacing: .12em; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  :focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
+  .shell { max-width: 1760px; margin: auto; padding: 28px 36px 28px; }
+  .eyebrow { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; letter-spacing: .12em; text-transform: uppercase; }
   .brand-mark { width: 12px; height: 12px; border: 3px solid var(--blue); border-radius: 3px; }
-  .heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 28px; margin: 18px 0 22px; }
-  h1 { margin: 0 0 9px; font-size: clamp(27px, 3vw, 42px); line-height: 1.15; font-weight: 650; letter-spacing: -.035em; }
-  .intro { margin: 0; max-width: 860px; font-size: 15px; line-height: 1.6; color: var(--muted); }
-  .current-link { flex-shrink: 0; margin-top: 6px; padding: 10px 15px; border: 1px solid color-mix(in srgb, var(--blue) 25%, var(--line)); border-radius: 24px; background: var(--blue-soft); color: var(--blue); font-size: 14px; font-weight: 600; }
-  .current-link::before { content: ""; display: inline-block; margin-right: 8px; width: 7px; height: 7px; background: currentColor; border-radius: 50%; }
-  .map-shell { background: var(--surface); border: 1px solid var(--line); border-radius: 18px; overflow: hidden; }
-  .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 15px 20px; border-bottom: 1px solid var(--soft); }
-  .toolbar-title { font-size: 14px; font-weight: 600; }
-  .toolbar-hint { margin-left: 12px; font-weight: 400; color: var(--muted); font-size: 13px; }
-  .controls { display: flex; align-items: center; gap: 5px; }
-  .control { padding: 7px 11px; border: 1px solid transparent; border-radius: 7px; background: transparent; font-size: 13px; white-space: nowrap; }
-  .control:hover { background: var(--soft); }
-  .control:disabled { opacity: .45; cursor: default; }
-  .control.zoom { width: 32px; font-size: 20px; line-height: 1; padding: 5px; }
-  .zoom-value { width: 42px; text-align: center; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-  .control.fit { border-color: var(--line); margin-right: 8px; }
-  .map-viewport { width: 100%; overflow: auto; overscroll-behavior-x: contain; }
-  .roadmap { display: block; width: 100%; height: auto; min-width: 1200px; user-select: none; }
-  .roadmap text { fill: var(--ink); font-family: "Segoe UI", system-ui, sans-serif; }
-  .roadmap .section-label { fill: var(--muted); font-size: 23px; letter-spacing: 1.5px; }
-  .roadmap .section-rule { stroke: var(--soft); stroke-width: 2; }
-  .roadmap .divider { stroke: var(--soft); stroke-width: 2; stroke-dasharray: 4 8; }
-  .route { fill: none; stroke: var(--line); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
-  .route.main { stroke: #8a97aa; }
-  .route.g1 { stroke: var(--teal); }
-  .route.g2 { stroke: var(--purple); }
-  .route.later { stroke: var(--orange); }
-  .route.repeat { stroke: var(--orange); stroke-dasharray: 7 9; }
-  .route.feedback { stroke: var(--purple); stroke-width: 3; stroke-dasharray: 6 9; }
-  .join { fill: var(--surface); stroke-width: 4; }
-  .join.g1 { stroke: var(--teal); }
-  .join.g2 { stroke: var(--purple); }
-  .join.later { stroke: var(--orange); }
-  .route-label { fill: var(--muted) !important; font-size: 24px; }
-  .route-label.purple { fill: var(--purple) !important; }
-  .route-label.orange { fill: var(--orange) !important; }
+  .heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 28px; margin: 16px 0 22px; }
+  h1 { margin: 0 0 8px; font-size: clamp(26px, 3vw, 40px); line-height: 1.15; font-weight: 650; letter-spacing: -.03em; }
+  h2 { margin: 0; font-size: 15px; font-weight: 600; }
+  .intro { margin: 0; max-width: 900px; font-size: 15px; line-height: 1.6; color: var(--muted); }
+  .pill { flex-shrink: 0; margin-top: 6px; padding: 10px 16px; border: 1px solid #3b5a8a; border-radius: 24px; background: var(--blue-soft); color: var(--blue); font-size: 14px; font-weight: 600; white-space: nowrap; }
+  .pill::before { content: ""; display: inline-block; margin-right: 8px; width: 8px; height: 8px; background: currentColor; border-radius: 50%; animation: pulse 1.8s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+
+  /* Now strip */
+  .now { display: grid; grid-template-columns: 1fr 1.35fr 1fr; gap: 14px; margin-bottom: 18px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 16px 18px; }
+  .card .label { display: flex; align-items: center; gap: 8px; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+  .card .label i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .card.done .label i { background: var(--good); }
+  .card.cur { border-color: #3b5a8a; background: linear-gradient(180deg, #1f2d44, var(--surface)); }
+  .card.cur .label { color: var(--blue); }
+  .card.cur .label i { background: var(--blue); }
+  .card.next .label i { border: 2px solid var(--blue); }
+  .card ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+  .card li { font-size: 14px; line-height: 1.45; color: var(--ink); }
+  .card li small { display: block; color: var(--muted); font-size: 12.5px; }
+  .card .big { font-size: 20px; font-weight: 650; margin: 0 0 4px; }
+  .card .sub { font-size: 13.5px; color: var(--muted); line-height: 1.5; margin: 0 0 12px; }
+  .r0bar { display: grid; grid-auto-columns: 1fr; grid-auto-flow: column; gap: 5px; }
+  .r0bar span { display: block; height: 30px; border-radius: 6px; background: var(--soft); font-size: 12px; font-weight: 600; color: var(--muted); text-align: center; line-height: 30px; }
+  .r0bar span.d { background: var(--good); color: #10241a; }
+  .r0bar span.c { background: var(--blue-soft); color: var(--blue); box-shadow: inset 0 0 0 2px var(--blue); }
+  .r0cap { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-top: 7px; }
+
+  /* Map */
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 18px; overflow: hidden; margin-bottom: 18px; }
+  .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; padding: 14px 20px; border-bottom: 1px solid var(--soft); }
+  .hint { font-weight: 400; color: var(--muted); font-size: 13px; margin-left: 10px; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .sw { width: 14px; height: 14px; border-radius: 4px; display: inline-block; border: 2px solid; }
+  .sw.d { background: var(--good-soft); border-color: var(--good); }
+  .sw.c { background: var(--blue-soft); border-color: var(--blue); }
+  .sw.n { background: var(--surface-2); border-color: var(--blue); border-style: dashed; }
+  .sw.l { background: var(--surface-2); border-color: var(--line); }
+  .sw.p { background: var(--orange-soft); border-color: var(--orange); border-style: dashed; }
+  .sw.a { background: var(--teal-soft); border-color: var(--teal); border-style: dashed; }
+  .sw.g { background: var(--purple-soft); border-color: var(--purple); border-radius: 50%; }
+  .scroll { overflow-x: auto; overscroll-behavior-x: contain; }
+  svg.map { display: block; width: 100%; min-width: 1180px; height: auto; user-select: none; }
+  svg text { font-family: "Segoe UI", system-ui, sans-serif; fill: var(--ink); }
+  .colhead { fill: var(--faint) !important; font-size: 15px; letter-spacing: 2px; }
+  .colrule { stroke: var(--soft); stroke-width: 2; }
+  .edge { fill: none; stroke: #6c7b91; stroke-width: 3; stroke-linejoin: round; }
+  .edge.hot { stroke: var(--blue); }
+  .edge.gate { stroke: var(--purple); }
+  .edge.ver { stroke: var(--orange); stroke-dasharray: 7 7; }
+  .edge.soft { stroke-dasharray: 5 7; stroke-width: 2.5; }
+  .elabel { fill: var(--muted) !important; font-size: 14px; }
+  .elabel.p { fill: var(--purple) !important; }
   .node { cursor: pointer; outline: none; }
-  .node .hit { fill: transparent; stroke: transparent; stroke-width: 3; }
-  .node:hover .hit, .node:focus-visible .hit { fill: var(--blue-soft); stroke: var(--blue); }
-  .node .dot { fill: var(--surface); stroke: #8a97aa; stroke-width: 4; }
-  .node .version { font-size: 34px; font-weight: 650; letter-spacing: -.7px; }
-  .node .stage-label { font-size: 26px; }
-  .node .halo { fill: none; stroke: transparent; stroke-width: 3; }
-  .node.selected .halo { stroke: var(--blue); }
-  .node.base .dot { fill: var(--good); stroke: var(--good); }
-  .node.base .version { font-size: 30px; }
-  .node.complete .dot { fill: var(--good); stroke: var(--good); }
-  .node.complete .version { fill: var(--good); }
-  .node.next .dot { fill: var(--surface); stroke: var(--blue); }
-  .node.next .version { fill: var(--blue); }
-  .node .current-badge { fill: var(--blue-soft); }
-  .node .current-text { fill: var(--blue); font-size: 22px; font-weight: 650; letter-spacing: 1px; }
-  .node.gate .dot { stroke: var(--ink); stroke-width: 5; }
-  .node.gate .gate-ring { fill: none; stroke: var(--ink); stroke-width: 2; }
-  .node.gate .version { font-size: 42px; }
-  .branch-box { fill: var(--teal-soft); stroke: var(--teal); stroke-width: 2; }
-  .node.g2 .branch-box { fill: var(--purple-soft); stroke: var(--purple); }
-  .node.later .branch-box { fill: var(--orange-soft); stroke: var(--orange); }
-  .node.branch:hover .branch-box, .node.branch:focus-visible .branch-box, .node.branch.selected .branch-box { stroke: var(--blue); stroke-width: 4; }
-  .branch-version { font-size: 24px; fill: var(--muted) !important; }
-  .branch-title { font-size: 31px; font-weight: 600; }
-  .branch-note { font-size: 23px; fill: var(--muted) !important; }
-  .legend { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 28px; padding: 15px 20px; border-top: 1px solid var(--soft); font-size: 12px; color: var(--muted); }
-  .legend-items { display: flex; flex-wrap: wrap; gap: 12px 20px; }
-  .legend-item { display: inline-flex; align-items: center; gap: 8px; }
-  .swatch { width: 25px; border-top: 2px solid var(--line); }
-  .swatch.teal { border-color: var(--teal); }
-  .swatch.purple { border-color: var(--purple); border-top-style: dashed; }
-  .legend-note { color: var(--ink); }
-  .footnotes { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px 28px; margin-top: 16px; font-size: 12px; color: var(--muted); line-height: 1.6; }
-  .source-links { display: flex; flex-wrap: wrap; gap: 16px; }
-  .source-links a { color: var(--muted); }
-  dialog { position: fixed; inset: 0 0 0 auto; width: min(540px, 100%); height: 100dvh; max-height: none; max-width: 100%; margin: 0; padding: 0; border: 0; border-left: 1px solid var(--line); background: var(--surface); color: var(--ink); box-shadow: var(--shadow); overflow-y: auto; }
-  dialog::backdrop { background: #111c3038; }
-  .detail-top { position: sticky; top: 0; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 17px 24px; background: var(--surface); border-bottom: 1px solid var(--soft); z-index: 1; }
-  .detail-tag { color: var(--blue); font-weight: 650; font-size: 14px; }
-  .close { width: 36px; height: 36px; border: 1px solid var(--line); border-radius: 50%; background: var(--surface); font-size: 24px; line-height: 1; }
-  .close:hover { background: var(--soft); }
-  .detail-body { padding: 26px 28px 36px; font-size: 15px; line-height: 1.65; }
-  .detail-body h2 { margin: 0 0 8px; font-size: 28px; line-height: 1.2; letter-spacing: -.02em; }
-  .detail-status { margin: 0 0 21px; font-size: 13px; color: var(--muted); }
-  .detail-body h3 { margin: 23px 0 7px; font-size: 14px; }
-  .detail-body p { margin: 0; overflow-wrap: anywhere; }
-  .detail-body ol { padding-left: 21px; margin: 5px 0; }
-  .detail-body li { padding-left: 4px; margin-bottom: 8px; }
-  .acceptance { margin-top: 24px; padding: 17px 19px; border-left: 3px solid var(--teal); background: var(--teal-soft); border-radius: 0 9px 9px 0; }
-  .acceptance h3 { margin: 0 0 6px; color: var(--teal); }
-  .limits { font-size: 13px; color: var(--muted); }
-  .dependencies { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
-  .dependency { padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--blue); font-size: 13px; }
-  .dependency:hover { background: var(--blue-soft); }
-  .detail-source { display: inline-block; margin-top: 24px; font-size: 13px; }
-  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
-  noscript p { margin: 20px; line-height: 1.6; }
-  @media (max-width: 760px) {
-    .shell { padding: 22px 14px 18px; }
-    .heading { display: block; margin-bottom: 18px; }
-    .current-link { margin-top: 16px; }
-    .intro { font-size: 14px; }
-    .toolbar { flex-wrap: wrap; gap: 9px; padding: 12px; }
-    .toolbar-hint { display: none; }
-    .legend { padding: 12px; }
-    .detail-body { padding: 24px 20px; }
-    .footnotes { margin-inline: 3px; }
+  .node .box { fill: var(--surface-2); stroke: var(--line); stroke-width: 2; }
+  .node .id { font-size: 25px; font-weight: 700; letter-spacing: -.5px; }
+  .node .ttl { font-size: 15.5px; }
+  .node .meta { font-size: 13.5px; fill: var(--muted) !important; }
+  .node .tag { font-size: 12px; font-weight: 700; letter-spacing: 1px; }
+  .node.done .box { fill: var(--good-soft); stroke: var(--good); }
+  .node.done .id, .node.done .tag { fill: var(--good); }
+  .node.cur .box { fill: var(--blue-soft); stroke: var(--blue); stroke-width: 3; }
+  .node.cur .id, .node.cur .tag { fill: var(--blue); }
+  .node.next .box { stroke: var(--blue); stroke-dasharray: 8 6; }
+  .node.next .tag { fill: var(--blue); }
+  .node.later .tag { fill: var(--faint); }
+  .node.paused .box { fill: var(--orange-soft); stroke: var(--orange); stroke-dasharray: 8 6; }
+  .node.paused .id, .node.paused .tag { fill: var(--orange); }
+  .node.ver .box { fill: var(--orange-soft); stroke: #8a7553; }
+  .node.ver .id { fill: var(--orange); }
+  .node.ver .tag { fill: var(--orange); }
+  .node.ai .box { fill: var(--teal-soft); stroke: var(--teal); stroke-dasharray: 8 6; }
+  .node.ai .id, .node.ai .tag { fill: var(--teal); }
+  .edge.ai { stroke: var(--teal); stroke-dasharray: 7 7; }
+  .elabel.t { fill: var(--teal) !important; }
+  .node.gate .box { fill: var(--purple-soft); stroke: var(--purple); }
+  .node.gate .id, .node.gate .tag { fill: var(--purple); }
+  .node .sel { fill: none; stroke: transparent; stroke-width: 3; }
+  .node:hover .sel, .node:focus-visible .sel { stroke: #9fb6d9; }
+  .node.selected .sel { stroke: var(--ink); }
+  .seg { fill: var(--soft); }
+  .seg.d { fill: var(--good); }
+  .seg.c { fill: var(--blue); }
+  .badge { fill: var(--blue); }
+  .badge-t { fill: #10203a !important; font-size: 12.5px; font-weight: 800; letter-spacing: 1.2px; }
+
+  /* Details */
+  .details { display: grid; grid-template-columns: 340px 1fr; gap: 0; }
+  .d-side { padding: 20px 22px; border-right: 1px solid var(--soft); }
+  .d-side .kicker { font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+  .d-side h3 { margin: 6px 0 10px; font-size: 22px; line-height: 1.25; }
+  .d-side p { margin: 0 0 12px; font-size: 14px; line-height: 1.55; color: var(--muted); }
+  .facts { display: grid; gap: 8px; margin: 12px 0 0; }
+  .facts div { display: flex; justify-content: space-between; gap: 10px; font-size: 13.5px; border-top: 1px solid var(--soft); padding-top: 8px; }
+  .facts dt { color: var(--muted); }
+  .facts dd { margin: 0; text-align: right; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+  .chip { border: 1px solid var(--line); background: transparent; border-radius: 12px; padding: 2px 9px; font-size: 12.5px; }
+  .chip:hover { border-color: var(--blue); color: var(--blue); }
+  .d-main { padding: 14px 20px 18px; overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th { text-align: left; font-weight: 600; color: var(--muted); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; padding: 8px 10px; border-bottom: 1px solid var(--soft); }
+  td { padding: 10px; border-bottom: 1px solid var(--soft); vertical-align: top; line-height: 1.45; }
+  td.id { font-weight: 700; white-space: nowrap; }
+  td.eff { white-space: nowrap; color: var(--muted); }
+  td .acc { display: block; color: var(--muted); font-size: 12.5px; margin-top: 3px; }
+  .st { display: inline-block; white-space: nowrap; border-radius: 10px; padding: 2px 9px; font-size: 12px; font-weight: 600; background: var(--soft); color: var(--muted); }
+  .st.d { background: var(--good-soft); color: var(--good); }
+  .st.c { background: var(--blue-soft); color: var(--blue); }
+
+  /* Timing */
+  .timing { padding: 16px 20px 18px; }
+  svg.time { display: block; width: 100%; min-width: 900px; height: auto; }
+  .axis { stroke: var(--soft); stroke-width: 1.5; }
+  .tick { fill: var(--faint) !important; font-size: 13px; }
+  .rowl { font-size: 14px; }
+  .rows { fill: var(--muted) !important; font-size: 12.5px; }
+  .bar-solid { rx: 6; }
+  .mk { stroke-width: 2.5; stroke-dasharray: 4 5; }
+  .mkt { font-size: 13px; font-weight: 600; }
+  .note { font-size: 12.5px; color: var(--muted); margin: 10px 0 0; line-height: 1.5; }
+
+  /* Version strip */
+  .vstrip { display: flex; gap: 0; padding: 18px 20px 20px; overflow-x: auto; }
+  .v { position: relative; flex: 1 0 118px; padding: 0 8px; text-align: center; }
+  .v::before { content: ""; position: absolute; top: 15px; left: 0; right: 0; height: 3px; background: var(--line); }
+  .v:first-child::before { left: 50%; }
+  .v:last-child::before { right: 50%; }
+  .v .dot { position: relative; display: block; width: 18px; height: 18px; margin: 7px auto 10px; border-radius: 50%; background: var(--surface); border: 3px solid #8a97aa; }
+  .v.d .dot { background: var(--good); border-color: var(--good); }
+  .v.p .dot { background: var(--orange-soft); border-color: var(--orange); border-style: dashed; }
+  .v b { display: block; font-size: 17px; }
+  .v.d b { color: var(--good); }
+  .v.p b { color: var(--orange); }
+  .v span { display: block; font-size: 12.5px; color: var(--muted); line-height: 1.4; margin-top: 3px; }
+  .v em { display: block; font-style: normal; font-size: 11.5px; color: var(--orange); margin-top: 4px; }
+
+  footer { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); padding: 4px 2px; }
+  footer nav { display: flex; gap: 16px; flex-wrap: wrap; }
+
+  @media (max-width: 1100px) {
+    .now { grid-template-columns: 1fr; }
+    .details { grid-template-columns: 1fr; }
+    .d-side { border-right: 0; border-bottom: 1px solid var(--soft); }
   }
-  @media (prefers-reduced-motion: no-preference) { .node .hit, .branch-box { transition: fill .15s, stroke .15s; } }
-  @media print {
-    .shell { padding: 10px; max-width: none; }
-    .controls, .current-link, dialog, .toolbar-hint { display: none; }
-    .map-viewport { overflow: visible; }
-    .roadmap { width: 100% !important; min-width: 0; }
+  @media (max-width: 640px) {
+    .shell { padding: 20px 16px; }
+    .heading { flex-direction: column; gap: 10px; }
+    .hint { display: block; margin: 4px 0 0; }
   }
 </style>
 </head>
 <body>
-<main class="shell">
-  <div class="eyebrow"><span class="brand-mark" aria-hidden="true"></span> MODULEENGINE / ДОРОЖНАЯ КАРТА</div>
-  <header class="heading">
+<div class="shell">
+  <div class="eyebrow"><span class="brand-mark"></span>ModuleEngine / дорожная карта</div>
+  <div class="heading">
     <div>
-      <h1>Одна основа. Разные игры.</h1>
-      <p class="intro">Настраивать движок самому, передавать работу команде и сохранять старые игры рабочими.<br>1.0 — самостоятельная команда. 1.3.x — пять законченных игр на общей версии.</p>
+      <h1>Перестройка движка: где мы сейчас</h1>
+      <p class="intro">С 21 ноября 2026 главный приоритет — трек перестройки ядра R0–R10: мир на <code>bevy_ecs</code>, GPU-driven рендер на Vulkan, редактор на Vulkan, физика, звук, анимация и современная графика. Рубеж 0.5 стоит на паузе, пока не приняты R1, R3 и R4.</p>
     </div>
-    <button class="current-link" type="button" id="current-stage">Далее · 0.5 · план</button>
-  </header>
-  <section class="map-shell" aria-label="Дорожная карта продукта">
-    <div class="toolbar">
-      <div class="toolbar-title">Путь продукта → <span class="toolbar-hint">Этапы и зависимости, без календарных дат</span></div>
-      <div class="controls" role="group" aria-label="Масштаб карты">
-        <button class="control fit" type="button" id="fit">Вся карта</button>
-        <button class="control zoom" type="button" id="zoom-out" aria-label="Уменьшить карту">−</button>
-        <output class="zoom-value" id="zoom-value" aria-label="Масштаб">100%</output>
-        <button class="control zoom" type="button" id="zoom-in" aria-label="Увеличить карту">+</button>
-      </div>
+    <div class="pill" id="pill">Сейчас</div>
+  </div>
+
+  <section class="now" aria-label="Текущее положение">
+    <div class="card done">
+      <div class="label"><i></i>Сделано</div>
+      <ul id="now-done"></ul>
     </div>
-    <div class="map-viewport" id="viewport" tabindex="0" role="region" aria-label="Схема. На узком экране прокручивается по горизонтали; выберите этап для подробностей.">
-      <svg class="roadmap" id="roadmap" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2680 940" role="group" aria-labelledby="map-title map-desc">
-        <title id="map-title">От принятой 0.4.2 к запланированной 0.5, 1.0 и портфелю 1.3.x</title>
-        <desc id="map-desc">Слева направо: основа 0.4–0.4.1, принятая владельцем 17 ноября 2026 версия 0.4.2, следующий запланированный состав 0.5 (реализация не начата), изоляция проектов 0.6, расширения 0.7, восстановление среды 0.8, приёмка инструмента 1.0. Снизу параллельно идут проверка G1 на чистой Windows и первый бой G2 0.9a с кампанией 0.9b; обе ветки сходятся с инструментом перед 1.0. Потребности первого боя задают приоритет 0.7. Затем 1.1, 1.2, 1.3 проверяют новые игры G3, G4, G5. Они и повторно проверенные G1/G2 сходятся к отдельной приёмке пяти игр на одной версии 1.3.x. Каждый этап открывает цель, зависимости и проверку.</desc>
-        <defs>
-          <marker id="arrow-main" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0 8 4.5 0 9" fill="none" stroke="#8a97aa" stroke-width="2"/></marker>
-          <marker id="arrow-teal" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto" markerUnits="userSpaceOnUse"><path d="M1 1 10 6 1 11" fill="none" stroke="var(--teal)" stroke-width="2.5"/></marker>
-          <marker id="arrow-purple" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto" markerUnits="userSpaceOnUse"><path d="M1 1 10 6 1 11" fill="none" stroke="var(--purple)" stroke-width="2.5"/></marker>
-          <marker id="arrow-orange" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto" markerUnits="userSpaceOnUse"><path d="M1 1 10 6 1 11" fill="none" stroke="var(--orange)" stroke-width="2.5"/></marker>
-        </defs>
-        <g aria-hidden="true">
-          <text class="section-label" x="64" y="40">ДО 1.0 · ИНСТРУМЕНТ И ПЕРВЫЕ ИГРЫ</text>
-          <path class="section-rule" d="M690 32H1605"/>
-          <text class="section-label" x="1715" y="40">ПОСЛЕ 1.0 · ПРОВЕРКА ШИРОТЫ</text>
-          <path class="section-rule" d="M2270 32H2618"/>
-          <path class="divider" d="M1630 76V903"/>
-          <path class="route main" d="M146 235H350 M390 235H572 M818 235H992 M608 235H782 M1028 235H1212 M1248 235H1473 M1527 235H1762 M1798 235H1982 M2018 235H2202 M2238 235H2473" marker-end="url(#arrow-main)"/>
-          <path class="route g1" d="M130 251V473H478" marker-end="url(#arrow-teal)"/>
-          <path class="route g1" d="M845 473H1435V235"/>
-          <path class="route g2" d="M130 473V725H398" marker-end="url(#arrow-purple)"/>
-          <path class="route g2" d="M770 725H968" marker-end="url(#arrow-purple)"/>
-          <path class="route g2" d="M1350 725H1435V473"/>
-          <circle class="join g1" cx="130" cy="473" r="6"/>
-          <circle class="join g2" cx="1435" cy="473" r="6"/>
-          <circle class="join g1" cx="1435" cy="235" r="6"/>
-          <text class="route-label" x="185" y="350">Параллельно инструментам</text>
-          <text class="route-label" x="800" y="704">принят бой</text>
-          <path class="route feedback" d="M590 648V585H1010V491Q1037 473 1010 455V255" marker-end="url(#arrow-purple)"/>
-          <text class="route-label purple" x="1040" y="579">Потребности боя → 0.7</text>
-          <text class="route-label" x="1040" y="611">не ждать всей 0.9a</text>
-          <text class="route-label" x="1410" y="370" text-anchor="end">Инструмент + передача + G1/G2</text>
-          <path class="route later" d="M1780 253V398 M2000 253V398 M2220 253V398" marker-end="url(#arrow-orange)"/>
-          <path class="route later" d="M1780 546V650H2500V259 M2000 546V650 M2220 546V650"/>
-          <circle class="join later" cx="2000" cy="650" r="6"/>
-          <circle class="join later" cx="2220" cy="650" r="6"/>
-          <text class="route-label orange" x="2040" y="701" text-anchor="middle">G3 + G4 + G5 · закончить и проверить</text>
-          <path class="route repeat" d="M1500 262V870H2500V650"/>
-          <circle class="join later" cx="2500" cy="650" r="6"/>
-          <text class="route-label orange" x="2050" y="839" text-anchor="middle">G1 + G2 · повторная проверка на общем релизе</text>
-          <text class="route-label" x="2468" y="485" text-anchor="end">5 отдельных</text>
-          <text class="route-label" x="2468" y="519" text-anchor="end">поставок</text>
-        </g>
-        <g id="main-nodes"></g>
-        <g id="branch-nodes"></g>
-      </svg>
+    <div class="card cur">
+      <div class="label"><i></i><span id="now-cur-label">Сейчас</span></div>
+      <p class="big" id="now-cur-big"></p>
+      <p class="sub" id="now-cur-sub"></p>
+      <div class="r0bar" id="now-bar"></div>
+      <div class="r0cap"><span id="now-cap-l"></span><span id="now-cap-r"></span></div>
     </div>
-    <noscript><p>Для подробностей этапов включите JavaScript. Полный план и проверки доступны по ссылкам под картой.</p></noscript>
-    <div class="legend">
-      <div class="legend-items">
-        <span class="legend-item"><span class="swatch" aria-hidden="true"></span>Порядок этапов</span>
-        <span class="legend-item"><span class="swatch teal" aria-hidden="true"></span>Параллельная работа и схождение</span>
-        <span class="legend-item"><span class="swatch purple" aria-hidden="true"></span>Обратная связь G2 → 0.7</span>
-      </div>
-      <span class="legend-note">Нажми на этап — цель, зависимости и приёмка</span>
+    <div class="card next">
+      <div class="label"><i></i>Дальше</div>
+      <ul id="now-next"></ul>
     </div>
   </section>
-  <footer class="footnotes">
-    <span>0.4.2 закрыта владельцем 17.11.2026. Далее — 0.5: запланирована, реализация не начата.</span>
-    <nav class="source-links" aria-label="Источники карты">
-      <a href="../docs/ru/product-roadmap.md">Полный план</a>
-      <a href="../docs/ru/product-roadmap-checks.md">Проверки владельца</a>
-      <a href="../docs/ru/release-042-ui-density-verification.md#owner-acceptance-20261117">Принятая 0.4.2</a>
-      <a href="codex://threads/01a1e59e-3496-7ae3-b8d0-89783af21a5c">История 0.4.2 ↗</a>
+
+  <section class="panel" aria-labelledby="map-title">
+    <div class="toolbar">
+      <h2 id="map-title">Фазы и зависимости<span class="hint">Стрелка — «нужно до». Нажми на фазу, чтобы увидеть задачи.</span></h2>
+      <div class="legend">
+        <span><i class="sw d"></i>Готово</span>
+        <span><i class="sw c"></i>Сейчас</span>
+        <span><i class="sw n"></i>Следующее</span>
+        <span><i class="sw l"></i>Позже</span>
+        <span><i class="sw g"></i>Контрольная точка</span>
+        <span><i class="sw a"></i>ИИ-авторинг (план)</span>
+        <span><i class="sw p"></i>Рубеж версий</span>
+      </div>
+    </div>
+    <div class="scroll">
+      <svg class="map" id="map" viewBox="0 0 1740 880" role="group" aria-label="Карта фаз R0–R10 и их зависимостей"></svg>
+    </div>
+  </section>
+
+  <section class="panel details" aria-live="polite" aria-labelledby="d-title">
+    <div class="d-side">
+      <div class="kicker" id="d-kicker"></div>
+      <h3 id="d-title"></h3>
+      <p id="d-goal"></p>
+      <dl class="facts" id="d-facts"></dl>
+    </div>
+    <div class="d-main" id="d-main"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="time-title">
+    <div class="toolbar">
+      <h2 id="time-title">Примерные сроки<span class="hint">Один разработчик на полный день · грубые диапазоны, не обещанные даты</span></h2>
+    </div>
+    <div class="timing">
+      <div class="scroll"><svg class="time" id="time" viewBox="0 0 1660 300" role="img" aria-label="Шкала сроков: основа ядра 16–26 недель, библиотеки и анимация 5–8 недель, современное изображение 23–37 недель, весь трек 44–71 неделя"></svg></div>
+      <p class="note">Сплошная часть полосы — где блок идёт почти наверняка, светлая — разброс оценки. Точка возобновления 0.5 посчитана как R0 + R1 + R2.1 + R3 + R4, если делать их первыми. Оценки заменяются реальным темпом после R0 и ещё раз после R2.</p>
+    </div>
+  </section>
+
+  <section class="panel" aria-labelledby="ver-title">
+    <div class="toolbar">
+      <h2 id="ver-title">Маршрут версий продукта<span class="hint">Трек R не заменяет рубежи, а готовит для них основу</span></h2>
+    </div>
+    <div class="vstrip">
+      <div class="v d"><i class="dot"></i><b>0.4–0.4.1</b><span>Основа и настройки</span></div>
+      <div class="v d"><i class="dot"></i><b>0.4.2</b><span>Кадр и окна · принята 17.11</span></div>
+      <div class="v p"><i class="dot"></i><b>0.5</b><span>Нужный состав</span><em>пауза до R1 + R3 + R4</em></div>
+      <div class="v"><i class="dot"></i><b>0.6</b><span>Изоляция игр A и B</span></div>
+      <div class="v"><i class="dot"></i><b>0.7</b><span>Свои расширения</span></div>
+      <div class="v"><i class="dot"></i><b>0.8</b><span>Восстановить среду</span></div>
+      <div class="v"><i class="dot"></i><b>0.9a / 0.9b</b><span>Бой и кампания G2</span><em>нужны R6 + R7</em></div>
+      <div class="v"><i class="dot"></i><b>1.0</b><span>Самостоятельная команда</span></div>
+      <div class="v"><i class="dot"></i><b>1.1–1.2</b><span>2D, пространство и движение</span></div>
+      <div class="v"><i class="dot"></i><b>1.3</b><span>Реалистичный рендер</span><em>основа — R5</em></div>
+      <div class="v"><i class="dot"></i><b>1.3.x</b><span>Пять игр на одной основе</span></div>
+    </div>
+  </section>
+
+  <footer>
+    <span id="stamp"></span>
+    <nav>
+      <a href="https://github.com/myjname/ModuleEngine/blob/main/docs/ru/product-roadmap.md#rebuild">Трек перестройки</a>
+      <a href="https://github.com/myjname/ModuleEngine/blob/main/docs/ru/product-roadmap.md">Полный план</a>
+      <a href="https://github.com/myjname/ModuleEngine/blob/main/docs/ru/current-status.md">Текущее состояние</a>
+      <a href="https://github.com/myjname/ModuleEngine/blob/main/docs/ru/product-roadmap-checks.md">Проверки владельца</a>
     </nav>
   </footer>
-</main>
-<dialog id="stage-dialog" aria-labelledby="detail-title" aria-describedby="detail-status">
-  <div class="detail-top"><span class="detail-tag" id="detail-version"></span><button class="close" id="close-detail" type="button" aria-label="Закрыть подробности">×</button></div>
-  <article class="detail-body">
-    <h2 id="detail-title"></h2><p class="detail-status" id="detail-status"></p>
-    <p id="detail-goal"></p>
-    <h3 id="detail-entry-title">Что нужно до начала</h3><p id="detail-entry"></p><div class="dependencies" id="detail-deps"></div>
-    <h3 id="detail-steps-title">Простая проверка владельца</h3><ol id="detail-steps"></ol>
-    <section class="acceptance"><h3>Условие приёмки</h3><p id="detail-acceptance"></p></section>
-    <h3>Границы результата</h3><p class="limits" id="detail-limits"></p>
-    <a class="detail-source" id="detail-source" href="../docs/ru/product-roadmap.md">Открыть раздел согласованного плана ↗</a>
-  </article>
-</dialog>
+</div>
+
 <script>
 (() => {
   'use strict';
-  const stages = {
-    base: {
-      version: '0.4 → 0.4.1', title: 'Рабочая основа и настройки', status: 'Реализовано в описанном объёме · полная независимая пользовательская приёмка открыта',
-      goal: 'Один настраиваемый ModuleEngine, несколько игровых проектов, нативный редактор и отдельный Player. G1 Crate Garden закончена на текущем Windows-ПК. В 0.4.1 автор меняет разрешённое сглаживание и привязывает своё меню, а Player хранит предпочтение отдельно для конкретной игры.',
-      entry: 'Существующая поставка 0.4.1, учебный проект и отдельный профиль игрока. Используем работающие Overview, сцены, Hierarchy и раскладки.', deps: [],
-      steps: ['Измени сглаживание в Project Settings, сохрани и открой проект снова; проверь экспортированный Player.', 'В меню игры выбери Off, полностью закрой и снова запусти Player. Отдельно проверь чистый профиль.'],
-      acceptance: 'Авторский выбор доходит до Player. Off сохраняется после выхода, чистый профиль начинает с FXAA; пакет и авторские файлы не меняются. Владелец сообщил, что настройки работают и понятны.',
-      limits: 'Это не приёмка чёткости изображения, docking, чистой машины или самостоятельной работы незнакомых авторов. Two Arenas — технический пример, не законченная G2.', anchor: 'baseline'
-    },
-    '0.4.2': {
-      version: '0.4.2', title: 'Чёткий кадр и перенос панелей', status: 'Закрыта владельцем · 17 ноября 2026',
-      goal: 'Рубеж изображения и окон завершён общей ручной приёмкой владельца. Поставка включает физическое разрешение, перенос панелей, исправление дрожания и уплотнение оболочки. Scene при клиенте 1580×940/100% выросла с 762×715 до 787×803 пикселей.',
-      entryTitle: 'Принятая поставка',
-      entry: 'Принятая поставка final03: outputs/ui-density-042/final03/launch-full.cmd и launch-team.cmd. SHA-256 Editor: a6667310134e3d90b9562f2fe5309556d0d5bdcbc160eba034809ed2305296e4. История реализации остаётся в рабочем чате 0.4.2.', deps: ['base'],
-      stepsTitle: 'Решение владельца',
-      steps: ['17 ноября 2026: «Я проверил, всё работает и выглядит нормально пока. Давай закроем 0.4.2.»', 'Ранее владелец лично подтвердил исчезновение дрожания. Подробный посценарный протокол не записан.'],
-      acceptance: 'Общая ручная приёмка завершает продуктовый рубеж 0.4.2. Следующий шаг — отдельная постановка согласованного объёма 0.5; его реализация ещё не начата.',
-      limits: 'Mixed-DPI/Linux, финальные автоматические снимки и другие не выполненные автоматические сценарии не объявлены пройденными. Прежние открытые строки отчётов относятся к их историческим снимкам; отдельная диагностика временного шлейфа не подменяется сообщением об исчезновении resize-jitter.', anchor: 'image-and-docking'
-    },
-    '0.5': {
-      version: '0.5', title: 'Собрать нужный состав', status: 'Следующий запланированный рубеж · реализация не начата',
-      goal: 'Добавлять, убирать или заменять возможности, заранее понимая потребителей, последствия и права. Отключённая функция не должна продолжать работать в Player.',
-      entry: '0.4.2 закрыта владельцем 17 ноября 2026; маршрут 0.4.1 сохраняется. Перед реализацией отдельно поставить согласованный объём 0.5. Пересекающееся с 2A проверить по существующим доказательствам.', deps: ['0.4.2'],
-      steps: ['В Full попробуй убрать звук, пока его запрашивает событие; прочитай причину отказа.', 'Убери потребителя, затем звук; экспортируй минимальный Player. Верни прежний состав.'],
-      acceptance: 'До изменения видно, кто зависит от сервиса. Без запроса аудио нет активного сервиса и рабочих аудионастроек; состав native-пакета подтверждён. Возврат восстанавливает прежние значения.',
-      limits: 'Скрытая кнопка не доказывает отсутствие модуля. Team не получает права Full, неактивные авторские данные не стираются. Карта зависимостей сначала только для чтения.', anchor: 'compose'
-    },
-    '0.6': {
-      version: '0.6', title: 'Менять B, сохраняя A', status: 'План · изоляция конфигураций проектов',
-      goal: 'Зафиксировать рабочую основу двух независимых игр. Изменение конфигурации B не обновляет A; A остаётся заново собираемой.',
-      entry: 'Совместимые проверенные варианты 0.4.1/0.5, точные привязки и раздельные папки проектов и сохранений.', deps: ['0.5'],
-      steps: ['В B замени подготовленный вариант рендера и сохрани.', 'Заново собери A из её проекта и запусти. Верни исходный вариант B.'],
-      acceptance: 'Только B меняет вид. A сохраняет авторские данные и поведение, открывается и пересобирается без обновления. Отказ и Cancel сохраняют последнюю рабочую точку.',
-      limits: 'Старый готовый EXE и копия одного JSON недостаточны. Здесь ещё не доказано сосуществование разных нативных реализаций — это отдельная проверка 0.8.', anchor: 'pin'
-    },
-    '0.7': {
-      version: '0.7', title: 'Добавить собственную функцию', status: 'План · приоритет задают первые потребности G2',
-      goal: 'Внешний разработчик добавляет HLSL-проход, контролируемую замену освещения и небольшой нативный Rust-модуль. Автор игры получает разрешённый параметр в Team.',
-      entry: 'Понятный выбор из 0.5 и закреплённый исходный вариант 0.6. Начинать можно на первом потребителе G2, пока продолжается работа над восстановлением среды.', deps: ['0.5', '0.6'],
-      steps: ['Попроси другого разработчика добавить проход и модуль по документации; настрой предоставленный параметр в Team.', 'Проверь видимую разницу в Player. Собери другую игру без нового модуля. Подай несовместимую связь и верни рабочий вариант.'],
-      acceptance: 'Разработчик действительно расширяет движок, автор действительно настраивает готовое. Модуль нужен только выбранной игре. Несовместимая связь отклоняется понятно и сохраняет рабочую конфигурацию.',
-      limits: 'Обратная связь от первых работ над боем — не требование ждать приёмки всей 0.9a. Один постэффект не доказывает замену освещения. Произвольный стабильный бинарный ABI не обещан.', anchor: 'extend'
-    },
-    '0.8': {
-      version: '0.8', title: 'Передать рабочую среду', status: 'План · восстановление и две нативные версии',
-      goal: 'Другой разработчик восстанавливает Full по одной точке входа и закреплённым материалам. A собирается на нативной v1, только B явно обновляется до v2 и возвращается назад.',
-      entry: 'Паспорта A/B из 0.6, проверенное расширение и границы сборки из 0.7. Доступны полные комплекты обеих версий, ассеты и требуемые инструменты.', deps: ['0.6', '0.7'],
-      steps: ['Передай коллеге описание и материалы на чистой заявленной машине. Получи изменённый проект, Team и Player.', 'Обнови только B с v1 до v2, затем верни v1. Заново собери A на v1.', 'На тестовых данных убери обязательный архив или подай неверный hash; проверь конкретную причину отказа и сохранность рабочего варианта.'],
-      acceptance: 'Коллега продолжает разработку без автора движка. Нет скрытого перехода на новое. A остаётся на v1, B откатывается с совместимыми данными и зависимостями; частичная публикация исключена.',
-      limits: 'Хеш не заменяет доступные байты старых пакетов. Восстановление среды автора и запуск Player игроком — разные проверки. Windows первая; аппаратный Linux проверяется отдельно.', anchor: 'restore'
-    },
-    G1: {
-      version: 'G1 · Crate Garden', title: 'Доставить игру на чистую Windows', status: 'Параллельная проверка · можно начинать сейчас',
-      goal: 'Подтвердить самостоятельную поставку уже законченной G1: игрок получает игру без checkout, редактора и компиляторов.',
-      entry: 'Существующая G1 на текущей основе. Нужен чистый Windows-ПК или согласованный образ с заявленными драйверами; ждать инструментов 0.5–0.8 не требуется.', deps: ['base'],
-      steps: ['На машине автора измени стену, сохрани, снова открой проект и экспортируй новую игру.', 'На чистой машине запусти Player, увидь новую стену, пройди уровень со звуком, выйди и продолжи.'],
-      acceptance: 'Игрок видит правку, слышит звук, проходит уровень и сохраняет прогресс. Для игры не понадобились инструменты автора. Поставка привязана к проверенной сборке.',
-      limits: 'Запуск перенесённого пакета на той же машине уже проверялся, но не доказывает чистую среду. Если её нет, результат именно «не проверялось». Бюджеты G1 проверяются отдельно.', anchor: 'start'
-    },
-    '0.9a': {
-      version: '0.9a · G2', title: 'Первый законченный бой', status: 'Параллельная ветка · основа G2',
-      goal: 'Собрать реальный бой с персонажем, анимацией, противником, препятствием и контрольной точкой. Потребности этого эпизода определяют, какие расширения нужны первыми.',
-      entry: 'Для начала достаточно сквозного маршрута 0.4.1 и нужной навигации; 0.4.2 уже закрыта. Не ждать всех инструментов 0.5–0.8; использовать их по готовности.', deps: ['base'],
-      steps: ['Сыграй бой, уклонись и достигни контрольной точки.', 'На паузе измени переход анимации и условие врага, увидь эффект, отмени.', 'Запусти тот же общий бой во втором составе без опыта и лута.'],
-      acceptance: 'Настоящий скелет и графы работают до Player. Правка меняет поведение, отмена возвращает его. Второй состав не требует XP/лут-систем; нужная переиспользуемая основа принята перед кампанией.',
-      limits: 'Это ещё не кампания. Для ошибок сохраняется принятая версия; несовместимое состояние требует явного сброса. Нагрузку с 20 врагами измеряют рано, но отдельно от простого прохождения.', anchor: 'combat'
-    },
-    '0.9b': {
-      version: '0.9b · G2', title: 'Законченная кампания', status: 'План · после принятой основы 0.9a',
-      goal: 'Три локации, три типа врагов, босс, опыт, улучшения и предметы. Цель — законченная G2 с самостоятельной доставкой, а не расширенный технический пример.',
-      entry: 'Принятая основа первого боя и необходимых общих контрактов 0.9a.', deps: ['0.9a'],
-      steps: ['Пройди три локации, смени предмет, погибни, выйди и продолжи.', 'Победи босса. Измени параметр врага в редакторе и проверь экспортированную игру.'],
-      acceptance: 'Опыт и вещи сохраняются; от контрольной точки заново идёт незавершённый бой. Есть конец и повтор. Подтверждены реальное прохождение, чистая поставка и отдельно 1080p/20 активных врагов со средним и p95 ≤16,667 мс.',
-      limits: 'Цель длительности — 20–30 минут активной игры, проверяемая прохождением. Старые замеры Two Arenas не подтверждают G2. Сохраняются 27 решений ТЗ; multiplayer и новые классы не добавляются по умолчанию.', anchor: 'campaign'
-    },
-    '1.0': {
-      version: '1.0', title: 'Самостоятельная команда', status: 'Продуктовый рубеж · приёмка инструмента',
-      goal: 'Команда самостоятельно работает на честно заявленных конфигурациях: настраивает, расширяет, восстанавливает среду и передаёт готовую игру.',
-      entry: 'Сходятся понятная конфигурация и расширения 0.4.1–0.7, передача среды и две версии 0.8, принятые G1 и G2.', deps: ['0.7', '0.8', 'G1', '0.9b'],
-      steps: ['Дай владельцу и четырём новым разработчикам задачи их ролей и обычную справку, без подсказок по кнопкам.', 'Попроси изменить игру B, сохранить пересобираемую A, справиться с ошибкой и вернуть исходный вариант.', 'Проверь восстановление среды автором расширения и самостоятельный Player отдельным получателем.'],
-      acceptance: 'На общих U1–U3 самостоятельно проходят владелец и ≥3 из 4 новых разработчиков. Обязательные операции проходят 2 из 2 авторов игр и 2 из 2 авторов расширений. Изоляция A/B, сохранность и права Team проходят во всех попытках; обязательные чистые поставки и бюджеты подтверждены.',
-      limits: 'Устная подсказка считается помощью. Повторяющуюся трудность исправляют даже при формальном пороге. 1.0 не требует пяти игр и не доказывает все жанры или незаявленные платформы.', anchor: 'author'
-    },
-    '1.1': {
-      version: '1.1 · G3', title: 'Пиксельная 2D-игра', status: 'После 1.0 · проверка широты',
-      goal: 'Проверить полноценный 2D-профиль: спрайты, атласы, слои, камера, столкновения и удобная авторская правка. Предложенный кандидат — короткий платформер.',
-      entry: 'Первая полезная версия инструмента 1.0. До производства согласованы ракурс, правила пиксельного масштаба, разрешения и бюджеты.', deps: ['1.0'],
-      steps: ['Вставь платформу и замени спрайт в уровне.', 'Запусти экспортированный Player, пройди участок и возродись у контрольной точки; проверь выбранные разрешения.'],
-      acceptance: 'Правка попала в нужный участок, прыжок и контрольная точка работают. Пиксельный масштаб предсказуем; есть законченный цикл и чистая поставка, лишние ARPG/3D-поля не обязательны.',
-      limits: 'Жанр может измениться по решению владельца, но проверка настоящего 2D и pixel art сохраняется. Плоская механика в 3D-диораме не заменяет этот результат.', anchor: 'pixel'
-    },
-    '1.2': {
-      version: '1.2 · G4', title: 'Пространственная игра', status: 'После 1.0 · проверка высоты, ориентации и движения',
-      goal: 'Проверить игру, где высота, ориентация, камера и столкновения действительно важны. Предложенный кандидат — короткий пространственный курс.',
-      entry: 'После полезного инструмента 1.0, в предложенном порядке — за 1.1. Объём курса и собственные бюджеты фиксируются заранее.', deps: ['1.1'],
-      steps: ['В редакторе подними ворота; экспортируй новую игру.', 'Попробуй прежний пролёт, затем новый по высоте. Закончи курс и повтори.'],
-      acceptance: 'Старый путь не засчитан, новый засчитан. Пространственная камера, столкновения, результат и повтор работают в поставленном Player.',
-      limits: 'Картинка объёмного мира сама по себе не доказывает пространственную механику. Проверяется экспортированная игра; собственные целевые бюджеты задаются до производства.', anchor: 'flight'
-    },
-    '1.3': {
-      version: '1.3 · G5', title: 'Материалы, свет и законченная игра', status: 'После 1.0 · реалистичный профиль',
-      goal: 'Проверить игровое окружение с PBR, согласованным светом и контролируемой стоимостью. Кандидат G5 — компактное исследование от первого лица.',
-      entry: 'В предложенном порядке — после пространственной проверки. Заранее согласованы визуальный эталон, контент, железо, кадровый и ресурсный бюджеты.', deps: ['1.2'],
-      steps: ['Измени шероховатость предмета под заданным светом.', 'Увидь разницу в движении и пройди игровую сцену до конца. Открой старый 2D-проект.'],
-      acceptance: 'Материал выглядит согласно эталону; сцена имеет игровой цикл и укладывается в собственный бюджет. Старая G3 не требует материалов и ресурсов G5.',
-      limits: 'Красивый неподвижный кадр не заменяет игру и замер стоимости. 1.3 ещё не принимает весь портфель автоматически.', anchor: 'real'
-    },
-    '1.3.x': {
-      version: '1.3.x', title: 'Пять игр на одной основе', status: 'Отдельный рубеж · приёмка портфеля после G5',
-      goal: 'Доказать применимость общей основы пятью существенно разными законченными играми с индивидуальными конфигурациями.',
-      entry: 'Все G1–G5 функционально закончены. Общая версия явно принимается только в проверочных копиях; прежние рабочие проекты и пакеты остаются доступны.', deps: ['1.0', '1.1', '1.2', '1.3'],
-      steps: ['Открой матрицу пяти игр: версия основы, состав, авторская правка, игровой цикл, сохранения, целевая среда и бюджет.', 'Проверь две разные игры вручную; для каждой из пяти найди полное подтверждение и отдельную поставку.'],
-      acceptance: 'Минимум пять принятых игр на одном заявленном выпуске: 2D, 2.5D, пространственное 3D, pixel art, стилизация, реализм и mobile-style на ПК. У каждой собственный законченный цикл, чистая поставка и проверка; G1/G2 заново подтверждены на общей версии.',
-      limits: 'Пять шаблонов или пять несопоставимых форков не засчитываются. Старые проекты не обновляются автоматически. G6–G10 нужны только для нового содержательного вопроса; mobile-style пока не означает порт на телефон.', anchor: 'portfolio'
-    }
+  // @model-begin (scripts/test_roadmap_map.py runs this part in Node)
+  const D = 'Готово', C = 'В работе', N = 'Впереди';
+  const phases = {
+    v042: { id: '0.4.2', kicker: 'Рубеж версий · закрыт', title: 'Чёткий кадр и перенос панелей', cls: 'done', tag: 'ПРИНЯТА 17.11',
+      ttl: 'Кадр и окна', meta: 'точка отсчёта трека',
+      goal: 'Последний принятый рубеж. Его поставка final03 — рабочая основа, от которой стартует перестройка. Исправления ошибок 0.4.2 по-прежнему разрешены.',
+      effort: '—', deps: [], unlocks: ['R0'], tasks: [] },
+    R0: { id: 'R0', kicker: 'Фаза · сейчас', title: 'Заморозка и исходные замеры', cls: 'cur', tag: 'СЕЙЧАС',
+      ttl: 'Заморозка и замеры', meta: '1–2 нед', goal: 'Остановить побочную работу, собрать воспроизводимые бенчмарки и записать исходные цифры. Они станут эталоном «не хуже» для всех следующих фаз.',
+      effort: '1–2 недели', deps: ['v042'], unlocks: ['R1', 'R2'], tasks: [
+        ['R0.1', 'Пауза брифа 0.5 и новой работы над UI', 'Датированное решение на обоих языках', 'выполнено', D],
+        ['R0.2', 'Сцены S3–S5 и запускатель bench с JSON в outputs/bench', 'Три прогона подряд расходятся не больше чем на 5 %', 'PR 13', D],
+        ['R0.3', 'GPU-таймеры на каждый проход и CPU-интервалы в оверлее редактора', 'Время GPU по проходам видно в редакторе и в JSON', 'PR 14', D],
+        ['R0.4', 'Записать целевое железо и уровни A/B/C, выбрать минимальный GPU', 'Таблица уровней в docs/', 'PR 15', D],
+        ['R0.5', 'Гигиена: понятные пропуски без GPU/DXC, слои валидации, ошибки thiserror', 'verify проходит без DXC/GPU; S1 без ошибок валидации', '2–3 д', C],
+        ['R0.6', 'Отчёт об исходных замерах S1–S5', 'Эталон для всех критериев «не хуже»', '1 д', N]] },
+    R1: { id: 'R1', kicker: 'Фаза · следующая', title: 'Хранение мира на bevy_ecs', cls: 'next', tag: 'СЛЕДОМ',
+      ttl: 'Мир на bevy_ecs', meta: '3–5 нед', goal: 'Заменить самописное хранение мира и полное клонирование состояния каждый тик на bevy_ecs. Авторские данные и стабильные ID сохраняются без изменений.',
+      effort: '3–5 недель', deps: ['R0'], unlocks: ['R4', 'R6', 'R7', 'g05', 'aiA'], tasks: [
+        ['R1.1', 'Прототип bevy_ecs против EcsWorld на S3, решение о хранении', 'Тик S3 быстрее хотя бы в 5 раз', '4–5 д', N],
+        ['R1.2', 'Стабильные ID через сцены, сохранения, экспорт и IPC', 'Сохранение → загрузка → сохранение побайтно одинаково', '2 д', N],
+        ['R1.3', 'Единый реестр компонентов и кодеки JSON', 'Тесты туда-обратно на всех сценах дают тот же JSON', '4–5 д', N],
+        ['R1.4', 'Транзакция тика без полной копии мира', 'Пустой тик стоит O(изменённого)', '3–4 д', N],
+        ['R1.5', 'Системы в Schedule с детерминированным порядком 60 Гц', 'Повтор ввода даёт те же журналы событий', '4–5 д', N],
+        ['R1.6', 'Извлечение для рендера по изменениям', 'Дельта содержит только движущиеся объекты', '2–3 д', N],
+        ['R1.7', 'Перевести все игры и хосты на новое хранение', 'Никто не обращается к старым картам столбцов', '4–6 д', N],
+        ['R1.8', 'Приёмка и удаление старого хранения', 'Тик S3 ≤2 мс; пороги S1/S2; ревью', '2 д', N]] },
+    R2: { id: 'R2', kicker: 'Фаза · следующая', title: 'Основа GPU-driven рендера', cls: 'next', tag: 'СЛЕДОМ',
+      ttl: 'GPU-driven рендер', meta: '8–12 нед · самая длинная', goal: 'Перестроить рендер под Vulkan: аллокатор, bindless-текстуры с mipmaps, сцена в памяти GPU, отсечение на GPU, render graph v2 и собственный swapchain игры.',
+      effort: '8–12 недель', deps: ['R0'], depNote: 'R2.3 также ждёт R1.6 из R1', unlocks: ['R3', 'R5', 'R7', 'R8'], tasks: [
+        ['R2.1', 'Слой устройства: аллокатор, 2–3 кадра в полёте, staging', 'Ноль ошибок валидации; CPU не ждёт свежий кадр', '2 н', N],
+        ['R2.2', 'Bindless-ресурсы, текстуры с mipmaps вместо атласа', '1 000 текстур без предела 8192 px', '1,5–2 н', N],
+        ['R2.3', 'Сцена в памяти GPU: пул мешей, инстансы, материалы', 'Кадр CPU на S3 ≤1 мс', '1,5–2 н', N],
+        ['R2.4', 'Отсечение на GPU и непрямое рисование, Hi-Z', '100 000 инстансов при 60 FPS 1080p', '1,5–2 н', N],
+        ['R2.5', 'Render graph v2: барьеры, алиасинг памяти, async compute', 'Старые графы грузятся; память −30 %', '2–3 н', N],
+        ['R2.6', 'Собственный swapchain игры для Player', 'p95 кадра не хуже R0.6', '1 н', N],
+        ['R2.7', 'Паритет, переключение и удаление старого рендера', 'Пороги S1/S2 на новом рендере; ревью', '0,5–1 н', N]] },
+    R3: { id: 'R3', kicker: 'Фаза · ядро и редактор', title: 'Редактор на Vulkan без моста DX12', cls: 'later', tag: 'ПОСЛЕ R2.1',
+      ttl: 'Редактор на Vulkan', meta: '3–5 нед', goal: 'Убрать eframe/WGPU и мост через DX12: редактор, окна сцены и игра работают на одном VkDevice. Панели egui не меняются.',
+      effort: '3–5 недель', deps: ['R2'], depNote: 'нужна только R2.1, дальше параллельно с R2', unlocks: ['g05'], tasks: [
+        ['R3.1', 'Прототип painter для egui на устройстве R2', '≥60 FPS, чёткий текст на 100 % и 150 % DPI', '4–5 д', N],
+        ['R3.2', 'Заменить оболочку eframe в Editor и Player', 'Все панели, окна и докинг работают', '1–1,5 н', N],
+        ['R3.3', 'Окна Scene и Game на том же устройстве, удалить мост', 'Задержка меньше; Linux тем же путём', '4–5 д', N],
+        ['R3.4', 'Перенести снимки UI и бенчмарк редактора', 'Работают как раньше', '2–3 д', N],
+        ['R3.5', 'Приёмка', 'Владелец не замечает разницы, кроме скорости; ревью', '1–2 д', N]] },
+    R4: { id: 'R4', kicker: 'Фаза · ядро и редактор', title: 'Отвязать редактор от конкретных игр', cls: 'later', tag: 'ПОСЛЕ R1',
+      ttl: 'Редактор без игр', meta: '1–2 нед', goal: 'Игры подключаются к редактору через интерфейс расширения, а не прямыми зависимостями. Новая игра больше не требует правки редактора.',
+      effort: '1–2 недели', deps: ['R1'], unlocks: ['g05', 'aiA'], tasks: [
+        ['R4.1', 'Интерфейс расширения редактора для игр', 'Описан в архитектуре', '2 д', N],
+        ['R4.2', 'Вынести игровой код из game_ui.rs в крейты игр', 'Редактор собирается без игровых крейтов', '4–6 д', N],
+        ['R4.3', 'Состав решает, какие игры входят в сборку', 'Тестовая игра без правок crates/editor', '1–2 д', N]] },
+    R5: { id: 'R5', kicker: 'Фаза · современное изображение', title: 'PBR-материалы, свет и тени', cls: 'later', tag: 'ПОСЛЕ R2',
+      ttl: 'PBR, свет и тени', meta: '6–9 нед', goal: 'Материалы glTF, кластерный свет, каскадные тени, освещение окружения, HDR и TAA. Техническая основа рубежа 1.3.',
+      effort: '6–9 недель', deps: ['R2'], unlocks: ['useful', 'R9', 'R10'], tasks: [
+        ['R5.1', 'Материалы glTF metallic-roughness и сжатие BC7/BC5', 'Образцы Khronos со всеми картами', '1,5 н', N],
+        ['R5.2', 'Свет как компоненты ECS с кластерным отсечением', '256 источников ≤2 мс', '1,5 н', N],
+        ['R5.3', 'Каскадные тени и атлас теней', 'Без швов и acne; ≤2,5 мс', '1,5–2 н', N],
+        ['R5.4', 'Освещение окружения и небо', 'Совпадает с Khronos Sample Viewer', '1 н', N],
+        ['R5.5', 'HDR, экспозиция, bloom, тональные кривые, TAA', 'Стабильное изображение в движении', '1,5 н', N],
+        ['R5.6', 'Правка света и материалов вживую в редакторе', 'Личная проверка 1.3 владельцем', '0,5–1 н', N]] },
+    R6: { id: 'R6', kicker: 'Фаза · библиотеки', title: 'Физика rapier3d, звук kira, математика glam', cls: 'later', tag: 'ПОСЛЕ R1',
+      ttl: 'Физика, звук, glam', meta: '2–3 нед', goal: 'Готовые библиотеки вместо самописного: твёрдые тела и запросы к миру, звук OGG/MP3 на Windows и Linux, общая математика и нативные диалоги.',
+      effort: '2–3 недели', deps: ['R1'], depNote: 'может идти параллельно с R2–R5', unlocks: ['g09', 'aiA'], tasks: [
+        ['R6.1', 'rapier3d: тела, коллайдеры, суставы, детерминизм', 'Повтор ввода идентичен; физика ≤1 мс', '1–1,5 н', N],
+        ['R6.2', 'Перевести общую физику игр на rapier3d', 'G1 и ARPG играются как раньше', '2–3 д', N],
+        ['R6.3', 'kira вместо микшера WinMM, звук на Linux', 'Задержка ≤50 мс на обеих ОС', '4–5 д', N],
+        ['R6.4', 'glam вместо самописной математики, rfd для диалогов', 'Самописного матричного кода нет', '2–3 д', N]] },
+    R7: { id: 'R7', kicker: 'Фаза · анимация', title: 'Скелетная анимация', cls: 'later', tag: 'ПОСЛЕ R1 + R2.3',
+      ttl: 'Скелетная анимация', meta: '3–5 нед', goal: 'Скины и клипы glTF, GPU-скиннинг, смешивание и граф состояний. Первый потребитель — герой G2.',
+      effort: '3–5 недель', deps: ['R1', 'R2'], depNote: 'из R2 нужна R2.3', unlocks: ['g09', 'R9'], tasks: [
+        ['R7.1', 'Импорт скинов, суставов и клипов glTF', 'CesiumMan и Fox проигрываются', '1 н', N],
+        ['R7.2', 'GPU-скиннинг в compute', '50 персонажей в бюджете кадра', '1 н', N],
+        ['R7.3', 'Рантайм: смешивание, слои, root motion, события', 'Тайминги атак G2 из событий анимации', '1 н', N],
+        ['R7.4', 'Граф состояний с визуальным редактором', 'Правка на паузе видна после продолжения', '1–1,5 н', N],
+        ['R7.5', 'Экипировка меняет облик героя', 'Смена оружия видна на герое', '2–3 д', N]] },
+    R8: { id: 'R8', kicker: 'Фаза · современное изображение', title: 'Mesh shaders и виртуальная геометрия', cls: 'later', tag: 'ПОСЛЕ R2.4',
+      ttl: 'Mesh shaders', meta: '4–6 нед · уровень B', goal: 'Meshlets, task/mesh shaders и непрерывный LOD для плотной геометрии, с запасным путём для GPU без mesh shaders.',
+      effort: '4–6 недель', deps: ['R2'], depNote: 'из R2 нужна R2.4', unlocks: [], tasks: [
+        ['R8.1', 'Прототип meshlets и mesh shaders на S5', 'Решение с цифрами', '4–5 д', N],
+        ['R8.2', 'Meshlets при импорте', 'Данные кэшируются', '3–4 д', N],
+        ['R8.3', 'Конвейер task/mesh с отсечением', 'S5 при 60 FPS 1080p', '1,5 н', N],
+        ['R8.4', 'Непрерывный LOD без «перескоков»', 'Память и время в бюджете', '1,5–2 н', N],
+        ['R8.5', 'Запасной путь уровня A', 'То же изображение в пределах допуска', '3–4 д', N]] },
+    R9: { id: 'R9', kicker: 'Фаза · современное изображение', title: 'Гибридная трассировка лучей', cls: 'later', tag: 'ПОСЛЕ R5',
+      ttl: 'Трассировка лучей', meta: '10–16 нед · уровень C', goal: 'Трассированные тени, AO, отражения и динамическое GI поверх растеризатора. У каждого эффекта есть растровый запасной путь.',
+      effort: '10–16 недель', deps: ['R5', 'R7'], depNote: 'от R7 — только refit для скинов', unlocks: [], tasks: [
+        ['R9.1', 'Структуры ускорения BLAS/TLAS', 'TLAS ≤0,5 мс на S3', '2 н', N],
+        ['R9.2', 'Трассированные мягкие тени', '≤2 мс; запас — R5.3', '1,5 н', N],
+        ['R9.3', 'Трассированное AO', '≤1 мс; запас — SSAO', '1 н', N],
+        ['R9.4', 'Гибридные отражения с шумоподавлением', '≤3 мс, стабильно в движении', '2–3 н', N],
+        ['R9.5', 'Динамическое GI на пробах (класс DDGI)', 'Реакция на свет за 1 с; ≤2 мс', '2–3 н', N],
+        ['R9.6', 'Эталонный path tracing в редакторе', 'Сравнение рядом с гибридом', '1–1,5 н', N],
+        ['R9.7', 'Пресеты качества и запасные пути', 'G1 запускается на GPU уровня A', '0,5–1 н', N]] },
+    R10: { id: 'R10', kicker: 'Фаза · по потребителю', title: 'Другие современные функции', cls: 'later', tag: 'ПОСЛЕ R5',
+      ttl: 'FSR/DLSS, HDR, частицы', meta: '3–6 нед', goal: 'Апскейлинг, HDR-вывод, частицы на GPU, VRS и потоковая подгрузка. Каждый пункт стартует только когда есть конкретный потребитель.',
+      effort: '3–6 недель', deps: ['R5'], unlocks: [], tasks: [
+        ['R10.1', 'Апскейлинг FSR, DLSS как плагин', 'Выигрыш кадра ≥30 %', '1–2 н', N],
+        ['R10.2', 'Вывод HDR на дисплей', 'SDR не изменился', '3–4 д', N],
+        ['R10.3', 'Частицы на GPU', '100 000 частиц ≤1 мс', '1 н', N],
+        ['R10.4', 'Variable-rate shading', 'Выигрыш ≥10 % или функцию убирают', '3–4 д', N],
+        ['R10.5', 'Потоковая подгрузка с бюджетом VRAM', 'S5 без подвисаний', '1–2 н', N]] },
+    aiA: { id: 'AI-A', kicker: 'ИИ-авторинг · план, не скоро', title: 'Прототип: игра по запросам через внешнего агента', cls: 'ai', tag: 'ПОСЛЕ R1+R4+R6',
+      ttl: 'Прототип ИИ-агента', meta: '≈1 нед · PR 16', goal: 'Внешний агент правит JSON сцены и custom_sources и запускает --check, без изменений в движке и редакторе. Пять эталонных запросов, записанные метрики, затем решение: продолжать, менять или бросить.',
+      effort: '≈1 неделя, не входит в оценки трека R', deps: ['R1', 'R4', 'R6'], depNote: 'журнал изменений и StableId из R1, интерфейс расширений R4, физика R6', unlocks: ['aiB'], tasks: [] },
+    aiB: { id: 'AI-B', kicker: 'ИИ-авторинг · план, не скоро', title: 'Панель запросов в редакторе', cls: 'ai', tag: 'ЕСЛИ AI-A «GO»',
+      ttl: 'Запросы прямо в редакторе', meta: '2–3 нед · PR 16', goal: 'Панель запросов как расширение редактора из R4, правка сцены вживую без Stop через журнал R1 и одна запись Undo на каждый набор изменений.',
+      effort: '2–3 недели, не входит в оценки трека R', deps: ['aiA'], depNote: 'только если AI-A дала решение «продолжать»', unlocks: [], tasks: [] },
+    g05: { id: 'R1+R3+R4', kicker: 'Контрольная точка', title: 'Снять паузу с 0.5 и UI', cls: 'gate', tag: 'ТОЧКА',
+      ttl: 'Снять паузу 0.5 и UI', meta: '≈10–16 нед от старта', goal: 'Когда приняты R1, R3 и R4, хранение мира, оболочка редактора и граница редактора с играми уже новые. Тогда бриф 0.5 и работа над UI возобновляются.',
+      effort: '≈10–16 недель, если R0, R1, R2.1, R3 и R4 делать первыми', deps: ['R1', 'R3', 'R4'], shownVia: { R1: 'R4' }, depNote: 'на схеме R1 показана через R4', unlocks: ['v05'], tasks: [] },
+    useful: { id: 'R2+R5', kicker: 'Контрольная точка', title: 'Первая полезная точка', cls: 'gate', tag: 'ТОЧКА',
+      ttl: 'Первая полезная точка', meta: '≈4,5–7 мес', goal: 'GPU-driven рендер с PBR и тенями: первый момент, когда новое изображение видно в играх. Примерно через 4,5–7 месяцев (R0, R1, R2 и R5).',
+      effort: '≈4,5–7 месяцев', deps: ['R5'], unlocks: ['v13'], tasks: [] },
+    v05: { id: '0.5', kicker: 'Рубеж версий · на паузе', title: 'Нужный состав', cls: 'paused', tag: 'НА ПАУЗЕ',
+      ttl: 'Нужный состав', meta: 'реализация не начата', goal: 'Добавить, убрать или заменить возможность, понимая последствия. Бриф сохранён, работа возобновится после контрольной точки R1 + R3 + R4.',
+      effort: '—', deps: ['g05'], unlocks: [], tasks: [] },
+    g09: { id: '0.9a', kicker: 'Рубеж версий', title: 'Первый бой G2', cls: 'ver', tag: 'ВЕРСИИ',
+      ttl: 'Первый бой G2', meta: 'нужны R6 и R7', goal: 'Физика, звук и скелетная анимация из R6–R7 должны быть готовы до того, как они понадобятся бою G2 и его решениям.',
+      effort: '—', deps: ['R6', 'R7'], unlocks: [], tasks: [] },
+    v13: { id: '1.3', kicker: 'Рубеж версий', title: 'Реалистичный рендер', cls: 'ver', tag: 'ВЕРСИИ',
+      ttl: 'Реалистичный рендер', meta: 'основа — R5', goal: 'R5 — техническая основа рубежа 1.3: материалы, свет и тени. Трассировка лучей остаётся необязательным уровнем железа.',
+      effort: '—', deps: ['useful'], unlocks: [], tasks: [] }
   };
-  const main = [
-    ['base',130,'0.4–0.4.1',['Основа','и настройки'],'base'],
-    ['0.4.2',370,'0.4.2',['Кадр и окна','Принято 17.11'],'complete'],
-    ['0.5',590,'0.5',['Нужный','состав'],'next'],
-    ['0.6',800,'0.6',['Изоляция','игр A и B'],''],
-    ['0.7',1010,'0.7',['Свои','расширения'],''],
-    ['0.8',1230,'0.8',['Восстановить','среду'],''],
-    ['1.0',1500,'1.0',['Самостоятельная','команда'],'gate'],
-    ['1.1',1780,'1.1',['2D','и спрайты'],''],
-    ['1.2',2000,'1.2',['Пространство','и движение'],''],
-    ['1.3',2220,'1.3',['Реалистичный','рендер'],''],
-    ['1.3.x',2500,'1.3.x',['Пять игр','на одной основе'],'gate']
-  ];
-  const branches = [
-    ['G1',480,400,365,146,'g1','G1 · проверить сейчас',['Чистая Windows'],'звук · прогресс · правка уровня'],
-    ['0.9a',400,650,370,150,'g2','0.9a · G2',['Первый бой'],'графы · анимация · 2-й состав'],
-    ['0.9b',970,650,380,180,'g2','0.9b · G2',['Кампания из','трёх локаций'],'босс · прогресс · предметы'],
-    ['1.1',1680,400,200,146,'later','G3',['Пиксельная','2D-игра'],''],
-    ['1.2',1900,400,200,146,'later','G4',['3D-курс','и полёт'],''],
-    ['1.3',2120,400,200,146,'later','G5',['Материалы','и свет'],'']
-  ];
-  const ns = 'http://www.w3.org/2000/svg';
-  const svg = document.getElementById('roadmap');
-  const viewport = document.getElementById('viewport');
-  const dialog = document.getElementById('stage-dialog');
-  let selected = '0.5';
-  let zoom = 1;
-  let opener = null;
-  function el(tag, attrs, text) {
-    const node = document.createElementNS(ns, tag);
-    for (const [key,value] of Object.entries(attrs || {})) node.setAttribute(key, value);
-    if (text !== undefined) node.textContent = text;
-    return node;
-  }
-  function setupNode(id, kind) {
-    const group = el('g', {class:'node '+kind, tabindex:'0', role:'button', 'data-stage':id, 'aria-label':stages[id].version+' · '+stages[id].title, 'aria-haspopup':'dialog', 'aria-controls':'stage-dialog', 'aria-pressed':'false'});
-    group.addEventListener('click', () => showStage(id, group));
-    group.addEventListener('keydown', event => {
-      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); showStage(id, group); }
-      if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
-        event.preventDefault();
-        const nodes = Array.from(svg.querySelectorAll('.node'));
-        const index = nodes.indexOf(group), delta = event.key === 'ArrowRight' ? 1 : -1;
-        nodes[(index+delta+nodes.length)%nodes.length].focus();
-      }
+
+  // ---- Statuses ----
+  // scripts/roadmap_map.py replaces the placeholder below with task statuses parsed from
+  // docs/product-roadmap.md (last table column: Done / In progress / effort = not started).
+  // Texts above stay hand-written; only statuses, the "now" strip and node colours are derived.
+  const SRC = {"source":"docs/product-roadmap.md","commit":"3cc2193","generated":"22.11.2026 00:57 UTC","phases":[{"id":"R0","title":"Заморозка и исходные замеры · 1–2 недели · без зависимостей","tasks":[{"id":"R0.1","state":"done","effort":"Done","text":"Владелец приостановил бриф 0.5 и новую работу над UI; записано в текущем состоянии и решениях","acceptance":"Датированное решение на обоих языках"},{"id":"R0.2","state":"done","effort":"Done","text":"S3–S5 — воспроизводимые фикстуры (S4 на закреплённой Sponza от Khronos), а scripts/bench.py пишет JSON-результаты в outputs/bench/<date>/; см","acceptance":"Три прогона подряд расходятся не более чем на 5 % по средним значениям"},{"id":"R0.3","state":"done","effort":"Done","text":"Добавлены GPU timestamp queries на каждый проход render graph и CPU-интервалы для тика, извлечения, записи команд и отправки","acceptance":"Тайминги кадра доступны в Game редактора и JSON бенчмарков"},{"id":"R0.4","state":"done","effort":"Done","text":"Аппаратные уровни и данные устройств","acceptance":"Таблица уровней и полный дамп Vulkan записаны в docs/"},{"id":"R0.5","state":"done","effort":"Done","text":"Предварительная гигиена: тесты, которым нужны GPU и DXC, при их отсутствии пропускаются с понятным сообщением","acceptance":"Verify проходит на машине без DXC/GPU с явными пропусками"},{"id":"R0.6","state":"done","effort":"Done","text":"Отчёт об исходных замерах S1–S5 на main после R0.5 (22 ноября 2026)","acceptance":"Отчёт служит эталоном для последующих сравнений этих метрик по критерию «не хуже»"}]},{"id":"R1","title":"Хранение мира на bevy_ecs · 3–5 недель · после R0","tasks":[{"id":"R1.1","state":"done","effort":"Done","text":"Выбран гибридный Bevy с рефлексией нативных значений, кодеками без потерь и JSON-столбцами для данных схем","acceptance":"Тик S3 у гибрида быстрее в 34,82 раза при пороге ≥5"},{"id":"R1.2","state":"todo","effort":"2 д","text":"Следующая задача — стабильные ID для гибридного хранилища","acceptance":"Существующие тесты ID проходят"},{"id":"R1.3","state":"todo","effort":"4–5 д","text":"Реестр компонентов и кодеки: нативные компоненты реализуют Reflect; компоненты схемы сохраняют точные JSON-ключи, null и неизвестные данные","acceptance":"Тесты туда-обратно на каждой сцене из examples/ и проектах G1/G2 дают идентичный JSON"},{"id":"R1.4","state":"todo","effort":"3–4 д","text":"Транзакция без полной копии: системы пишут через буферы команд и журналы изменений","acceptance":"Упавшая система оставляет мир неизменным (тест)"},{"id":"R1.5","state":"todo","effort":"4–5 д","text":"Планирование: перенести engine-core/src/systems.rs и системы ARPG в Schedule из bevy_ecs с явным детерминированным порядком при фиксированных 60 Гц","acceptance":"Повтор записанного ввода на уровнях G1 и в бою ARPG даёт одинаковые журналы событий до и после"},{"id":"R1.6","state":"todo","effort":"2–3 д","text":"Извлечение по изменениям: извлечение для рендера читает Changed<…> и выдаёт дельты (создано, сдвинуто, удалено, материал изменён) вместо полного Scen…","acceptance":"На S3 с 1 000 движущихся объектов дельта содержит только их"},{"id":"R1.7","state":"todo","effort":"4–6 д","text":"Перевести потребителей: game-host/game_worker, типизированные команды runtime-script, project-g1, project-puzzle, gameplay-arpg, example-two-arenas","acceptance":"Тесты всех crate проходят"},{"id":"R1.8","state":"todo","effort":"2 д","text":"Приёмка и удаление старого хранения","acceptance":"P95 тика S2 не хуже R0.6"}]},{"id":"R2","title":"Основа GPU-driven рендера · 8–12 недель · после R0; R2.3 также после R1.6","tasks":[{"id":"R2.1","state":"todo","effort":"2 н","text":"Слой устройства: определение уровня железа, аллокатор памяти (gpu-allocator) вместо отдельного выделения на каждый ресурс, 2–3 кадра в полёте с comma…","acceptance":"Ноль ошибок валидации на S1–S3"},{"id":"R2.2","state":"todo","effort":"1,5–2 н","text":"Bindless-ресурсы: один глобальный набор дескрипторов с descriptor indexing (массив текстур, сэмплеры, storage-буферы) или buffer device address","acceptance":"1 000 уникальных текстур без предела 8192 px"},{"id":"R2.3","state":"todo","effort":"1,5–2 н","text":"Сцена в памяти GPU: один пул мешей (общие буферы вершин и индексов), каждый меш загружается один раз","acceptance":"Объём загрузки за кадр пропорционален числу изменённых объектов"},{"id":"R2.4","state":"todo","effort":"1,5–2 н","text":"Отсечение на GPU и непрямое рисование: frustum culling в compute, vkCmdDrawIndexedIndirectCount, затем двухфазное Hi-Z occlusion culling","acceptance":"Число draw calls на проход не растёт с числом объектов"},{"id":"R2.5","state":"todo","effort":"2–3 н","text":"Render graph v2: автоматические барьеры на synchronization2, совмещение памяти временных ресурсов, очередь async compute","acceptance":"Существующие тесты графа и пользовательских проходов проходят"},{"id":"R2.6","state":"todo","effort":"1 н","text":"Собственный swapchain игры для Player: режимы показа, темп кадров, изменение размера, подготовка к выводу HDR","acceptance":"Player показывает S1/S2 прямо через swapchain"},{"id":"R2.7","state":"todo","effort":"0,5–1 н","text":"Паритет и переключение: старый рендер за флагом функции, пока S1/S2 не пройдут, затем удаление","acceptance":"Пороги S1/S2 проходят на новом рендере"}]},{"id":"R3","title":"Редактор на Vulkan без моста DX12 · 3–5 недель · после R2.1; может идти параллельно с R2.2–R2.7","tasks":[{"id":"R3.1","state":"todo","effort":"4–5 д","text":"Прототип: у eframe нет бэкенда Vulkan","acceptance":"Решение записано"},{"id":"R3.2","state":"todo","effort":"1–1,5 н","text":"Заменить оболочку eframe в Editor и UI Player: окно, ввод, буфер обмена, IME, DPI, курсор и отдельные нативные окна из native_windows.rs","acceptance":"Открывается каждая существующая панель"},{"id":"R3.3","state":"todo","effort":"4–5 д","text":"Окна Scene и Game читают выходные изображения render graph на том же устройстве","acceptance":"Задержка на кадр меньше, чем сейчас"},{"id":"R3.4","state":"todo","effort":"2–3 д","text":"Перенести проверочные хуки, зависящие от eframe (__screenshot, ui_capture.rs, бенчмарк редактора)","acceptance":"Снимки UI и бенчмарк редактора работают как раньше"},{"id":"R3.5","state":"todo","effort":"1–2 д","text":"Приёмка","acceptance":"Время от открытия до первого кадра не хуже R0.6 (парную проверку времени до первого кадра ещё предстоит сделать: ни --compare, ни отчёт R0.6 его не и…"}]},{"id":"R4","title":"Отвязать редактор от конкретных игр · 1–2 недели · после R1","tasks":[{"id":"R4.1","state":"todo","effort":"2 д","text":"Определить интерфейс расширения редактора: игра регистрирует свои панели, инспекторы, проверочные сценарии и хуки Play","acceptance":"Интерфейс описан в архитектуре"},{"id":"R4.2","state":"todo","effort":"4–6 д","text":"Вынести игровой код из game_ui.rs и связанных файлов редактора в функции ui крейтов gameplay-arpg, project-g1 и project-puzzle","acceptance":"Crate редактора собирается без единого игрового crate в зависимостях"},{"id":"R4.3","state":"todo","effort":"1–2 д","text":"Состав определяет, какие игры подключаются в сборку редактора","acceptance":"Добавление тестовой игры не требует изменений в crates/editor"}]},{"id":"R5","title":"Физически корректные материалы, свет и тени · 6–9 недель · после R2","tasks":[{"id":"R5.1","state":"todo","effort":"1,5 н","text":"Материалы glTF metallic-roughness: base color, normal, metallic-roughness, occlusion, emissive, alpha mask/blend","acceptance":"Образцы Khronos (DamagedHelmet, FlightHelmet) импортируются со всеми картами"},{"id":"R5.2","state":"todo","effort":"1,5 н","text":"Источники света как компоненты ECS (направленный, точечный, прожектор, позднее площадной) с кластерным отсечением света в compute","acceptance":"S4 с 256 точечными источниками: освещение ≤2 мс при 1080p на эталонном GPU R0.4"},{"id":"R5.3","state":"todo","effort":"1,5–2 н","text":"Тени: каскадные карты теней для солнца (4 каскада, PCF и при желании PCSS), атлас теней для точечных источников и прожекторов, кэширование статичных…","acceptance":"На S4 нет видимых швов каскадов и shadow acne"},{"id":"R5.4","state":"todo","effort":"1 н","text":"Освещение по окружению и небо: кубическая карта окружения, предфильтрованный specular, irradiance в сферических гармониках, BRDF LUT, физическая моде…","acceptance":"Образцы совпадают с Khronos glTF Sample Viewer в пределах согласованного допуска"},{"id":"R5.5","state":"todo","effort":"1,5 н","text":"HDR-конвейер: экспозиция физической камеры и автоэкспозиция, bloom, выбор тональной кривой (ACES/AgX), векторы движения и TAA","acceptance":"Стабильное изображение без «ползущих» краёв в движении на S4"},{"id":"R5.6","state":"todo","effort":"0,5–1 н","text":"Работа в редакторе: правка света и материалов вживую, сфера предпросмотра материала, оверлей из R0.3 показывает стоимость проходов","acceptance":"Владелец меняет шероховатость одного предмета и видит это в Editor и Player (личная проверка 1.3)"}]},{"id":"R6","title":"Физика на rapier3d, звук на kira, общая математика · 2–3 недели · после R1; может идти параллельно с R2–R5","tasks":[{"id":"R6.1","state":"todo","effort":"1–1,5 н","text":"Rapier3d: компоненты твёрдых тел, коллайдеров и суставов","acceptance":"Повтор записанного ввода остаётся идентичным"},{"id":"R6.2","state":"todo","effort":"2–3 д","text":"Перевести на rapier3d игровой код столкновений там, где это общая физическая задача","acceptance":"Уровни G1 и бой ARPG играются как раньше"},{"id":"R6.3","state":"todo","effort":"4–5 д","text":"Kira заменяет микшер на WinMM: OGG/MP3/FLAC/WAV, шины, громкость и плавные переходы, пространственный звук; вывод на Linux","acceptance":"Те же привязки звучат на Windows и Linux"},{"id":"R6.4","state":"todo","effort":"2–3 д","text":"Glam для математики вместо самописных матричных функций (transform_point и подобных)","acceptance":"Самописного матричного кода вне кодеков не осталось"}]},{"id":"R7","title":"Скелетная анимация · 3–5 недель · после R2.3 и R1; первый потребитель — герой G2","tasks":[{"id":"R7.1","state":"todo","effort":"1 н","text":"Импорт скинов, суставов и анимационных клипов glTF (сейчас импортёр их отклоняет)","acceptance":"Образцы Khronos со скинами (CesiumMan, Fox) импортируются и проигрываются"},{"id":"R7.2","state":"todo","effort":"1 н","text":"GPU-скиннинг в compute с записью в пул мешей, чтобы отсечение, тени и позднее обновление структур трассировки видели позу после скиннинга","acceptance":"50 персонажей со скинами на S2 в пределах бюджета кадра"},{"id":"R7.3","state":"todo","effort":"1 н","text":"Рантайм анимации: выборка клипов, смешивание, аддитивные слои, root motion, события на кадрах","acceptance":"Тайминги атаки и уклонения из решений G2 №24–25 управляются анимационными событиями"},{"id":"R7.4","state":"todo","effort":"1–1,5 н","text":"Граф состояний анимации с визуальным редактором и текстовым файлом, применяемый во время паузы Play (решения G2 №22 и №26)","acceptance":"Владелец меняет переход на паузе и видит его после продолжения"},{"id":"R7.5","state":"todo","effort":"2–3 д","text":"Смена экипировки меняет облик героя (решение G2 №14) через меши, прикреплённые к суставам","acceptance":"Смена оружия или брони меняет отрисованного героя"}]},{"id":"R8","title":"Mesh shaders и виртуализированная геометрия · 4–6 недель · после R2.4; уровень B с запасным путём уровня A","tasks":[{"id":"R8.1","state":"todo","effort":"4–5 д","text":"Прототип: построение meshlets через meshopt и путь task/mesh shader на S5","acceptance":"Решение с цифрами: путь mesh shaders против непрямого пути из R2.4"},{"id":"R8.2","state":"todo","effort":"3–4 д","text":"Meshlets при импорте: кластеризация, границы и конусы нормалей сохраняются в ассете","acceptance":"Данные meshlets кэшируются"},{"id":"R8.3","state":"todo","effort":"1,5 н","text":"Конвейер task/mesh shader с отсечением meshlets по frustum, конусу и Hi-Z","acceptance":"S5 при 60 FPS и 1080p на эталонном GPU R0.4 с путём уровня B"},{"id":"R8.4","state":"todo","effort":"1,5–2 н","text":"Непрерывный LOD: цепочка упрощённых LOD (meshopt simplify) или иерархия meshlets с выбором по экранной ошибке, без заметного «перескока»","acceptance":"Память и время GPU на S5 в согласованном бюджете"},{"id":"R8.5","state":"todo","effort":"3–4 д","text":"Запасной путь: те же данные meshlets рисуются через отсечение в compute и непрямое рисование на уровне A","acceptance":"На уровне A изображение то же в пределах допуска"}]},{"id":"R9","title":"Гибридная трассировка лучей · 10–16 недель · после R5 (TAA, PBR); обновление структур для скинов после R7; уровень C с растровым запасным путём","tasks":[{"id":"R9.1","state":"todo","effort":"2 н","text":"Структуры ускорения: BLAS на каждый меш со сжатием, TLAS пересобирается каждый кадр из буфера инстансов на GPU, refit BLAS для мешей со скинами, бюдж…","acceptance":"Сборка TLAS ≤0,5 мс для S3"},{"id":"R9.2","state":"todo","effort":"1,5 н","text":"Трассированные тени через ray query в compute, мягкие тени по размеру источника или солнца, временное шумоподавление","acceptance":"S4: солнце и 16 источников с тенями ≤2 мс"},{"id":"R9.3","state":"todo","effort":"1 н","text":"Трассированное ambient occlusion как вариант рядом с SSAO","acceptance":"Видимое улучшение в зонах контакта"},{"id":"R9.4","state":"todo","effort":"2–3 н","text":"Гибридные отражения: отражения в экранном пространстве с трассировкой для того, что за экраном, и шероховатых поверхностей","acceptance":"Зеркальные и глянцевые отражения стабильны в движении"},{"id":"R9.5","state":"todo","effort":"2–3 н","text":"Динамическое глобальное освещение на трассируемых пробах irradiance (класс DDGI) с правкой расстановки проб в редакторе","acceptance":"Отражённый свет реагирует на сдвиг источника за 1 с"},{"id":"R9.6","state":"todo","effort":"1–1,5 н","text":"Эталонный режим path tracing в редакторе: прогрессивное накопление с теми же материалами для проверки PBR и гибридного результата","acceptance":"Эталонный и гибридный кадры можно сравнить рядом в редакторе"},{"id":"R9.7","state":"todo","effort":"0,5–1 н","text":"Пресеты качества и правила возможностей: у каждого эффекта трассировки есть растровый запасной путь, пресеты Low/Medium/High/RT, а пакет без трассиро…","acceptance":"Пакет G1 запускается на GPU уровня A"}]},{"id":"R10","title":"Другие современные функции · 3–6 недель · каждый пункт начинается только с названным потребителем","tasks":[{"id":"R10.1","state":"todo","effort":"1–2 н","text":"Временной апскейлинг: AMD FSR (открытый код) через FFI поверх входов TAA из R5.5","acceptance":"Рендер в 67 % разрешения с качеством, сравнимым с родным TAA"},{"id":"R10.2","state":"todo","effort":"3–4 д","text":"Вывод HDR на дисплей (scRGB/HDR10) с отдельным путём SDR","acceptance":"Корректный вывод на HDR-мониторе"},{"id":"R10.3","state":"todo","effort":"1 н","text":"Частицы на GPU в compute с сортировкой и освещением","acceptance":"100 000 частиц ≤1 мс"},{"id":"R10.4","state":"todo","effort":"3–4 д","text":"Variable-rate shading там, где GPU его поддерживает","acceptance":"Выигрыш ≥10 % на S4 без видимых артефактов, иначе функцию убирают"},{"id":"R10.5","state":"todo","effort":"1–2 н","text":"Потоковая подгрузка текстур и мешей с бюджетом резидентности","acceptance":"S5 работает в фиксированном бюджете VRAM без подвисаний"}]}]};
+  // Optional longer wording for the "Сейчас" card, keyed by task id.
+  const NOTES = {
+    'R0.5': { short: 'гигиена и диагностика', about: 'Тесты без GPU и DXC пропускаются с понятным сообщением, в debug-сборках включены слои валидации Vulkan и отладочные имена, в render-vulkan типизированные ошибки thiserror вместо String. Готово, когда verify проходит на машине без DXC/GPU, а debug-прогон S1 идёт без ошибок валидации.' }
+  };
+  // Extra lines for the "Дальше" card, shown while the named phase is not started.
+  const NEXT_EXTRA = [['aiA', 'AI-A / AI-B — сборка игры запросами', 'План, не скоро: только после R1, R4 и R6']];
+
+  const keyOf = {};
+  Object.keys(phases).forEach(k => { keyOf[phases[k].id] = k; });
+  const order = [];
+  if (SRC) {
+    const ST = { done: D, cur: C, todo: N };
+    SRC.phases.forEach(ph => {
+      const k = keyOf[ph.id];
+      if (!k) return;
+      order.push(k);
+      const p = phases[k], old = {};
+      p.tasks.forEach(t => { old[t[0]] = t; });
+      p.tasks = ph.tasks.map(t => {
+        const o = old[t.id];
+        const note = t.state === 'done' ? (o && o[4] === D ? o[3] : 'выполнено') : (o && o[4] !== D ? o[3] : t.effort);
+        return [t.id, o ? o[1] : t.text, o ? o[2] : t.acceptance, note, ST[t.state]];
+      });
     });
-    return group;
   }
-  for (const [id,x,version,labels,kind] of main) {
-    const group = setupNode(id, kind);
-    group.append(el('rect',{class:'hit',x:x-102,y:73,width:204,height:210,rx:15}));
-    if (id === '0.5') {
-      group.append(el('rect',{class:'current-badge',x:x-79,y:50,width:158,height:34,rx:17}));
-      group.append(el('text',{class:'current-text',x,y:74,'text-anchor':'middle'},'ДАЛЕЕ'));
-    }
-    group.append(el('text',{class:'version',x,y:123,'text-anchor':'middle'},version));
-    labels.forEach((label,index) => group.append(el('text',{class:'stage-label',x,y:166+index*38,'text-anchor':'middle'},label)));
-    group.append(el('circle',{class:'halo',cx:x,cy:235,r:kind==='gate'?34:28}));
-    group.append(el('circle',{class:'dot',cx:x,cy:235,r:kind==='gate'?23:kind==='next'?17:14}));
-    if (kind === 'gate') group.append(el('circle',{class:'gate-ring',cx:x,cy:235,r:15}));
-    document.getElementById('main-nodes').append(group);
-  }
-  for (const [id,x,y,width,height,kind,version,labels,note] of branches) {
-    const group = setupNode(id, 'branch '+kind);
-    group.append(el('rect',{class:'branch-box',x,y,width,height,rx:16}));
-    group.append(el('text',{class:'branch-version',x:x+22,y:y+34},version));
-    labels.forEach((label,index) => group.append(el('text',{class:'branch-title',x:x+22,y:y+77+index*44,style:width<250?'font-size:27px':''},label)));
-    if (note) group.append(el('text',{class:'branch-note',x:x+22,y:y+height-20},note));
-    document.getElementById('branch-nodes').append(group);
-  }
-  function markSelected(id) {
-    selected = id;
-    for (const node of svg.querySelectorAll('.node')) {
-      const active = node.dataset.stage === id;
-      node.classList.toggle('selected', active);
-      node.setAttribute('aria-pressed', String(active));
-    }
-  }
-  function showStage(id, trigger) {
-    const stage = stages[id];
-    if (!stage) return;
-    if (!dialog.open) opener = trigger || document.activeElement;
-    markSelected(id);
-    for (const field of ['version','title','status','goal','entry','acceptance','limits']) document.getElementById('detail-'+field).textContent = stage[field];
-    document.getElementById('detail-entry-title').textContent = stage.entryTitle || 'Что нужно до начала';
-    document.getElementById('detail-steps-title').textContent = stage.stepsTitle || 'Простая проверка владельца';
-    const steps = document.getElementById('detail-steps');
-    steps.replaceChildren(...stage.steps.map(step => { const li = document.createElement('li'); li.textContent = step; return li; }));
-    const deps = document.getElementById('detail-deps');
-    deps.replaceChildren(...stage.deps.map(key => {
-      const button = document.createElement('button'); button.type = 'button'; button.className = 'dependency';
-      button.textContent = stages[key].version; button.setAttribute('aria-label','Подробнее: '+stages[key].title);
-      button.addEventListener('click', () => { showStage(key); document.getElementById('close-detail').focus(); });
-      return button;
-    }));
-    document.getElementById('detail-source').href = '../docs/ru/product-roadmap.md#'+stage.anchor;
-    if (!dialog.open) dialog.showModal();
-    dialog.scrollTop = 0;
-    try { localStorage.setItem('moduleengine-roadmap-version', id); } catch (_) { /* The map also works without storage. */ }
-  }
-  document.getElementById('close-detail').addEventListener('click', () => dialog.close());
-  dialog.addEventListener('click', event => {
-    const rect = dialog.getBoundingClientRect();
-    if (event.target === dialog && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) dialog.close();
+  Object.keys(phases).forEach(k => {
+    const p = phases[k];
+    if (!p.tasks.length || order.includes(k)) return;
+    if (SRC) { p.tasks = []; p.missing = true; } // phase removed from docs/product-roadmap.md
+    else order.push(k);
   });
-  dialog.addEventListener('close', () => {
-    if (opener && opener.isConnected) opener.focus({preventScroll:true});
+
+  const STATE_CLS = ['done', 'cur', 'next', 'later'];
+  const memo = {};
+  const stateOf = k => {
+    if (k in memo) return memo[k];
+    const p = phases[k];
+    let s;
+    if (!p.tasks.length) {
+      s = p.cls === 'done' ? 'done' : (p.cls === 'gate' && p.deps.length && p.deps.every(x => stateOf(x) === 'done')) ? 'done' : null;
+    } else {
+      const n = p.tasks.length, d = p.tasks.filter(t => t[4] === D).length;
+      if (d === n) s = 'done';
+      else if (d || p.tasks.some(t => t[4] === C)) s = 'cur';
+      else s = p.deps.every(x => ['done', 'cur'].includes(stateOf(x))) ? 'next' : 'later';
+    }
+    return (memo[k] = s);
+  };
+  const TAG = { done: 'ГОТОВО', cur: 'СЕЙЧАС', next: 'СЛЕДОМ' };
+  const WORD = { done: 'готово', cur: 'сейчас', next: 'следующая', later: 'позже' };
+  Object.keys(phases).forEach(k => {
+    const p = phases[k], s = stateOf(k);
+    if (p.missing) {
+      p.cls = 'later'; p.tag = 'НЕТ В ПЛАНЕ'; p.meta = 'нет в docs/product-roadmap.md';
+      p.kicker = `${p.kicker.split(' · ')[0]} · нет в плане`;
+      return;
+    }
+    if (!p.tasks.length) {
+      if (p.cls === 'gate' && s === 'done') { p.cls = 'done'; p.tag = 'ПРОЙДЕНА'; p.kicker = 'Контрольная точка · пройдена'; }
+      return;
+    }
+    const [prefix, suffix] = p.kicker.split(' · ');
+    if (s === 'later') {
+      if (!STATE_CLS.includes(p.cls)) return; // e.g. AI phases keep their own colour until they start
+      p.cls = 'later';
+      if (Object.values(TAG).includes(p.tag)) p.tag = 'ПОЗЖЕ';
+      if (Object.values(WORD).includes(suffix)) p.kicker = `${prefix} · ${WORD.later}`;
+      return;
+    }
+    p.cls = s;
+    p.tag = TAG[s];
+    p.kicker = `${prefix} · ${WORD[s]}`;
   });
-  document.getElementById('current-stage').addEventListener('click', event => showStage('0.5', event.currentTarget));
-  function setZoom(next, fit) {
-    const oldWidth = svg.getBoundingClientRect().width;
-    const center = (viewport.scrollLeft+viewport.clientWidth/2)/oldWidth;
-    zoom = Math.max(1,Math.min(2.5,next));
-    const width = Math.max(1200,viewport.clientWidth)*zoom;
-    svg.style.width = width+'px';
-    svg.style.maxWidth = 'none';
-    viewport.scrollLeft = fit ? 0 : center*width-viewport.clientWidth/2;
-    document.getElementById('zoom-value').value = Math.round(zoom*100)+'%';
-    document.getElementById('zoom-out').disabled = zoom === 1;
-    document.getElementById('zoom-in').disabled = zoom === 2.5;
+  const hot = k => ['cur', 'next'].includes(phases[k].cls) ? ['edge hot', 'ah'] : ['edge', 'a'];
+
+  // Headline: a task in progress, the next available task, all tasks done, or work blocked
+  // (open tasks remain but no phase can start, e.g. a dependency was removed from the plan).
+  const flat = [];
+  order.forEach(k => phases[k].tasks.forEach(t => flat.push({ k, t })));
+  const open = flat.filter(x => x.t[4] !== D);
+  const summary = (() => {
+    const inProgress = flat.find(x => x.t[4] === C);
+    if (inProgress) return { kind: 'cur', item: inProgress, remaining: open.length };
+    const available = open.find(x => ['cur', 'next'].includes(phases[x.k].cls));
+    if (available) return { kind: 'next', item: available, remaining: open.length };
+    if (!open.length) return { kind: flat.length ? 'done' : 'empty', remaining: 0 };
+    const k = open[0].k;
+    return { kind: 'blocked', phase: k, waits: phases[k].deps.filter(d => stateOf(d) !== 'done'), remaining: open.length };
+  })();
+  // @model-end
+
+  // Layout grid
+  const W = 226, H = 104, colX = [24, 304, 584, 864, 1144, 1460], rowY = [80, 214, 348, 482, 616, 750];
+  const pos = {
+    v042: [0, 2], R0: [1, 2], R1: [2, 1], R2: [2, 3],
+    R6: [3, 0], R4: [3, 1], R3: [3, 2], R5: [3, 3], R8: [3, 4],
+    aiA: [4, 0], g05: [4, 1], R7: [4, 2], useful: [4, 3], R9: [4, 4], R10: [4, 5],
+    aiB: [5, 0], v05: [5, 1], g09: [5, 2], v13: [5, 3]
+  };
+  const box = k => { const [c, r] = pos[k]; return { x: colX[c], y: rowY[r], w: c === 5 ? 256 : W, h: H }; };
+  const R = k => { const b = box(k); return [b.x + b.w, b.y + b.h / 2]; };
+  const L = k => { const b = box(k); return [b.x, b.y + b.h / 2]; };
+
+  const NS = 'http://www.w3.org/2000/svg';
+  const el = (tag, attrs, parent, text) => { const e = document.createElementNS(NS, tag); for (const a in attrs) e.setAttribute(a, attrs[a]); if (text != null) e.textContent = text; if (parent) parent.appendChild(e); return e; };
+  const svg = document.getElementById('map');
+  const defs = el('defs', {}, svg);
+  [['a', '#6c7b91'], ['ah', '#86b0ff'], ['ag', '#be9be7'], ['ao', '#dab17a'], ['at', '#67c9b7']].forEach(([id, c]) => {
+    const m = el('marker', { id, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' }, defs);
+    el('path', { d: 'M0,0 L10,5 L0,10 z', fill: c }, m);
+  });
+
+  // Column headers
+  const colHead = c => {
+    const cls = Object.keys(pos).filter(k => pos[k][0] === c).map(k => phases[k].cls);
+    if (cls.includes('cur')) return 'СЕЙЧАС';
+    if (cls.includes('next')) return 'СЛЕДОМ';
+    return cls.every(x => x === 'done') ? 'ГОТОВО' : 'ПОТОМ';
+  };
+  const heads = [0, 1, 2, 3, 4].map(c => [colHead(c), c]).concat([['МАРШРУТ ВЕРСИЙ', 5]]);
+  heads.forEach(([t, c]) => { el('text', { x: colX[c], y: 40, class: 'colhead' }, svg, t); el('line', { x1: colX[c], x2: colX[c] + (c === 5 ? 256 : W), y1: 54, y2: 54, class: 'colrule' }, svg); });
+
+  // Edges: add('from>to', points, class, marker, label, label position).
+  // Every dependency listed in a phase card has an edge; scripts/test_roadmap_map.py checks it.
+  const pts = a => 'M' + a.map(p => p.join(',')).join(' L');
+  const edges = [];
+  const add = (link, points, cls, mk, label, lp) => edges.push({ link, points, cls, mk, label, lp });
+  const [r0x, r0y] = R('R0');
+  add('v042>R0', [R('v042'), L('R0')], ...hot('R0'));
+  add('R0>R1', [[r0x, r0y], [r0x + 30, r0y], [r0x + 30, L('R1')[1]], L('R1')], ...hot('R1'));
+  add('R0>R2', [[r0x, r0y], [r0x + 30, r0y], [r0x + 30, L('R2')[1]], L('R2')], ...hot('R2'));
+  const [r1x, r1y] = R('R1');
+  add('R1>R4', [R('R1'), L('R4')], ...hot('R4'));
+  add('R1>R6', [[r1x, r1y], [r1x + 30, r1y], [r1x + 30, L('R6')[1]], L('R6')], ...hot('R6'));
+  // R1 → R7 runs in the gap between R4 and R3 and enters R7 from the top
+  const r7b = box('R7'), gapY = (box('R4').y + H + box('R3').y) / 2;
+  add('R1>R7', [[r1x, r1y + 34], [r1x + 42, r1y + 34], [r1x + 42, gapY], [r7b.x + 96, gapY], [r7b.x + 96, r7b.y]], ...hot('R7'));
+  // R1.6 needed by R2.3
+  add('R1>R2', [[box('R1').x + 113, box('R1').y + H], [box('R2').x + 113, box('R2').y]], 'edge soft', 'a', 'R1.6 → R2.3', [box('R1').x + 122, 336]);
+  const [r2x, r2y] = R('R2');
+  add('R2>R5', [R('R2'), L('R5')], ...hot('R5'));
+  add('R2>R3', [[r2x, r2y], [r2x + 30, r2y], [r2x + 30, L('R3')[1]], L('R3')], ...hot('R3'));
+  add('R2>R8', [[r2x, r2y], [r2x + 30, r2y], [r2x + 30, L('R8')[1]], L('R8')], ...hot('R8'), 'R2.4', [r2x + 38, 612]);
+  // R2.3 → R7 runs in the gap between R3 and R5
+  const lowGap = (box('R3').y + H + box('R5').y) / 2, r2b = box('R2');
+  add('R2>R7', [[r2b.x + r2b.w - 20, r2b.y], [r2b.x + r2b.w - 20, lowGap], [1124, lowGap], [1124, r7b.y + 82], [r7b.x, r7b.y + 82]], ...hot('R7'), 'R2.3', [r2b.x + r2b.w - 12, lowGap - 6]);
+  add('R4>g05', [R('R4'), L('g05')], 'edge gate', 'ag');
+  const [r3x, r3y] = R('R3');
+  add('R3>g05', [[r3x, r3y], [r3x + 14, r3y], [r3x + 14, L('g05')[1] + 22], [box('g05').x, L('g05')[1] + 22]], 'edge gate', 'ag');
+  add('R5>useful', [R('R5'), L('useful')], 'edge gate', 'ag');
+  const [r5x, r5y] = R('R5');
+  add('R5>R9', [[r5x, r5y], [r5x + 34, r5y], [r5x + 34, L('R9')[1]], L('R9')], ...hot('R9'));
+  add('R5>R10', [[r5x, r5y], [r5x + 34, r5y], [r5x + 34, L('R10')[1]], L('R10')], ...hot('R10'));
+  add('g05>v05', [R('g05'), L('v05')], 'edge ver', 'ao');
+  add('useful>v13', [R('useful'), L('v13')], 'edge ver', 'ao');
+  add('R7>g09', [R('R7'), L('g09')], 'edge ver', 'ao');
+  // AI-A needs R1, R4 and R6: R6 directly, R1 and R4 merge above R4
+  const aib = box('aiA'), r4b = box('R4'), topGap = (box('R6').y + H + r4b.y) / 2;
+  add('R6>aiA', [R('R6'), L('aiA')], 'edge ai', 'at');
+  add('R1>aiA', [[r1x + 30, topGap], [1114, topGap], [1114, aib.y + 80], [aib.x, aib.y + 80]], 'edge ai', 'at');
+  add('R4>aiA', [[r4b.x + r4b.w - 30, r4b.y], [r4b.x + r4b.w - 30, topGap], [1114, topGap], [1114, aib.y + 80], [aib.x, aib.y + 80]], 'edge ai', 'at');
+  add('aiA>aiB', [R('aiA'), L('aiB')], 'edge ai', 'at');
+  // R6 → 0.9a over the top and down the right margin
+  const r6b = box('R6'), g9 = box('g09');
+  add('R6>g09', [[r6b.x + r6b.w / 2, r6b.y], [r6b.x + r6b.w / 2, 64], [g9.x + g9.w + 12, 64], [g9.x + g9.w + 12, g9.y + 30], [g9.x + g9.w, g9.y + 30]], 'edge ver', 'ao');
+  // R7 skin refit → R9 (soft)
+  add('R7>R9', [[r7b.x + r7b.w, r7b.y + 82], [1420, r7b.y + 82], [1420, box('R9').y + 40], [box('R9').x + box('R9').w, box('R9').y + 40]], 'edge soft', 'a', 'скины → R9.1', [1428, box('R9').y + 10]);
+
+  const eg = el('g', {}, svg);
+  edges.forEach(e => {
+    el('path', { d: pts(e.points), class: e.cls, 'marker-end': `url(#${e.mk})` }, eg);
+    if (e.label) el('text', { x: e.lp[0], y: e.lp[1], class: 'elabel' + (e.cls.includes('ai') ? ' t' : '') }, eg, e.label);
+  });
+
+  // Nodes
+  const ng = el('g', {}, svg);
+  const nodes = {};
+  Object.keys(pos).forEach(k => {
+    const p = phases[k], b = box(k);
+    const g = el('g', { class: `node ${p.cls}`, tabindex: 0, role: 'button', 'aria-label': `${p.id}: ${p.title}. ${p.tag.toLowerCase()}`, 'data-k': k }, ng);
+    el('rect', { x: b.x - 5, y: b.y - 5, width: b.w + 10, height: b.h + 10, rx: 16, class: 'sel' }, g);
+    el('rect', { x: b.x, y: b.y, width: b.w, height: b.h, rx: 12, class: 'box' }, g);
+    el('text', { x: b.x + 16, y: b.y + 34, class: 'id' }, g, p.id);
+    el('text', { x: b.x + b.w - 14, y: b.y + 28, class: 'tag', 'text-anchor': 'end' }, g, p.cls === 'cur' ? '' : p.tag);
+    el('text', { x: b.x + 16, y: b.y + 62, class: 'ttl' }, g, p.ttl);
+    el('text', { x: b.x + 16, y: b.y + 86, class: 'meta' }, g, p.meta);
+    if (p.cls === 'cur' && p.tasks.length) {
+      el('rect', { x: b.x + b.w - 92, y: b.y - 14, width: 84, height: 26, rx: 13, class: 'badge' }, g);
+      el('text', { x: b.x + b.w - 50, y: b.y + 4, class: 'badge-t', 'text-anchor': 'middle' }, g, 'СЕЙЧАС');
+      const n = p.tasks.length, gap = 4, sw = Math.min(13, (b.w * 0.45 - (n - 1) * gap) / n), sx = b.x + b.w - 16 - (n * sw + (n - 1) * gap);
+      p.tasks.forEach((t, i) => el('rect', { x: sx + i * (sw + gap), y: b.y + 78, width: sw, height: 10, rx: 3, class: 'seg ' + (t[4] === D ? 'd' : t[4] === C ? 'c' : '') }, g));
+    }
+    g.addEventListener('click', () => select(k));
+    g.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); select(k); } });
+    nodes[k] = g;
+  });
+
+  // Details
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const chips = list => list.length ? `<span class="chips">${list.map(k => `<button class="chip" data-go="${k}">${esc(phases[k].id)}</button>`).join('')}</span>` : '—';
+  function select(k) {
+    const p = phases[k];
+    Object.values(nodes).forEach(n => n.classList.remove('selected'));
+    nodes[k].classList.add('selected');
+    $('d-kicker').textContent = p.kicker;
+    $('d-title').textContent = `${p.id} · ${p.title}`;
+    $('d-goal').textContent = p.goal;
+    const done = p.tasks.filter(t => t[4] === D).length;
+    $('d-facts').innerHTML =
+      `<div><dt>Трудоёмкость</dt><dd>${esc(p.effort)}</dd></div>` +
+      `<div><dt>Нужно до начала</dt><dd>${chips(p.deps)}${p.depNote ? `<br><small style="color:var(--muted)">${esc(p.depNote)}</small>` : ''}</dd></div>` +
+      `<div><dt>Открывает</dt><dd>${chips(p.unlocks)}</dd></div>` +
+      (p.tasks.length ? `<div><dt>Готово задач</dt><dd>${done} из ${p.tasks.length}</dd></div>` : '');
+    $('d-main').innerHTML = p.tasks.length
+      ? `<table><thead><tr><th>#</th><th>Задача и критерий приёмки</th><th>Срок</th><th>Статус</th></tr></thead><tbody>${p.tasks.map(t =>
+          `<tr><td class="id">${esc(t[0])}</td><td>${esc(t[1])}<span class="acc">Приёмка: ${esc(t[2])}</span></td><td class="eff">${esc(t[3])}</td><td><span class="st ${t[4] === D ? 'd' : t[4] === C ? 'c' : ''}">${t[4]}</span></td></tr>`).join('')}</tbody></table>`
+      : `<p style="color:var(--muted);font-size:14px;margin:8px 0">Это не фаза с задачами, а точка на пути. Нажми на соседние фазы, чтобы увидеть, что к ней ведёт.</p>`;
+    $('d-main').querySelectorAll('[data-go]').forEach(b => b.addEventListener('click', () => select(b.dataset.go)));
+    $('d-facts').querySelectorAll('[data-go]').forEach(b => b.addEventListener('click', () => select(b.dataset.go)));
   }
-  document.getElementById('zoom-in').addEventListener('click', () => setZoom(zoom+.25));
-  document.getElementById('zoom-out').addEventListener('click', () => setZoom(zoom-.25));
-  document.getElementById('fit').addEventListener('click', () => setZoom(1,true));
-  new ResizeObserver(() => setZoom(zoom)).observe(viewport);
-  try {
-    const saved = localStorage.getItem('moduleengine-roadmap-version');
-    if (stages[saved]) selected = saved;
-    else if (saved === '0.4' || saved === '0.4.1') selected = 'base';
-  } catch (_) { /* No persistent storage is required. */ }
-  markSelected(selected);
-  setZoom(1,true);
+
+  // "Now" strip, header pill and footer stamp
+  const li = (title, small) => `<li>${esc(title)}${small ? `<small>${esc(small)}</small>` : ''}</li>`;
+  const cur = ['cur', 'next'].includes(summary.kind) ? summary.item : null;
+  const curLabel = { cur: 'Сейчас', next: 'Следующая задача', blocked: 'Работа заблокирована', done: 'Трек завершён', empty: 'Нет данных' }[summary.kind];
+  const done = flat.filter(x => x.t[4] === D);
+  const doneShown = done.slice(-4);
+  $('now-done').innerHTML = li(`${phases.v042.id} — ${phases.v042.title}`, 'Принята владельцем 17.11.2026') +
+    (done.length > doneShown.length ? li(`…и раньше выполненные: ${done.length - doneShown.length}`) : '') +
+    doneShown.map(x => li(`${x.t[0]} — ${x.t[1]}`, x.t[3])).join('');
+  $('now-cur-label').textContent = curLabel;
+  const progress = p => {
+    const d = p.tasks.filter(t => t[4] === D).length, c = p.tasks.filter(t => t[4] === C).length;
+    $('now-bar').innerHTML = p.tasks.map(t => `<span class="${t[4] === D ? 'd' : t[4] === C ? 'c' : ''}">${esc(t[0])}</span>`).join('');
+    $('now-bar').setAttribute('aria-label', `Прогресс фазы ${p.id}: ${d} из ${p.tasks.length} задач готовы` + (c ? `, ${c} в работе` : ''));
+    $('now-cap-l').textContent = `Фаза ${p.id} · ${d} из ${p.tasks.length} готово`;
+    $('now-cap-r').textContent = `вся ${p.id} — ${p.effort}`;
+  };
+  let focusKey = order[0] || 'R0';
+  if (cur) {
+    const p = phases[cur.k], note = NOTES[cur.t[0]] || {};
+    focusKey = cur.k;
+    $('pill').textContent = `${curLabel} · ${cur.t[0]} ${note.short || p.ttl.toLowerCase()}`;
+    $('now-cur-big').textContent = `${cur.t[0]} — ${cur.t[1]}`;
+    $('now-cur-sub').textContent = note.about || `Готово, когда: ${cur.t[2]}. Оценка: ${cur.t[3]}.`;
+    progress(p);
+  } else if (summary.kind === 'blocked') {
+    const p = phases[summary.phase];
+    const waits = summary.waits.map(d => phases[d].id + (phases[d].missing ? ' (нет в плане)' : '')).join(', ');
+    focusKey = summary.phase;
+    $('pill').textContent = `${curLabel} · ${p.id} ждёт ${waits || 'зависимостей'}`;
+    $('now-cur-big').textContent = `Нет доступной задачи: ${p.id} ждёт ${waits || 'зависимостей'}`;
+    $('now-cur-sub').textContent = `В плане ${summary.remaining} незавершённых задач, но ни одна фаза не может начаться. Проверь зависимости ${p.id} в docs/product-roadmap.md.`;
+    progress(p);
+  } else if (summary.kind === 'done') {
+    $('pill').textContent = 'Все фазы трека готовы';
+    $('now-cur-big').textContent = 'Все задачи трека выполнены';
+  } else {
+    $('pill').textContent = 'Нет данных о задачах';
+    $('now-cur-big').textContent = 'В docs/product-roadmap.md не найдено ни одной задачи';
+  }
+  const next = [];
+  if (cur) {
+    const rest = phases[cur.k].tasks.filter(t => t[4] !== D && t !== cur.t).slice(0, 2);
+    const last = phases[cur.k].tasks[phases[cur.k].tasks.length - 1];
+    rest.forEach(t => next.push(li(`${t[0]} — ${t[1]}`, t[2] + (t === last ? ` · закрывает ${phases[cur.k].id}` : ''))));
+  }
+  order.filter(k => phases[k].cls === 'next' && (!cur || k !== cur.k)).slice(0, 2)
+    .forEach(k => next.push(li(`${phases[k].id} — ${phases[k].title}`, `${phases[k].meta} · после ${phases[k].deps.map(x => phases[x].id).join(', ')}`)));
+  NEXT_EXTRA.filter(([k]) => !['done', 'cur'].includes(phases[k].cls)).forEach(([, a, b]) => next.push(li(a, b)));
+  $('now-next').innerHTML = next.slice(0, 4).join('') || li('Дальше по маршруту версий');
+  $('stamp').textContent = SRC
+    ? `Статусы собраны автоматически из ${SRC.source} · коммит ${SRC.commit || '—'} · ${SRC.generated}`
+    : 'Шаблон без данных: запусти scripts/roadmap_map.py';
+  select(focusKey);
+
+  // Timing chart
+  const t = document.getElementById('time');
+  const X0 = 290, X1 = 1640, WK = 72, wx = w => X0 + (X1 - X0) * w / WK;
+  const start = new Date(2026, 10, 21);
+  const mon = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+  for (let m = 1; m <= 17; m++) {
+    const d = new Date(2026, 10 + m, 1), w = (d - start) / 6048e5;
+    if (w > WK) break;
+    el('line', { x1: wx(w), x2: wx(w), y1: 40, y2: 250, class: 'axis' }, t);
+    el('text', { x: wx(w), y: 272, class: 'tick', 'text-anchor': 'middle' }, t, mon[d.getMonth()] + (d.getMonth() === 0 ? ' ' + d.getFullYear() : ''));
+  }
+  el('text', { x: X0, y: 292, class: 'tick' }, t, 'старт 21.11.2026');
+  const rows = [
+    ['Основа ядра и редактора', 'R0 · R1 · R2 · R3 · R4 — 16–26 нед', 0, 0, 16, 26, '#86b0ff', '#243a5c'],
+    ['Библиотеки и анимация', 'R6 · R7 — 5–8 нед', 16, 26, 21, 34, '#67c9b7', '#203d3c'],
+    ['Современное изображение', 'R5 · R8 · R9 · R10 — 23–37 нед', 21, 34, 44, 71, '#be9be7', '#352d48']
+  ];
+  rows.forEach((r, i) => {
+    const y = 66 + i * 58;
+    el('text', { x: 0, y: y + 12, class: 'rowl' }, t, r[0]);
+    el('text', { x: 0, y: y + 31, class: 'rows' }, t, r[1]);
+    el('rect', { x: wx(r[2]), y, width: wx(r[5]) - wx(r[2]), height: 30, rx: 7, fill: r[7], stroke: r[6], 'stroke-width': 1.5, 'stroke-dasharray': '5 5' }, t);
+    const s = r[3], e = r[4];
+    if (e > s) el('rect', { x: wx(s), y, width: wx(e) - wx(s), height: 30, rx: 7, fill: r[6], opacity: .85 }, t);
+  });
+  // markers
+  const mk = (w1, w2, label, color, y) => {
+    if (w2 > w1) el('rect', { x: wx(w1), y: 40, width: wx(w2) - wx(w1), height: 210, fill: color, opacity: .08 }, t);
+    el('line', { x1: wx(w1), x2: wx(w1), y1: 40, y2: 250, stroke: color, class: 'mk' }, t);
+    el('text', { x: wx(w1) + 6, y, class: 'mkt', fill: color }, t, label);
+  };
+  mk(0, 0, '◀ сейчас', '#86b0ff', 32);
+  mk(10, 16, '0.5 снова в работе · 10–16 нед', '#dab17a', 32);
+  mk(20, 30, 'первая полезная точка · 4,5–7 мес', '#be9be7', 246);
+  mk(44, 71, 'весь трек готов · 44–71 нед (11–17 мес)', '#82be99', 32);
 })();
 </script>
 </body>

@@ -181,3 +181,13 @@ is updated in both languages. This change is documentation only.
 | The [engine rebuild track](product-roadmap.md#rebuild) is the current priority: `bevy_ecs` world storage, a GPU-driven Vulkan renderer on `ash`, the editor on Vulkan, `rapier3d`/`kira`, skeletal animation, PBR, mesh shaders and hybrid ray tracing. | Work follows phases R0–R10 with their acceptance criteria and benchmarks. Vulkan stays the only game-rendering API. |
 | The 0.5 brief and new UI work are paused until R1, R3 and R4 are accepted. | Bug fixes to accepted 0.4.2 remain allowed. The agreed 0.5 scope is kept and resumes after those phases. |
 | "Not worse than R0.6" and similar criteria follow the [not-worse rule](bench.md#not-worse): the baseline commit and the candidate run interleaved in one session (five runs each), medians are compared with a per-metric tolerance of max(5 %, 2 × measured spread), a borderline result is repeated once, peak memory has a 1 % floor and p99 is tracked only. | `scripts/bench.py --compare` returns the verdict; archived report numbers are not compared directly. |
+
+<a id="ecs-storage-r11-20261122"></a>
+
+## R1.1 storage decision — 22 November 2026
+
+Proceed to R1.2 with hybrid `bevy_ecs` storage. Native values use typed
+queries, reflection and lossless project codecs. Schema-defined payloads
+use JSON columns. In the matched S3 series, hybrid reached 34.82× and
+dynamic JSON reached 4.59× against the 5× gate. The [storage decision](ecs-storage-decision.md#r11)
+records the authored-data cases, lifecycle costs, and limits of the spike.

@@ -30,7 +30,7 @@ GATE_METRICS = {
 LIMIT_PERCENT = 5.0
 BUILD_COMMAND = ["cargo", "build", "--locked", "--release", "--features", "bench",
                  "--message-format=json-render-diagnostics",
-                 "-p", "module-engine-editor", "--target-dir", str(ROOT / "target")]
+                 "-p", "module-engine-editor"]
 NVIDIA_QUERY = (
     "timestamp,index,name,driver_version,pstate,temperature.gpu,"
     "utilization.gpu,memory.total,memory.used,clocks.sm,power.draw"
@@ -375,10 +375,11 @@ def dxc_inputs(env):
     return {str(path): entry(path.parent, path.name)["sha256"] for path in sorted(resolved)}
 
 
-def built_editor(messages, host, source_root=None):
+def built_editor(messages, host, source_root=None, target_dir=None):
     bins = set()
     source = (source_root or ROOT) / "crates/editor/src/main.rs"
-    allowed_folders = {ROOT / "target/release", ROOT / "target" / host / "release"}
+    target_dir = (target_dir or ROOT / "target").resolve()
+    allowed_folders = {target_dir / "release", target_dir / host / "release"}
     with messages.open(encoding="utf-8") as events:
         for line in events:
             event = json.loads(line)
@@ -423,7 +424,7 @@ def run_series(series, diagnostic, vsync, profiling, once):
     bench_assets = ensure_bench_assets()
     source = capture(ROOT)
     write_json(series / "source.json", source)
-    build = BUILD_COMMAND
+    build = [*BUILD_COMMAND, "--target-dir", str(ROOT / "target")]
     rustc, host = native_host()
     smi = shutil.which("nvidia-smi")
     telemetry = [smi, f"--query-gpu={NVIDIA_QUERY}", "--format=csv"] if smi else None
@@ -729,12 +730,15 @@ def provision_worktree(worktree):
 def build_side(folder, root, env, host):
     """Build one side and copy the exact executable into the series."""
     folder.mkdir()
+    # Shared Cargo products can remain fresh across checkouts with different sources.
+    target_dir = folder / "target"
+    build = [*BUILD_COMMAND, "--target-dir", str(target_dir)]
     messages = folder / "build.jsonl"
     with (folder / "build.log").open("x", encoding="utf-8") as log, messages.open("xb") as events:
-        result = subprocess.run(BUILD_COMMAND, cwd=root, env=env, stdout=events, stderr=log)
+        result = subprocess.run(build, cwd=root, env=env, stdout=events, stderr=log)
     if result.returncode:
         raise ValueError(f"Build failed in {root}; see {folder / 'build.log'}")
-    executable = built_editor(messages, host, root)
+    executable = built_editor(messages, host, root, target_dir)
     exe = folder / executable.name
     shutil.copy2(executable, exe)
     return exe, entry(folder, exe.name)["sha256"]

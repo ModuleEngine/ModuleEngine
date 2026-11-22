@@ -1,5 +1,7 @@
 //! Source-only R0.2 fixtures using the existing native renderer and Player bridge.
 mod fixtures;
+#[path = "../../../../examples/bench/s3_ecs.rs"]
+mod s3_ecs;
 
 use eframe::egui;
 use fixtures::Fixture;
