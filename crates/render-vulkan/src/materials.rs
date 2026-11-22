@@ -290,6 +290,9 @@ impl VulkanRenderer {
             indices
         } else {
             let indices = self.buffer(byte_count, vk::BufferUsageFlags::STORAGE_BUFFER)?;
+            // SAFETY: This fresh host-visible allocation is aligned for u32
+            // and sized for the reserved row plus every item. No GPU work
+            // references it while it is being written.
             unsafe {
                 indices
                     .memory

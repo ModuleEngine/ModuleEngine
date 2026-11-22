@@ -2086,6 +2086,9 @@ impl VulkanRenderer {
                 )?);
             }
             let buffer = vertex.as_ref().unwrap();
+            // SAFETY: The staging data is separate from the mapped buffer and
+            // fits its allocation. The frame slot is available for CPU writes
+            // because any previous GPU submission using this slot completed.
             unsafe {
                 buffer
                     .memory

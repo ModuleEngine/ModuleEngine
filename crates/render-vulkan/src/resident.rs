@@ -345,10 +345,11 @@ impl Buffers {
                 super::materials::FIRST_MATERIAL_ROW.wrapping_sub(run.object_bias),
             ]
             .map(u32::to_ne_bytes);
+            // The last three stock-pass constants restore the published IDs
+            // and map the published object ID back to its physical material slot.
+            // SAFETY: The command buffer is recording on this device. Bytes
+            // 116..128 and the specified stages are covered by the bound layout.
             unsafe {
-                // The last three stock-pass constants convert stable slots
-                // back to the published object and triangle IDs. The fragment
-                // stage's material row base applies the inverse object shift.
                 device.cmd_push_constants(
                     command,
                     layout,
@@ -363,6 +364,9 @@ impl Buffers {
             let mut offset = run.first as u64 * u64::from(stride);
             while count != 0 {
                 let batch = count.min(max_draws as usize);
+                // SAFETY: Recording is inside the geometry pass. This batch
+                // fits the indirect buffer and device draw limit. The flight
+                // retains the buffer until GPU completion.
                 unsafe {
                     device.cmd_draw_indirect(
                         command,
@@ -704,10 +708,14 @@ impl BufferUpdates<'_> {
     fn write<const N: usize>(&self, buffer: &Buffer, start: usize, rows: &[[u32; N]]) -> usize {
         let words = rows.as_flattened();
         let bytes = std::mem::size_of_val(words);
-        // Arrays of initialized u32 words contain no padding.
+        // SAFETY: The initialized u32 slice has no padding. The byte view
+        // covers exactly that allocation's slice and is used while it is live.
         let data = unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), bytes) };
         let mut offset = (start * N * size_of::<u32>()) as u64;
         for chunk in data.chunks(65_536) {
+            // SAFETY: The command buffer is recording outside rendering.
+            // The caller sized this transfer destination for the rows, and
+            // the word layout gives four-byte-aligned offsets and sizes.
             unsafe {
                 self.device
                     .cmd_update_buffer(self.command, buffer.buffer, offset, chunk)
@@ -726,6 +734,8 @@ impl BufferUpdates<'_> {
     ) -> usize {
         if let Some(before) = before.filter(|b| b.buffer != after.buffer && uploaded != 0) {
             let region = vk::BufferCopy::default().size((uploaded * size_of::<[u32; N]>()) as u64);
+            // SAFETY: This records outside rendering. The committed prefix
+            // fits both distinct transfer buffers, which the flight retains.
             unsafe {
                 self.device
                     .cmd_copy_buffer(self.command, before.buffer, after.buffer, &[region])
@@ -763,6 +773,9 @@ impl BufferUpdates<'_> {
                     .src_offset(offset)
                     .dst_offset(offset)
                     .size(size);
+                // SAFETY: These unchanged rows fit both distinct transfer
+                // buffers. The command buffer is recording outside rendering
+                // and the flight retains both buffers through completion.
                 unsafe {
                     self.device.cmd_copy_buffer(
                         self.command,
@@ -788,6 +801,8 @@ fn barrier(
     let memory = vk::MemoryBarrier::default()
         .src_access_mask(available)
         .dst_access_mask(visible);
+    // SAFETY: The command buffer is recording outside rendering on the
+    // graphics queue, and the access masks match the supplied pipeline stages.
     unsafe {
         device.cmd_pipeline_barrier(
             command,
