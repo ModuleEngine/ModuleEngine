@@ -710,9 +710,14 @@ impl EcsWorld {
         Ok(())
     }
     pub fn clear(&mut self) {
-        for (_, handle) in std::mem::take(&mut self.index) {
+        let removed_entities = std::mem::take(&mut self.index);
+        let had_removals = !removed_entities.is_empty();
+        for (_, handle) in removed_entities {
             let removed = self.world.despawn(handle);
             debug_assert!(removed);
+        }
+        if had_removals {
+            self.world.clear_trackers();
         }
         self.components.clear();
     }
@@ -779,6 +784,7 @@ impl WorldProvider for EcsWorld {
             })
             .collect();
         let keep = |id: &u64| objects.contains_key(id) && !spawned.contains(id);
+        let previous_count = self.index.len();
         self.index.retain(|id, handle| {
             if keep(id) {
                 return true;
@@ -787,6 +793,10 @@ impl WorldProvider for EcsWorld {
             debug_assert!(removed);
             false
         });
+        // Standalone Bevy does not age removal messages without a tracker update.
+        if self.index.len() != previous_count {
+            self.world.clear_trackers();
+        }
         for column in self.components.values_mut() {
             column.retain(|id, _| keep(id));
         }
@@ -931,6 +941,39 @@ mod tests {
             references: BTreeMap::new(),
         }
     }
+    #[test]
+    fn repeated_remove_and_clear_bound_bevy_removal_messages() {
+        let retained = [false, true].map(|clear| {
+            let mut world = EcsWorld::from_objects(Vec::new()).unwrap();
+            for _ in 0..1024 {
+                world
+                    .apply_commands(&[WorldCommand::Spawn {
+                        object: entity(1, None, &[]).object,
+                    }])
+                    .unwrap();
+                if clear {
+                    world.clear();
+                } else {
+                    world
+                        .apply_commands(&[WorldCommand::Remove { id: 1 }])
+                        .unwrap();
+                }
+                assert!(world.is_empty());
+            }
+            let component = world.world.component_id::<StableId>().unwrap();
+            world
+                .world
+                .removed_components()
+                .get(component)
+                .unwrap()
+                .len()
+        });
+        assert!(
+            retained.into_iter().all(|count| count <= 1),
+            "Remove / clear: {retained:?}"
+        );
+    }
+
     #[test]
     fn component_column_queries_and_owned_dtos_keep_one_mutable_store() {
         let mut world = EcsWorld::from_entities(vec![

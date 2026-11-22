@@ -48,6 +48,11 @@ a different generation, and a reference to the deleted ID stays unresolved.
 Ordinary updates retain the existing row and lifetime. A rejected structural
 change leaves the rows and index in their previous state.
 
+After each successful batch that despawns rows, Core advances Bevy's removed
+component message buffers once. The private world keeps the latest batch of
+messages and reuses the buffers across batches. Both portable commands and
+`clear()` use this boundary.
+
 `lifetime(id)` identifies the current runtime incarnation separately from the
 saved ID. Cloning a checkpoint preserves it; spawning, rebuilding from a DTO or
 clearing and recreating an object gets a fresh token. Module caches use this
