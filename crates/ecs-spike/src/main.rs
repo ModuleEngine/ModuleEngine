@@ -3,7 +3,7 @@ mod bevy_store;
 mod s3;
 
 use bevy_store::{BevyStore, Encoding};
-use module_engine_core::{EcsWorld, GameEntity, WorldCommand, WorldProvider};
+use module_engine_core::{EcsWorld, GameEntity, WorldCommand};
 use serde_json::{Value, json};
 use std::{hint::black_box, time::Instant};
 
