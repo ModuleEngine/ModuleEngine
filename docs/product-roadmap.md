@@ -325,6 +325,8 @@ Basis: [portfolio gates](portfolio-roadmap.md), [independent review](review.md),
 
 Phase numbers R0–R10 are planning labels, not versions. Effort is a rough range for one full-time developer with Vulkan experience; it is speculation until R0 records real throughput (see the [complete route](#map) rule on estimates). The phases are ordered by dependency; independent phases can overlap when there is more than one developer.
 
+**Task status.** The last column of every phase task table is the task's status: `Done`, `In progress` (an estimate may follow in parentheses), or the effort estimate while the task has not started. Change it in the same pull request that completes or starts the task, in both languages. The [visual roadmap](roadmap-map.md) is rebuilt from this column after every merge to `main`.
+
 **Relation to the version route.** On 21 November 2026 the owner paused the 0.5 brief and new UI work until R1, R3 and R4 are accepted, because they change the world storage, the editor shell and the editor/game boundary that 0.5 would build on. The track does not replace any milestone: R5 is the technical base for [1.3](#real), R6–R7 supply the physics and skeleton that [0.9a](#combat) and the [G2 decisions](#g2-agreement) need, and every phase keeps the G1 and ARPG budgets from [release decisions](#decision) as regression gates. Ray tracing and mesh shaders are optional hardware tiers: G1/G3-style packages must never require them.
 
 ### Where the code stands today
@@ -353,6 +355,7 @@ Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
 - The old path stays behind a switch until the new one passes parity; it is removed in the same phase after acceptance, not left as a second production implementation.
 - Every hardware-dependent feature declares its tier and a fallback. The [R0.4 hardware contract](hardware-tiers.md) lists the Vulkan 1.3 base tier A and the independent mesh shader (B) and ray tracing (C) additions, with their individual features and requirements for native Player presentation.
 - Measurements follow [release decisions](#decision): sequential GPU runs, recorded driver and load, mean and p95, the real game window rather than offscreen alone.
+- "Not worse than R0.6" (or than another baseline) is decided by the [not-worse rule](bench.md#not-worse), approved on 21 November 2026: the baseline commit and the candidate run interleaved in one session, five runs each; medians are compared with a per-metric tolerance of max(5 %, 2 × measured spread); a borderline result is repeated once; peak memory is compared with a 1 % floor; p99 is tracked but does not block. `python scripts/bench.py --compare <baseline>` returns the verdict for the S1–S5 metrics; R3.5 open-to-first-frame has no automated check yet.
 
 ### Benchmark scenes used by all phases
 
@@ -374,8 +377,8 @@ Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
 | R0.2 | Done 21 November 2026: S3–S5 are reproducible fixtures (S4 on pinned Khronos Sponza) and `scripts/bench.py` writes JSON results to `outputs/bench/<date>/`; see [running benchmarks](bench.md) and the [accepted series](bench-r02-20261121.md) (maximum spread 4.75 %). | Three consecutive runs differ by ≤5 % on mean values. | Done |
 | R0.3 | Added GPU timestamp queries per render-graph pass and CPU spans for tick, extraction, recording and submission. | [Frame timings](bench.md#frame-timings) are available in Editor Game and benchmark JSON. | Done |
 | R0.4 | [Hardware tiers and device evidence](hardware-tiers.md). RTX 4080 SUPER is the development reference. GTX 1660 SUPER 6 GB is the candidate for minimum Windows tier A hardware. | Tier table and full Vulkan dump recorded in `docs/`. Physical qualification is on the [pre-release checklist](hardware-tiers.md#minimum-gpu). | Done |
-| R0.5 | Hygiene prerequisites: GPU and DXC tests skip with a clear message when unavailable; Vulkan validation layers and debug names in debug builds; typed errors with `thiserror` in `render-vulkan` instead of `String`. | `verify` passes on a machine without DXC/GPU with explicit skips; a debug run shows no validation errors on S1. | 2–3 d |
-| R0.6 | Baseline report: S1–S5 on the current code. | Report linked from this section; it is the reference for every later "not worse" criterion. | 1 d |
+| R0.5 | Hygiene prerequisites: GPU and DXC tests skip with a clear message when unavailable; Vulkan validation layers and debug names in debug builds; typed errors with `thiserror` in `render-vulkan` instead of `String`. | `verify` passes on a machine without DXC/GPU with explicit skips; a debug run shows no validation errors on S1. | Done |
+| R0.6 | [S1–S5 baseline report](bench-r06-20261122.md) on post-R0.5 `main` (22 November 2026). All 15 runs completed with a maximum declared spread of 2.39 %. | The report is the reference for later "not worse" comparisons of these metrics. | Done |
 
 <a id="rebuild-r1"></a>
 
@@ -383,14 +386,28 @@ Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
 
 | # | Task | Acceptance | Effort |
 | --- | --- | --- | --- |
-| R1.1 | Spike: S3 entities in `bevy_ecs` (standalone crate, no Bevy app) vs current `EcsWorld`: query, mutation, spawn/despawn, snapshot. Decide how schema-defined components are stored: dynamic components registered through `ComponentDescriptor`, or typed native components with `bevy_reflect` and a JSON codec for the rest. | Superseding decision in [ecs-storage-decision.md](ecs-storage-decision.md) (both languages) with numbers. Go if S3 tick is at least 5× faster and no authored-data invariant is lost. | 4–5 d |
-| R1.2 | Stable IDs: a `StableId(u64)` component and a `u64 → Entity` index; IDs survive scene/prefab resolution, saves, exports and Rust IPC. | Existing ID tests pass; save → load → save is byte-identical. | 2 d |
-| R1.3 | Component registry and codecs: native components derive `Reflect`; schema components keep exact JSON keys, `null` and unknown payloads. One registry serves UI, saves, IPC and validation. | Round-trip tests on every scene in `examples/` and the G1/G2 projects produce identical JSON. | 4–5 d |
-| R1.4 | Transaction without a full copy: systems write through command buffers and change journals; a failed tick discards them instead of restoring a clone of `GameState`. | A failing system leaves the world identical (test); a no-op tick on S3 costs O(changed), not O(world). | 3–4 d |
-| R1.5 | Scheduling: port `engine-core/src/systems.rs` and ARPG systems to a `bevy_ecs` `Schedule` with explicit, deterministic ordering at fixed 60 Hz. | Recorded-input replay of G1 levels and the ARPG encounter produces identical event logs before and after. | 4–5 d |
-| R1.6 | Change-driven extraction: render extraction reads `Changed<…>` and produces deltas (spawned, moved, removed, material changed) instead of a full `SceneSnapshot`. The full snapshot remains for the software renderer and diagnostics. | On S3 with 1,000 moving objects the delta contains only those objects. | 2–3 d |
-| R1.7 | Migrate consumers: `game-host`/`game_worker`, `runtime-script` typed commands, `project-g1`, `project-puzzle`, `gameplay-arpg`, `example-two-arenas`. The Object provider stays a compatibility adapter. | All crate test suites pass; no consumer touches the old column maps. | 4–6 d |
-| R1.8 | Acceptance and removal of the old storage. | S2 tick p95 not worse than R0.6; S3 tick ≤2 ms; S1/S2 gates pass; independent review. | 2 d |
+| R1.1 | [Hybrid Bevy selected](ecs-storage-decision.md#r11): reflected native values with lossless codecs and JSON columns for schema data. The standalone spike compares query/mutation, spawn/despawn and snapshot/restore. | Hybrid S3 tick 34.82× faster (gate ≥5×). Both Bevy variants passed the authored-data cases. The dynamic JSON variant averaged 4.59× faster. | Done |
+| R1.2 | [Stable IDs in the production ECS](ecs-world.md). An immutable `StableId(u64)` and ordered `u64 → Entity` index preserve IDs through scene/prefab resolution, saves, Player export and Rust IPC. | [Core and native fixture checks](ecs-world.md#r12-verification), including byte-identical saves, high IDs, references and Bevy slot reuse. | Done |
+| R1.3 | [Component registry and codecs](component-schemas.md). The native `Transform` exposes `Reflect`. Schema components keep exact JSON keys, `null` and unknown payloads. One registry serves UI, saves, IPC and validation. | Round-trip tests on every scene in `examples/` and the G1/G2 projects produce identical JSON. See [verified corpus and open coverage](ecs-world.md#r13-verification). | Done |
+| R1.4 | [Fixed-tick transaction](ecs-world.md#lifetime-and-transactions) stages command buffers and changed ECS rows. A failed tick discards the journal. | Late rejection and recovery through `GameHost`. The empty S3 transaction with the canonical ECS avoids a whole-world traversal. Structural packets, active schema validation on edited worlds, and compatibility provider diffs can still walk the world. See [verification](ecs-world.md#r14-verification). | Done |
+| R1.5 | [Bevy schedule](module-execution.md) runs Core and ARPG gameplay at a fixed 60 Hz in the saved stage and node order. | Two Windows replays match the baseline event log for all ten G1 levels and the Small monsters ARPG encounter. `GameHost` late rejection rolls back and retries the tick. See [verification](module-execution.md#r15-verification). | Done |
+| R1.6 | Change-driven extraction: render extraction reads `Changed<…>` and produces deltas (spawned, moved, removed, material changed) instead of a full `SceneSnapshot`. The full snapshot remains for the software renderer and diagnostics. | On S3 with 1,000 moving objects the delta contains only those objects. Schema-only edits must not produce a transform delta. | Done |
+| R1.7 | Migrate consumers: `game-host`/`game_worker`, `runtime-script` typed commands, `project-g1`, `project-puzzle`, `gameplay-arpg`, `example-two-arenas`. The Object provider stays a compatibility adapter. | All crate test suites pass; no consumer touches the old column maps. | In progress (4–6 d) |
+| R1.8 | Acceptance and removal of the old storage. Measure the [session checkpoint copy cost](#r18-session-checkpoint). | S2 tick p95 [not worse](bench.md#not-worse) than R0.6. S3 tick ≤2 ms. Compare S3 with session metadata against the R1.4 baseline and report the copy cost separately. S1/S2 gates pass. Independent review. | 2 d |
+
+<a id="r18-session-checkpoint"></a>
+
+**R1.8 debt — session checkpoint copies.** `GameState::checkpoint_tick` copies
+`scene`, `module_data`, and `control` so a failed tick can restore what systems
+write directly through `&mut GameState`. Use a `GameHost` S3 variant with a
+representative, non-empty `module_data` payload. Record its entry count and
+serialized size. Time the metadata copies separately from the full fixed tick.
+Build the accepted R1.4 revision and the R1.8 candidate with the same payload
+and timing probe. Compare fixed-tick mean and p95 using the paired Release
+procedure and tolerance in the [not-worse rule](bench.md#not-worse). If the
+copy cost materially contributes to a regression or threatens the S3 tick
+budget, address it in R1.8 and recheck late rejection and retry through
+`GameHost`.
 
 <a id="rebuild-r2"></a>
 
@@ -398,12 +415,12 @@ Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
 
 | # | Task | Acceptance | Effort |
 | --- | --- | --- | --- |
-| R2.1 | Device layer: tier detection, a memory allocator (`gpu-allocator`) instead of one allocation per resource, 2–3 frames in flight with per-frame command pools and timeline semaphores, a staging ring and a transfer queue, a deletion queue that replaces `retirement.rs` semantics. Spike first: allocator and frame pacing on S3. | Zero validation errors on S1–S3; in steady state the CPU never waits for the frame it just submitted. | 2 w |
-| R2.2 | Bindless resources: one global descriptor set with descriptor indexing (texture array, samplers, storage buffers) or buffer device address. Replace the atlas with per-texture images, mipmaps generated at import or on upload, anisotropic sampling. The push-constant ABI gains bindless indices; custom HLSL passes keep working. | 1,000 unique textures without the 8192 px limit; no shimmering on a moving camera over S4 floors; existing custom-pass tests pass. | 1.5–2 w |
-| R2.3 | GPU-resident scene: one mesh pool (shared vertex/index buffers) uploaded once per mesh; instance buffer with transforms and material indices updated from R1.6 deltas; material buffer. Remove the CPU vertex transform in `geometry.rs`. | Upload bytes per frame proportional to changed objects; S3 CPU frame ≤1 ms. | 1.5–2 w |
+| R2.1 | Device layer: tier detection, a memory allocator (`gpu-allocator`) instead of one allocation per resource, 2–3 frames in flight with per-frame command pools and timeline semaphores, a staging ring and a transfer queue, a deletion queue that replaces `retirement.rs` semantics. Spike first: allocator and frame pacing on S3. | Zero validation errors on S1–S3; in steady state the CPU never waits for the frame it just submitted. | Done |
+| R2.2 | Bindless resources: one global descriptor set with descriptor indexing (texture array, samplers, storage buffers) or buffer device address. Replace the atlas with per-texture images, mipmaps generated at import or on upload, anisotropic sampling. The push-constant ABI gains bindless indices; custom HLSL passes keep working. | 1,000 unique textures without the 8192 px limit; no shimmering on a moving camera over S4 floors; existing custom-pass tests pass. | Done |
+| R2.3 | GPU-resident scene: one mesh pool (shared vertex/index buffers) uploaded once per mesh; instance buffer with transforms and material indices updated from R1.6 deltas; material buffer. Remove the CPU vertex transform in `geometry.rs`. | Upload bytes per frame proportional to changed objects; S3 CPU frame ≤1 ms. | In progress (1.5–2 w) |
 | R2.4 | GPU culling and indirect drawing: compute frustum culling, `vkCmdDrawIndexedIndirectCount`, then two-phase Hi-Z occlusion culling. | Draw calls per pass do not grow with object count; S3 scaled to 100,000 instances keeps 60 FPS at 1080p on the [R0.4 reference GPU](hardware-tiers.md#reference-gpu). | 1.5–2 w |
 | R2.5 | Render graph v2: automatic barriers with synchronization2, transient resource aliasing, async compute queue. Existing graph documents load unchanged; built-in passes (forward, gbuffer, deferred, SSAO, FXAA, tonemap, color encode) are migrated. | Existing graph and custom-pass tests pass; built-ins match the old images within the `image_quality_check` tolerance; transient memory on S4 is at least 30 % lower. | 2–3 w |
-| R2.6 | Game swapchain for Player: present modes, frame pacing, resize, prepared for HDR output. | Player S1/S2 run directly on the swapchain; frame-time p95 not worse than R0.6. | 1 w |
+| R2.6 | Game swapchain for Player: present modes, frame pacing, resize, prepared for HDR output. | Player S1/S2 run directly on the swapchain; frame-time p95 [not worse](bench.md#not-worse) than R0.6. | 1 w |
 | R2.7 | Parity and switch: the old renderer behind a feature flag until S1/S2 pass, then removal. | S1/S2 gates pass on the new renderer; old code deleted; independent review. | 0.5–1 w |
 
 <a id="rebuild-r3"></a>
@@ -416,7 +433,7 @@ Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
 | R3.2 | Replace the `eframe` shell in Editor and Player UI: window, input, clipboard, IME, DPI, cursor, and the detached native windows from `native_windows.rs`. egui widgets and panes stay unchanged. | Every existing pane opens; detached windows, docking and resize work; native window checks pass. | 1–1.5 w |
 | R3.3 | Scene and Game views sample render-graph output images on the same device. Remove the D3D12/OPAQUE_FD interop path after acceptance. | One frame less latency than today; `gpu_presentation.rs` interop removed; Linux uses the same path. | 4–5 d |
 | R3.4 | Port verification hooks that depend on `eframe` (`__screenshot`, `ui_capture.rs`, editor benchmark). | UI capture and editor benchmark run as before. | 2–3 d |
-| R3.5 | Acceptance. | Open-to-first-frame not worse than R0.6; owner opens the editor, moves panes and plays G1 without visible change; independent review. | 1–2 d |
+| R3.5 | Acceptance. | Open-to-first-frame [not worse](bench.md#not-worse) than R0.6 (the paired open-to-first-frame check is still to be built: neither `--compare` nor the R0.6 report measures it); owner opens the editor, moves panes and plays G1 without visible change; independent review. | 1–2 d |
 
 <a id="rebuild-r4"></a>
 

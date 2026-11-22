@@ -36,6 +36,16 @@ SceneVarying mainVS(Vertex v) {
                      p.z*farZ/(farZ-nearZ)-farZ*nearZ/(farZ-nearZ),p.z);
     o.normal=v.normal; o.color=v.color; o.depth=p.z; o.ids=v.ids; o.uv=v.uv; o.atlasRect=v.atlasRect; return o;
 }
+#ifdef MODULE_ENGINE_BINDLESS_MATERIALS
+[[vk::binding(0,1)]] Texture2D<float4> materialImages[];
+[[vk::binding(1,1)]] SamplerState materialSampler;
+[[vk::binding(2,1)]] StructuredBuffer<uint> materialIndices;
+float3 baseColor(SceneVarying v) {
+    uint row = asuint(values[3].w) + (uint(v.ids.y) - 1);
+    uint index = NonUniformResourceIndex(materialIndices[row]);
+    return v.color.rgb * materialImages[index].Sample(materialSampler, v.uv).rgb;
+}
+#else
 [[vk::binding(0,0)]] Texture2D<float4> materialAtlas;
 float3 baseColor(SceneVarying v) {
     int2 p=int2(v.atlasRect.xy+min(floor(frac(v.uv)*v.atlasRect.zw),v.atlasRect.zw-1));
@@ -43,6 +53,7 @@ float3 baseColor(SceneVarying v) {
     float3 decoded=lerp(s/12.92,pow((s+0.055)/1.055,2.4),step(0.04045,s));
     return v.color.rgb*decoded;
 }
+#endif
 struct Targets {float4 color:SV_Target0;float4 normal:SV_Target1;float depth:SV_Target2;};
 Targets main(SceneVarying v) {
     Targets o;o.color=float4(baseColor(v),v.ids.x);o.normal=float4(normalize(v.normal),v.ids.y);o.depth=v.depth;return o;

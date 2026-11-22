@@ -9,6 +9,9 @@ use std::{collections::BTreeSet, sync::Arc};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RendererPerformance {
+    pub mesh_upload_bytes: u64,
+    pub instance_upload_bytes: u64,
+    pub material_row_upload_bytes: u64,
     pub render_calls: u64,
     pub prepare_calls: u64,
     pub plan_builds: u64,
@@ -125,6 +128,37 @@ pub trait FrameRenderer: Send {
         height: usize,
         overrides: &RenderOverrides,
     ) -> Result<Frame, String>;
+
+    /// Optional retained scene input; synchronization is independent of GPU
+    /// submission. Busy, cancellation and polling do not acknowledge a delta.
+    fn scene_sync(&self) -> crate::SceneSync {
+        crate::SceneSync::SnapshotOnly
+    }
+
+    fn update_scene(&mut self, _update: crate::SceneUpdate<'_>) -> Result<(), String> {
+        Err("Renderer does not support retained scene input".into())
+    }
+
+    fn render_retained(
+        &mut self,
+        _camera: Camera,
+        _width: usize,
+        _height: usize,
+        _overrides: &RenderOverrides,
+    ) -> Result<Frame, String> {
+        Err("Renderer does not support retained scene input".into())
+    }
+
+    fn render_retained_presented(
+        &mut self,
+        camera: Camera,
+        width: usize,
+        height: usize,
+        overrides: &RenderOverrides,
+    ) -> Result<RenderSubmission, String> {
+        self.render_retained(camera, width, height, overrides)
+            .map(RenderSubmission::Ready)
+    }
 
     /// Install a typed native endpoint. CPU/software renderers need no endpoint.
     /// Unsupported GPU endpoints must be reported by their rendering module.

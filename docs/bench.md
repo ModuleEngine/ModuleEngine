@@ -45,14 +45,77 @@ Sponza is not redistributed: its model files are under the
 pins all 71 files (about 53 MB) by SHA-256 at the same Khronos commit.
 `scripts/bench.py` downloads missing files into the Git-ignored
 `.tools/bench-assets/sponza/`, and the fixture checks every hash again before
-loading. Two fixture adaptations are needed for the legacy renderer. Its static
-importer accepts only opaque materials, so the three alpha-mask materials
+loading. The static importer accepts only opaque materials, so the three alpha-mask materials
 (leaves, chains, plant) are drawn opaque from a derived `Sponza.bench.gltf`
-beside the download. Its base-color atlas is at most 8192 px high, so every S4
-base-color texture is box-filtered to at most 256 px per edge. Geometry is
-unchanged. `cargo test -p module-engine-editor --features bench bench::`
+beside the download. S4 uses original base-color dimensions on the
+[indexed path](hardware-tiers.md#r22-materials). On the compatibility path
+the fixture box-filters them to at most 256 px per edge to fit the atlas.
+Geometry is unchanged. `cargo test -p module-engine-editor --features bench bench::`
 checks the S3–S5 fixture contracts without a GPU; the S4 test skips with a
 message when Sponza has not been downloaded.
+
+<a id="r22-material-checks"></a>
+
+## R2.2 material checks
+
+Build the Editor with `cargo build --release --features bench -p module-engine-editor`.
+Run it with the following options, supplying a new output directory for each.
+These commands use the stock Vulkan renderer with explicit PNG readback.
+
+- `--bench-scene R2-textures <output>` renders a grid of 1,000 unique 16×16
+  source images. It checks every tile center against a linear material color
+  control and records image, upload and pixel counts in `materials.json`.
+- `--bench-scene S4-floor <output>` captures a 32-frame floor-level camera
+  path on S4. `--bench-scene S4-floor-atlas <other-output>` replays that path
+  using the original 256 px atlas fixture and the original Custom HLSL
+  material ABI. Both directories contain the exact camera parameters and PNGs.
+
+The Player example `gpu_presentation_check` exercises native interop and
+checks that two in-flight material versions produce their individual reference
+pixels while the second submission reuses the unchanged texture.
+
+<a id="r23-scene-checks"></a>
+
+## R2.3 scene uploads and timing
+
+Use a Release Editor built with `bench`. Run native S3 with 11,000 drawables
+and 1,000 moving instances, then repeat in a new output directory with
+`MODULE_ENGINE_BENCHMARK_S3_STATIC=1` to hold every model fixed. Use the same
+viewport, profiling and vsync configuration as the baseline and keep other
+GPU work out of the measurement. Native runs should admit two tickets and
+transfer no CPU pixel bytes. An optimized build with the Vulkan package's
+debug assertions and the Khronos layer verifies synchronization separately
+from performance runs.
+
+`first_completed_frame_work` and every sample record bytes for vertices,
+mesh indices, instances, material rows, draw commands, texture images and
+the atlas. The moving series should write only changed instance rows in
+steady state. The fixed series should write zero scene bytes after the first
+submission. The counters exclude on-device copies for mesh pool growth.
+
+`cpu_scene_frame_ms` measures construction and application of the standalone
+scene delta plus the CPU elapsed time for the successful `render_scene_presented`
+call, through queue submission. The per-submission work reports renderer
+preparation, command recording, queue submit, and any blocking diagnostic
+GPU wait. The native producer polls asynchronously. Its observed ticket
+latency and the window-observed interval are separate measurements.
+`cpu_fixture_frame_ms` also includes the Core ECS fixture tick and
+standalone transform extraction. The roadmap's **S3 CPU frame** uses this
+full measured boundary. The S3 report also breaks down the same ECS tick
+into its eight-column query and motion writes. The render-call boundary is the one
+reported in the baseline `cpu_submit_ms`. The benchmark emits its own deltas,
+so the [GameHost acceptance fixture](shared-game-host.md#r16-scene-updates)
+separately checks the production path and its upload counters.
+
+Run `--bench-scene R23-structure <new output folder>` for the offscreen
+structural comparison. It applies one insertion, removal or triangle-count
+change at the start, middle and end of scenes with 1,000 and 11,000
+drawables. Each case warms both mesh/material states, records 24 edit
+samples with an unchanged control, and checks exact RGBA and render stats
+against the expanded snapshot. Compare delta application, Vulkan
+preparation, recording and queue submit as CPU work. Diagnostic GPU wait
+is recorded separately. The benchmark does not exercise ECS changes or
+the native window.
 
 ## Measurement and repeatability
 
@@ -72,10 +135,13 @@ measures 30. No authored project or installed Editor or Player is used.
 | S4, S5 | Window-observed frame interval and CPU render/submission time |
 
 S3–S5 exercise the current Vulkan graph, GPU completion and the Player's
-native GPU texture bridge in a real window. Their diagnostic app admits one
-submission at a time on the window thread, observes completion on a later UI
-callback and submits the next frame in that same callback. This includes window
-scheduling. The launcher requests `MODULE_ENGINE_GUI_VSYNC=off` for every scene.
+native GPU texture bridge in a real window. S3 can pipeline two producer
+requests on [R2.1-capable devices](hardware-tiers.md#r21-device). S4 and S5
+use one request at a time. The window thread observes at most one completion
+per UI callback and refills available requests in that callback. The timing
+includes window scheduling. S3 records the producer slot count, observed
+maximum pending tickets and allocator totals in the raw scene report.
+The launcher requests `MODULE_ENGINE_GUI_VSYNC=off` for every scene.
 WGPU can fall back to display pacing when an unsynchronized mode is unavailable.
 `--vsync` explicitly requests the display-paced mode. Each scene records the
 request separately from `effective_present_mode`, the concrete mode selected by
@@ -110,6 +176,107 @@ start a new complete series. R0.3–R0.6 have separate acceptance criteria.
 `python scripts/bench.py --once` runs one diagnostic S1–S5 pass with per-scene
 warmup and returns success when all scenes complete. It does not evaluate the
 three-run repeatability gate.
+
+<a id="not-worse"></a>
+
+## Not worse than the baseline
+
+Every later acceptance criterion that says "not worse than R0.6" (or than
+any other baseline) is decided by this rule, and `scripts/bench.py --compare`
+applies it and returns the verdict. Archived numbers are not reused: drivers,
+Windows and background load drift, so the baseline commit is rebuilt and
+measured again in the same session as the candidate. The R0.6 baseline
+commit is the source revision recorded in the
+[R0.6 report](product-roadmap.md#rebuild-r0).
+
+```sh
+python scripts/bench.py --no-profiling --compare <baseline commit>
+python scripts/bench.py --no-profiling --compare <baseline commit> --scenes S2,S3
+```
+
+1. **Paired session.** Both sides are built in Release from their own
+   sources: the baseline in a temporary Git worktree, the candidate from the
+   current checkout including uncommitted changes, or from `--candidate <commit>`.
+   Each side has a separate Cargo target directory inside its series build
+   directory. The launcher only accepts the Editor artifact from that side's target.
+   After one unscored prewarm pass per side, full passes alternate baseline,
+   candidate, baseline, … until each side has five (`--rounds`, at least 3).
+   Machine drift then affects both sides equally.
+2. **Median verdict.** Each metric is reduced to one value per run. The verdict
+   compares the median of the candidate's runs with the median of the
+   baseline's runs: `change = 100 × (candidate − baseline) / baseline`.
+   Positive means slower or larger.
+3. **Per-metric tolerance from measured noise.**
+   `tolerance = max(floor, 2 × spread)`, where `spread = 100 × (max − min) /
+   median` of the baseline's runs in this session. The floor is 5 % for
+   timings and 1 % for peak working set, so memory is compared almost
+   strictly. A change above `+tolerance` is **worse**, below `−tolerance` is
+   **better**, otherwise **same**.
+4. **One automatic rerun on the border.** If a blocking metric's change is
+   within 25 % of its tolerance on either side of the line
+   (`|change − tolerance| ≤ 0.25 × tolerance`), the affected scenes are
+   measured once more, starting with the candidate. The verdict is then taken
+   from both sessions together, with no further reruns.
+
+| Metric | Role |
+| --- | --- |
+| Mean and p95 of each declared metric (see the table above: frame interval, S2 GameHost step, CPU submit, S3 ECS tick) | Blocking |
+| Peak working set of each scene process | Blocking, 1 % floor |
+| p99 of each declared metric | Tracked: reported, never blocks. S2 step time has no raw samples, so its p99 is reported as missing. |
+
+A scene passes when every run on both sides completed, every run reports
+its vsync request, frame profiling setting and a known effective present mode,
+the scene signature (adapter, driver, present mode, profiling, resolution,
+workload counts) and fixture inventory match across all runs, and no blocking
+metric is worse or missing. A null present mode means the mode was unknown or
+changed during that run, so the scene is incomparable even when both sides
+report it. A changed fixture is not comparable: record a new baseline instead.
+The series passes, and the command exits 0, only when every requested scene
+passes and neither side's sources or binary changed during the series. A
+rejected comparison exits 1, an error 2. A comparison of a commit against
+itself (A/A) shows the machine's current noise.
+
+**Declared presentation change.** When the presentation path itself is the
+change under test (R2.6: the current WGPU path against the direct Vulkan
+swapchain), declare each field that may differ between the sides:
+`--declare-change gui_graphics.backend` (also `gui_graphics.renderer`,
+`gui_graphics.requested_renderer`, `gui_graphics.requested_gpu_backend`; the
+option repeats). Only these fields can be declared. A declared field must be
+reported (non-null) in every run on both sides and identical across all runs of one side, both values are written to
+`compare.json` and `compare.md`, and every other field stays strict: a
+different adapter, resolution, workload or effective present mode is still
+incomparable. Without the option the comparison is fully strict.
+
+**Not covered yet: R3.5 open-to-first-frame.** The launcher does not measure
+editor start to first frame, and the R0.6 report has no such value, so a
+passing `--compare` is not R3.5 evidence. The R3.5 check remains outstanding:
+it needs defined start and first-frame events and a paired command under this
+rule before R3.5 can be accepted.
+
+The series directory `outputs/bench/<date>/<time>-compare/` contains both
+build logs and binaries, `compare-manifest.json` with the commits and rule,
+per-run scene JSON in `session-1/` (and `session-2/` after a rerun),
+`compare.json` with every value and verdict, and `compare.md` with the table
+that is also printed. A full S1–S5 comparison runs 12 passes and takes much
+longer than the repeatability series; limit `--scenes` to what the criterion
+names when appropriate.
+
+<a id="vulkan-validation"></a>
+
+## Debug Vulkan validation (R0.5)
+
+A debug build requests `VK_LAYER_KHRONOS_validation` when the loader exposes
+it. The startup log reports layer and debug-utils availability. Debug utils
+names the producer device, queue, commands, pipelines, and frame resources.
+Keep stderr through process exit to capture validation messages and per-instance
+counts. The S1 command exits with an error if a validation error was recorded,
+including during retirement. Use this run for functional diagnostics.
+
+```powershell
+cargo build --offline --locked -p module-engine-editor --features bench
+$env:VK_LAYER_PATH = 'C:\path\to\explicit-layer-manifests'
+.\target\debug\module-engine-editor.exe --bench-scene S1 outputs/s1-debug
+```
 
 <a id="frame-timings"></a>
 

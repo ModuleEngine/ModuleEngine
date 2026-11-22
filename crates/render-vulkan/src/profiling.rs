@@ -1,4 +1,4 @@
-use crate::presentation::DeviceLifetime;
+use crate::{VulkanError, presentation::DeviceLifetime};
 use ash::vk;
 use module_engine_core::{FrameTimings, GpuPassTiming, GpuTimings};
 use std::sync::Arc;
@@ -30,15 +30,19 @@ impl TimestampCapture {
         valid_bits: u32,
         period_ns: f64,
         passes: Vec<(String, bool)>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, VulkanError> {
         if !(1..=64).contains(&valid_bits) || !period_ns.is_finite() || period_ns <= 0. {
-            return Err("Selected Vulkan queue does not support timestamps".into());
+            return Err(VulkanError::Profiling(
+                "Selected Vulkan queue does not support timestamps",
+            ));
         }
         let count = u32::try_from(passes.len())
             .ok()
             .and_then(|n| n.checked_add(1))
             .and_then(|n| n.checked_mul(2))
-            .ok_or("Too many graph passes for Vulkan timestamp queries")?;
+            .ok_or(VulkanError::Profiling(
+                "Too many graph passes for Vulkan timestamp queries",
+            ))?;
         if slot.as_ref().is_none_or(|pool| pool.capacity < count) {
             let raw = unsafe {
                 context.device.create_query_pool(
@@ -48,7 +52,8 @@ impl TimestampCapture {
                     None,
                 )
             }
-            .map_err(|error| format!("Vulkan timestamp pool: {error:?}"))?;
+            .map_err(VulkanError::api("create timestamp query pool"))?;
+            context.name(raw, || "ModuleEngine GPU frame timestamp queries".into());
             *slot = Some(Arc::new(TimestampPool {
                 context: context.clone(),
                 raw,
@@ -133,7 +138,7 @@ fn duration_ms(start: u64, end: u64, bits: u32, period_ns: f64) -> f64 {
 }
 
 pub(crate) struct PendingTimings {
-    pub capture: Result<TimestampCapture, String>,
+    pub capture: Result<TimestampCapture, VulkanError>,
     pub record_ms: f64,
     pub submit_ms: Option<f64>,
 }
@@ -146,7 +151,7 @@ impl PendingTimings {
             gpu: Some(match &self.capture {
                 Ok(capture) => capture.read(),
                 Err(reason) => GpuTimings::Unavailable {
-                    reason: reason.clone(),
+                    reason: reason.to_string(),
                 },
             }),
             ..Default::default()

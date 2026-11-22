@@ -111,7 +111,7 @@ pub(crate) fn install(registry: &mut ComponentRegistry) -> Result<(), String> {
             let board: Board = serde_json::from_value(entity.components[BOARD].clone())
                 .map_err(|error| error.to_string())?;
             validate_board(&board)?;
-            root(entity)
+            root(&entity.object)
         },
     )?;
     registry.register_with_validator(
@@ -135,12 +135,12 @@ pub(crate) fn install(registry: &mut ComponentRegistry) -> Result<(), String> {
         |entity, _| {
             let _: Cell = serde_json::from_value(entity.components[CELL].clone())
                 .map_err(|error| error.to_string())?;
-            root(entity)
+            root(&entity.object)
         },
     )
 }
-fn root(entity: &GameEntity) -> Result<(), String> {
-    if entity.object.parent.is_some() {
+fn root(object: &WorldObject) -> Result<(), String> {
+    if object.parent.is_some() {
         Err("Puzzle board/cells must be root objects".into())
     } else {
         Ok(())
@@ -187,16 +187,19 @@ impl Layout {
     }
 }
 pub(crate) fn world_layout(world: &EcsWorld) -> Result<Layout, String> {
-    let ids: BTreeSet<_> = world
-        .entities_with(&[BOARD])
+    let boards = world.entities_with(&[BOARD]);
+    let [id] = boards.as_slice() else {
+        return Err("Puzzle scene needs exactly one board".into());
+    };
+    let owner = world.object(*id).ok_or("Missing puzzle board object")?;
+    let raw = world
+        .component(*id, BOARD)
+        .ok_or("Missing puzzle board component")?;
+    let cells = world
+        .entities_with(&[CELL])
         .into_iter()
-        .chain(world.entities_with(&[CELL]))
-        .collect();
-    layout(
-        &ids.into_iter()
-            .filter_map(|id| world.entity(id))
-            .collect::<Vec<_>>(),
-    )
+        .filter_map(|id| Some((world.object(id)?, world.component(id, CELL)?)));
+    layout(&owner, raw, world.component(*id, CELL).is_some(), cells)
 }
 pub(crate) fn project_layout(project: &GameProject, scene: &str) -> Result<Layout, String> {
     let mut entities = project.resolve_scene(scene)?;
@@ -235,49 +238,62 @@ pub(crate) fn project_layout(project: &GameProject, scene: &str) -> Result<Layou
             }
         }
     }
-    layout(&entities)
-}
-fn layout(entities: &[GameEntity]) -> Result<Layout, String> {
-    let boards: Vec<_> = entities
+    let mut boards = entities
         .iter()
-        .filter(|entity| entity.components.contains_key(BOARD))
-        .collect();
-    if boards.len() != 1 {
+        .filter_map(|entity| Some((entity, entity.components.get(BOARD)?)));
+    let Some((owner, raw)) = boards.next() else {
+        return Err("Puzzle scene needs exactly one board".into());
+    };
+    if boards.next().is_some() {
         return Err("Puzzle scene needs exactly one board".into());
     }
-    let owner = boards[0];
+    let cells = entities.iter().filter_map(|entity| {
+        entity
+            .components
+            .get(CELL)
+            .map(|raw| (entity.object.clone(), raw))
+    });
+    layout(
+        &owner.object,
+        raw,
+        owner.components.contains_key(CELL),
+        cells,
+    )
+}
+
+fn layout<'a>(
+    owner: &WorldObject,
+    raw: &Value,
+    board_is_cell: bool,
+    cell_values: impl Iterator<Item = (WorldObject, &'a Value)>,
+) -> Result<Layout, String> {
     root(owner)?;
-    if owner.components.contains_key(CELL) || owner.object.transform.rotation != [0.; 3] {
+    if board_is_cell || owner.transform.rotation != [0.; 3] {
         return Err("Puzzle board cannot also be a cell or be rotated".into());
     }
-    let board: Board = serde_json::from_value(owner.components[BOARD].clone())
-        .map_err(|error| error.to_string())?;
+    let board = Board::deserialize(raw).map_err(|error| error.to_string())?;
     validate_board(&board)?;
     let mut cells = BTreeMap::new();
     let mut walls = BTreeSet::new();
     let mut pawn = None;
     let mut crate_id = None;
     let mut goal = None;
-    for entity in entities {
-        let Some(value) = entity.components.get(CELL) else {
-            continue;
-        };
-        root(entity)?;
-        let cell: Cell =
-            serde_json::from_value(value.clone()).map_err(|error| error.to_string())?;
+    for (object, value) in cell_values {
+        root(&object)?;
+        let cell = Cell::deserialize(value).map_err(|error| error.to_string())?;
         if cell.x < 0 || cell.z < 0 || cell.x >= board.width || cell.z >= board.height {
             return Err("Puzzle cell is outside board bounds".into());
         }
         let duplicate = match cell.kind {
             Kind::Wall => !walls.insert((cell.x, cell.z)),
             Kind::Goal => goal.replace((cell.x, cell.z)).is_some(),
-            Kind::Pawn => pawn.replace(entity.object.id).is_some(),
-            Kind::Crate => crate_id.replace(entity.object.id).is_some(),
+            Kind::Pawn => pawn.replace(object.id).is_some(),
+            Kind::Crate => crate_id.replace(object.id).is_some(),
         };
         if duplicate {
             return Err("Duplicate puzzle pawn, crate, goal or wall".into());
         }
-        cells.insert(entity.object.id, cell);
+        cells.insert(object.id, cell);
     }
     let (pawn, crate_id, goal) = (
         pawn.ok_or("Puzzle needs one pawn")?,
@@ -297,7 +313,7 @@ fn layout(entities: &[GameEntity]) -> Result<Layout, String> {
     }
     Ok(Layout {
         board,
-        origin: owner.object.transform.translation,
+        origin: owner.transform.translation,
         cells,
         pawn,
         crate_id,

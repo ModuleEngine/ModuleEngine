@@ -368,6 +368,13 @@ pub fn install(registry: &mut SystemRegistry) -> Result<(), String> {
         diagnostics: crate::diagnostics,
     })?;
     registry.register_pose_projection("g1.presentation", project_garden_poses)?;
+    registry.register_presentation_scope(
+        "g1.presentation",
+        GamePresentationScope {
+            pose_objects: |game| presentation_cells(game, &["pawn", "goal"]),
+            appearance_objects: |game| presentation_cells(game, &["crate"]),
+        },
+    )?;
     registry.describe_contribution("g1.presentation", CapabilityMetadata::new(
         "Crate Garden host integration", "Supply the game's diorama camera, scene decoration, input adaptation and explicit audio/persistence requests; UI is installed separately.",
         CapabilityOwner::Project, CapabilityKind::HostContribution, env!("CARGO_PKG_NAME"),
@@ -542,6 +549,19 @@ impl Rules {
 }
 /// Presentation-only feedback. Shared materials, texture Arcs,
 /// authored data and the canonical world/attempt remain untouched.
+fn presentation_cells(game: &GameState, kinds: &[&str]) -> Vec<u64> {
+    game.world
+        .entities_with(&[CELL])
+        .into_iter()
+        .filter(|&id| {
+            game.world
+                .component(id, CELL)
+                .and_then(|cell| cell["kind"].as_str())
+                .is_some_and(|kind| kinds.contains(&kind))
+        })
+        .collect()
+}
+
 fn decorate_garden_snapshot(snapshot: &mut SceneSnapshot, game: &GameState) {
     let mut goals = BTreeSet::new();
     let mut crates = Vec::new();

@@ -131,6 +131,25 @@ pub struct GameState {
     pub control: SessionControl,
 }
 impl GameState {
+    pub(crate) fn checkpoint_tick(&mut self, validated_world: bool) -> Self {
+        let Self {
+            scene,
+            time,
+            tick,
+            world,
+            module_data,
+            control,
+        } = self;
+        Self {
+            scene: scene.clone(),
+            time: *time,
+            tick: *tick,
+            world: world.checkpoint_tick(validated_world),
+            module_data: module_data.clone(),
+            control: control.clone(),
+        }
+    }
+
     pub fn apply_commands(&mut self, commands: &[WorldCommand]) -> Result<(), String> {
         self.world.apply_commands(commands)
     }
@@ -404,11 +423,31 @@ impl GameSession {
         snapshot.time = self.state.time as f32;
         snapshot
     }
+    /// The canonical ECS can stream accepted changes. A compatibility provider
+    /// remains authoritative for its own drawables and supplies a full snapshot.
+    pub fn has_render_changes(&self) -> bool {
+        self.provider.is_none()
+    }
+
+    pub fn read_render_changes(
+        &mut self,
+        cursor: &mut crate::RenderChangeCursor,
+    ) -> Option<crate::WorldRenderChanges> {
+        self.has_render_changes()
+            .then(|| self.state.world.read_render_changes(cursor))
+    }
     /// Source visual poses on a fresh raw snapshot, before interpolation/content.
     /// The compatibility `snapshot` remains the canonical provider projection.
     /// A rejected visual projection never mutates or rolls back gameplay.
     pub fn presentation_snapshot(&self) -> Result<SceneSnapshot, String> {
         let mut snapshot = self.snapshot();
+        self.project_presentation_models(&mut snapshot)?;
+        Ok(snapshot)
+    }
+
+    /// Apply the pose hooks to all provided raw drawables. A partial input
+    /// requires the active hooks to have registered a presentation scope.
+    pub fn project_presentation_models(&self, snapshot: &mut SceneSnapshot) -> Result<(), String> {
         let mut written = BTreeSet::new();
         for contribution in self
             .registry
@@ -417,7 +456,7 @@ impl GameSession {
             let Some(project) = self.registry.pose_projection(&contribution.id) else {
                 continue;
             };
-            let models = project(&snapshot, &self.state)
+            let models = project(snapshot, &self.state)
                 .map_err(|error| format!("Pose projection '{}': {error}", contribution.id))?;
             for (id, model) in &models {
                 if snapshot.items.iter().filter(|item| item.id == *id).count() != 1 {
@@ -446,7 +485,7 @@ impl GameSession {
                 }
             }
         }
-        Ok(snapshot)
+        Ok(())
     }
     pub fn world_kind(&self) -> WorldKind {
         self.kind
@@ -454,8 +493,21 @@ impl GameSession {
     /// Useful for host Custom packets: components remain with stable object IDs.
     pub fn apply_commands(&mut self, commands: &[WorldCommand]) -> Result<(), String> {
         self.bootstrap_open = false;
-        let mut candidate = self.state.clone();
-        candidate.apply_commands(commands)?;
+        let original = self.state.checkpoint_tick(true);
+        match self.apply_staged_commands(commands) {
+            Ok(()) => {
+                self.state.world.finish_tick(original.world);
+                Ok(())
+            }
+            Err(error) => {
+                self.state = original;
+                Err(error)
+            }
+        }
+    }
+
+    fn apply_staged_commands(&mut self, commands: &[WorldCommand]) -> Result<(), String> {
+        self.state.apply_commands(commands)?;
         let context = ComponentValidationContext {
             scenes: &self.project.scenes,
             modules: &self.validation_modules,
@@ -473,12 +525,11 @@ impl GameSession {
             self.world_factory.as_ref(),
             true,
         )?;
-        transaction.validate(&candidate)?;
-        if let Err(error) = transaction.commit(&candidate) {
+        transaction.validate(&self.state)?;
+        if let Err(error) = transaction.commit(&self.state) {
             transaction.rollback()?;
             return Err(error);
         }
-        self.state = candidate;
         Ok(())
     }
     /// Advance in 1/60s increments independently of render cadence. Catchup is
@@ -524,7 +575,6 @@ impl GameSession {
             let mut fixed_input = input.clone();
             fixed_input.actions = std::mem::take(&mut self.pending_actions);
             fixed_input.action_values = std::mem::take(&mut self.pending_action_values);
-            let before_tick = self.state.clone();
             let context = ComponentValidationContext {
                 scenes: &self.project.scenes,
                 modules: &self.validation_modules,
@@ -550,14 +600,13 @@ impl GameSession {
                 }
             };
             let mut tick_events = vec![];
-            if let Err(error) = self.executor.step_with_transaction(
+            if let Err(error) = self.executor.step_with_validated_world(
                 &mut self.state,
                 &fixed_input,
                 1. / 60.,
                 &mut tick_events,
                 &mut transaction,
             ) {
-                self.state = before_tick;
                 self.pending_actions.extend(fixed_input.actions);
                 self.pending_action_values.extend(fixed_input.action_values);
                 return Err(error);
@@ -909,26 +958,42 @@ impl<'a> WorldTickTransaction<'a> {
         })
     }
 }
-impl TickTransaction for WorldTickTransaction<'_> {
-    fn validate(&mut self, candidate: &GameState) -> Result<(), String> {
+impl WorldTickTransaction<'_> {
+    fn validate_candidate(
+        &mut self,
+        candidate: &GameState,
+        before: Option<&GameState>,
+    ) -> Result<(), String> {
         if let Some(request) = &candidate.control.transition {
             validate_scene_transition(request, &candidate.world, self.context.scenes)?;
         }
-        candidate.world.validate_references()?;
-        let objects = candidate.world.objects_snapshot();
-        crate::validate_world_commands(&objects, &[])?;
-        self.registry.components().validate_entities(
-            &candidate.world.entities_snapshot(),
-            self.active,
-            &self.context,
-        )?;
+        if let Some(before) = before {
+            candidate.world.validate_changes_since(&before.world)?;
+        } else {
+            candidate.world.validate_references()?;
+            candidate.world.validate_objects()?;
+        }
+        let components = self.registry.components();
+        let world_changed =
+            before.is_none_or(|before| !candidate.world.unchanged_since(&before.world));
+        // Source callbacks may depend on state outside the entity DTO.
+        if self.active.iter().any(|id| {
+            (world_changed || components.has_semantic_validator(id))
+                && candidate.world.may_have_component(id)
+        }) {
+            components.validate_entities(
+                &candidate.world.entities_snapshot(),
+                self.active,
+                &self.context,
+            )?;
+        }
         // SystemExecutor already guards the same staged state on ordinary
         // ticks. Direct session commands have no executor, so guard them here.
         if self.validate_state {
             validate_game_state(self.project, self.registry, candidate)?;
         }
         if let Some(provider) = self.provider.as_ref() {
-            self.commands = world_command_diff(&self.before, &objects)?;
+            self.commands = world_command_diff(&self.before, &candidate.world.objects_snapshot())?;
             provider.validate_commands(&self.commands)?;
         }
         self.prepared_transition = candidate
@@ -949,6 +1014,21 @@ impl TickTransaction for WorldTickTransaction<'_> {
             .transpose()?;
         Ok(())
     }
+}
+
+impl TickTransaction for WorldTickTransaction<'_> {
+    fn validate(&mut self, candidate: &GameState) -> Result<(), String> {
+        self.validate_candidate(candidate, None)
+    }
+
+    fn validate_changes(
+        &mut self,
+        candidate: &GameState,
+        before: &GameState,
+    ) -> Result<(), String> {
+        self.validate_candidate(candidate, Some(before))
+    }
+
     fn commit(&mut self, candidate: &GameState) -> Result<(), String> {
         if self.commands.is_empty() {
             return Ok(());

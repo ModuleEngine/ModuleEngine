@@ -49,14 +49,22 @@ class PolicyTests(unittest.TestCase):
                 ci_plan.changed_paths("a" * 40)
 
     def test_gate_rejects_every_non_success_prerequisite(self):
+        normal = {"native": "true", "package": "true", "roadmap_only": "false"}
+        light = {"native": "false", "package": "false", "roadmap_only": "true"}
+        ci_plan.check_gate("success", "success", "skipped", normal)
+        ci_plan.check_gate("success", "skipped", "success", light)
         for result in ["failure", "cancelled", "skipped", "", None]:
-            for plan, checks in [(result, "success"), ("success", result)]:
+            for planning, checks, roadmap, selected in [
+                (result, "success", "skipped", normal), ("success", result, "skipped", normal),
+                (result, "skipped", "success", light), ("success", "skipped", result, light),
+                ("success", result, "success", normal),
+            ]:
                 with self.assertRaises(ValueError):
-                    ci_plan.check_gate(plan, checks, {"native": "false", "package": "false"})
-        ci_plan.check_gate("success", "success", {"native": "true", "package": "false"})
-        for selected in [{}, {"native": "", "package": "false"}, {"native": "TRUE", "package": "true"}]:
+                    ci_plan.check_gate(planning, checks, roadmap, selected)
+        for selected in [{}, {**normal, "native": "TRUE"}, {**normal, "roadmap_only": ""},
+                         {**light, "native": "true"}, {**light, "package": "true"}]:
             with self.assertRaises(ValueError):
-                ci_plan.check_gate("success", "success", selected)
+                ci_plan.check_gate("success", "skipped", "success", selected)
 
     def test_workflow_keeps_unconditional_gate_and_pinned_read_only_actions(self):
         # Structure check complements policy tests; Actions still needs its first real run.
@@ -64,7 +72,9 @@ class PolicyTests(unittest.TestCase):
         self.assertNotIn("pull_request_target", text)
         self.assertNotIn("self-hosted", text)
         self.assertNotIn("continue-on-error", text)
-        self.assertIn("    if: always()\n    needs: [plan, checks]", text)
+        self.assertIn("    if: always()\n    needs: [plan, checks, roadmap_status]", text)
+        self.assertIn("    if: needs.plan.outputs.roadmap_only == 'false'", text)
+        self.assertIn("    if: needs.plan.outputs.roadmap_only == 'true'", text)
         self.assertIn("  contents: read", text)
         self.assertIn("  merge_group:", text)
         self.assertIn("--component rustfmt --component clippy", text)
@@ -95,6 +105,57 @@ class PolicyTests(unittest.TestCase):
         self.assertIn("if: runner.os == 'Windows' && needs.plan.outputs.native == 'true'", text)
         self.assertIn("if: runner.os == 'Linux' && needs.plan.outputs.native == 'true'", text)
         self.assertIn("if: needs.plan.outputs.package == 'true'", text)
+
+
+class RoadmapRouteTests(unittest.TestCase):
+    EN, RU = ci_plan.ROADMAPS
+
+    @classmethod
+    def roadmaps(cls, en="1.5–2 w", ru="1,5–2 н"):
+        row = "| R1.6 | Work \\| details | Criterion | {} |\n"
+        other = "| R1.7 | More work | Another criterion | {} |\n"
+        heading = "### R1 — Phase\n\n"
+        return {cls.EN: heading + row.format(en) + other.format("2 d"),
+                cls.RU: heading + row.format(ru) + other.format("2 д")}
+
+    def route(self, before, after, paths=None):
+        with patch.object(ci_plan, "changed_paths", return_value=list(before) if paths is None else paths), \
+                patch.object(ci_plan, "read_roadmaps", side_effect=(before, after)):
+            return ci_plan.plan("a" * 40)
+
+    def test_bilingual_status_only_and_estimates(self):
+        for en, ru in [("Done", "Сделано"), ("In progress (1.5–2 w)", "В работе (1,5–2 н)"),
+                       ("3 d", "3 д")]:
+            plan = self.route(self.roadmaps(), self.roadmaps(en, ru))
+            self.assertEqual((plan["roadmap_only"], plan["native"], plan["package"]), (True, False, False))
+
+    def test_empty_single_path_and_mixed_diff_keep_ordinary_route(self):
+        for paths in ([], [self.EN], [self.EN, self.RU, "docs/current-status.md"],
+                      [self.EN, self.RU, "scripts/roadmap_world.html"], ["<initial-or-manual-run>"],
+                      [".github/workflows/ci.yml"]):
+            self.assertFalse(self.route(self.roadmaps(), self.roadmaps("Done", "Сделано"), paths)["roadmap_only"], paths)
+
+    def test_non_status_and_ambiguous_edits_keep_ordinary_route(self):
+        before, valid = self.roadmaps(), self.roadmaps("Done", "Сделано")
+        for transform in (lambda text: text.replace("Criterion", "Other criterion"),
+                          lambda text: text.replace("R1.6", "R1.9"),
+                          lambda text: text.replace("Work", "Different task"),
+                          lambda text: text.replace("### R1", "### R3"),
+                          lambda text: text + "| R1.8 | Extra | Check | 2 d |\n",
+                          lambda text: text.splitlines(keepends=True)[0],
+                          lambda text: text.replace("\n", "\r\n")):
+            self.assertFalse(self.route(before, {**valid, self.EN: transform(valid[self.EN])})["roadmap_only"])
+        self.assertFalse(self.route(before, before)["roadmap_only"])
+        self.assertFalse(self.route(before, {**before, self.EN: valid[self.EN]})["roadmap_only"])
+        self.assertFalse(self.route(before, self.roadmaps("Done", "В работе"))["roadmap_only"])
+        after = {**valid, self.RU: before[self.RU].replace("2 д", "Сделано")}
+        self.assertFalse(self.route(before, after)["roadmap_only"])
+        self.assertFalse(self.route(None, valid, list(before))["roadmap_only"])
+
+    def test_invalid_values_fail_instead_of_becoming_todo(self):
+        for status in ("Implemented", "Done-ish", "In progres", "In progress (soon)", "1.5 m", ""):
+            with self.subTest(status=status), self.assertRaisesRegex(ValueError, "R1.6.*unsupported"):
+                self.route(self.roadmaps(), self.roadmaps(status, "В работе"))
 
 
 class DxcRestoreTests(unittest.TestCase):

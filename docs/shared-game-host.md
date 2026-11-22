@@ -100,8 +100,8 @@ wrapper. Backend counters report actual work; unavailable counters stay zero.
 ## Fixed simulation and interpolated presentation
 
 Interactive gameplay keeps its authoritative fixed 1/60-second step. Host retains
-at most the previous and current completed raw scene, their ECS lifetimes and
-follow-camera targets. `try_render_interpolated(width, height, alpha)` evaluates
+two adjacent follow-camera targets, current object lifetimes and enough of the
+previous accepted pose to interpolate. `try_render_interpolated(width, height, alpha)` evaluates
 an immutable presentation without advancing systems, Custom, input, events or
 audio. The synchronous `render`/CLI route continues to use current state.
 This implementation is undergoing P0 verification; its presence is not a passed
@@ -113,8 +113,8 @@ scheduled node or a mandatory `GameContribution` field. Registration requires
 that contribution to exist and be unique; only a contribution activated by the
 selected execution graph runs its hook. `GamePoseProjection` reads the raw
 `SceneSnapshot` and immutable `GameState` and returns fallible object-ID/model
-pairs. `GameSession::presentation_snapshot()` applies these before Host captures
-its pose endpoints and before content attaches primitive-local matrices.
+pairs. `GameSession` applies these before Host captures its pose endpoints and
+before content attaches primitive-local matrices.
 `GameSession::snapshot()` retains its raw provider projection for compatibility.
 
 Projection may replace only finite affine matrices for unambiguous existing raw
@@ -165,6 +165,64 @@ selected `ReadyVariant`/`project_commands` recipes remain active on each actual
 render, including interpolated poses, and use committed simulation time; they do
 not run additional Custom or game calls. Headless execution discards GPU operations
 at each step call without GPU work or an unbounded command queue.
+
+<a id="r16-scene-updates"></a>
+
+### R1.6 scene updates
+
+For the canonical ECS, the Vulkan adapter receives `SceneUpdate` from the
+interpolated, synchronous and authored Host render routes. Host starts from
+[committed ECS changes](ecs-world.md#r16-render-extraction), then interpolates,
+expands imported primitives, and applies materials and presentation effects.
+The final delta carries stable IDs for spawned, removed and replaced drawables.
+Edits flag model, material/color and mesh changes independently. Each drawable
+group keeps primitive order, and groups are ordered by stable object ID.
+Interpolation also updates owners whose displayed pose returns to the latest
+accepted endpoint.
+
+Each retained renderer wrapper reports its CPU scene revision. Host sends an
+initial reset on first use, a delta if the receiver has its base revision, or
+a fresh reset if the receiver has missed the retained delta. An empty delta
+can carry visual time when a frame is required without drawable edits. Scene
+synchronization is independent of request acceptance and GPU completion.
+Polling, cancellation and Busy keep the existing frame-publication and
+one-shot rules. Vulkan retains the ordered CPU drawable list and tracks the
+rows named by accepted deltas. On the [R2.3 path](hardware-tiers.md#r23-scene)
+the next successful graphics submission publishes those GPU updates. A busy
+request keeps edits pending. A reset or scene switch reconciles the rows
+against the new accepted list and can reuse meshes already in the device pool.
+
+The software renderer, explicit `author_snapshot()` for picking/diagnostics,
+and compatibility world providers retain the snapshot path. A contribution can
+register a `GamePresentationScope` to select potentially affected pose and
+appearance IDs in the accepted state. The hooks must work on a partial input
+with identical per-item results, and decoration must preserve ID, primitive
+count and order. Crate Garden, the source Puzzle and ARPG register scopes.
+Active legacy hooks without a scope use full snapshots.
+
+#### S3 verification
+
+Before R1.6, `PresentationSample::capture` built the complete raw snapshot in
+`GameHost::step_budget` before and after the tick, and again in
+`try_render_interpolated`. The existing standalone S3 benchmark mutates its
+own draw list, so it cannot observe this Host-to-renderer boundary. The R1.6
+test uses the S3 layout and IDs through an authored schedule, GameSession,
+GameHost and the retained receiver.
+
+```powershell
+cargo test --offline --locked --release -p module-engine-host --lib render_extraction_tests -- --include-ignored --nocapture --test-threads=1
+```
+
+The fixture has 11,000 live drawables and 2,000 entities with eight registered
+schema columns. It asserts the exact set of 1,000 moved IDs and 10,000 untouched
+objects, an empty repeat and schema-only update, material-only and structural
+edits, and recovery after two missed updates. The CPU and offscreen Vulkan
+fixtures compare pixel bytes with their full-snapshot reference. The CPU test
+also compares the entire retained drawable list in stable order. The small
+fixture covers parent/child interpolation, tick rejection and a scene switch
+that reuses an ID. These are extraction and image-equivalence checks using
+cube drawables. The native S3 asset-coverage, window-interoperability and
+performance benchmarks have separate verification routes.
 
 ## Headless and optional services
 

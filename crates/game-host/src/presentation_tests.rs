@@ -7,9 +7,48 @@ struct Draws {
     fail: bool,
     snapshots: Vec<SceneSnapshot>,
     batches: Vec<Vec<RenderResourceCommand>>,
+    retained: Option<RenderScene>,
 }
 struct Recorder(Arc<Mutex<Draws>>);
 impl FrameRenderer for Recorder {
+    fn scene_sync(&self) -> SceneSync {
+        self.0
+            .lock()
+            .unwrap()
+            .retained
+            .as_ref()
+            .map_or(SceneSync::SnapshotOnly, RenderScene::sync)
+    }
+
+    fn update_scene(&mut self, update: SceneUpdate<'_>) -> Result<(), String> {
+        self.0
+            .lock()
+            .unwrap()
+            .retained
+            .as_mut()
+            .unwrap()
+            .apply(update)
+    }
+
+    fn render_retained(
+        &mut self,
+        camera: Camera,
+        w: usize,
+        h: usize,
+        controls: &RenderOverrides,
+    ) -> Result<Frame, String> {
+        let snapshot = self
+            .0
+            .lock()
+            .unwrap()
+            .retained
+            .as_ref()
+            .unwrap()
+            .snapshot()?
+            .clone();
+        self.render(&snapshot, camera, w, h, controls)
+    }
+
     fn render(
         &mut self,
         scene: &SceneSnapshot,
@@ -118,6 +157,15 @@ fn host_with_pose(
         systems.register_game_contribution(contribution).unwrap();
         systems
             .register_pose_projection("fixture.source_pose", project)
+            .unwrap();
+        systems
+            .register_presentation_scope(
+                "fixture.source_pose",
+                GamePresentationScope {
+                    pose_objects: |_| vec![1],
+                    ..Default::default()
+                },
+            )
             .unwrap();
     }
     let composition = CompositionContext::new(ModuleRegistry::builtin(), systems).unwrap();
@@ -415,9 +463,49 @@ pub(crate) struct GpuDraws {
     pub(crate) polls: usize,
     pub(crate) discarded: Vec<u64>,
     pending: Option<(u64, Frame)>,
+    retained: Option<RenderScene>,
+    submitted_model_x: Option<f32>,
 }
 struct GpuRecorder(Arc<Mutex<GpuDraws>>);
 impl FrameRenderer for GpuRecorder {
+    fn scene_sync(&self) -> SceneSync {
+        self.0
+            .lock()
+            .unwrap()
+            .retained
+            .as_ref()
+            .map_or(SceneSync::SnapshotOnly, RenderScene::sync)
+    }
+
+    fn update_scene(&mut self, update: SceneUpdate<'_>) -> Result<(), String> {
+        self.0
+            .lock()
+            .unwrap()
+            .retained
+            .as_mut()
+            .unwrap()
+            .apply(update)
+    }
+
+    fn render_retained_presented(
+        &mut self,
+        camera: Camera,
+        width: usize,
+        height: usize,
+        controls: &RenderOverrides,
+    ) -> Result<RenderSubmission, String> {
+        let snapshot = self
+            .0
+            .lock()
+            .unwrap()
+            .retained
+            .as_ref()
+            .unwrap()
+            .snapshot()?
+            .clone();
+        self.render_presented(&snapshot, camera, width, height, controls)
+    }
+
     fn render(
         &mut self,
         _: &SceneSnapshot,
@@ -449,7 +537,7 @@ impl FrameRenderer for GpuRecorder {
     }
     fn render_presented(
         &mut self,
-        _: &SceneSnapshot,
+        scene: &SceneSnapshot,
         camera: Camera,
         width: usize,
         height: usize,
@@ -463,6 +551,7 @@ impl FrameRenderer for GpuRecorder {
         if draws.busy || draws.pending.is_some() {
             return Ok(RenderSubmission::Busy);
         }
+        draws.submitted_model_x = scene.items.first().map(|item| item.model[0][3]);
         draws
             .completed
             .push((camera, controls.resource_commands.clone()));
@@ -515,6 +604,85 @@ impl FrameRenderer for GpuRecorder {
     fn backend_name(&self) -> &str {
         "fixture GPU lease recorder"
     }
+}
+
+#[test]
+fn retained_busy_and_discard_preserve_accepted_ticket_and_one_shot_ownership() {
+    let (mut host, draws, _temp) = gpu_host();
+    {
+        let mut draws = draws.lock().unwrap();
+        draws.retained = Some(RenderScene::default());
+        draws.busy = true;
+        draws.delayed = true;
+    }
+    host.step_budget(1. / 60., &input(&["move"]), 1).unwrap();
+    let accepted_batch = queue_gpu_resource_batch(&host);
+    assert!(
+        host.try_render_interpolated(80, 45, 0.25)
+            .unwrap()
+            .is_none()
+    );
+    assert!(!host.has_pending_presentation());
+    assert_eq!(
+        host.overrides.lock().unwrap().resource_commands,
+        accepted_batch
+    );
+    {
+        let mut draws = draws.lock().unwrap();
+        let scene = draws.retained.as_ref().unwrap().snapshot().unwrap();
+        assert_eq!(scene.items[0].model[0][3], 0.25);
+        assert!(draws.completed.is_empty());
+        draws.busy = false;
+    }
+    assert!(
+        host.try_render_interpolated(80, 45, 0.75)
+            .unwrap()
+            .is_none()
+    );
+    assert!(host.has_pending_presentation());
+    assert!(host.overrides.lock().unwrap().resource_commands.is_empty());
+    assert_eq!(draws.lock().unwrap().submitted_model_x, Some(0.75));
+
+    let successor_command = RenderResourceCommand::ClearResource {
+        name: "successor.color".into(),
+        value: [1.; 4],
+    };
+    host.overrides
+        .lock()
+        .unwrap()
+        .resource_commands
+        .push(successor_command.clone());
+    host.session
+        .apply_commands(&[WorldCommand::SetPosition {
+            id: 1,
+            position: [9., 0., 0.],
+        }])
+        .unwrap();
+    assert!(host.try_render_interpolated(80, 45, 0.5).unwrap().is_none());
+    {
+        let mut draws = draws.lock().unwrap();
+        assert_eq!(draws.discarded, vec![1]);
+        assert_eq!(draws.submitted_model_x, Some(9.));
+        assert_eq!(draws.completed[0].1, accepted_batch);
+        assert_eq!(draws.completed[1].1, vec![successor_command]);
+        draws.ready = true;
+    }
+    assert!(host.overrides.lock().unwrap().resource_commands.is_empty());
+    let completed = host.poll_interpolated_presentation().unwrap().unwrap();
+    assert_eq!(completed.provenance.alpha, 1.);
+    assert_eq!(
+        completed
+            .frame
+            .gpu
+            .as_ref()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<FixtureGpuLease>()
+            .unwrap()
+            .serial,
+        2
+    );
+    assert!(host.poll_interpolated_presentation().unwrap().is_none());
 }
 
 pub(crate) fn gpu_host() -> (
@@ -1956,6 +2124,15 @@ fn following_respawn_snaps_camera_with_geometry_and_cannot_create_extra_pose_fra
 
 #[test]
 fn imported_primitives_receive_interpolated_object_pose_before_attachment() {
+    check_imported_primitives(false);
+}
+
+#[test]
+fn retained_imported_primitives_receive_interpolated_object_pose_before_attachment() {
+    check_imported_primitives(true);
+}
+
+fn check_imported_primitives(retained: bool) {
     let (mut host, draws, _temp) = host_with_pose(Some(|snapshot, state| {
         let mut model = snapshot.items[0].model;
         model[0][3] += state.time as f32 * 60.;
@@ -1979,6 +2156,10 @@ fn imported_primitives_receive_interpolated_object_pose_before_attachment() {
         .components
         .insert("mesh".into(), json!({"path":"assets/models/crystal.glb"}));
     host.refresh_author_preview(&document).unwrap();
+    if retained {
+        draws.lock().unwrap().retained = Some(RenderScene::default());
+        host.try_render_interpolated(80, 45, 1.).unwrap().unwrap();
+    }
     let model = host
         .content
         .load_model("assets/models/crystal.glb")
@@ -2024,10 +2205,19 @@ fn respawn_same_id_and_actual_same_scene_transition_never_blend_unrelated_lifeti
 
 #[test]
 fn compiled_custom_string_reset_snaps_only_committed_teleport_and_rejection_keeps_history() {
-    // Reuse the existing validated native fixture/compiler path. Only the final
-    // rendering is recorded on CPU; the script really compiles and executes IPC.
+    // Keep the real compiler/IPC fixture and construct the host with a CPU
+    // renderer before installing the Recorder used by the assertions.
     let root = super::test_support::workspace_root();
     let mut document = super::test_support::demo_document();
+    let renderer = document
+        .root
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == "renderer")
+        .unwrap();
+    renderer.module = "render.software3d".into();
+    renderer.subgraph = Some(Box::new(module_engine_core::software3d_graph()));
+    document.engine.exposure = Default::default();
     document.custom_sources.insert(
         "game-controller".into(),
         r#"// module-engine-state: {"schema":"presentation.reset.v1","initial":{"mode":"move","ticks":0}}

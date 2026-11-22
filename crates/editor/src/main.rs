@@ -32,6 +32,8 @@ mod scalar;
 mod scene_assets_verification;
 mod scene_tools;
 mod scene_view_ui;
+#[cfg(test)]
+mod schedule_replay;
 mod settings_verification;
 #[cfg(test)]
 mod source_modules;
@@ -50,6 +52,35 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// A serialized verify process owns all the retired workers and GPU jobs here.
+/// Drop this after the test's fixtures and before its validation guard.
+#[cfg(test)]
+struct FinishSerialRenderTest;
+
+#[cfg(test)]
+impl Drop for FinishSerialRenderTest {
+    fn drop(&mut self) {
+        if std::env::var_os("MODULE_ENGINE_VERIFY_SERIAL").as_deref() == Some("1".as_ref()) {
+            let workers = game_worker::finish_after_ui();
+            let gpu = module_engine_player::gpu_presentation::finish_gpu_retirements();
+            if !std::thread::panicking() {
+                workers.expect("retire test Game workers and preparation");
+                gpu.expect("retire test GPU owners");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+macro_rules! requires_editor_vulkan {
+    () => {
+        module_engine_vulkan::requires_capabilities!(Vulkan, Dxc);
+        let _finish_render_test = $crate::FinishSerialRenderTest;
+    };
+}
+#[cfg(test)]
+pub(crate) use requires_editor_vulkan;
+
 fn main() {
     let result = run();
     // The native window is already closed. Finish detached Game owners here
@@ -59,14 +90,26 @@ fn main() {
     let gpu_cleanup = module_engine_player::gpu_presentation::finish_gpu_retirements()
         .map(|_| ())
         .map_err(|error| error.to_string());
-    if let Err(error) = result.and(cleanup).and(gpu_cleanup) {
+    let validation = if std::env::args()
+        .any(|arg| matches!(arg.as_str(), "--bench-scene" | "--legacy-verify-check"))
+    {
+        let errors = module_engine_vulkan::validation_error_count();
+        if errors == 0 {
+            Ok(())
+        } else {
+            Err(format!("Vulkan validation reported {errors} errors"))
+        }
+    } else {
+        Ok(())
+    };
+    if let Err(error) = result.and(cleanup).and(gpu_cleanup).and(validation) {
         eprintln!("ModuleEngine: {error}");
         std::process::exit(1);
     }
 }
 
 fn run() -> Result<(), String> {
-    let (args, requested_profile) = parse_profile(std::env::args().skip(1).collect())?;
+    let (mut args, requested_profile) = parse_profile(std::env::args().skip(1).collect())?;
     let player_root = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(Path::to_path_buf))
@@ -82,6 +125,30 @@ fn run() -> Result<(), String> {
         return Err(
             "This is a standalone Player package. Editor/Engine commands are unavailable.".into(),
         );
+    }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "--legacy-verify-check")
+    {
+        args.remove(0);
+        let command = args.first().map(String::as_str).unwrap_or_default();
+        if !matches!(
+            command,
+            "--integration-check"
+                | "--settings-check"
+                | "--game-check"
+                | "--editor-ui-check"
+                | "--scene-assets-check"
+                | "--game-worker-check"
+        ) {
+            return Err(format!("Unsupported legacy verification check {command:?}"));
+        }
+        use module_engine_vulkan::verification::{Capability, unavailable};
+        let missing = unavailable(&[Capability::Vulkan, Capability::Dxc])?;
+        if !missing.is_empty() {
+            println!("Skipped {command}: {}", missing.join(" | "));
+            return Ok(());
+        }
     }
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
@@ -107,7 +174,10 @@ fn run() -> Result<(), String> {
         #[cfg(feature = "bench")]
         Some("--bench-scene") => {
             if requested_profile.is_some() || args.len() != 3 {
-                return Err("Usage: --bench-scene S1|S2|S3|S4|S5 <new output folder>".into());
+                return Err(
+                    "Usage: --bench-scene S1|S2|S3|S4|S4-floor|S4-floor-atlas|S5|R2-textures|R23-structure <new output folder>"
+                        .into(),
+                );
             }
             return bench::run(&args[1], Path::new(&args[2]));
         }

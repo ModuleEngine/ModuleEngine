@@ -296,7 +296,9 @@ pub fn export_with_package_root(
         "AGENTS.md",
         ".agents/skills/moduleengine-debug/SKILL.md",
         ".codex/config.toml",
-        "LICENSE",
+        "LICENSE-MIT",
+        "LICENSE-APACHE",
+        "THIRD-PARTY-LICENSES.txt",
         "run.ps1",
         "run.sh",
         "verify.ps1",
@@ -314,7 +316,8 @@ pub fn export_with_package_root(
         } else if matches!(
             relative,
             "Cargo.toml" | "Cargo.lock" | "toolchain-manifest.json"
-        ) {
+        ) || crate::distribution::LICENSE_FILES.contains(&relative)
+        {
             return Err(format!("Missing source export requirement: {relative}"));
         }
     }
@@ -583,7 +586,9 @@ pub fn export_team_with_package_root(
         fs::create_dir_all(native_target.parent().unwrap()).map_err(|e| e.to_string())?;
         copy_new(&native_player, &native_target)?;
     }
-    for relative in ["toolchain-manifest.json", "LICENSE"] {
+    for relative in
+        std::iter::once("toolchain-manifest.json").chain(crate::distribution::LICENSE_FILES)
+    {
         copy_new(&source.join(relative), &target.join(relative))?;
     }
     copy_tree(&source.join("scripts"), &target.join("scripts"))?;
@@ -1113,6 +1118,7 @@ mod tests {
 
     #[test]
     fn export_includes_new_packages_tools_and_relative_external_assets() {
+        crate::requires_editor_vulkan!();
         let temp = fixture("export");
         let asset_root = temp.join("external files");
         fs::create_dir_all(asset_root.join("resources")).unwrap();
@@ -1152,6 +1158,9 @@ mod tests {
             "AGENTS.md",
             ".agents/skills/moduleengine-debug/SKILL.md",
             ".codex/config.toml",
+            "LICENSE-MIT",
+            "LICENSE-APACHE",
+            "THIRD-PARTY-LICENSES.txt",
         ] {
             assert_eq!(
                 fs::read(output.join(path)).unwrap(),

@@ -16,6 +16,8 @@ pub const EDITOR_EXECUTABLE: &str = if cfg!(windows) {
 } else {
     "ModuleEngine"
 };
+/// Project license and third-party notices shipped with every Full, Team and Player delivery.
+pub const LICENSE_FILES: [&str; 3] = ["LICENSE-MIT", "LICENSE-APACHE", "THIRD-PARTY-LICENSES.txt"];
 pub const PROJECT_BINDING_NAME: &str = ".module-engine-project.json";
 pub fn project_binding_path(project_path: &Path) -> Result<PathBuf, String> {
     let name = project_path
@@ -613,7 +615,9 @@ pub fn write_full_manifest(
         "AGENTS.md",
         ".agents/skills/moduleengine-debug/SKILL.md",
         ".codex/config.toml",
-        "LICENSE",
+        "LICENSE-MIT",
+        "LICENSE-APACHE",
+        "THIRD-PARTY-LICENSES.txt",
         "toolchain-manifest.json",
         "run.ps1",
         "run.sh",
@@ -1113,7 +1117,12 @@ pub(crate) fn copy_native_fixture(root: &Path) {
         .unwrap()
         .parent()
         .unwrap();
-    for relative in NATIVE_FILES {
+    // The isolated Editor also compiles Rust workers against the copied Core.
+    for relative in NATIVE_FILES
+        .iter()
+        .copied()
+        .chain(["crates/engine-core/src/render_scene_update.rs"])
+    {
         let p = root.join(relative);
         fs::create_dir_all(p.parent().unwrap()).unwrap();
         fs::copy(original.join(relative), p).unwrap();

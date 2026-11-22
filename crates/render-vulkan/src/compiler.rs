@@ -1,4 +1,6 @@
 use crate::graph::Pass;
+use crate::{ShaderError, VulkanError};
+use std::sync::Arc;
 use std::{
     collections::{BTreeMap, BTreeSet},
     hash::{Hash, Hasher},
@@ -40,7 +42,7 @@ pub fn shader_dependency_revision_at(
     graph: &module_engine_core::Graph,
     sources: &BTreeMap<String, String>,
     root: &Path,
-) -> Result<u64, String> {
+) -> Result<u64, VulkanError> {
     let plan = crate::graph::build_plan_at(graph, sources, root)?;
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     for pass in plan.passes {
@@ -119,14 +121,7 @@ fn resolve_dxc_at(
     root: &Path,
     explicit: Option<&std::ffi::OsStr>,
     search_path: Option<&std::ffi::OsStr>,
-) -> Result<PathBuf, String> {
-    let on_path = |name: &std::ffi::OsStr| {
-        search_path
-            .into_iter()
-            .flat_map(std::env::split_paths)
-            .map(|directory| directory.join(name))
-            .find(|path| validate_native_dxc(path).is_ok())
-    };
+) -> Result<PathBuf, ShaderError> {
     if let Some(explicit) = explicit {
         let path = PathBuf::from(explicit);
         // Preserve Windows Command's existing bare-command override behavior.
@@ -134,61 +129,122 @@ fn resolve_dxc_at(
         return Ok(path);
         #[cfg(not(windows))]
         {
+            let wrap = |path, source| ShaderError::DxcOverride {
+                path,
+                source: Arc::new(source),
+            };
             let resolved = if path.components().count() == 1 && !path.is_file() {
-                on_path(explicit).unwrap_or(path)
+                find_native_dxc(dxc_path_candidates(search_path, explicit))
+                    .map_err(|source| wrap(path.clone(), source))?
+                    .unwrap_or(path)
             } else {
                 path
             };
-            validate_native_dxc(&resolved).map_err(|error| {
-                format!("MODULE_ENGINE_DXC {}: {error}; set it to a native executable, not Windows dxc.exe", resolved.display())
-            })?;
+            validate_native_dxc(&resolved).map_err(|source| wrap(resolved.clone(), source))?;
             return Ok(resolved);
         }
     }
     let candidates = bundled_dxc_candidates(root);
-    if let Some(path) = candidates
-        .iter()
-        .find(|path| validate_native_dxc(path).is_ok())
-    {
-        return Ok(path.clone());
-    }
-    if let Some(path) = on_path(std::ffi::OsStr::new(if cfg!(windows) {
-        "dxc.exe"
-    } else {
-        "dxc"
-    })) {
-        return Ok(path);
-    }
-    Err(format!(
-        "No native DXC compiler for {}. Restore {} with its native shared libraries, install DXC yourself on PATH, or set MODULE_ENGINE_DXC. Precompiled Player shaders do not require DXC.",
-        std::env::consts::OS,
-        candidates[0].display()
-    ))
+    let executable = std::ffi::OsStr::new(if cfg!(windows) { "dxc.exe" } else { "dxc" });
+    find_native_dxc(
+        candidates
+            .iter()
+            .cloned()
+            .chain(dxc_path_candidates(search_path, executable)),
+    )?
+    .ok_or_else(|| ShaderError::MissingDxc {
+        platform: std::env::consts::OS,
+        bundled: candidates[0].clone(),
+    })
 }
 
-fn validate_native_dxc(path: &Path) -> Result<(), String> {
-    let metadata = std::fs::metadata(path).map_err(|error| error.to_string())?;
+fn dxc_path_candidates<'a>(
+    search_path: Option<&'a std::ffi::OsStr>,
+    name: &'a std::ffi::OsStr,
+) -> impl Iterator<Item = PathBuf> + 'a {
+    search_path
+        .into_iter()
+        .flat_map(std::env::split_paths)
+        .map(move |directory| directory.join(name))
+}
+
+fn find_native_dxc(
+    candidates: impl Iterator<Item = PathBuf>,
+) -> Result<Option<PathBuf>, ShaderError> {
+    let mut invalid = None;
+    for path in candidates {
+        match validate_native_dxc(&path) {
+            Ok(()) => return Ok(Some(path)),
+            Err(ShaderError::Io { ref source, .. })
+                if source.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                invalid.get_or_insert(error);
+            }
+        }
+    }
+    invalid.map_or(Ok(None), Err)
+}
+
+fn validate_native_dxc(path: &Path) -> Result<(), ShaderError> {
+    let metadata =
+        std::fs::metadata(path).map_err(|source| ShaderError::io("Inspect DXC", path, source))?;
     if !metadata.is_file() {
-        return Err("not a regular file".into());
+        return Err(ShaderError::InvalidDxc {
+            path: path.into(),
+            reason: "not a regular file",
+        });
     }
     #[cfg(target_os = "linux")]
     {
         use std::{io::Read, os::unix::fs::PermissionsExt};
         if metadata.permissions().mode() & 0o111 == 0 {
-            return Err("native Linux DXC is not executable (check file permissions)".into());
+            return Err(ShaderError::InvalidDxc {
+                path: path.into(),
+                reason: "native Linux DXC is not executable (check file permissions)",
+            });
         }
         let mut magic = [0_u8; 4];
         std::fs::File::open(path)
             .and_then(|mut file| file.read_exact(&mut magic))
-            .map_err(|error| error.to_string())?;
+            .map_err(|source| ShaderError::io("Read DXC executable", path, source))?;
         if magic != *b"\x7fELF" {
-            return Err("expected a native Linux ELF DXC executable".into());
+            return Err(ShaderError::InvalidDxc {
+                path: path.into(),
+                reason: "expected a native Linux ELF DXC executable",
+            });
         }
     }
     Ok(())
 }
 
-fn dxc_command(path: &Path) -> Result<Command, String> {
+fn configured_dxc(root: &Path) -> Result<PathBuf, ShaderError> {
+    resolve_dxc_at(
+        root,
+        std::env::var_os("MODULE_ENGINE_DXC").as_deref(),
+        std::env::var_os("PATH").as_deref(),
+    )
+}
+
+pub(crate) fn probe_dxc(root: &Path) -> Result<(), ShaderError> {
+    let path = configured_dxc(root)?;
+    let output = dxc_command(&path)?
+        .arg("--version")
+        .output()
+        .map_err(|source| ShaderError::DxcLaunch {
+            path: path.clone(),
+            source: Arc::new(source),
+        })?;
+    if !output.status.success() {
+        return Err(ShaderError::DxcVersion {
+            path,
+            status: output.status,
+            diagnostics: String::from_utf8_lossy(&output.stderr).into_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn dxc_command(path: &Path) -> Result<Command, ShaderError> {
     let mut command = Command::new(path);
     #[cfg(windows)]
     {
@@ -217,7 +273,7 @@ fn dxc_command(path: &Path) -> Result<Command, String> {
             command.env(
                 "LD_LIBRARY_PATH",
                 std::env::join_paths(paths)
-                    .map_err(|error| format!("DXC library path: {error}"))?,
+                    .map_err(|source| ShaderError::DxcLibraryPath(Arc::new(source)))?,
             );
         }
     }
@@ -227,7 +283,7 @@ fn dxc_command(path: &Path) -> Result<Command, String> {
 /// The same content walk is used before compiling and when selecting a pipeline,
 /// so editing a nested include invalidates cached SPIR-V/pipelines without DXC
 /// work on every unchanged frame. Macro names have no complete dependency set.
-pub(crate) fn dependency_fingerprint_at(root: &Path, source: &str) -> Result<u64, String> {
+pub(crate) fn dependency_fingerprint_at(root: &Path, source: &str) -> Result<u64, ShaderError> {
     DEPENDENCY_WALKS.fetch_add(1, Ordering::Relaxed);
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     shader_root_text(source).as_ref().hash(&mut hash);
@@ -239,13 +295,15 @@ pub(crate) fn dependency_fingerprint_at(root: &Path, source: &str) -> Result<u64
     ROOT_RESOLUTIONS.fetch_add(1, Ordering::Relaxed);
     let root = root
         .canonicalize()
-        .map_err(|e| format!("HLSL workspace: {e}"))?;
+        .map_err(|e| ShaderError::io("HLSL workspace", root, e))?;
     let mut seen = BTreeSet::new();
     let mut pending = vec![(None, source.to_owned())];
     while let Some((parent, text)) = pending.pop() {
         for (include, quoted) in literal_includes(&text)? {
             if include.starts_with('/') || include.contains(':') {
-                return Err(format!("HLSL absolute include is forbidden: {include}"));
+                return Err(ShaderError::Include(format!(
+                    "HLSL absolute include is forbidden: {include}"
+                )));
             }
             // Inline HLSL has no authored file directory: its documented roots
             // are assets/gpu then workspace. Nested files resolve their local
@@ -260,24 +318,28 @@ pub(crate) fn dependency_fingerprint_at(root: &Path, source: &str) -> Result<u64
             .map(|directory| directory.join(&include))
             .filter_map(|candidate| candidate.canonicalize().ok())
             .find(|candidate| candidate.starts_with(&root) && candidate.is_file())
-            .ok_or_else(|| format!("HLSL missing or out-of-project include: {include}"))?;
+            .ok_or_else(|| {
+                ShaderError::Include(format!("HLSL missing or out-of-project include: {include}"))
+            })?;
             if !seen.insert(file.clone()) {
                 continue;
             }
-            let bytes = std::fs::read(&file)
-                .map_err(|e| format!("HLSL include {}: {e}", file.display()))?;
+            let bytes =
+                std::fs::read(&file).map_err(|e| ShaderError::io("HLSL include", &file, e))?;
             INCLUDE_READS.fetch_add(1, Ordering::Relaxed);
             INCLUDE_BYTES.fetch_add(bytes.len() as u64, Ordering::Relaxed);
             file.strip_prefix(&root).unwrap().hash(&mut hash);
             bytes.hash(&mut hash);
-            let text = String::from_utf8(bytes)
-                .map_err(|e| format!("HLSL include {} must be UTF-8: {e}", file.display()))?;
+            let text = String::from_utf8(bytes).map_err(|e| ShaderError::IncludeEncoding {
+                path: file.clone(),
+                source: Arc::new(e),
+            })?;
             pending.push((file.parent().map(Path::to_path_buf), text));
         }
     }
     Ok(hash.finish())
 }
-fn literal_includes(source: &str) -> Result<Vec<(String, bool)>, String> {
+fn literal_includes(source: &str) -> Result<Vec<(String, bool)>, ShaderError> {
     let text = without_comments(source.trim_start_matches('\u{feff}'));
     let mut includes = vec![];
     for line in text.lines() {
@@ -299,14 +361,17 @@ fn literal_includes(source: &str) -> Result<Vec<(String, bool)>, String> {
         } else if rest.starts_with('<') {
             '>'
         } else {
-            return Err(format!(
+            return Err(ShaderError::Include(format!(
                 "HLSL macro include has no stable dependency contract: {rest}"
-            ));
+            )));
         };
-        let end = rest[1..].find(close).ok_or("HLSL malformed #include")? + 1;
+        let end = rest[1..]
+            .find(close)
+            .ok_or(ShaderError::Include("HLSL malformed #include".into()))?
+            + 1;
         let include = rest[1..end].replace('\\', "/");
         if include.is_empty() {
-            return Err("HLSL empty #include".into());
+            return Err(ShaderError::Include("HLSL empty #include".into()));
         }
         includes.push((include, close == '"'));
     }
@@ -355,7 +420,11 @@ fn without_comments(source: &str) -> String {
     }
     out
 }
-pub fn compile_hlsl(source: &str, entry: &str, profile: &str) -> Result<ShaderArtifact, String> {
+pub fn compile_hlsl(
+    source: &str,
+    entry: &str,
+    profile: &str,
+) -> Result<ShaderArtifact, ShaderError> {
     compile_hlsl_at(&resource_root(), source, entry, profile)
 }
 /// Compile against an explicitly selected package, including its local includes.
@@ -364,22 +433,21 @@ pub fn compile_hlsl_at(
     source: &str,
     entry: &str,
     profile: &str,
-) -> Result<ShaderArtifact, String> {
+) -> Result<ShaderArtifact, ShaderError> {
     let key = shader_key(root, source, entry, profile)?;
     let sealed = root.join(".spirv");
     let sealed_file = sealed.join(format!("{key:016x}.spv"));
     if sealed.is_dir() {
-        let bytes = std::fs::read(&sealed_file).map_err(|e| {
-            format!(
-                "Precompiled Player shader {}: {e}; re-export this graph",
-                sealed_file.display()
-            )
+        let bytes = std::fs::read(&sealed_file).map_err(|source| ShaderError::SealedArtifact {
+            path: sealed_file.clone(),
+            source: Arc::new(source),
         })?;
         SPIRV_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
         return artifact(bytes, "Precompiled Player SPIR-V".into());
     }
     let cache = root.join(".work/shader-cache");
-    std::fs::create_dir_all(&cache).map_err(|e| format!("shader cache: {e}"))?;
+    std::fs::create_dir_all(&cache)
+        .map_err(|e| ShaderError::io("Create shader cache", &cache, e))?;
     let stable = cache.join(format!("{key:016x}.spv"));
     if let Ok(bytes) = std::fs::read(&stable)
         && let Ok(shader) = artifact(bytes, "Cached SPIR-V".into())
@@ -399,12 +467,9 @@ pub fn compile_hlsl_at(
         input: input.clone(),
         output: output.clone(),
     };
-    std::fs::write(&input, source).map_err(|e| e.to_string())?;
-    let dxc = resolve_dxc_at(
-        root,
-        std::env::var_os("MODULE_ENGINE_DXC").as_deref(),
-        std::env::var_os("PATH").as_deref(),
-    )?;
+    std::fs::write(&input, source)
+        .map_err(|source| ShaderError::io("Write HLSL input", &input, source))?;
+    let dxc = configured_dxc(root)?;
     DXC_INVOCATIONS.fetch_add(1, Ordering::Relaxed);
     let result = dxc_command(&dxc)?
         .args([
@@ -425,11 +490,9 @@ pub fn compile_hlsl_at(
         .arg(root)
         .arg(&input)
         .output()
-        .map_err(|e| {
-            format!(
-                "Native DXC {}: {e}; restore this platform's tools/dxc and shared libraries or set MODULE_ENGINE_DXC",
-                dxc.display()
-            )
+        .map_err(|source| ShaderError::DxcLaunch {
+            path: dxc,
+            source: Arc::new(source),
         })?;
     let diagnostics = format!(
         "{}{}",
@@ -437,14 +500,18 @@ pub fn compile_hlsl_at(
         String::from_utf8_lossy(&result.stderr)
     );
     if !result.status.success() {
-        return Err(format!(
-            "HLSL compilation failed ({profile}, entry {entry}):\n{diagnostics}"
-        ));
+        return Err(ShaderError::Compile {
+            profile: profile.into(),
+            entry: entry.into(),
+            diagnostics,
+            status: result.status,
+        });
     }
-    let bytes = std::fs::read(&output).map_err(|e| e.to_string())?;
+    let bytes = std::fs::read(&output)
+        .map_err(|source| ShaderError::io("Read DXC output", &output, source))?;
     let result = artifact(bytes.clone(), diagnostics)?;
     if shader_key(root, source, entry, profile)? != key {
-        return Err("HLSL dependencies changed during compilation; retry the current files".into());
+        return Err(ShaderError::DependenciesChanged);
     }
     // Publish a complete artifact, avoiding partial reads by parallel compilation.
     if let Err(error) = std::fs::rename(&output, &stable) {
@@ -453,7 +520,7 @@ pub fn compile_hlsl_at(
             .and_then(|b| artifact(b, String::new()).ok())
             .is_none()
         {
-            return Err(format!("Publish shader cache: {error}"));
+            return Err(ShaderError::io("Publish shader cache", &stable, error));
         }
         let _ = std::fs::remove_file(output);
     }
@@ -469,7 +536,12 @@ fn shader_root_text(source: &str) -> std::borrow::Cow<'_, str> {
         std::borrow::Cow::Borrowed(source)
     }
 }
-fn shader_key(root: &Path, source: &str, entry: &str, profile: &str) -> Result<u64, String> {
+pub(crate) fn shader_key(
+    root: &Path,
+    source: &str,
+    entry: &str,
+    profile: &str,
+) -> Result<u64, ShaderError> {
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     shader_root_text(source).as_ref().hash(&mut hash);
     dependency_fingerprint_at(root, source)?.hash(&mut hash);
@@ -477,9 +549,9 @@ fn shader_key(root: &Path, source: &str, entry: &str, profile: &str) -> Result<u
     profile.hash(&mut hash);
     Ok(hash.finish())
 }
-fn artifact(bytes: Vec<u8>, diagnostics: String) -> Result<ShaderArtifact, String> {
+fn artifact(bytes: Vec<u8>, diagnostics: String) -> Result<ShaderArtifact, ShaderError> {
     if !bytes.len().is_multiple_of(4) {
-        return Err("DXC emitted malformed SPIR-V".into());
+        return Err(ShaderError::InvalidSpirv("DXC emitted malformed SPIR-V"));
     }
     let words: Vec<_> = bytes
         .as_chunks::<4>()
@@ -488,7 +560,7 @@ fn artifact(bytes: Vec<u8>, diagnostics: String) -> Result<ShaderArtifact, Strin
         .map(|b| u32::from_le_bytes(*b))
         .collect();
     if words.len() < 5 || words.first() != Some(&0x07230203) {
-        return Err("DXC output is not SPIR-V".into());
+        return Err(ShaderError::InvalidSpirv("DXC output is not SPIR-V"));
     }
     Ok(ShaderArtifact { words, diagnostics })
 }
@@ -499,7 +571,7 @@ pub fn precompile_graph_at(
     sources: &BTreeMap<String, String>,
     root: &Path,
     destination: &Path,
-) -> Result<usize, String> {
+) -> Result<usize, VulkanError> {
     let plan = crate::graph::build_plan_at(graph, sources, root)?;
     let mut jobs = BTreeMap::new();
     for pass in &plan.passes {
@@ -514,6 +586,15 @@ pub fn precompile_graph_at(
             shader_key(root, &pass.source, &pass.manifest.entry, profile)?,
             shader.words,
         );
+        if pass.has_bindless_variant() {
+            let source = bindless_source(pass);
+            let shader = compile_hlsl_at(root, &source, &pass.manifest.entry, profile)?;
+            verify_bindless_shader(pass, &shader.words)?;
+            jobs.insert(
+                shader_key(root, &source, &pass.manifest.entry, profile)?,
+                shader.words,
+            );
+        }
         if pass.manifest.stage != "compute" {
             let source = if pass.manifest.vertex_entry.is_some() {
                 pass.source.as_str()
@@ -528,18 +609,146 @@ pub fn precompile_graph_at(
             jobs.insert(shader_key(root, source, entry, "vs_6_0")?, shader.words);
         }
     }
+    if plan.passes.iter().any(Pass::resident_geometry) {
+        let source = crate::vulkan::resident::VERTEX_SHADER;
+        let shader = compile_hlsl_at(root, source, "mainVS", "vs_6_0")?;
+        verify_resident_vertex(&shader.words)?;
+        jobs.insert(shader_key(root, source, "mainVS", "vs_6_0")?, shader.words);
+    }
     let output = destination.join(".spirv");
-    std::fs::create_dir_all(&output).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&output)
+        .map_err(|source| ShaderError::io("Create Player shader directory", &output, source))?;
     for (key, words) in &jobs {
         let bytes = words
             .iter()
             .flat_map(|w| w.to_le_bytes())
             .collect::<Vec<_>>();
-        std::fs::write(output.join(format!("{key:016x}.spv")), bytes).map_err(|e| e.to_string())?;
+        let path = output.join(format!("{key:016x}.spv"));
+        std::fs::write(&path, bytes)
+            .map_err(|source| ShaderError::io("Write Player shader", &path, source))?;
     }
     Ok(jobs.len())
 }
-pub(crate) fn verify_shader(pass: &Pass, words: &[u32], vertex: bool) -> Result<(), String> {
+
+pub(crate) fn bindless_source(pass: &Pass) -> String {
+    format!(
+        "#define MODULE_ENGINE_BINDLESS_MATERIALS 1\n{}",
+        pass.source
+    )
+}
+
+pub(crate) fn verify_bindless_shader(pass: &Pass, words: &[u32]) -> Result<(), ShaderError> {
+    verify_scene_descriptors(&pass.id, words, false)
+}
+
+pub(crate) fn verify_resident_vertex(words: &[u32]) -> Result<(), ShaderError> {
+    verify_scene_descriptors("resident vertex", words, true)
+}
+
+fn verify_scene_descriptors(name: &str, words: &[u32], resident: bool) -> Result<(), ShaderError> {
+    let mut bindings = BTreeMap::new();
+    let mut sets = BTreeMap::new();
+    let mut types = BTreeMap::new();
+    let mut variables = BTreeMap::new();
+    let mut strides = BTreeMap::new();
+    let mut read_only_rows = std::collections::BTreeSet::new();
+    let mut index = 5;
+    while index < words.len() {
+        let instruction = words[index];
+        let count = (instruction >> 16) as usize;
+        if count == 0 || index + count > words.len() {
+            return Err(ShaderError::InvalidSpirv("Malformed SPIR-V instruction"));
+        }
+        let opcode = instruction & 0xffff;
+        let a = &words[index + 1..index + count];
+        match opcode {
+            71 if a.len() >= 3 && a[1] == 33 => {
+                bindings.insert(a[0], a[2]);
+            }
+            71 if a.len() >= 3 && a[1] == 34 => {
+                sets.insert(a[0], a[2]);
+            }
+            71 if a.len() >= 3 && a[1] == 6 => {
+                strides.insert(a[0], a[2]);
+            }
+            72 if a.len() >= 3 && a[1] == 0 && a[2] == 24 => {
+                read_only_rows.insert(a[0]);
+            }
+            21 | 22 | 25 | 26 | 29 | 30 | 32 if !a.is_empty() => {
+                types.insert(a[0], (opcode, &a[1..]));
+            }
+            59 if a.len() >= 3 => {
+                variables.insert(a[1], (a[0], a[2]));
+            }
+            _ => {}
+        }
+        index += count;
+    }
+    let matches = |id: &u32, binding| {
+        let (pointer, storage) = *variables.get(id)?;
+        let (32, [_, element]) = types.get(&pointer).copied()? else {
+            return None;
+        };
+        let (opcode, operands) = types.get(element).copied()?;
+        let storage_array = || {
+            let (12, 30, [rows]) = (storage, opcode, operands) else {
+                return None;
+            };
+            read_only_rows.contains(element).then_some(*rows)
+        };
+        if resident {
+            let rows = storage_array()?;
+            let stride = match binding {
+                1 | 2 => 4,
+                3 => 64,
+                4 => 16,
+                _ => return None,
+            };
+            return (strides.get(&rows) == Some(&stride)).then_some(());
+        }
+        match (binding, storage, opcode, operands) {
+            (0, 0, 29, [image]) => {
+                let (25, [component, 1, _, 0, 0, 1, ..]) = types.get(image).copied()? else {
+                    return None;
+                };
+                (types.get(component).copied() == Some((22, &[32]))).then_some(())
+            }
+            (1, 0, 26, []) => Some(()),
+            (2, ..) => {
+                let rows = storage_array()?;
+                let (29, [component]) = types.get(&rows).copied()? else {
+                    return None;
+                };
+                (strides.get(&rows) == Some(&4)
+                    && types.get(component).copied() == Some((21, &[32, 0])))
+                .then_some(())
+            }
+            _ => None,
+        }
+    };
+    let actual = bindings
+        .values()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
+    let (set, expected): (u32, &[u32]) = if resident {
+        (0, &[1, 2, 3, 4])
+    } else {
+        (1, &[0, 1, 2])
+    };
+    if bindings.len() != expected.len()
+        || !actual.iter().copied().eq(expected.iter().copied())
+        || bindings
+            .iter()
+            .any(|(id, binding)| sets.get(id) != Some(&set) || matches(id, *binding).is_none())
+    {
+        return Err(ShaderError::ShaderInterface(format!(
+            "Pass {name} has an invalid scene descriptor interface"
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) fn verify_shader(pass: &Pass, words: &[u32], vertex: bool) -> Result<(), ShaderError> {
     let mut bindings = BTreeMap::new();
     let mut sets = BTreeMap::new();
     let mut pointer_types = BTreeMap::new();
@@ -553,7 +762,7 @@ pub(crate) fn verify_shader(pass: &Pass, words: &[u32], vertex: bool) -> Result<
         let count = (instruction >> 16) as usize;
         let opcode = instruction & 0xffff;
         if count == 0 || index + count > words.len() {
-            return Err("Malformed SPIR-V instruction".into());
+            return Err(ShaderError::InvalidSpirv("Malformed SPIR-V instruction"));
         }
         let a = &words[index + 1..index + count];
         match opcode {
@@ -581,10 +790,10 @@ pub(crate) fn verify_shader(pass: &Pass, words: &[u32], vertex: bool) -> Result<
         index += count;
     }
     if pass.manifest.stage == "compute" && !vertex && locals != Some(pass.manifest.workgroup) {
-        return Err(format!(
+        return Err(ShaderError::ShaderInterface(format!(
             "Custom {} workgroup manifest {:?} differs from compiled shader {:?}",
             pass.id, pass.manifest.workgroup, locals
-        ));
+        )));
     }
     let images: Vec<_> = pass
         .manifest
@@ -602,35 +811,36 @@ pub(crate) fn verify_shader(pass: &Pass, words: &[u32], vertex: bool) -> Result<
         };
     for (id, binding) in &bindings {
         if sets.get(id) != Some(&0) || *binding as usize >= expected {
-            return Err(format!(
+            return Err(ShaderError::ShaderInterface(format!(
                 "Pass {} shader binding set={:?}, binding={} outside declared resources",
                 pass.id,
                 sets.get(id),
                 binding
-            ));
+            )));
         }
-        let type_id = variables
-            .get(id)
-            .and_then(|v| pointer_types.get(v))
-            .ok_or("Shader resource is not a declared image")?;
+        let type_id = variables.get(id).and_then(|v| pointer_types.get(v)).ok_or(
+            ShaderError::ShaderInterface("Shader resource is not a declared image".into()),
+        )?;
         let (sampled, format, component, dimension, arrayed, multisampled) = image_types
             .get(type_id)
-            .ok_or("Only typed texture resources are supported by the 0.2 Custom manifest")?;
+            .ok_or(ShaderError::ShaderInterface(
+                "Only typed texture resources are supported by the 0.2 Custom manifest".into(),
+            ))?;
         if !float_types.contains(component)
             || *dimension != 1
             || *arrayed != 0
             || *multisampled != 0
         {
-            return Err(
+            return Err(ShaderError::ShaderInterface(
                 "Manifest resources require floating-point, 2D, single-layer, single-sample images"
                     .into(),
-            );
+            ));
         }
         let output = *binding as usize >= images.len() + material_input;
         if *sampled != if output { 2 } else { 1 } {
-            return Err(
+            return Err(ShaderError::ShaderInterface(
                 "Compiled HLSL sampled/storage image type conflicts with declared access".into(),
-            );
+            ));
         }
         if output {
             let spec = &pass.manifest.outputs[*binding as usize - images.len()];
@@ -638,23 +848,27 @@ pub(crate) fn verify_shader(pass: &Pass, words: &[u32], vertex: bool) -> Result<
                 "rgba32float" => 1,
                 "rgba8unorm" => 4,
                 "r32float" => 3,
-                _ => return Err("Unsupported SPIR-V image format".into()),
+                _ => {
+                    return Err(ShaderError::ShaderInterface(
+                        "Unsupported SPIR-V image format".into(),
+                    ));
+                }
             };
             if *format != expected_format {
-                return Err(format!(
+                return Err(ShaderError::ShaderInterface(format!(
                     "Output {} image format decoration {} differs from manifest {}; use [[vk::image_format(...)]]",
                     spec.name, format, spec.format
-                ));
+                )));
             }
         }
     }
     if pass.manifest.stage == "compute" && !vertex {
         for binding in images.len()..expected {
             if !bindings.values().any(|b| *b == binding as u32) {
-                return Err(format!(
+                return Err(ShaderError::ShaderInterface(format!(
                     "Pass {} declared output binding {binding} is not used by compiled shader",
                     pass.id
-                ));
+                )));
             }
         }
     }
@@ -757,6 +971,7 @@ mod dependency_tests {
 
     #[test]
     fn genuine_dxc_shader_sealed_lookup_accepts_root_eol_only_without_fallback() {
+        crate::requires_capabilities!(Dxc);
         let package = eol_fixture("sealed");
         let source = format!(
             "// unique fixture {}\n[[vk::binding(0,0)]] RWStructuredBuffer<uint> result;\n#define VALUE (1u + \\\n2u)\n[numthreads(1,1,1)] void main(uint3 id : SV_DispatchThreadID) {{ result[0] = VALUE; }}\n",
@@ -789,7 +1004,8 @@ mod dependency_tests {
         let error = compile_hlsl_at(&package, &source.replace("1u +", "3u +"), "main", "cs_6_0")
             .unwrap_err();
         assert!(
-            error.contains("Precompiled Player shader") && error.contains("re-export"),
+            error.to_string().contains("Precompiled Player shader")
+                && error.to_string().contains("re-export"),
             "{error}"
         );
         assert_eq!(std::fs::read(&artifact).unwrap(), bytes);
@@ -797,6 +1013,7 @@ mod dependency_tests {
         assert!(
             compile_hlsl_at(&package, &source, "main", "cs_6_0")
                 .unwrap_err()
+                .to_string()
                 .contains("re-export")
         );
         // Like the native GPU checks, run this global-counter delta serially.
@@ -821,9 +1038,13 @@ mod dependency_tests {
         ));
         std::fs::create_dir_all(&root).unwrap();
         let error = resolve_dxc_at(&root, None, None).unwrap_err();
-        assert!(error.contains("No native DXC compiler"));
-        assert!(error.contains("MODULE_ENGINE_DXC"));
-        assert!(error.contains("Precompiled Player shaders do not require DXC"));
+        assert!(error.to_string().contains("No native DXC compiler"));
+        assert!(error.to_string().contains("MODULE_ENGINE_DXC"));
+        assert!(
+            error
+                .to_string()
+                .contains("Precompiled Player shaders do not require DXC")
+        );
         let candidate = bundled_dxc_candidates(&root).remove(0);
         assert_eq!(
             candidate.file_name().unwrap(),
@@ -862,17 +1083,31 @@ mod dependency_tests {
         std::fs::create_dir_all(root.join("tools/dxc/lib")).unwrap();
         std::fs::write(&compiler, b"MZWindowsExecutable").unwrap();
         std::fs::set_permissions(&compiler, std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(validate_native_dxc(&compiler).unwrap_err().contains("ELF"));
+        assert!(
+            validate_native_dxc(&compiler)
+                .unwrap_err()
+                .to_string()
+                .contains("ELF")
+        );
         let error = resolve_dxc_at(&root, Some(compiler.as_os_str()), None).unwrap_err();
-        assert!(error.contains("MODULE_ENGINE_DXC"));
-        assert!(error.contains("not Windows dxc.exe"));
+        assert!(error.to_string().contains("MODULE_ENGINE_DXC"));
+        assert!(error.to_string().contains("not Windows dxc.exe"));
         std::fs::write(&compiler, b"\x7fELFfixture").unwrap();
         std::fs::set_permissions(&compiler, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(
             validate_native_dxc(&compiler)
                 .unwrap_err()
+                .to_string()
                 .contains("not executable")
         );
+        let broken_path = std::env::join_paths([compiler.parent().unwrap()]).unwrap();
+        let configured = std::ffi::OsStr::new("dxc");
+        let error = resolve_dxc_at(&root, Some(configured), Some(&broken_path)).unwrap_err();
+        assert!(
+            !error.dxc_unavailable(),
+            "an invalid configured executable must fail"
+        );
+
         std::fs::set_permissions(&compiler, std::fs::Permissions::from_mode(0o755)).unwrap();
         let flat_compiler = root.join("tools/dxc/dxc");
         std::fs::copy(&compiler, &flat_compiler).unwrap();
@@ -906,6 +1141,7 @@ mod dependency_tests {
         assert!(
             dependency_fingerprint_at(&absent, "#include MISSING")
                 .unwrap_err()
+                .to_string()
                 .contains("macro include")
         );
         assert!(dependency_fingerprint_at(&absent, "#include \"missing.hlsli\"").is_err());
@@ -967,6 +1203,7 @@ mod dependency_tests {
         assert!(
             dependency_fingerprint_at(&root, source)
                 .unwrap_err()
+                .to_string()
                 .contains("missing"),
             "Nested angle include must not accidentally search local parent"
         );

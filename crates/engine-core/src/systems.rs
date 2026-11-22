@@ -1,10 +1,17 @@
 //! General source-installed executable systems. The graph chooses the schedule;
 //! factories choose behavior. Contracts are validated before any lifecycle hook.
 use crate::{GameEvent, GameInput, GameState};
+use bevy_ecs::{
+    resource::Resource,
+    schedule::{IntoScheduleConfigs, Schedule, SingleThreadedExecutor, SystemSet},
+    system::ResMut,
+    world::World,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+use std::sync::{Arc, Mutex};
 
 /// An explicitly typed resource. External values are supplied by the host.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -170,7 +177,7 @@ impl SystemContext<'_> {
         if resource.data_type == "GameWorld" {
             let candidate: GameState = serde_json::from_value(value.clone())
                 .map_err(|e| format!("Invalid GameWorld: {e}"))?;
-            crate::validate_world_commands(&crate::WorldProvider::objects(&candidate.world)?, &[])?;
+            crate::validate_world_commands(&candidate.world.objects_snapshot(), &[])?;
             *self.game = candidate;
         }
         resource.value = value;
@@ -218,6 +225,14 @@ pub trait TickTransaction {
     fn validate(&mut self, _candidate: &GameState) -> Result<(), String> {
         Ok(())
     }
+    /// The previous state is still available while the candidate is staged.
+    fn validate_changes(
+        &mut self,
+        candidate: &GameState,
+        _before: &GameState,
+    ) -> Result<(), String> {
+        self.validate(candidate)
+    }
     fn commit(&mut self, _candidate: &GameState) -> Result<(), String> {
         Ok(())
     }
@@ -245,6 +260,7 @@ pub struct SystemRegistry {
     project_contracts: BTreeMap<String, (ProjectValidator, ProjectPreparer)>,
     game_contributions: BTreeMap<String, crate::GameContribution>,
     pose_projections: BTreeMap<String, crate::GamePoseProjection>,
+    presentation_scopes: BTreeMap<String, crate::GamePresentationScope>,
     capability_metadata: BTreeMap<String, crate::CapabilityMetadata>,
     contribution_metadata: BTreeMap<String, crate::CapabilityMetadata>,
 }
@@ -381,6 +397,26 @@ impl SystemRegistry {
     }
     pub fn pose_projection(&self, contribution_id: &str) -> Option<crate::GamePoseProjection> {
         self.pose_projections.get(contribution_id).copied()
+    }
+    pub fn register_presentation_scope(
+        &mut self,
+        contribution_id: &str,
+        scope: crate::GamePresentationScope,
+    ) -> Result<(), String> {
+        if !self.game_contributions.contains_key(contribution_id)
+            || self.presentation_scopes.contains_key(contribution_id)
+        {
+            return Err("Presentation scope needs a unique registered contribution owner".into());
+        }
+        self.presentation_scopes
+            .insert(contribution_id.into(), scope);
+        Ok(())
+    }
+    pub fn presentation_scope(
+        &self,
+        contribution_id: &str,
+    ) -> Option<crate::GamePresentationScope> {
+        self.presentation_scopes.get(contribution_id).copied()
     }
     pub fn game_contributions(&self) -> impl Iterator<Item = &crate::GameContribution> {
         self.game_contributions.values()
@@ -656,14 +692,76 @@ struct LiveSystem {
     pending: Option<PreparedReplacement>,
 }
 
-struct TickCheckpoint {
+struct ScheduledTick {
+    game: GameState,
+    input: GameInput,
+    dt: f32,
+    events: Vec<GameEvent>,
+    resources: ResourceStore,
+    systems: Vec<LiveSystem>,
     states: Vec<(Value, bool)>,
     entered: usize,
+    result: Result<(), String>,
+}
+
+// ExecutableSystem is Send, and Bevy resources must also be Sync. The
+// scheduler uses exclusive resource access, so it never locks this mutex.
+#[derive(Default, Resource)]
+struct TickSlot(Mutex<Option<ScheduledTick>>);
+
+impl TickSlot {
+    fn get_mut(&mut self) -> &mut Option<ScheduledTick> {
+        self.0.get_mut().expect("Tick slot is never locked")
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq, SystemSet)]
+struct AuthoredNode(usize);
+
+impl ScheduledTick {
+    fn step_node(&mut self, index: usize) -> Result<(), String> {
+        SystemExecutor::refresh_service_resources(&mut self.resources, &self.input, &self.events)?;
+        let system = &mut self.systems[index];
+        SystemExecutor::activate_replacement(
+            system,
+            &mut self.game,
+            &self.input,
+            self.dt,
+            &mut self.events,
+            &mut self.resources,
+            &mut self.states[index],
+        )?;
+        self.entered = index + 1;
+        let mut ctx = SystemContext {
+            game: &mut self.game,
+            resources: &mut self.resources,
+            events: &mut self.events,
+            dt: self.dt,
+            input: &self.input,
+            bindings: &system.node.bindings,
+        };
+        if !system.initialized {
+            let retained = system.preserve_on_initialize.then(|| system.state.clone());
+            system
+                .implementation
+                .initialize(&mut ctx, &mut system.state)?;
+            if let Some(state) = retained {
+                system.state = state;
+            }
+            system.initialized = true;
+        }
+        system
+            .implementation
+            .step(&mut ctx, &mut system.state)
+            .map_err(|e| format!("System '{}': {e}", system.node.id))
+    }
 }
 
 /// Executor of arbitrary registered systems; it does not inspect module IDs.
 pub struct SystemExecutor {
     systems: Vec<LiveSystem>,
+    schedule: Schedule,
+    schedule_world: World,
     resources: ResourceStore,
     event_validators: Vec<crate::GameEventValidator>,
     begin_tick_hooks: Vec<crate::GameTickHook>,
@@ -686,6 +784,26 @@ impl SystemExecutor {
                 pending: None,
             });
         }
+        let mut schedule = Schedule::default();
+        schedule.set_executor(SingleThreadedExecutor::default());
+        for index in 0..systems.len() {
+            let run_node = move |mut slot: ResMut<TickSlot>| {
+                let tick = slot
+                    .get_mut()
+                    .as_mut()
+                    .expect("Schedule runs inside a tick");
+                if tick.result.is_ok() {
+                    tick.result = tick.step_node(index);
+                }
+            };
+            let mut config = run_node.in_set(AuthoredNode(index));
+            if let Some(previous) = index.checked_sub(1) {
+                config = config.after(AuthoredNode(previous));
+            }
+            schedule.add_systems(config);
+        }
+        let mut schedule_world = World::new();
+        schedule_world.init_resource::<TickSlot>();
         let resources = graph
             .resources
             .iter()
@@ -716,6 +834,8 @@ impl SystemExecutor {
             .collect();
         Ok(Self {
             systems,
+            schedule,
+            schedule_world,
             resources,
             event_validators,
             begin_tick_hooks,
@@ -740,21 +860,87 @@ impl SystemExecutor {
         events: &mut Vec<GameEvent>,
         transaction: &mut dyn TickTransaction,
     ) -> Result<(), String> {
-        let original_game = game.clone();
+        self.step_checkpointed(game, input, dt, events, transaction, false)
+    }
+
+    pub(crate) fn step_with_validated_world(
+        &mut self,
+        game: &mut GameState,
+        input: &GameInput,
+        dt: f32,
+        events: &mut Vec<GameEvent>,
+        transaction: &mut dyn TickTransaction,
+    ) -> Result<(), String> {
+        self.step_checkpointed(game, input, dt, events, transaction, true)
+    }
+
+    fn step_checkpointed(
+        &mut self,
+        game: &mut GameState,
+        input: &GameInput,
+        dt: f32,
+        events: &mut Vec<GameEvent>,
+        transaction: &mut dyn TickTransaction,
+        validated_world: bool,
+    ) -> Result<(), String> {
         let original_resources = self.resources.clone();
         let original_events = events.clone();
-        let mut checkpoint = TickCheckpoint {
-            states: self
-                .systems
-                .iter()
-                .map(|s| (s.state.clone(), s.initialized))
-                .collect(),
+        let states = self
+            .systems
+            .iter()
+            .map(|s| (s.state.clone(), s.initialized))
+            .collect();
+        // Run on the existing staged ECS journal. The caller retains the
+        // accepted branch for host validation and rollback while Bevy owns the
+        // candidate. Neither branch clones the underlying Bevy entity rows.
+        let mut tick_game = game.checkpoint_tick(validated_world);
+        let result = self.begin_tick_hooks.iter().try_for_each(|hook| {
+            hook(game).map_err(|error| format!("Game contribution begin_tick: {error}"))
+        });
+        std::mem::swap(game, &mut tick_game);
+        let mut tick = ScheduledTick {
+            game: tick_game,
+            input: input.clone(),
+            dt,
+            events: std::mem::take(events),
+            resources: std::mem::take(&mut self.resources),
+            systems: std::mem::take(&mut self.systems),
+            states,
             entered: 0,
+            result,
         };
-        let mut result = self.run_tick(game, input, dt, events, &mut checkpoint, transaction);
+        let unwind = if tick.result.is_ok() {
+            *self.schedule_world.resource_mut::<TickSlot>().get_mut() = Some(tick);
+            // Take back the live instances even if a trusted node panics, so
+            // session Drop can still stop them. Resume the original unwind.
+            let unwind = catch_unwind(AssertUnwindSafe(|| {
+                self.schedule.run(&mut self.schedule_world);
+            }));
+            tick = self
+                .schedule_world
+                .resource_mut::<TickSlot>()
+                .get_mut()
+                .take()
+                .unwrap();
+            unwind
+        } else {
+            Ok(())
+        };
+        self.systems = tick.systems;
+        self.resources = tick.resources;
+        *events = tick.events;
+        let original = std::mem::replace(game, tick.game);
+        if let Err(payload) = unwind {
+            self.schedule
+                .set_executor(SingleThreadedExecutor::default());
+            resume_unwind(payload);
+        }
+        let mut result = tick
+            .result
+            .and_then(|()| self.validate_and_commit(game, &original, events, transaction));
         if result.is_err() {
             let mut rollback_errors = vec![];
-            for system in self.systems.iter_mut().take(checkpoint.entered).rev() {
+            for system in self.systems.iter_mut().take(tick.entered).rev() {
                 if let Err(error) = system.implementation.rollback_tick() {
                     rollback_errors.push(format!("{}: {error}", system.node.id));
                 }
@@ -762,10 +948,11 @@ impl SystemExecutor {
             if let Err(error) = transaction.rollback() {
                 rollback_errors.push(format!("Host transaction: {error}"));
             }
-            *game = original_game;
+            *game = original;
+            game.world.compact_staged();
             self.resources = original_resources;
             *events = original_events;
-            for (system, (state, initialized)) in self.systems.iter_mut().zip(checkpoint.states) {
+            for (system, (state, initialized)) in self.systems.iter_mut().zip(tick.states) {
                 system.state = state;
                 system.initialized = initialized;
             }
@@ -776,33 +963,34 @@ impl SystemExecutor {
                     rollback_errors.join("; ")
                 ));
             }
+        } else {
+            game.world.finish_tick(original.world);
         }
         result
     }
     /// Activation needs a real tick context. Initialization writes join this
     /// tick's transaction; teardown writes are discarded with its scratch DTOs.
     fn activate_replacement(
-        &mut self,
-        index: usize,
+        system: &mut LiveSystem,
         game: &mut GameState,
         input: &GameInput,
         dt: f32,
         events: &mut Vec<GameEvent>,
+        resources: &mut ResourceStore,
         rollback_state: &mut (Value, bool),
     ) -> Result<(), String> {
-        let system = &mut self.systems[index];
         let Some(mut candidate) = system.pending.take() else {
             return Ok(());
         };
         let mut old_game = game.clone();
-        let mut old_resources = self.resources.clone();
+        let mut old_resources = resources.clone();
         let mut old_events = events.clone();
         let before_initialize = candidate.state.clone().unwrap_or(Value::Null);
         let mut candidate_state = before_initialize.clone();
         let initialization = {
             let mut ctx = SystemContext {
                 game,
-                resources: &mut self.resources,
+                resources,
                 events,
                 dt,
                 input,
@@ -881,56 +1069,13 @@ impl SystemExecutor {
         }
         Ok(())
     }
-    fn run_tick(
+    fn validate_and_commit(
         &mut self,
-        game: &mut GameState,
-        input: &GameInput,
-        dt: f32,
-        events: &mut Vec<GameEvent>,
-        checkpoint: &mut TickCheckpoint,
+        game: &GameState,
+        original: &GameState,
+        events: &[GameEvent],
         transaction: &mut dyn TickTransaction,
     ) -> Result<(), String> {
-        // step_with_transaction has already checkpointed all owned values.
-        // A failed preparation follows the same rollback path as a failed
-        // authored system and cannot initialize or retire a replacement.
-        for begin_tick in &self.begin_tick_hooks {
-            begin_tick(game).map_err(|error| format!("Game contribution begin_tick: {error}"))?;
-        }
-        for index in 0..self.systems.len() {
-            Self::refresh_service_resources(&mut self.resources, input, events)?;
-            self.activate_replacement(
-                index,
-                game,
-                input,
-                dt,
-                events,
-                &mut checkpoint.states[index],
-            )?;
-            checkpoint.entered = index + 1;
-            let system = &mut self.systems[index];
-            let mut ctx = SystemContext {
-                game,
-                resources: &mut self.resources,
-                events,
-                dt,
-                input,
-                bindings: &system.node.bindings,
-            };
-            if !system.initialized {
-                let retained = system.preserve_on_initialize.then(|| system.state.clone());
-                system
-                    .implementation
-                    .initialize(&mut ctx, &mut system.state)?;
-                if let Some(state) = retained {
-                    system.state = state;
-                }
-                system.initialized = true;
-            }
-            system
-                .implementation
-                .step(&mut ctx, &mut system.state)
-                .map_err(|e| format!("System '{}': {e}", system.node.id))?;
-        }
         for system in &mut self.systems {
             system
                 .implementation
@@ -941,14 +1086,14 @@ impl SystemExecutor {
             validate(game)
                 .map_err(|error| format!("Game contribution state validation: {error}"))?;
         }
-        for event in events.iter() {
+        for event in events {
             event.validate()?;
             for validate in &self.event_validators {
                 validate(event)?;
             }
         }
         transaction
-            .validate(game)
+            .validate_changes(game, original)
             .map_err(|e| format!("Host transaction validation: {e}"))?;
         transaction
             .commit(game)
@@ -1192,6 +1337,7 @@ mod tests {
         default_state: u64,
         reject_initialize: bool,
         reject_step: bool,
+        panic_step: bool,
         reject_stop: bool,
         initialize_outputs: bool,
     }
@@ -1203,6 +1349,7 @@ mod tests {
                 default_state,
                 reject_initialize: false,
                 reject_step: false,
+                panic_step: false,
                 reject_stop: false,
                 initialize_outputs: false,
             }
@@ -1251,6 +1398,7 @@ mod tests {
                 return Err("step without initialize".into());
             }
             *state = json!(state.as_u64().unwrap() + 1);
+            assert!(!self.config.panic_step, "fixture step panicked");
             if self.config.reject_step {
                 Err("step rejected".into())
             } else {
@@ -1322,8 +1470,8 @@ mod tests {
         registry
     }
 
-    fn lifecycle_fixture(registry: &SystemRegistry) -> (SystemExecutor, GameState) {
-        let graph = ExecutionGraph {
+    fn lifecycle_graph() -> ExecutionGraph {
+        ExecutionGraph {
             resources: vec![SystemResource {
                 name: "counter".into(),
                 data_type: "Number".into(),
@@ -1340,12 +1488,54 @@ mod tests {
                     after: vec![],
                 }],
             }],
-        };
+        }
+    }
+
+    fn lifecycle_fixture(registry: &SystemRegistry) -> (SystemExecutor, GameState) {
         let game = crate::GameSession::new(empty_project(), crate::WorldKind::Objects)
             .unwrap()
             .state()
             .clone();
-        (SystemExecutor::new(&graph, registry).unwrap(), game)
+        (
+            SystemExecutor::new(&lifecycle_graph(), registry).unwrap(),
+            game,
+        )
+    }
+
+    #[test]
+    fn session_stops_initialized_instance_on_unwind_from_schedule() {
+        let calls = Arc::new(Mutex::new(vec![]));
+        let mut config = LifecycleConfig::new("probe", 10);
+        config.panic_step = true;
+        let recorded = calls.clone();
+        let result = std::panic::catch_unwind(move || {
+            let mut registry = lifecycle_registry("1", config, &recorded);
+            registry
+                .components_mut()
+                .register(crate::ComponentSchema {
+                    id: "test-component".into(),
+                    owner_module: "test.lifecycle".into(),
+                    version: "1".into(),
+                    label: "Test component".into(),
+                    defaults: json!({}),
+                    fields: vec![],
+                    requires_modules: vec![],
+                    requires_components: vec![],
+                })
+                .unwrap();
+            let mut project = empty_project();
+            project.execution = lifecycle_graph();
+            let mut session =
+                crate::GameSession::new_with_registry(project, crate::WorldKind::Ecs, registry)
+                    .unwrap();
+            let _ = session.step(1. / 60., &GameInput::default());
+        });
+        let panic = result.unwrap_err();
+        assert_eq!(panic.downcast_ref::<&str>(), Some(&"fixture step panicked"));
+        assert_eq!(
+            *calls.lock().unwrap(),
+            ["probe:initialize:null", "probe:step:10", "probe:stop"]
+        );
     }
 
     fn call_count(calls: &Arc<std::sync::Mutex<Vec<String>>>, name: &str) -> usize {
@@ -1355,6 +1545,65 @@ mod tests {
             .iter()
             .filter(|call| call.starts_with(name))
             .count()
+    }
+
+    #[test]
+    fn saved_stage_and_node_order_runs_independent_instances_of_one_factory() {
+        struct Probe(String);
+        impl ExecutableSystem for Probe {
+            fn step(
+                &mut self,
+                ctx: &mut SystemContext<'_>,
+                state: &mut Value,
+            ) -> Result<(), String> {
+                *state = json!(state.as_u64().unwrap_or(0) + 1);
+                ctx.events.push(GameEvent::new(&self.0, state.clone()));
+                Ok(())
+            }
+        }
+
+        let mut registry = SystemRegistry::default();
+        registry
+            .register(
+                SystemDescriptor {
+                    id: "test.probe".into(),
+                    state_schema: "1".into(),
+                    components: vec![],
+                    ports: vec![],
+                    requires: vec![],
+                },
+                |params| Ok(Box::new(Probe(params.as_str().unwrap().into()))),
+            )
+            .unwrap();
+        let stage = |name: &str, ids: &[&str]| SystemStage {
+            name: name.into(),
+            nodes: ids
+                .iter()
+                .map(|&id| SystemNode {
+                    id: id.into(),
+                    module: "test.probe".into(),
+                    params: json!(id),
+                    bindings: BTreeMap::new(),
+                    after: vec![],
+                })
+                .collect(),
+        };
+        let mut project = empty_project();
+        project.execution.stages = vec![
+            stage("Last by name", &["z", "x"]),
+            stage("Empty", &[]),
+            stage("First by name", &["a"]),
+        ];
+        let mut session =
+            crate::GameSession::new_with_registry(project, crate::WorldKind::Ecs, registry)
+                .unwrap();
+        for tick in 1..=2 {
+            assert_eq!(session.step(1. / 60., &GameInput::default()).unwrap(), 1);
+            assert_eq!(
+                session.events(),
+                ["z", "x", "a"].map(|id| GameEvent::new(id, json!(tick)))
+            );
+        }
     }
 
     #[test]

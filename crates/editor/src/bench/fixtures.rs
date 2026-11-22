@@ -1,26 +1,22 @@
+use super::s3_ecs::{
+    self, COMPONENTS, ENTITIES as S3_ENTITIES, MOVING as S3_MOVING, STATIC as S3_STATIC,
+};
 use module_engine_content::ContentLibrary;
 use module_engine_core::{
-    Camera, EcsWorld, GameEntity, Material, Mesh, RenderItem, SceneSnapshot, TextureImage,
-    Transform, WorldObject,
+    Camera, EcsWorld, Material, Mesh, RenderItem, SceneSnapshot, TextureImage, Transform,
 };
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
-const S3_STATIC: usize = 10_000;
-const S3_MOVING: usize = 1_000;
-const S3_ENTITIES: usize = 2_000;
 const S3_MESHES: usize = 200;
 const S3_TEXTURES: usize = 500;
-const COMPONENTS: [&str; 8] = [
-    "bench.motion",
-    "bench.health",
-    "bench.stamina",
-    "bench.team",
-    "bench.controller",
-    "bench.collision",
-    "bench.target",
-    "bench.flags",
-];
+
+#[derive(Clone, Copy)]
+pub(super) struct EcsWork {
+    pub tick_ms: f64,
+    pub query_ms: f64,
+    pub extract_ms: f64,
+}
 
 pub struct Fixture {
     pub scene: SceneSnapshot,
@@ -39,26 +35,50 @@ impl Fixture {
         }
     }
 
+    pub fn use_legacy_s4_textures(&mut self) -> Result<(), String> {
+        // Keep the same geometry and alpha adaptation on compatibility devices.
+        let mut reduced: BTreeMap<usize, Arc<TextureImage>> = BTreeMap::new();
+        for item in &mut self.scene.items {
+            if let Some(texture) = &item.material.base_color_texture {
+                let key = Arc::as_ptr(texture) as usize;
+                let small = match reduced.entry(key) {
+                    std::collections::btree_map::Entry::Occupied(entry) => entry.get().clone(),
+                    std::collections::btree_map::Entry::Vacant(entry) => entry
+                        .insert(Arc::new(downscale(texture, SPONZA_TEXTURE_SIDE)?))
+                        .clone(),
+                };
+                item.material.base_color_texture = Some(small);
+            }
+        }
+        let atlas_height = 1 + reduced.values().map(|texture| texture.height).sum::<u32>();
+        if atlas_height > 8192 {
+            return Err("Reduced S4 textures still exceed the compatibility atlas".into());
+        }
+        self.inventory["legacy_atlas_height"] = json!(atlas_height);
+        self.inventory["base_color_texture_max_edge"] = json!(SPONZA_TEXTURE_SIDE);
+        self.inventory["base_color_texture_reason"] =
+            json!("Texture reduction for the compatibility atlas");
+        Ok(())
+    }
+
     /// Workload for the present Core storage: query eight columns, update the
     /// motion payload and Transform for 1,000 matches, then extract transforms.
-    pub fn tick(&mut self, frame: usize) -> Option<(f64, f64)> {
+    pub(super) fn tick(&mut self, frame: usize) -> Option<EcsWork> {
         let world = self.ecs.as_mut()?;
         let started = std::time::Instant::now();
-        let entities = world.entities_with(&COMPONENTS);
-        let time = (frame + 1) as f32 / 60.;
-        for &id in &entities[..S3_MOVING] {
-            let motion = world.component_mut(id, COMPONENTS[0]).unwrap();
-            let offset = (time * 1.5 + id as f32 * 0.03125).sin() * 0.35;
-            motion["offset"] = json!(offset);
-            world.transform_mut(id).unwrap().translation[1] = offset;
-        }
+        let mut query_ms = 0.;
+        let entities = s3_ecs::tick(world, frame, Some(&mut query_ms));
         let tick_ms = started.elapsed().as_secs_f64() * 1000.;
         let started = std::time::Instant::now();
         for &id in &entities[..S3_MOVING] {
             self.scene.items[id as usize - 1].model = world.object(id).unwrap().transform.matrix();
         }
-        self.scene.time = time;
-        Some((tick_ms, started.elapsed().as_secs_f64() * 1000.))
+        self.scene.time = s3_ecs::time(frame);
+        Some(EcsWork {
+            tick_ms,
+            query_ms,
+            extract_ms: started.elapsed().as_secs_f64() * 1000.,
+        })
     }
 }
 
@@ -113,40 +133,10 @@ fn stress() -> Result<Fixture, String> {
     let mut entities = Vec::new();
     let items: Vec<_> = (0..S3_STATIC + S3_MOVING)
         .map(|i| {
-            // Permute cells so the moving objects are spread throughout the field.
-            let cell = i * 73 % (S3_STATIC + S3_MOVING);
-            let transform = Transform {
-                translation: [
-                    (cell % 110) as f32 * 1.6 - 87.2,
-                    0.,
-                    (cell / 110) as f32 * 1.6 - 79.2,
-                ],
-                rotation: [0., (i % 19) as f32 * 0.13, 0.],
-                scale: [0.62; 3],
-            };
+            let object = s3_ecs::object(i);
+            let transform = object.transform;
             if i < S3_ENTITIES {
-                entities.push(GameEntity {
-                    object: WorldObject {
-                        id: (i + 1) as u64,
-                        parent: None,
-                        transform,
-                        color: [255; 4],
-                    },
-                    components: BTreeMap::from([
-                        (
-                            COMPONENTS[0].into(),
-                            json!({"moving":i < S3_MOVING,"offset":0.}),
-                        ),
-                        (COMPONENTS[1].into(), json!({"current":100,"maximum":100})),
-                        (COMPONENTS[2].into(), json!({"current":50,"maximum":50})),
-                        (COMPONENTS[3].into(), json!(i % 8)),
-                        (COMPONENTS[4].into(), json!({"enabled":true})),
-                        (COMPONENTS[5].into(), json!({"radius":0.62})),
-                        (COMPONENTS[6].into(), Value::Null),
-                        (COMPONENTS[7].into(), json!({"visible":true})),
-                    ]),
-                    references: BTreeMap::new(),
-                });
+                entities.push(s3_ecs::entity(object));
             }
             item(
                 i + 1,
@@ -354,23 +344,24 @@ fn sponza(root: &Path) -> Result<Fixture, String> {
         }
         models.insert(file, items.len() - objects_before);
     }
-    // Reduce every base-color texture once, preserving shared images.
-    let mut reduced: BTreeMap<usize, Arc<TextureImage>> = BTreeMap::new();
-    for item in &mut items {
+    let mut images = BTreeMap::new();
+    for item in &items {
         if let Some(texture) = &item.material.base_color_texture {
-            let key = Arc::as_ptr(texture) as usize;
-            let small = match reduced.get(&key) {
-                Some(small) => small.clone(),
-                None => {
-                    let small = Arc::new(downscale(texture, SPONZA_TEXTURE_SIDE)?);
-                    reduced.insert(key, small.clone());
-                    small
-                }
-            };
-            item.material.base_color_texture = Some(small);
+            images.insert(
+                Arc::as_ptr(texture) as usize,
+                [texture.width, texture.height],
+            );
         }
     }
-    let atlas_height = 1 + reduced.values().map(|t| t.height).sum::<u32>();
+    let mut image_dimensions: Vec<_> = images.values().copied().collect();
+    image_dimensions.sort_unstable();
+    let original_atlas_height = 1 + image_dimensions.iter().map(|dims| dims[1]).sum::<u32>();
+    let max_edge = image_dimensions
+        .iter()
+        .flatten()
+        .copied()
+        .max()
+        .unwrap_or(0);
     // 16 × 8 grid on two storeys of the nave and side galleries.
     let points: Vec<_> = (0..256)
         .map(|i| {
@@ -388,8 +379,7 @@ fn sponza(root: &Path) -> Result<Fixture, String> {
     if sponza_triangles != SPONZA_TRIANGLES
         || sponza_primitives != SPONZA_PRIMITIVES
         || masked != 3
-        || reduced.len() != 26
-        || atlas_height > 8192
+        || image_dimensions.len() != 26
         || points.len() != 256
         || models.len() != 2
         || models.values().any(|&count| count == 0)
@@ -400,9 +390,9 @@ fn sponza(root: &Path) -> Result<Fixture, String> {
         inventory: json!({
             "interior":"Khronos glTF Sample Assets Sponza at e124e8d (pinned download)",
             "sponza_triangles":sponza_triangles,"sponza_primitives":sponza_primitives,
-            "base_color_textures":reduced.len(),"legacy_atlas_height":atlas_height,
-            "base_color_texture_max_edge":SPONZA_TEXTURE_SIDE,
-            "base_color_texture_reason":"legacy 8192 px vertical atlas; R2.2 removes it",
+            "base_color_textures":image_dimensions.len(),"legacy_atlas_height":null,
+            "base_color_texture_max_edge":max_edge,"base_color_texture_reason":"imported dimensions",
+            "original_base_color_dimensions":image_dimensions,"original_vertical_atlas_height":original_atlas_height,
             "alpha_mask_materials_drawn_opaque":masked,
             "imported_glb_primitives":models,
             "point_lights_defined":points.len(),"point_lights_rendered":null,"point_lights":points,

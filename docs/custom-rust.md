@@ -51,6 +51,28 @@ The current editor call limit is 150 ms; the API accepts an explicit timeout. Co
 
 ScriptContext contains time, dt, base, objects, world_queries_available, permitted parameters, active resolved properties, and accumulated commands. Version 0.4 adds state/state_schema, input, and events. ctx.parameter/ctx.property/ctx.component_property read settings; global/module data is available through ctx.properties.global/modules. The inactive archive is not passed in. With an initialized Engine policy, render commands are restricted to exposed ranges and ready variants, including for compiled Rust. For legacy render-only Update, a provider without WorldObject reading can supply a context with objects=[] and world_queries_available=false; the script distinguishes an unavailable query capability from an empty world. World commands require corresponding provider support. In an old JSON context without world_queries_available, the value is false: query capability is not considered declared.
 
+<a id="named-object-references"></a>
+
+For scheduled GameHost Update, `ctx.object(id)` reads an object and its parent ID,
+and `ctx.reference(id, name)` reads a named reference target in the same snapshot.
+All IDs are exact `u64` values. The optional `references` field is a map from
+source object IDs to named target IDs. Older v3 workers ignore the additional
+JSON field. Updated workers read an absent field as empty, including for legacy
+Update and Speed. A script using `ctx.reference` needs the updated SDK sources.
+The existing v3 SDK pin and world command set still apply.
+
+The same snapshot supplies the native local transform through
+`ctx.object(id)?.transform` and only active, registered schema components through
+`ctx.component_property(id, component, key)`. The latter looks up an exact
+top-level JSON key, including a key containing a dot. Read nested objects and
+arrays from the returned JSON value. Absence returns `None`, and a present null
+returns `Some(Value::Null)`. Scene validation and the worker packet use the
+same [component registry](component-schemas.md), so values may include effective
+schema defaults. Saving a scene writes its authored component data.
+
+A nonfinite Transform in a request or returned command produces a packet
+error. The host discards that tick and retains the last committed script state.
+
 | World | Renderer |
 | --- | --- |
 | object(id) — read local state. | set_render_parameter(pass, name, value) — a finite numeric scalar. |

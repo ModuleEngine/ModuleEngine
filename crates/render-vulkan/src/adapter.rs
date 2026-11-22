@@ -1,13 +1,14 @@
 //! Installation metadata and the core renderer boundary for Vulkan.
+use crate::VulkanError;
 
 use crate::{
-    RenderGraphValidator, VulkanRenderer, module_descriptors, render_graph_targets,
-    shader_dependency_revision_at,
+    RenderGraphValidator, ResidentScene, SceneInput, VulkanRenderer, module_descriptors,
+    render_graph_targets, shader_dependency_revision_at,
 };
 use module_engine_core::{
     Camera, Frame, FrameRenderer, Graph, GraphDocument, ModuleDescriptor, ModuleRegistry, Node,
     PortDescriptor, RenderControlTargets, RenderOverrides, RenderSubmission, RendererAdapter,
-    RendererPerformance, SceneSnapshot,
+    RendererPerformance, SceneSnapshot, SceneSync, SceneUpdate,
 };
 use std::{
     collections::BTreeMap,
@@ -21,7 +22,7 @@ use std::{
 /// Install contracts and factories without opening a device or loading tools.
 /// Each factory invocation owns a fresh backend, so background preparation
 /// cannot block or reconfigure a previously accepted renderer.
-pub fn install(registry: &mut ModuleRegistry, resource_root: &Path) -> Result<(), String> {
+pub fn install(registry: &mut ModuleRegistry, resource_root: &Path) -> Result<(), VulkanError> {
     for descriptor in module_descriptors() {
         let metadata = module_engine_core::CapabilityMetadata::new(
             &descriptor.label,
@@ -35,36 +36,43 @@ pub fn install(registry: &mut ModuleRegistry, resource_root: &Path) -> Result<()
             module_engine_core::CapabilityConfiguration::HlslSource,
         ]);
         let id = descriptor.id.clone();
-        registry.register_module(descriptor)?;
-        registry.describe_module(&id, metadata)?;
+        registry
+            .register_module(descriptor)
+            .map_err(VulkanError::Registration)?;
+        registry
+            .describe_module(&id, metadata)
+            .map_err(VulkanError::Registration)?;
     }
     let resource_root = resource_root.to_path_buf();
-    registry.register_renderer_with_adapter(
-        renderer_descriptor(),
-        VulkanAdapter::new(resource_root.clone()),
-        move |node, document| {
-            Ok(Box::new(VulkanFrameRenderer::new(
-                &resource_root,
-                node,
-                document,
-            )?))
-        },
-    )?;
-    let descriptor = renderer_descriptor();
-    registry.describe_module(
-        "render.vulkan",
-        module_engine_core::CapabilityMetadata::new(
-            &descriptor.label,
-            &descriptor.description,
-            module_engine_core::CapabilityOwner::Engine,
-            module_engine_core::CapabilityKind::Renderer,
-            env!("CARGO_PKG_NAME"),
+    registry
+        .register_renderer_with_adapter(
+            renderer_descriptor(),
+            VulkanAdapter::new(resource_root.clone()),
+            move |node, document| {
+                Ok(Box::new(
+                    VulkanFrameRenderer::new(&resource_root, node, document)
+                        .map_err(|error| error.to_string())?,
+                ))
+            },
         )
-        .configured_by([
-            module_engine_core::CapabilityConfiguration::RootGraph,
-            module_engine_core::CapabilityConfiguration::RenderGraph,
-        ]),
-    )
+        .map_err(VulkanError::Registration)?;
+    let descriptor = renderer_descriptor();
+    registry
+        .describe_module(
+            "render.vulkan",
+            module_engine_core::CapabilityMetadata::new(
+                &descriptor.label,
+                &descriptor.description,
+                module_engine_core::CapabilityOwner::Engine,
+                module_engine_core::CapabilityKind::Renderer,
+                env!("CARGO_PKG_NAME"),
+            )
+            .configured_by([
+                module_engine_core::CapabilityConfiguration::RootGraph,
+                module_engine_core::CapabilityConfiguration::RenderGraph,
+            ]),
+        )
+        .map_err(VulkanError::Registration)
 }
 
 fn renderer_descriptor() -> ModuleDescriptor {
@@ -95,9 +103,12 @@ fn renderer_descriptor() -> ModuleDescriptor {
     }
 }
 
-fn renderer_graph(node: &Node) -> Result<&Graph, String> {
+fn renderer_graph(node: &Node) -> Result<&Graph, VulkanError> {
     if node.module != "render.vulkan" {
-        return Err(format!("Expected Vulkan renderer, got '{}'", node.module));
+        return Err(VulkanError::Graph(format!(
+            "Expected Vulkan renderer, got '{}'",
+            node.module
+        )));
     }
     if !node.params.is_null()
         && !node
@@ -105,14 +116,14 @@ fn renderer_graph(node: &Node) -> Result<&Graph, String> {
             .as_object()
             .is_some_and(|params| params.is_empty())
     {
-        return Err(
+        return Err(VulkanError::Graph(
             "Vulkan module parameters are declared in its passes; outer parameters must be empty"
                 .into(),
-        );
+        ));
     }
     node.subgraph
         .as_deref()
-        .ok_or_else(|| "Vulkan renderer needs a pass graph".into())
+        .ok_or_else(|| VulkanError::Graph("Vulkan renderer needs a pass graph".into()))
 }
 
 /// Cheap metadata remains available even when the first shader candidate fails.
@@ -130,10 +141,11 @@ impl VulkanAdapter {
 impl RendererAdapter for VulkanAdapter {
     fn dependency_revision(&self, node: &Node, document: &GraphDocument) -> Result<u64, String> {
         shader_dependency_revision_at(
-            renderer_graph(node)?,
+            renderer_graph(node).map_err(|error| error.to_string())?,
             &document.shader_sources,
             &self.resource_root,
         )
+        .map_err(|error| error.to_string())
     }
 
     fn control_targets(
@@ -141,7 +153,8 @@ impl RendererAdapter for VulkanAdapter {
         node: &Node,
         _document: &GraphDocument,
     ) -> Result<Option<RenderControlTargets>, String> {
-        let (controls, resources) = render_graph_targets(renderer_graph(node)?);
+        let (controls, resources) =
+            render_graph_targets(renderer_graph(node).map_err(|error| error.to_string())?);
         Ok(Some(RenderControlTargets {
             controls,
             resources,
@@ -154,7 +167,10 @@ impl RendererAdapter for VulkanAdapter {
         _document: &GraphDocument,
         controls: &RenderOverrides,
     ) -> Result<(), String> {
-        RenderGraphValidator::new(renderer_graph(node)?)?.validate(controls)
+        renderer_graph(node)
+            .and_then(RenderGraphValidator::new)
+            .and_then(|validator| validator.validate(controls))
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -169,10 +185,15 @@ struct VulkanFrameRenderer {
     pending: Option<(u64, Arc<AtomicBool>)>,
     busy_skips: u64,
     frame_profiling: bool,
+    scene: ResidentScene,
 }
 
 impl VulkanFrameRenderer {
-    fn new(resource_root: &Path, node: &Node, document: &GraphDocument) -> Result<Self, String> {
+    fn new(
+        resource_root: &Path,
+        node: &Node,
+        document: &GraphDocument,
+    ) -> Result<Self, VulkanError> {
         let graph = renderer_graph(node)?;
         RenderGraphValidator::new(graph)?.validate(&RenderOverrides::default())?;
         let mut backend = VulkanRenderer::new_at(resource_root.to_path_buf())?;
@@ -186,7 +207,51 @@ impl VulkanFrameRenderer {
             pending: None,
             busy_skips: 0,
             frame_profiling: false,
+            scene: ResidentScene::default(),
         })
+    }
+    fn submit(
+        &mut self,
+        snapshot: Option<&SceneSnapshot>,
+        camera: Camera,
+        width: usize,
+        height: usize,
+        overrides: &RenderOverrides,
+    ) -> Result<RenderSubmission, String> {
+        if self.pending.is_some() {
+            self.busy_skips += 1;
+            return Ok(RenderSubmission::Busy);
+        }
+        let mut backend = match self.backend.try_lock() {
+            Ok(backend) => backend,
+            Err(TryLockError::WouldBlock) => {
+                self.busy_skips += 1;
+                return Ok(RenderSubmission::Busy);
+            }
+            Err(_) => return Err("Vulkan device lock is poisoned".into()),
+        };
+        backend.set_frame_profiling(self.frame_profiling);
+        let submitted = backend
+            .render_scene_presented(
+                match snapshot {
+                    Some(scene) => SceneInput::Snapshot(scene),
+                    None => SceneInput::Retained(&mut self.scene),
+                },
+                camera,
+                width,
+                height,
+                &self.graph,
+                &self.sources,
+                overrides,
+            )
+            .map_err(|error| error.to_string())?;
+        if let RenderSubmission::Pending(ticket) = submitted {
+            let cancel = backend
+                .cancellation(ticket)
+                .expect("accepted producer owns a cancellation flag");
+            self.pending = Some((ticket, cancel));
+        }
+        Ok(submitted)
     }
 }
 impl Drop for VulkanFrameRenderer {
@@ -200,6 +265,48 @@ impl Drop for VulkanFrameRenderer {
 }
 
 impl FrameRenderer for VulkanFrameRenderer {
+    fn scene_sync(&self) -> SceneSync {
+        self.scene.sync()
+    }
+
+    fn update_scene(&mut self, update: SceneUpdate<'_>) -> Result<(), String> {
+        self.scene.apply(update)
+    }
+
+    fn render_retained(
+        &mut self,
+        camera: Camera,
+        width: usize,
+        height: usize,
+        overrides: &RenderOverrides,
+    ) -> Result<Frame, String> {
+        let mut backend = self.backend.try_lock().map_err(|_| {
+            "GPU is preparing a new configuration; showing the last frame".to_string()
+        })?;
+        backend.set_frame_profiling(self.frame_profiling);
+        backend
+            .render_scene(
+                SceneInput::Retained(&mut self.scene),
+                camera,
+                width,
+                height,
+                &self.graph,
+                &self.sources,
+                overrides,
+            )
+            .map_err(|error| error.to_string())
+    }
+
+    fn render_retained_presented(
+        &mut self,
+        camera: Camera,
+        width: usize,
+        height: usize,
+        overrides: &RenderOverrides,
+    ) -> Result<RenderSubmission, String> {
+        self.submit(None, camera, width, height, overrides)
+    }
+
     fn render(
         &mut self,
         scene: &SceneSnapshot,
@@ -212,15 +319,17 @@ impl FrameRenderer for VulkanFrameRenderer {
             "GPU is preparing a new configuration; showing the last frame".to_string()
         })?;
         backend.set_frame_profiling(self.frame_profiling);
-        backend.render(
-            scene,
-            camera,
-            width,
-            height,
-            &self.graph,
-            &self.sources,
-            overrides,
-        )
+        backend
+            .render(
+                scene,
+                camera,
+                width,
+                height,
+                &self.graph,
+                &self.sources,
+                overrides,
+            )
+            .map_err(|error| error.to_string())
     }
 
     fn backend_name(&self) -> &str {
@@ -247,7 +356,9 @@ impl FrameRenderer for VulkanFrameRenderer {
             .backend
             .lock()
             .map_err(|_| "Vulkan device lock is poisoned")?;
-        backend.set_presentation_target(target)?;
+        backend
+            .set_presentation_target(target)
+            .map_err(|error| error.to_string())?;
         self.name = format!("Vulkan / {}", backend.device_name());
         Ok(())
     }
@@ -260,35 +371,7 @@ impl FrameRenderer for VulkanFrameRenderer {
         height: usize,
         overrides: &RenderOverrides,
     ) -> Result<RenderSubmission, String> {
-        if self.pending.is_some() {
-            self.busy_skips += 1;
-            return Ok(RenderSubmission::Busy);
-        }
-        let mut backend = match self.backend.try_lock() {
-            Ok(backend) => backend,
-            Err(TryLockError::WouldBlock) => {
-                self.busy_skips += 1;
-                return Ok(RenderSubmission::Busy);
-            }
-            Err(_) => return Err("Vulkan device lock is poisoned".into()),
-        };
-        backend.set_frame_profiling(self.frame_profiling);
-        let submitted = backend.render_presented(
-            scene,
-            camera,
-            width,
-            height,
-            &self.graph,
-            &self.sources,
-            overrides,
-        )?;
-        if let RenderSubmission::Pending(ticket) = submitted {
-            let cancel = backend
-                .cancellation(ticket)
-                .expect("accepted producer owns a cancellation flag");
-            self.pending = Some((ticket, cancel));
-        }
-        Ok(submitted)
+        self.submit(Some(scene), camera, width, height, overrides)
     }
 
     fn poll_presented(&mut self, ticket: u64) -> Result<Option<Frame>, String> {
@@ -303,7 +386,9 @@ impl FrameRenderer for VulkanFrameRenderer {
             Err(TryLockError::WouldBlock) => return Ok(None),
             Err(_) => return Err("Vulkan device lock is poisoned".into()),
         };
-        let completed = backend.poll_presented(ticket)?;
+        let completed = backend
+            .poll_presented(ticket)
+            .map_err(|error| error.to_string())?;
         if backend.cancellation(ticket).is_none() {
             self.pending = None;
         }
@@ -345,12 +430,15 @@ impl FrameRenderer for VulkanFrameRenderer {
         node: &Node,
         document: &GraphDocument,
     ) -> Result<Option<Box<dyn FrameRenderer>>, String> {
-        let graph = renderer_graph(node)?;
-        RenderGraphValidator::new(graph)?.validate(&RenderOverrides::default())?;
+        let graph = renderer_graph(node).map_err(|error| error.to_string())?;
+        RenderGraphValidator::new(graph)
+            .and_then(|validator| validator.validate(&RenderOverrides::default()))
+            .map_err(|error| error.to_string())?;
         self.backend
             .lock()
             .map_err(|_| "Vulkan device lock is poisoned".to_string())?
-            .prepare(graph, &document.shader_sources)?;
+            .prepare(graph, &document.shader_sources)
+            .map_err(|error| error.to_string())?;
         Ok(Some(Box::new(Self {
             backend: self.backend.clone(),
             graph: graph.clone(),
@@ -359,11 +447,14 @@ impl FrameRenderer for VulkanFrameRenderer {
             pending: None,
             busy_skips: 0,
             frame_profiling: self.frame_profiling,
+            scene: ResidentScene::default(),
         })))
     }
 
     fn validate_overrides(&self, overrides: &RenderOverrides) -> Result<(), String> {
-        RenderGraphValidator::new(&self.graph)?.validate(overrides)
+        RenderGraphValidator::new(&self.graph)
+            .and_then(|validator| validator.validate(overrides))
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -458,14 +549,17 @@ mod tests {
             .create_renderer(&bad_node, &document)
             .err()
             .unwrap();
-        assert!(error.contains("outer parameters must be empty"), "{error}");
+        assert!(
+            error.to_string().contains("outer parameters must be empty"),
+            "{error}"
+        );
         bad_node.params = json!({});
         bad_node.subgraph = None;
         let error = registry
             .create_renderer(&bad_node, &document)
             .err()
             .unwrap();
-        assert!(error.contains("needs a pass graph"), "{error}");
+        assert!(error.to_string().contains("needs a pass graph"), "{error}");
     }
 
     #[test]
@@ -584,6 +678,7 @@ mod tests {
 
     #[test]
     fn factories_isolate_devices_and_sync_candidates_share_cache_without_selecting_configuration() {
+        crate::requires_capabilities!(Vulkan, Dxc);
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let document = document();
         let mut registry = ModuleRegistry::builtin();

@@ -1,15 +1,27 @@
 use crate::presentation::{
     DeviceLifetime, PresentationPool, SharedImage, VulkanPresentationTarget,
 };
+use crate::{
+    DeviceCapabilities,
+    frames::{Completion, FramePools, Timeline},
+    memory::{DeviceAllocator, ResourceMemory},
+    staging::StagingCursor,
+    transfer::TransferQueue,
+};
+use crate::{VulkanError, instance::InstanceLifetime};
 #[cfg(test)]
 use crate::{compiler::compile_hlsl, graph::build_plan};
 use crate::{
-    compiler::{compile_hlsl_at, verify_shader},
+    compiler::{
+        bindless_source, compile_hlsl_at, verify_bindless_shader, verify_resident_vertex,
+        verify_shader,
+    },
     geometry,
     graph::{Pass, Plan, build_metadata_plan, build_plan_at},
     profiling::{PendingTimings, TimestampCapture, TimestampPool},
 };
-use ash::{Entry, vk};
+use ash::vk;
+use gpu_allocator::vulkan::AllocationScheme;
 use module_engine_core::{
     Camera, Frame, Graph, RenderOverrides, RenderResourceCommand, RenderStats, RenderSubmission,
     RendererPerformance, SceneSnapshot,
@@ -18,12 +30,38 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::{CStr, CString},
     hash::{Hash, Hasher},
+    ops::Range,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
+    task::Poll,
     time::{Duration, Instant},
 };
+
+#[path = "materials.rs"]
+mod materials;
+use materials::{MaterialLayout, MaterialSet};
+
+#[path = "resident.rs"]
+pub(crate) mod resident;
+pub use resident::ResidentScene;
+
+pub enum SceneInput<'a> {
+    Snapshot(&'a SceneSnapshot),
+    Retained(&'a mut ResidentScene),
+}
+
+impl SceneInput<'_> {
+    fn snapshot(&self) -> Result<&SceneSnapshot, VulkanError> {
+        match self {
+            Self::Snapshot(scene) => Ok(scene),
+            Self::Retained(scene) => scene.snapshot().map_err(VulkanError::Resource),
+        }
+    }
+}
+
+static NEXT_TRACE_ID: AtomicU64 = AtomicU64::new(1);
 
 const INCLUDE_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 #[cfg(test)]
@@ -60,7 +98,7 @@ struct RejectedPreparation {
     sources: BTreeMap<String, String>,
     signature: Option<Vec<String>>,
     checked: Instant,
-    error: String,
+    error: VulkanError,
 }
 impl RejectedPreparation {
     fn matches(&self, graph: &Graph, sources: &BTreeMap<String, String>) -> bool {
@@ -72,7 +110,7 @@ struct Image {
     device: ash::Device,
     image: vk::Image,
     view: vk::ImageView,
-    memory: vk::DeviceMemory,
+    memory: Option<ResourceMemory>,
     format: vk::Format,
     aspect: vk::ImageAspectFlags,
     layout: vk::ImageLayout,
@@ -98,9 +136,8 @@ impl Drop for Image {
                     .images
                     .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
             }
-            if self.memory != vk::DeviceMemory::null() {
-                self.device.free_memory(self.memory, None);
-                #[cfg(test)]
+            #[cfg(test)]
+            if self.memory.is_some() {
                 self.allocations
                     .memory
                     .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
@@ -111,7 +148,7 @@ impl Drop for Image {
 struct Buffer {
     device: ash::Device,
     buffer: vk::Buffer,
-    memory: vk::DeviceMemory,
+    memory: Option<ResourceMemory>,
     size: u64,
     #[cfg(test)]
     allocations: std::sync::Arc<AllocationCounts>,
@@ -126,9 +163,8 @@ impl Drop for Buffer {
                     .buffers
                     .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
             }
-            if self.memory != vk::DeviceMemory::null() {
-                self.device.free_memory(self.memory, None);
-                #[cfg(test)]
+            #[cfg(test)]
+            if self.memory.is_some() {
                 self.allocations
                     .memory
                     .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
@@ -142,11 +178,13 @@ struct Pipeline {
     layout: vk::PipelineLayout,
     set_layout: vk::DescriptorSetLayout,
     compute: bool,
+    bindless_materials: bool,
+    resident_scene: bool,
 }
 struct FrameResources {
     key: FrameResourceKey,
     images: BTreeMap<String, Image>,
-    vertex: Buffer,
+    vertex: Option<Buffer>,
     staging: Option<Buffer>,
 }
 /// Allocation identity is independent from shader/pipeline identity. Reusing a
@@ -226,7 +264,7 @@ fn validate_frame_images(
     plan: &Plan,
     available: &BTreeSet<&str>,
     readback: &[(String, usize, usize)],
-) -> Result<(), String> {
+) -> Result<(), VulkanError> {
     let mut declared = BTreeSet::new();
     for pass in &plan.passes {
         for (_, resource) in pass
@@ -235,44 +273,46 @@ fn validate_frame_images(
             .filter(|(spec, _)| spec.format != "scene")
         {
             if !available.contains(resource.as_str()) {
-                return Err(format!(
+                return Err(VulkanError::Resource(format!(
                     "GPU pass {} input resource {resource} has no allocated image",
                     pass.id
-                ));
+                )));
             }
         }
         for spec in &pass.manifest.outputs {
             let resource = pass.resource(&spec.name);
             if !declared.insert(resource.clone()) {
-                return Err(format!(
+                return Err(VulkanError::Resource(format!(
                     "GPU output resource identity collision: {resource}"
-                ));
+                )));
             }
             if !available.contains(resource.as_str()) {
-                return Err(format!(
+                return Err(VulkanError::Resource(format!(
                     "GPU pass {} output resource {resource} has no allocated image",
                     pass.id
-                ));
+                )));
             }
         }
         if pass.geometry() {
             let resource = format!("{}.__hardware_depth", pass.id);
             if !declared.insert(resource.clone()) {
-                return Err(format!("GPU depth resource identity collision: {resource}"));
+                return Err(VulkanError::Resource(format!(
+                    "GPU depth resource identity collision: {resource}"
+                )));
             }
             if !available.contains(resource.as_str()) {
-                return Err(format!(
+                return Err(VulkanError::Resource(format!(
                     "GPU pass {} hardware depth has no allocated image",
                     pass.id
-                ));
+                )));
             }
         }
     }
     for (resource, _, _) in readback {
         if !available.contains(resource.as_str()) {
-            return Err(format!(
+            return Err(VulkanError::Resource(format!(
                 "GPU readback resource {resource} has no allocated image"
-            ));
+            )));
         }
     }
     Ok(())
@@ -283,48 +323,63 @@ struct AtlasGpu {
     image: Image,
 }
 /// Everything referenced by the recorded command buffer remains untouched until
-/// its fence signals. In particular uploads and evicted pipelines cannot drop.
+/// completion is confirmed. In particular uploads and evicted pipelines cannot drop.
 struct ProducerFlight {
     ticket: u64,
-    fence: vk::Fence,
+    completion: Completion,
+    serial: u64,
+    work: FrameWork,
     shared: Option<Arc<SharedImage>>,
     resources: FrameResources,
-    atlas: AtlasGpu,
-    _upload: Option<Buffer>,
+    atlas: Option<AtlasGpu>,
+    _upload: Option<StagingUpload>,
+    materials: Option<Arc<MaterialSet>>,
+    _material_upload: Option<Buffer>,
+    _scene_buffers: Option<(resident::Buffers, Option<resident::Buffers>)>,
+    _transfer_timeline: Option<Arc<Timeline>>,
     _pipelines: Vec<Arc<Pipeline>>,
     _context: Arc<DeviceLifetime>,
     size: [usize; 2],
     stats: RenderStats,
     timings: Option<PendingTimings>,
     cancelled: Arc<AtomicBool>,
-    failure: Option<String>,
+    failure: Option<VulkanError>,
 }
-struct ProducerRetirement {
-    device: ash::Device,
-    flight: Option<ProducerFlight>,
-    pipelines: BTreeMap<String, Arc<Pipeline>>,
+struct FrameSlot {
+    pools: FramePools,
+    pending: Option<ProducerFlight>,
     resources: Option<FrameResources>,
     atlas: Option<AtlasGpu>,
-    pool: vk::CommandPool,
-    descriptors: vk::DescriptorPool,
+    last_serial: u64,
+    timestamp_pool: Option<Arc<TimestampPool>>,
+}
+
+struct StagingUpload {
+    buffer: Arc<Buffer>,
+    offset: u64,
+    ring_range: Option<Range<u64>>,
+}
+
+#[derive(Default)]
+struct StagingRing {
+    buffer: Option<Arc<Buffer>>,
+    cursor: StagingCursor,
+}
+
+struct ProducerRetirement {
+    slots: Vec<FrameSlot>,
+    _pipelines: BTreeMap<String, Arc<Pipeline>>,
     _context: Arc<DeviceLifetime>,
 }
-impl Drop for ProducerRetirement {
+
+struct OwnedShaderModule<'a>(&'a ash::Device, vk::ShaderModule);
+
+impl Drop for OwnedShaderModule<'_> {
     fn drop(&mut self) {
-        // This owner is dropped only after completion has been established.
-        unsafe {
-            if let Some(flight) = &self.flight {
-                self.device.destroy_fence(flight.fence, None);
-            }
-            self.device.destroy_descriptor_pool(self.descriptors, None);
-            self.device.destroy_command_pool(self.pool, None);
-        }
-        self.flight = None;
-        self.pipelines.clear();
-        self.resources = None;
-        self.atlas = None;
+        unsafe { self.0.destroy_shader_module(self.1, None) };
     }
 }
+
 impl Drop for Pipeline {
     fn drop(&mut self) {
         unsafe {
@@ -340,7 +395,21 @@ impl Drop for Pipeline {
 pub struct FrameWork {
     pub draw_calls: usize,
     pub vertex_write_bytes: usize,
+    /// CPU-to-GPU writes to persistent mesh indices, excluding GPU-local growth copies.
+    pub mesh_index_write_bytes: usize,
+    pub instance_write_bytes: usize,
+    pub material_row_write_bytes: usize,
+    pub draw_write_bytes: usize,
+    pub resident_scene: bool,
+    pub cpu_prepare_ms: f64,
+    pub cpu_record_ms: f64,
+    pub cpu_queue_submit_ms: f64,
+    /// Synchronous diagnostic GPU wait. Native submissions do not block here.
+    pub cpu_wait_ms: f64,
     pub atlas_upload_bytes: usize,
+    pub material_images: usize,
+    pub material_uploaded_images: usize,
+    pub material_upload_bytes: usize,
 }
 
 /// Adapter and legacy vertex-buffer limits for one known-size scene.
@@ -371,21 +440,28 @@ pub struct VulkanRenderer {
     family: u32,
     presentation_target: Option<Arc<VulkanPresentationTarget>>,
     presentation_slots: PresentationPool<SharedImage>,
-    pool: vk::CommandPool,
-    command: vk::CommandBuffer,
-    descriptor_pool: vk::DescriptorPool,
+    slots: Vec<FrameSlot>,
+    serial: u64,
+    timeline: Option<Arc<Timeline>>,
+    allocator: Option<Arc<DeviceAllocator>>,
+    transfer: Option<TransferQueue>,
+    staging: StagingRing,
+    staging_alignment: u64,
+    capabilities: DeviceCapabilities,
+    material_layout: Option<Arc<MaterialLayout>>,
+    materials: Option<Arc<MaterialSet>>,
+    gpu_scene: resident::GpuScene,
+    storage_buffer_limit: u64,
+    max_indirect_draws: u32,
+    trace: Option<u64>,
     name: String,
     pipelines: BTreeMap<String, Arc<Pipeline>>,
-    pending: Option<ProducerFlight>,
     next_ticket: u64,
-    producer_error: Option<String>,
+    producer_error: Option<VulkanError>,
     prepared: Option<Plan>,
     diagnostics: Vec<String>,
-    frame_resources: Option<FrameResources>,
-    atlas: Option<AtlasGpu>,
     detailed_stats: bool,
     frame_profiling: bool,
-    timestamp_pool: Option<Arc<TimestampPool>>,
     timestamp_valid_bits: u32,
     timestamp_period_ns: f64,
     prepared_inputs: Option<(Graph, BTreeMap<String, String>, Instant)>,
@@ -398,97 +474,122 @@ pub struct VulkanRenderer {
     allocations: std::sync::Arc<AllocationCounts>,
 }
 impl VulkanRenderer {
-    pub fn new() -> Result<Self, String> {
+    pub fn new() -> Result<Self, VulkanError> {
         Self::new_at(crate::compiler::resource_root())
     }
     /// Bind this backend's shader compilation to one explicit package root.
-    pub fn new_at(resource_root: std::path::PathBuf) -> Result<Self, String> {
+    pub fn new_at(resource_root: std::path::PathBuf) -> Result<Self, VulkanError> {
         Self::new_at_target(resource_root, None)
     }
     fn new_at_target(
         resource_root: std::path::PathBuf,
         presentation_target: Option<Arc<VulkanPresentationTarget>>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, VulkanError> {
         unsafe {
-            let entry = Entry::load().map_err(|e| format!("Vulkan loader: {e}"))?;
-            let app = CString::new("ModuleEngine GPU graph").unwrap();
-            let info = vk::ApplicationInfo::default()
-                .application_name(&app)
-                .api_version(vk::API_VERSION_1_3);
-            let instance = entry
-                .create_instance(
-                    &vk::InstanceCreateInfo::default().application_info(&info),
-                    None,
-                )
-                .map_err(|e| format!("Vulkan 1.3 instance: {e:?}"))?;
+            let trace = std::env::var_os("MODULE_ENGINE_VULKAN_TRACE")
+                .map(|_| NEXT_TRACE_ID.fetch_add(1, Ordering::Relaxed));
+            let owner = InstanceLifetime::new()?;
+            let instance = owner.raw.clone();
             let candidates = instance
                 .enumerate_physical_devices()
-                .map_err(|e| format!("Vulkan adapters: {e:?}"))?;
+                .map_err(VulkanError::api("enumerate adapters"))?;
+            let mut extension_error = None;
             let selected = candidates
                 .into_iter()
                 .filter_map(|physical| {
-                    if let Some(target) = &presentation_target {
-                        if !crate::presentation::matches_adapter(
+                    if let Some(target) = &presentation_target
+                        && !crate::presentation::matches_adapter(
                             &instance,
                             physical,
                             &target.identity,
-                        ) {
-                            return None;
-                        }
-                        let extensions = instance
-                            .enumerate_device_extension_properties(physical)
-                            .ok()?;
-                        if !extensions.iter().any(|extension| {
-                            CStr::from_ptr(extension.extension_name.as_ptr())
-                                == crate::presentation::extension_name()
-                        }) {
-                            return None;
-                        }
+                        )
+                    {
+                        return None;
                     }
                     let properties = instance.get_physical_device_properties(physical);
                     if properties.api_version < vk::API_VERSION_1_3 {
                         return None;
                     }
-                    let family = instance
-                        .get_physical_device_queue_family_properties(physical)
-                        .iter()
-                        .position(|p| {
-                            p.queue_flags
+                    let families = instance.get_physical_device_queue_family_properties(physical);
+                    let family = families.iter().position(|p| {
+                        p.queue_count != 0
+                            && p.queue_flags
                                 .contains(vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE)
-                        })?;
-                    let mut rendering = vk::PhysicalDeviceDynamicRenderingFeatures::default();
-                    let mut features =
-                        vk::PhysicalDeviceFeatures2::default().push_next(&mut rendering);
-                    instance.get_physical_device_features2(physical, &mut features);
-                    if rendering.dynamic_rendering == 0 {
+                    })?;
+                    let extensions = match instance.enumerate_device_extension_properties(physical)
+                    {
+                        Ok(extensions) => extensions,
+                        Err(error) => {
+                            extension_error.get_or_insert(error);
+                            return None;
+                        }
+                    };
+                    if presentation_target.is_some()
+                        && !extensions.iter().any(|extension| {
+                            CStr::from_ptr(extension.extension_name.as_ptr())
+                                == crate::presentation::extension_name()
+                        })
+                    {
                         return None;
                     }
-                    Some((physical, family as u32, properties))
+                    let capabilities = DeviceCapabilities::query(
+                        &instance,
+                        physical,
+                        &extensions,
+                        family as u32,
+                        &families,
+                    )?;
+                    Some((
+                        physical,
+                        capabilities,
+                        properties,
+                        families[family].timestamp_valid_bits,
+                    ))
                 })
-                .max_by_key(|(_, _, p)| {
+                .max_by_key(|(_, _, p, _)| {
                     if p.device_type == vk::PhysicalDeviceType::DISCRETE_GPU {
                         2
                     } else {
                         1
                     }
                 });
-            let Some((physical, family, properties)) = selected else {
-                instance.destroy_instance(None);
+            let Some((physical, capabilities, properties, timestamp_valid_bits)) = selected else {
+                if let Some(source) = extension_error {
+                    return Err(VulkanError::api("enumerate device extensions")(source));
+                }
                 return Err(if presentation_target.is_some() {
-                    "No matching GUI adapter with Vulkan 1.3 dynamic rendering and external-memory import".into()
+                    VulkanError::NoPresentationAdapter
                 } else {
-                    "No Vulkan 1.3 graphics+compute adapter with dynamic rendering; a compatible GPU driver is required".into()
+                    VulkanError::NoAdapter
                 });
             };
             let name = CStr::from_ptr(properties.device_name.as_ptr())
                 .to_string_lossy()
                 .into_owned();
+            let family = capabilities.graphics_family;
+            let modern = capabilities.use_modern_device();
+            let transfer_family = capabilities.dedicated_transfer_family.filter(|_| modern);
             let priorities = [1.];
-            let queues = [vk::DeviceQueueCreateInfo::default()
-                .queue_family_index(family)
-                .queue_priorities(&priorities)];
-            let mut rendering =
-                vk::PhysicalDeviceDynamicRenderingFeatures::default().dynamic_rendering(true);
+            let queue_info = |family| {
+                vk::DeviceQueueCreateInfo::default()
+                    .queue_family_index(family)
+                    .queue_priorities(&priorities)
+            };
+            let mut queues = vec![queue_info(family)];
+            queues.extend(transfer_family.map(queue_info));
+            let mut vulkan13 = vk::PhysicalDeviceVulkan13Features::default()
+                .dynamic_rendering(true)
+                .synchronization2(modern);
+            let bindless = capabilities.bindless_materials;
+            let mut vulkan12 = vk::PhysicalDeviceVulkan12Features::default()
+                .timeline_semaphore(modern)
+                .descriptor_indexing(bindless)
+                .shader_sampled_image_array_non_uniform_indexing(bindless)
+                .runtime_descriptor_array(bindless);
+            let features = vk::PhysicalDeviceFeatures::default()
+                .sampler_anisotropy(bindless)
+                .multi_draw_indirect(capabilities.resident_scene)
+                .draw_indirect_first_instance(capabilities.resident_scene);
             let extensions = if presentation_target.is_some() {
                 vec![crate::presentation::extension_name().as_ptr()]
             } else {
@@ -500,57 +601,74 @@ impl VulkanRenderer {
                     &vk::DeviceCreateInfo::default()
                         .queue_create_infos(&queues)
                         .enabled_extension_names(&extensions)
-                        .push_next(&mut rendering),
+                        .enabled_features(&features)
+                        .push_next(&mut vulkan13)
+                        .push_next(&mut vulkan12),
                     None,
                 )
-                .map_err(|e| format!("Vulkan device {name}: {e:?}"))?;
+                .map_err(|source| VulkanError::CreateDevice {
+                    name: name.clone(),
+                    source,
+                })?;
             let context = Arc::new(DeviceLifetime {
-                _entry: entry,
-                instance: instance.clone(),
+                instance: owner,
                 device: device.clone(),
             });
+            let material_layout = bindless
+                .then(|| MaterialLayout::new(&context, capabilities.max_material_anisotropy))
+                .transpose()?
+                .map(Arc::new);
             if presentation_target.is_some() {
                 crate::presentation::validate_external_format(&context, physical, 1, 1)?;
             }
             let queue = device.get_device_queue(family, 0);
-            let timestamp_valid_bits = instance
-                .get_physical_device_queue_family_properties(physical)[family as usize]
-                .timestamp_valid_bits;
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "Vulkan debug device: {name}, type={:?}, API={}.{}.{}, driver={:#x}, queue={family}, GUI interop={}",
+                properties.device_type,
+                vk::api_version_major(properties.api_version),
+                vk::api_version_minor(properties.api_version),
+                vk::api_version_patch(properties.api_version),
+                properties.driver_version,
+                presentation_target.is_some()
+            );
+            context.name(device.handle(), || format!("ModuleEngine device ({name})"));
+            context.name(queue, || {
+                format!("ModuleEngine graphics+compute queue {family}")
+            });
             let memory = instance.get_physical_device_memory_properties(physical);
-            let pool = device
-                .create_command_pool(
-                    &vk::CommandPoolCreateInfo::default()
-                        .queue_family_index(family)
-                        .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),
-                    None,
-                )
-                .map_err(vk_error)?;
-            let command = device
-                .allocate_command_buffers(
-                    &vk::CommandBufferAllocateInfo::default()
-                        .command_pool(pool)
-                        .level(vk::CommandBufferLevel::PRIMARY)
-                        .command_buffer_count(1),
-                )
-                .map_err(vk_error)?[0];
-            let sizes = [
-                vk::DescriptorPoolSize {
-                    ty: vk::DescriptorType::SAMPLED_IMAGE,
-                    descriptor_count: 1024,
-                },
-                vk::DescriptorPoolSize {
-                    ty: vk::DescriptorType::STORAGE_IMAGE,
-                    descriptor_count: 1024,
-                },
-            ];
-            let descriptor_pool = device
-                .create_descriptor_pool(
-                    &vk::DescriptorPoolCreateInfo::default()
-                        .max_sets(128)
-                        .pool_sizes(&sizes),
-                    None,
-                )
-                .map_err(vk_error)?;
+            let timeline = modern
+                .then(|| Timeline::new(&context, "ModuleEngine graphics timeline"))
+                .transpose()?;
+            let transfer = transfer_family
+                .map(|family| TransferQueue::new(&context, family))
+                .transpose()?;
+            let allocator = modern
+                .then(|| DeviceAllocator::new(&context, &instance, physical))
+                .transpose()?;
+            let mut slots = Vec::new();
+            for _ in 0..if modern { 2 } else { 1 } {
+                slots.push(FrameSlot {
+                    pools: FramePools::new(&context, family, transfer_family)?,
+                    pending: None,
+                    resources: None,
+                    atlas: None,
+                    last_serial: 0,
+                    timestamp_pool: None,
+                });
+            }
+            if let Some(trace) = trace {
+                eprintln!(
+                    "Vulkan device renderer={trace} adapter={name:?} driver={:#x} tier_a={} tier_b={} tier_c={} timeline={modern} bindless_materials={bindless} graphics_family={family} transfer_family={} slots={} present={}",
+                    properties.driver_version,
+                    capabilities.tier_a,
+                    capabilities.tier_b,
+                    capabilities.tier_c,
+                    transfer_family.unwrap_or(family),
+                    slots.len(),
+                    presentation_target.is_some(),
+                );
+            }
             Ok(Self {
                 context,
                 instance,
@@ -561,22 +679,32 @@ impl VulkanRenderer {
                 family,
                 presentation_target,
                 presentation_slots: PresentationPool::default(),
-                pool,
-                command,
-                descriptor_pool,
+                slots,
+                serial: 0,
+                timeline,
+                allocator,
+                transfer,
+                staging: StagingRing::default(),
+                staging_alignment: properties
+                    .limits
+                    .optimal_buffer_copy_offset_alignment
+                    .max(4),
+                capabilities,
+                material_layout,
+                materials: None,
+                gpu_scene: resident::GpuScene::default(),
+                storage_buffer_limit: u64::from(properties.limits.max_storage_buffer_range),
+                max_indirect_draws: properties.limits.max_draw_indirect_count,
+                trace,
                 name,
                 pipelines: BTreeMap::new(),
                 prepared: None,
                 diagnostics: vec![],
                 resource_root,
-                frame_resources: None,
-                pending: None,
                 next_ticket: 0,
                 producer_error: None,
-                atlas: None,
                 detailed_stats: true,
                 frame_profiling: false,
-                timestamp_pool: None,
                 timestamp_valid_bits,
                 timestamp_period_ns: f64::from(properties.limits.timestamp_period),
                 prepared_inputs: None,
@@ -599,7 +727,7 @@ impl VulkanRenderer {
     pub fn set_presentation_target(
         &mut self,
         target: Option<Arc<VulkanPresentationTarget>>,
-    ) -> Result<(), String> {
+    ) -> Result<(), VulkanError> {
         if match (&self.presentation_target, &target) {
             (None, None) => true,
             (Some(a), Some(b)) => {
@@ -610,7 +738,9 @@ impl VulkanRenderer {
             return Ok(());
         }
         if self.presentation_slots.busy() {
-            return Err("GPU presentation target still has leased frames".into());
+            return Err(VulkanError::Presentation(
+                "GPU presentation target still has leased frames".into(),
+            ));
         }
         let Some(target) = target else {
             self.presentation_slots.clear();
@@ -640,6 +770,15 @@ impl VulkanRenderer {
     }
     pub fn performance(&self) -> RendererPerformance {
         self.performance
+    }
+    pub fn capabilities(&self) -> DeviceCapabilities {
+        self.capabilities
+    }
+    pub fn frame_capacity(&self) -> usize {
+        self.slots.len()
+    }
+    pub fn allocator_stats(&self) -> Option<[u64; 3]> {
+        self.allocator.as_ref().map(|allocator| allocator.stats())
     }
     pub fn last_frame_work(&self) -> Option<FrameWork> {
         self.last_frame_work
@@ -705,7 +844,7 @@ impl VulkanRenderer {
         let memory_type = match self.memory_type(requirements.memory_type_bits, host) {
             Ok(index) => index,
             Err(error) => {
-                result.blocked = Some(error);
+                result.blocked = Some(error.to_string());
                 return result;
             }
         };
@@ -752,7 +891,7 @@ impl VulkanRenderer {
         &mut self,
         graph: &Graph,
         sources: &BTreeMap<String, String>,
-    ) -> Result<(), String> {
+    ) -> Result<(), VulkanError> {
         self.prepare_checked(graph, sources, false)
     }
     fn reject_preparation(
@@ -760,9 +899,9 @@ impl VulkanRenderer {
         graph: &Graph,
         sources: &BTreeMap<String, String>,
         signature: Option<Vec<String>>,
-        error: String,
-    ) -> Result<(), String> {
-        self.diagnostics = vec![error.clone()];
+        error: VulkanError,
+    ) -> Result<(), VulkanError> {
+        self.diagnostics = vec![error.to_string()];
         self.rejected_inputs = Some(RejectedPreparation {
             graph: graph.clone(),
             sources: sources.clone(),
@@ -777,7 +916,7 @@ impl VulkanRenderer {
         graph: &Graph,
         sources: &BTreeMap<String, String>,
         reuse_rejection: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), VulkanError> {
         self.performance.prepare_calls += 1;
         self.performance.plan_builds += 1;
         let started = Instant::now();
@@ -806,55 +945,73 @@ impl VulkanRenderer {
         self.diagnostics.clear();
         Ok(())
     }
-    fn prepare_plan(&mut self, plan: Plan) -> Result<(), String> {
+    fn prepare_plan(&mut self, plan: Plan) -> Result<(), VulkanError> {
         if let Err(error) = schedule_overrides(&plan, &RenderOverrides::default()) {
-            self.diagnostics = vec![error.clone()];
+            self.diagnostics = vec![error.to_string()];
             return Err(error);
         }
         if plan.passes.len() > 64 {
-            return Err("GPU graph exceeds 64 passes".into());
+            return Err(VulkanError::PassLimit);
         }
         if self.pipelines.len() > 256 {
-            let mut keep: BTreeSet<_> = plan.passes.iter().map(pipeline_key).collect();
-            if let Some(active) = &self.prepared {
-                keep.extend(active.passes.iter().map(pipeline_key));
+            let mut keep = BTreeSet::new();
+            for pass in plan
+                .passes
+                .iter()
+                .chain(self.prepared.iter().flat_map(|p| &p.passes))
+            {
+                let key = pipeline_key(pass);
+                if pass.has_bindless_variant() && self.material_layout.is_some() {
+                    keep.insert(atlas_pipeline_key(&key));
+                }
+                if pass.resident_geometry() && self.capabilities.resident_scene {
+                    keep.insert(resident_pipeline_key(&key));
+                }
+                keep.insert(key);
             }
             self.pipelines.retain(|key, _| keep.contains(key));
         }
         for pass in &plan.passes {
             let key = pipeline_key(pass);
-            if !self.pipelines.contains_key(&key) {
-                self.performance.pipeline_build_attempts += 1;
-                match self.create_pipeline(pass) {
-                    Ok(pipeline) => {
-                        if crate::compiler::dependency_fingerprint_at(
-                            &self.resource_root,
-                            &pass.source,
-                        )? != pass.dependency_hash
-                        {
-                            return Err(format!(
-                                "Pass {}: HLSL dependencies changed during pipeline preparation",
-                                pass.id
-                            ));
-                        }
-                        self.pipelines.insert(key, Arc::new(pipeline));
-                        self.performance.pipeline_creations += 1;
-                    }
-                    Err(error) => {
-                        self.diagnostics = vec![format!("Pass {}: {error}", pass.id)];
-                        return Err(self.diagnostics[0].clone());
-                    }
-                }
+            self.prepare_pipeline(pass, key.clone(), true, false)?;
+            if pass.resident_geometry() && self.capabilities.resident_scene {
+                self.prepare_pipeline(pass, resident_pipeline_key(&key), true, true)?;
             }
         }
         self.prepared = Some(plan);
+        Ok(())
+    }
+    fn prepare_pipeline(
+        &mut self,
+        pass: &Pass,
+        key: String,
+        allow_indexed: bool,
+        resident_scene: bool,
+    ) -> Result<(), VulkanError> {
+        if self.pipelines.contains_key(&key) {
+            return Ok(());
+        }
+        self.performance.pipeline_build_attempts += 1;
+        let pipeline = self
+            .create_pipeline(pass, allow_indexed, resident_scene)
+            .map_err(|error| VulkanError::Pass {
+                pass: pass.id.clone(),
+                source: Arc::new(error),
+            })?;
+        if crate::compiler::dependency_fingerprint_at(&self.resource_root, &pass.source)?
+            != pass.dependency_hash
+        {
+            return Err(VulkanError::PassDependenciesChanged(pass.id.clone()));
+        }
+        self.pipelines.insert(key, Arc::new(pipeline));
+        self.performance.pipeline_creations += 1;
         Ok(())
     }
     fn prepare_for_render(
         &mut self,
         graph: &Graph,
         sources: &BTreeMap<String, String>,
-    ) -> Result<(), String> {
+    ) -> Result<(), VulkanError> {
         if let Some(rejected) = &self.rejected_inputs
             && rejected.matches(graph, sources)
         {
@@ -878,7 +1035,11 @@ impl VulkanRenderer {
         }
         self.prepare_checked(graph, sources, true)
     }
-    fn memory_type(&self, bits: u32, required: vk::MemoryPropertyFlags) -> Result<u32, String> {
+    fn memory_type(
+        &self,
+        bits: u32,
+        required: vk::MemoryPropertyFlags,
+    ) -> Result<u32, VulkanError> {
         (0..self.memory.memory_type_count)
             .find(|i| {
                 bits & (1 << i) != 0
@@ -886,9 +1047,59 @@ impl VulkanRenderer {
                         .property_flags
                         .contains(required)
             })
-            .ok_or_else(|| format!("Vulkan memory type {required:?} unavailable"))
+            .ok_or(VulkanError::MemoryType { bits, required })
     }
-    fn buffer(&self, size: u64, usage: vk::BufferUsageFlags) -> Result<Buffer, String> {
+    fn allocate(
+        &self,
+        name: &str,
+        mut requirements: vk::MemoryRequirements,
+        memory_type: u32,
+        linear: bool,
+        dedicated: Option<AllocationScheme>,
+    ) -> Result<ResourceMemory, VulkanError> {
+        if let Some(allocator) = &self.allocator {
+            requirements.memory_type_bits = 1 << memory_type;
+            return allocator.allocate(
+                name,
+                requirements,
+                linear,
+                dedicated.unwrap_or(AllocationScheme::GpuAllocatorManaged),
+            );
+        }
+        let mut dedicated_info = vk::MemoryDedicatedAllocateInfo::default();
+        let mut info = vk::MemoryAllocateInfo::default()
+            .allocation_size(requirements.size)
+            .memory_type_index(memory_type);
+        if let Some(scheme) = dedicated {
+            dedicated_info = match scheme {
+                AllocationScheme::DedicatedBuffer(buffer) => dedicated_info.buffer(buffer),
+                AllocationScheme::DedicatedImage(image) => dedicated_info.image(image),
+                AllocationScheme::GpuAllocatorManaged => unreachable!(),
+            };
+            info = info.push_next(&mut dedicated_info);
+        }
+        let memory = unsafe { self.device.allocate_memory(&info, None) }
+            .map_err(VulkanError::api("allocate resource memory"))?;
+        Ok(ResourceMemory::Standalone(self.context.clone(), memory))
+    }
+    fn buffer(&self, size: u64, usage: vk::BufferUsageFlags) -> Result<Buffer, VulkanError> {
+        self.allocate_buffer(size, usage, false)
+    }
+
+    fn device_buffer(&self, size: u64, usage: vk::BufferUsageFlags) -> Result<Buffer, VulkanError> {
+        self.allocate_buffer(
+            size,
+            usage | vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::TRANSFER_SRC,
+            true,
+        )
+    }
+
+    fn allocate_buffer(
+        &self,
+        size: u64,
+        usage: vk::BufferUsageFlags,
+        device_local: bool,
+    ) -> Result<Buffer, VulkanError> {
         unsafe {
             let size = size.max(4);
             let buffer = self
@@ -900,7 +1111,9 @@ impl VulkanRenderer {
                         .sharing_mode(vk::SharingMode::EXCLUSIVE),
                     None,
                 )
-                .map_err(vk_error)?;
+                .map_err(VulkanError::api("create buffer"))?;
+            self.context
+                .name(buffer, || format!("ModuleEngine {usage:?} buffer"));
             #[cfg(test)]
             self.allocations
                 .buffers
@@ -908,20 +1121,31 @@ impl VulkanRenderer {
             let mut allocated = Buffer {
                 device: self.device.clone(),
                 buffer,
-                memory: vk::DeviceMemory::null(),
+                memory: None,
                 size,
                 #[cfg(test)]
                 allocations: self.allocations.clone(),
             };
             #[cfg(test)]
             self.allocation_checkpoint(AllocationFault::BufferHandle)?;
-            let requirements = self.device.get_buffer_memory_requirements(buffer);
+            let mut dedicated = vk::MemoryDedicatedRequirements::default();
+            let mut requirements = vk::MemoryRequirements2::default().push_next(&mut dedicated);
+            self.device.get_buffer_memory_requirements2(
+                &vk::BufferMemoryRequirementsInfo2::default().buffer(buffer),
+                &mut requirements,
+            );
+            let requirements = requirements.memory_requirements;
             let host =
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
             // CPU frame reads must prefer cached system memory. On a discrete
             // adapter the first HOST_VISIBLE type can be an uncached BAR mapping,
             // whose read bandwidth dominates a 1080p frame despite fast GPU work.
-            let memory_type = if usage.contains(vk::BufferUsageFlags::TRANSFER_DST) {
+            let memory_type = if device_local {
+                self.memory_type(
+                    requirements.memory_type_bits,
+                    vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                )?
+            } else if usage.contains(vk::BufferUsageFlags::TRANSFER_DST) {
                 self.memory_type(
                     requirements.memory_type_bits,
                     host | vk::MemoryPropertyFlags::HOST_CACHED,
@@ -930,23 +1154,26 @@ impl VulkanRenderer {
             } else {
                 self.memory_type(requirements.memory_type_bits, host)?
             };
-            let allocation = vk::MemoryAllocateInfo::default()
-                .allocation_size(requirements.size)
-                .memory_type_index(memory_type);
-            let memory = self
-                .device
-                .allocate_memory(&allocation, None)
-                .map_err(vk_error)?;
-            allocated.memory = memory;
+            allocated.memory = Some(
+                self.allocate(
+                    "buffer",
+                    requirements,
+                    memory_type,
+                    true,
+                    (dedicated.requires_dedicated_allocation != 0)
+                        .then_some(AllocationScheme::DedicatedBuffer(buffer)),
+                )?,
+            );
             #[cfg(test)]
             self.allocations
                 .memory
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             #[cfg(test)]
             self.allocation_checkpoint(AllocationFault::BufferMemory)?;
+            let (memory, offset) = allocated.memory.as_ref().unwrap().binding();
             self.device
-                .bind_buffer_memory(buffer, memory, 0)
-                .map_err(vk_error)?;
+                .bind_buffer_memory(buffer, memory, offset)
+                .map_err(VulkanError::api("bind buffer memory"))?;
             Ok(allocated)
         }
     }
@@ -956,7 +1183,7 @@ impl VulkanRenderer {
         height: u32,
         format: vk::Format,
         depth: bool,
-    ) -> Result<Image, String> {
+    ) -> Result<Image, VulkanError> {
         unsafe {
             let props = self
                 .instance
@@ -972,10 +1199,11 @@ impl VulkanRenderer {
                     | vk::FormatFeatureFlags::TRANSFER_DST
             };
             if !props.optimal_tiling_features.contains(required) {
-                return Err(format!(
-                    "Adapter {} lacks required format capabilities {format:?}: {required:?}",
-                    self.name
-                ));
+                return Err(VulkanError::FormatSupport {
+                    adapter: self.name.clone(),
+                    format,
+                    required,
+                });
             }
             let usage = if depth {
                 vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC
@@ -1000,22 +1228,34 @@ impl VulkanRenderer {
                 .tiling(vk::ImageTiling::OPTIMAL)
                 .usage(usage)
                 .initial_layout(vk::ImageLayout::UNDEFINED);
-            let image = self.device.create_image(&info, None).map_err(vk_error)?;
-            #[cfg(test)]
-            self.allocations
-                .images
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let aspect = if depth {
                 vk::ImageAspectFlags::DEPTH
             } else {
                 vk::ImageAspectFlags::COLOR
             };
+            self.allocate_image(&info, aspect)
+        }
+    }
+    fn allocate_image(
+        &self,
+        info: &vk::ImageCreateInfo<'_>,
+        aspect: vk::ImageAspectFlags,
+    ) -> Result<Image, VulkanError> {
+        unsafe {
+            let image = self
+                .device
+                .create_image(info, None)
+                .map_err(VulkanError::api("create image"))?;
+            #[cfg(test)]
+            self.allocations
+                .images
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let mut allocated = Image {
                 device: self.device.clone(),
                 image,
                 view: vk::ImageView::null(),
-                memory: vk::DeviceMemory::null(),
-                format,
+                memory: None,
+                format: info.format,
                 aspect,
                 layout: vk::ImageLayout::UNDEFINED,
                 stage: vk::PipelineStageFlags::TOP_OF_PIPE,
@@ -1025,40 +1265,48 @@ impl VulkanRenderer {
             };
             #[cfg(test)]
             self.allocation_checkpoint(AllocationFault::ImageHandle)?;
-            let requirements = self.device.get_image_memory_requirements(image);
-            let memory = self
-                .device
-                .allocate_memory(
-                    &vk::MemoryAllocateInfo::default()
-                        .allocation_size(requirements.size)
-                        .memory_type_index(self.memory_type(
-                            requirements.memory_type_bits,
-                            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-                        )?),
-                    None,
-                )
-                .map_err(vk_error)?;
-            allocated.memory = memory;
+            let mut dedicated = vk::MemoryDedicatedRequirements::default();
+            let mut requirements = vk::MemoryRequirements2::default().push_next(&mut dedicated);
+            self.device.get_image_memory_requirements2(
+                &vk::ImageMemoryRequirementsInfo2::default().image(image),
+                &mut requirements,
+            );
+            let requirements = requirements.memory_requirements;
+            let memory_type = self.memory_type(
+                requirements.memory_type_bits,
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            )?;
+            allocated.memory = Some(
+                self.allocate(
+                    "image",
+                    requirements,
+                    memory_type,
+                    false,
+                    (dedicated.requires_dedicated_allocation != 0)
+                        .then_some(AllocationScheme::DedicatedImage(image)),
+                )?,
+            );
             #[cfg(test)]
             self.allocations
                 .memory
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             #[cfg(test)]
             self.allocation_checkpoint(AllocationFault::ImageMemory)?;
+            let (memory, offset) = allocated.memory.as_ref().unwrap().binding();
             self.device
-                .bind_image_memory(image, memory, 0)
-                .map_err(vk_error)?;
+                .bind_image_memory(image, memory, offset)
+                .map_err(VulkanError::api("bind image memory"))?;
             let view = self
                 .device
                 .create_image_view(
                     &vk::ImageViewCreateInfo::default()
                         .image(image)
                         .view_type(vk::ImageViewType::TYPE_2D)
-                        .format(format)
-                        .subresource_range(range(aspect)),
+                        .format(info.format)
+                        .subresource_range(range(aspect).level_count(info.mip_levels)),
                     None,
                 )
-                .map_err(vk_error)?;
+                .map_err(VulkanError::api("create image view"))?;
             allocated.view = view;
             #[cfg(test)]
             self.allocations
@@ -1070,30 +1318,127 @@ impl VulkanRenderer {
         }
     }
     #[cfg(test)]
-    fn allocation_checkpoint(&self, stage: AllocationFault) -> Result<(), String> {
+    fn allocation_checkpoint(&self, stage: AllocationFault) -> Result<(), VulkanError> {
         if self.allocation_fault == Some(stage) {
-            Err(format!("Injected Vulkan allocation failure: {stage:?}"))
+            Err(VulkanError::Resource(format!(
+                "Injected Vulkan allocation failure: {stage:?}"
+            )))
         } else {
             Ok(())
         }
     }
-    fn create_pipeline(&self, pass: &Pass) -> Result<Pipeline, String> {
+    fn stage_atlas(&mut self, bytes: &[u8]) -> Result<StagingUpload, VulkanError> {
+        let size = bytes.len() as u64;
+        let (buffer, ring_range) = if let Some(timeline) = &self.timeline {
+            let completed = timeline
+                .counter()
+                .map_err(VulkanError::api("query completed staging ranges"))?;
+            if self
+                .staging
+                .buffer
+                .as_ref()
+                .is_none_or(|buffer| buffer.size < size)
+            {
+                let capacity = (size + self.staging_alignment)
+                    .next_power_of_two()
+                    .max(1024 * 1024);
+                let buffer = self.buffer(capacity, vk::BufferUsageFlags::TRANSFER_SRC)?;
+                self.staging = StagingRing {
+                    buffer: Some(Arc::new(buffer)),
+                    cursor: StagingCursor::default(),
+                };
+            }
+            let ring = self.staging.buffer.as_ref().unwrap();
+            match self
+                .staging
+                .cursor
+                .reserve(size, ring.size, self.staging_alignment, completed)
+            {
+                Some(region) => (ring.clone(), Some(region)),
+                // One temporary upload can belong to each pending slot.
+                None => (
+                    Arc::new(self.buffer(size, vk::BufferUsageFlags::TRANSFER_SRC)?),
+                    None,
+                ),
+            }
+        } else {
+            (
+                Arc::new(self.buffer(size, vk::BufferUsageFlags::TRANSFER_SRC)?),
+                None,
+            )
+        };
+        let offset = ring_range.as_ref().map_or(0, |range| range.start);
+        unsafe {
+            buffer
+                .memory
+                .as_ref()
+                .unwrap()
+                .access(buffer.size, |mapped| {
+                    std::ptr::copy_nonoverlapping(
+                        bytes.as_ptr(),
+                        mapped.add(offset as usize),
+                        bytes.len(),
+                    );
+                })?;
+        }
+        Ok(StagingUpload {
+            buffer,
+            offset,
+            ring_range,
+        })
+    }
+    fn create_pipeline(
+        &self,
+        pass: &Pass,
+        allow_indexed: bool,
+        resident_scene: bool,
+    ) -> Result<Pipeline, VulkanError> {
         unsafe {
             let compute = pass.manifest.stage == "compute";
             let profile = if compute { "cs_6_0" } else { "ps_6_0" };
+            let bindless = self
+                .material_layout
+                .as_ref()
+                .filter(|_| allow_indexed && pass.has_bindless_variant());
+            let variant = bindless.map(|_| bindless_source(pass));
             let shader = compile_hlsl_at(
                 &self.resource_root,
-                &pass.source,
+                variant.as_deref().unwrap_or(&pass.source),
                 &pass.manifest.entry,
                 profile,
             )?;
-            verify_shader(pass, &shader.words, false)?;
+            if bindless.is_some() {
+                verify_bindless_shader(pass, &shader.words)?;
+            } else {
+                verify_shader(pass, &shader.words, false)?;
+            }
+            if pass.module == "gpu.custom" && pass.has_bindless_variant() {
+                if bindless.is_some() {
+                    let compatibility = compile_hlsl_at(
+                        &self.resource_root,
+                        &pass.source,
+                        &pass.manifest.entry,
+                        profile,
+                    )?;
+                    verify_shader(pass, &compatibility.words, false)?;
+                } else {
+                    let indexed = compile_hlsl_at(
+                        &self.resource_root,
+                        &bindless_source(pass),
+                        &pass.manifest.entry,
+                        profile,
+                    )?;
+                    verify_bindless_shader(pass, &indexed.words)?;
+                }
+            }
             // Compile and validate BOTH stages before allocating Vulkan handles.
             // A rejected vertex candidate cannot leak the fragment/layout handles.
             let vertex_artifact = if compute {
                 None
             } else {
-                let vertex_source = if pass.manifest.vertex_entry.is_some() {
+                let vertex_source = if resident_scene {
+                    resident::VERTEX_SHADER
+                } else if pass.manifest.vertex_entry.is_some() {
                     pass.source.as_str()
                 } else if pass.geometry() {
                     include_str!("../../../assets/gpu/forward.hlsl")
@@ -1103,7 +1448,11 @@ impl VulkanRenderer {
                 let entry = pass.manifest.vertex_entry.as_deref().unwrap_or("mainVS");
                 let artifact =
                     compile_hlsl_at(&self.resource_root, vertex_source, entry, "vs_6_0")?;
-                verify_shader(pass, &artifact.words, true)?;
+                if resident_scene {
+                    verify_resident_vertex(&artifact.words)?;
+                } else {
+                    verify_shader(pass, &artifact.words, true)?;
+                }
                 Some(artifact)
             };
             let inputs = pass
@@ -1112,14 +1461,14 @@ impl VulkanRenderer {
                 .iter()
                 .filter(|s| s.format != "scene")
                 .count()
-                + usize::from(pass.manifest.scene_materials);
+                + usize::from(pass.manifest.scene_materials && bindless.is_none());
             let descriptor_count = inputs
                 + if compute {
                     pass.manifest.outputs.len()
                 } else {
                     0
                 };
-            let bindings: Vec<_> = (0..descriptor_count)
+            let mut bindings: Vec<_> = (0..descriptor_count)
                 .map(|i| {
                     vk::DescriptorSetLayoutBinding::default()
                         .binding(i as u32)
@@ -1136,14 +1485,35 @@ impl VulkanRenderer {
                         })
                 })
                 .collect();
+            if resident_scene {
+                bindings.extend((1..=4).map(|binding| {
+                    vk::DescriptorSetLayoutBinding::default()
+                        .binding(binding)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .descriptor_count(1)
+                        .stage_flags(vk::ShaderStageFlags::VERTEX)
+                }));
+            }
             let set_layout = self
                 .device
                 .create_descriptor_set_layout(
                     &vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings),
                     None,
                 )
-                .map_err(vk_error)?;
-            let layouts = [set_layout];
+                .map_err(VulkanError::api("create descriptor set layout"))?;
+            let mut pipeline = Pipeline {
+                device: self.device.clone(),
+                pipeline: vk::Pipeline::null(),
+                layout: vk::PipelineLayout::null(),
+                set_layout,
+                compute,
+                bindless_materials: bindless.is_some(),
+                resident_scene,
+            };
+            self.context
+                .name(set_layout, || format!("{} descriptor layout", pass.id));
+            let mut layouts = vec![set_layout];
+            layouts.extend(bindless.map(|material| material.layout));
             let push = [vk::PushConstantRange {
                 stage_flags: vk::ShaderStageFlags::VERTEX
                     | vk::ShaderStageFlags::FRAGMENT
@@ -1151,7 +1521,7 @@ impl VulkanRenderer {
                 offset: 0,
                 size: 128,
             }];
-            let layout = self
+            pipeline.layout = self
                 .device
                 .create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::default()
@@ -1159,23 +1529,34 @@ impl VulkanRenderer {
                         .push_constant_ranges(&push),
                     None,
                 )
-                .map_err(vk_error)?;
+                .map_err(VulkanError::api("create pipeline layout"))?;
+            let layout = pipeline.layout;
+            self.context
+                .name(layout, || format!("{} pipeline layout", pass.id));
             let module = self
                 .device
                 .create_shader_module(
                     &vk::ShaderModuleCreateInfo::default().code(&shader.words),
                     None,
                 )
-                .map_err(vk_error)?;
-            let entry = CString::new(pass.manifest.entry.as_str())
-                .map_err(|_| "Shader entry contains NUL")?;
+                .map_err(VulkanError::api("create shader module"))?;
+            let module = OwnedShaderModule(&self.device, module);
+            self.context.name(module.1, || {
+                format!("{} {profile} {}", pass.id, pass.manifest.entry)
+            });
+            let entry = CString::new(pass.manifest.entry.as_str()).map_err(|source| {
+                VulkanError::ShaderEntry {
+                    stage: "Shader",
+                    source,
+                }
+            })?;
             let stage = vk::PipelineShaderStageCreateInfo::default()
                 .stage(if compute {
                     vk::ShaderStageFlags::COMPUTE
                 } else {
                     vk::ShaderStageFlags::FRAGMENT
                 })
-                .module(module)
+                .module(module.1)
                 .name(&entry);
             let result = if compute {
                 self.device
@@ -1187,7 +1568,12 @@ impl VulkanRenderer {
                         None,
                     )
                     .map(|p| p[0])
-                    .map_err(|(_, e)| vk_error(e))
+                    .map_err(|(partial, source)| {
+                        for handle in partial {
+                            self.device.destroy_pipeline(handle, None);
+                        }
+                        VulkanError::api("create compute pipeline")(source)
+                    })
             } else {
                 let vertex_entry = pass.manifest.vertex_entry.as_deref().unwrap_or("mainVS");
                 let vertex = vertex_artifact.as_ref().unwrap();
@@ -1197,12 +1583,19 @@ impl VulkanRenderer {
                         &vk::ShaderModuleCreateInfo::default().code(&vertex.words),
                         None,
                     )
-                    .map_err(vk_error)?;
-                let ve = CString::new(vertex_entry).map_err(|_| "Vertex entry contains NUL")?;
+                    .map_err(VulkanError::api("create vertex shader module"))?;
+                let vertex_module = OwnedShaderModule(&self.device, vertex_module);
+                self.context.name(vertex_module.1, || {
+                    format!("{} vs_6_0 {vertex_entry}", pass.id)
+                });
+                let ve = CString::new(vertex_entry).map_err(|source| VulkanError::ShaderEntry {
+                    stage: "Vertex",
+                    source,
+                })?;
                 let stages = [
                     vk::PipelineShaderStageCreateInfo::default()
                         .stage(vk::ShaderStageFlags::VERTEX)
-                        .module(vertex_module)
+                        .module(vertex_module.1)
                         .name(&ve),
                     stage,
                 ];
@@ -1249,7 +1642,7 @@ impl VulkanRenderer {
                         offset: 56,
                     },
                 ];
-                let vertex_input = if pass.geometry() {
+                let vertex_input = if pass.geometry() && !resident_scene {
                     vk::PipelineVertexInputStateCreateInfo::default()
                         .vertex_binding_descriptions(&vertex_bindings)
                         .vertex_attribute_descriptions(&attributes)
@@ -1311,29 +1704,21 @@ impl VulkanRenderer {
                     .dynamic_state(&dynamic)
                     .layout(layout)
                     .push_next(&mut rendering);
-                let result = self
-                    .device
+                self.device
                     .create_graphics_pipelines(vk::PipelineCache::null(), &[info], None)
                     .map(|p| p[0])
-                    .map_err(|(_, e)| vk_error(e));
-                self.device.destroy_shader_module(vertex_module, None);
-                result
+                    .map_err(|(partial, source)| {
+                        for handle in partial {
+                            self.device.destroy_pipeline(handle, None);
+                        }
+                        VulkanError::api("create graphics pipeline")(source)
+                    })
             };
-            self.device.destroy_shader_module(module, None);
-            match result {
-                Ok(pipeline) => Ok(Pipeline {
-                    device: self.device.clone(),
-                    pipeline,
-                    layout,
-                    set_layout,
-                    compute,
-                }),
-                Err(error) => {
-                    self.device.destroy_pipeline_layout(layout, None);
-                    self.device.destroy_descriptor_set_layout(set_layout, None);
-                    Err(error)
-                }
-            }
+            pipeline.pipeline = result?;
+            self.context.name(pipeline.pipeline, || {
+                format!("{} ({}) pipeline", pass.id, pass.module)
+            });
+            Ok(pipeline)
         }
     }
     #[allow(clippy::too_many_arguments)] // Public integration boundary fixed by the shared renderer contract.
@@ -1346,14 +1731,36 @@ impl VulkanRenderer {
         graph: &Graph,
         sources: &BTreeMap<String, String>,
         overrides: &RenderOverrides,
-    ) -> Result<Frame, String> {
-        if self.pending.is_some() {
-            return Err("GPU producer submission is still in flight; poll or discard its ticket before CPU readback".into());
+    ) -> Result<Frame, VulkanError> {
+        self.render_scene(
+            SceneInput::Snapshot(scene),
+            camera,
+            width,
+            height,
+            graph,
+            sources,
+            overrides,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_scene(
+        &mut self,
+        scene: SceneInput<'_>,
+        camera: Camera,
+        width: usize,
+        height: usize,
+        graph: &Graph,
+        sources: &BTreeMap<String, String>,
+        overrides: &RenderOverrides,
+    ) -> Result<Frame, VulkanError> {
+        if self.slots.iter().any(|slot| slot.pending.is_some()) {
+            return Err(VulkanError::ProducerBusy);
         }
         self.render_output(
-            scene, camera, width, height, graph, sources, overrides, None,
+            scene, camera, width, height, graph, sources, overrides, None, 0,
         )
-        .and_then(|frame| frame.ok_or_else(|| "CPU render did not complete".into()))
+        .and_then(|frame| frame.ok_or(VulkanError::NoReadback))
     }
     /// Render to one of four leased shared images, without host pixel transfer.
     /// Backpressure does no GPU work and leaves portable resource commands pending.
@@ -1367,7 +1774,29 @@ impl VulkanRenderer {
         graph: &Graph,
         sources: &BTreeMap<String, String>,
         overrides: &RenderOverrides,
-    ) -> Result<RenderSubmission, String> {
+    ) -> Result<RenderSubmission, VulkanError> {
+        self.render_scene_presented(
+            SceneInput::Snapshot(scene),
+            camera,
+            width,
+            height,
+            graph,
+            sources,
+            overrides,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_scene_presented(
+        &mut self,
+        scene: SceneInput<'_>,
+        camera: Camera,
+        width: usize,
+        height: usize,
+        graph: &Graph,
+        sources: &BTreeMap<String, String>,
+        overrides: &RenderOverrides,
+    ) -> Result<RenderSubmission, VulkanError> {
         if width == 0
             || height == 0
             || width > 8192
@@ -1376,34 +1805,38 @@ impl VulkanRenderer {
                 .checked_mul(height)
                 .is_none_or(|pixels| pixels > 16_777_216)
         {
-            return Err("GPU viewport must be nonzero, <=8192 per axis and <=16M pixels".into());
+            return Err(VulkanError::Viewport);
         }
         let Some(target) = self.presentation_target.clone() else {
             // No presentation target is the explicit legacy/readback mode used
             // by headless callers. A rejected requested target never falls back.
             return self
-                .render(scene, camera, width, height, graph, sources, overrides)
+                .render_scene(scene, camera, width, height, graph, sources, overrides)
                 .map(RenderSubmission::Ready);
         };
         if let Some(error) = &self.producer_error {
             return Err(error.clone());
         }
-        if let Some(flight) = &self.pending {
-            if flight.cancelled.load(Ordering::Acquire) {
-                let ticket = flight.ticket;
-                let _ = self.poll_presented(ticket)?;
-            }
-            if self.pending.is_some() {
-                self.performance.gpu_busy_skips += 1;
-                return Ok(RenderSubmission::Busy);
+        for index in 0..self.slots.len() {
+            if let Some(flight) = &self.slots[index].pending
+                && flight.cancelled.load(Ordering::Acquire)
+            {
+                let _ = self.poll_presented(flight.ticket)?;
             }
         }
+        let Some(index) = self.slots.iter().position(|slot| slot.pending.is_none()) else {
+            self.performance.gpu_busy_skips += 1;
+            return Ok(RenderSubmission::Busy);
+        };
         let size = [width as u32, height as u32];
         let context = self.context.clone();
         let physical = self.physical;
         let memory = self.memory;
         let Some(slot) = self.presentation_slots.reserve(size, || {
-            let shared = target.allocator.allocate(size[0], size[1])?;
+            let shared = target
+                .allocator
+                .allocate(size[0], size[1])
+                .map_err(VulkanError::Presentation)?;
             SharedImage::import(context, physical, &memory, size[0], size[1], shared)
         })?
         else {
@@ -1419,45 +1852,54 @@ impl VulkanRenderer {
             sources,
             overrides,
             Some(&slot),
-        )
-        .map(|_| RenderSubmission::Pending(self.next_ticket))
+            index,
+        )?;
+        Ok(RenderSubmission::Pending(self.next_ticket))
     }
 
     pub(crate) fn cancellation(&self, ticket: u64) -> Option<Arc<AtomicBool>> {
-        self.pending
-            .as_ref()
-            .filter(|flight| flight.ticket == ticket)
+        self.slots
+            .iter()
+            .filter_map(|slot| slot.pending.as_ref())
+            .find(|flight| flight.ticket == ticket)
             .map(|flight| flight.cancelled.clone())
     }
     /// Only this exact request can complete; polling never submits or waits.
-    pub fn poll_presented(&mut self, ticket: u64) -> Result<Option<Frame>, String> {
+    pub fn poll_presented(&mut self, ticket: u64) -> Result<Option<Frame>, VulkanError> {
         if ticket == 0 || ticket > self.next_ticket {
-            return Err("Unknown GPU producer presentation ticket".into());
+            return Err(VulkanError::UnknownTicket(ticket));
         }
         if let Some(error) = &self.producer_error {
             return Err(error.clone());
         }
-        let Some(flight) = self
-            .pending
-            .as_ref()
-            .filter(|flight| flight.ticket == ticket)
-        else {
+        let Some(slot) = self.slots.iter_mut().find(|slot| {
+            slot.pending
+                .as_ref()
+                .is_some_and(|flight| flight.ticket == ticket)
+        }) else {
             return Ok(None);
         };
+        let flight = slot.pending.as_mut().unwrap();
         self.performance.gpu_completion_polls += 1;
-        match unsafe { self.device.get_fence_status(flight.fence) } {
+        match flight.completion.ready() {
             Ok(false) => return Ok(None),
             Err(error) => {
-                let error = format!("GPU producer completion: {error:?}; resources remain pinned");
-                self.pending.as_mut().unwrap().failure = Some(error.clone());
+                let error = VulkanError::ProducerUnconfirmed {
+                    operation: "producer completion",
+                    source: error,
+                };
+                flight.failure = Some(error.clone());
                 self.producer_error = Some(error.clone());
                 return Err(error);
             }
             Ok(true) => {}
         }
-        let flight = self.pending.take().unwrap();
-        unsafe {
-            self.device.destroy_fence(flight.fence, None);
+        let flight = slot.pending.take().unwrap();
+        if let Some(trace) = self.trace {
+            eprintln!(
+                "Vulkan frame complete renderer={trace} serial={} ticket={ticket}",
+                flight.serial
+            );
         }
         let shared = flight
             .shared
@@ -1481,16 +1923,20 @@ impl VulkanRenderer {
                     .map(|timings| Box::new(timings.completed())),
             })
         };
-        self.frame_resources = Some(flight.resources);
-        self.atlas = Some(flight.atlas);
+        self.last_frame_work = Some(flight.work);
+        slot.resources = Some(flight.resources);
+        slot.atlas = flight.atlas;
         Ok(frame)
     }
-    pub fn discard_presented(&mut self, ticket: u64) -> Result<(), String> {
+    pub fn discard_presented(&mut self, ticket: u64) -> Result<(), VulkanError> {
         if ticket == 0 || ticket > self.next_ticket {
-            return Err("Unknown GPU producer presentation ticket".into());
+            return Err(VulkanError::UnknownTicket(ticket));
         }
-        if let Some(flight) = &self.pending
-            && flight.ticket == ticket
+        if let Some(flight) = self
+            .slots
+            .iter()
+            .filter_map(|slot| slot.pending.as_ref())
+            .find(|flight| flight.ticket == ticket)
         {
             flight.cancelled.store(true, Ordering::Release);
         }
@@ -1500,7 +1946,7 @@ impl VulkanRenderer {
     #[allow(clippy::too_many_arguments)]
     fn render_output(
         &mut self,
-        scene: &SceneSnapshot,
+        mut input: SceneInput<'_>,
         camera: Camera,
         width: usize,
         height: usize,
@@ -1508,7 +1954,8 @@ impl VulkanRenderer {
         sources: &BTreeMap<String, String>,
         overrides: &RenderOverrides,
         presentation: Option<&Arc<SharedImage>>,
-    ) -> Result<Option<Frame>, String> {
+        index: usize,
+    ) -> Result<Option<Frame>, VulkanError> {
         if let Some(error) = &self.producer_error {
             return Err(error.clone());
         }
@@ -1518,92 +1965,165 @@ impl VulkanRenderer {
             || height > 8192
             || width.checked_mul(height).is_none_or(|p| p > 16_777_216)
         {
-            return Err("GPU viewport must be nonzero, <=8192 per axis and <=16M pixels".into());
+            return Err(VulkanError::Viewport);
         }
+        let serial = self
+            .serial
+            .checked_add(1)
+            .ok_or(VulkanError::TicketExhausted)?;
+        let previous = self.slots[index].last_serial;
+        if let Some(trace) = self.trace {
+            let completed = self
+                .timeline
+                .as_ref()
+                .and_then(|timeline| timeline.counter().ok());
+            eprintln!(
+                "Vulkan frame begin renderer={trace} serial={serial} slot={index} previous={previous} latest={} completed={completed:?}",
+                self.serial
+            );
+        }
+        let prepare_started = Instant::now();
         self.performance.render_calls += 1;
         self.prepare_for_render(graph, sources)?;
         let plan = self.prepared.as_ref().unwrap().clone();
         let operations = schedule_overrides(&plan, overrides)?;
-        let texture_keys = geometry::texture_keys(scene);
-        let mut atlas = self.atlas.take().filter(|a| a.keys == texture_keys);
-        let upload = atlas.is_none();
-        if atlas.is_none() {
-            let decoded = geometry::texture_atlas(scene)?;
-            let image = self.image(
-                decoded.width,
-                decoded.height,
-                vk::Format::R8G8B8A8_UNORM,
-                false,
-            )?;
-            atlas = Some(AtlasGpu {
-                keys: texture_keys,
-                atlas: decoded,
-                image,
-            });
+        let command = self.slots[index].pools.graphics.command;
+        let descriptor_pool = self.slots[index].pools.descriptors;
+        let active_passes = || {
+            plan.passes
+                .iter()
+                .filter(|pass| pass_enabled(pass, overrides))
+        };
+        let resident = match &input {
+            SceneInput::Retained(source)
+                if self.capabilities.resident_scene
+                    && active_passes().any(Pass::geometry)
+                    && active_passes()
+                        .filter(|pass| pass.geometry())
+                        .all(Pass::resident_geometry) =>
+            {
+                match self.gpu_scene.prepare(self, source) {
+                    Err(VulkanError::SceneBufferLimit) => None,
+                    other => other?,
+                }
+            }
+            _ => None,
+        };
+        let scene = input.snapshot()?;
+        let objects = scene.items.len();
+        let wants_indexed =
+            self.material_layout.is_some() && active_passes().any(Pass::has_bindless_variant);
+        let indexed = if resident.is_none() && wants_indexed {
+            self.prepare_materials(scene)?
+        } else {
+            None
+        };
+        let atlas_overflow_fallback = resident.is_none() && wants_indexed && indexed.is_none();
+        let needs_atlas = active_passes().any(|pass| {
+            pass.manifest.scene_materials
+                && (indexed.is_none() && resident.is_none() || !pass.has_bindless_variant())
+        });
+        let (materials, material_uploads) = indexed.map_or_else(
+            || (None, materials::MaterialUploads::default()),
+            |(materials, uploads)| (Some(materials), uploads),
+        );
+        let mut atlas = None;
+        let mut atlas_needs_upload = false;
+        if needs_atlas {
+            let keys = geometry::texture_keys(scene);
+            atlas = self.slots[index].atlas.take().filter(|a| a.keys == keys);
+            if atlas.is_none() {
+                let decoded = geometry::texture_atlas(scene)?;
+                let image = self.image(
+                    decoded.width,
+                    decoded.height,
+                    vk::Format::R8G8B8A8_UNORM,
+                    false,
+                )?;
+                self.context.name(image.image, || "Base-color atlas".into());
+                self.context
+                    .name(image.view, || "Base-color atlas view".into());
+                atlas = Some(AtlasGpu {
+                    keys,
+                    atlas: decoded,
+                    image,
+                });
+                atlas_needs_upload = true;
+            }
         }
-        let mut atlas = atlas.unwrap();
-        let (vertex_bytes, submitted) = geometry::vertices(scene, &atlas.atlas.rects);
+        if atlas_overflow_fallback {
+            for pass in active_passes().filter(|pass| pass.has_bindless_variant()) {
+                self.prepare_pipeline(pass, atlas_pipeline_key(&pipeline_key(pass)), false, false)?;
+            }
+        }
+        let no_rects = BTreeMap::new();
+        let rects = atlas.as_ref().map_or(&no_rects, |a| &a.atlas.rects);
+        let (vertex_bytes, submitted) = match &resident {
+            Some(resident) => (Vec::new(), resident.triangles),
+            None => geometry::legacy_vertices(scene, rects),
+        };
         let readback = if presentation.is_some() {
             Vec::new()
         } else {
             frame_readback(&plan, width, height, self.detailed_stats)
         };
         let resource_key = frame_resource_key(&plan, width, height, &readback);
-        let mut reused = self
-            .frame_resources
+        let mut reused = self.slots[index]
+            .resources
             .take()
             .filter(|r| r.key == resource_key);
-        let new_vertex = if let Some(resources) = reused.as_mut() {
-            if resources.vertex.size < vertex_bytes.len() as u64 {
-                resources.vertex = self.buffer(
+        let mut vertex = reused
+            .as_mut()
+            .and_then(|resources| resources.vertex.take());
+        if resident.is_none() {
+            if vertex
+                .as_ref()
+                .is_none_or(|buffer| buffer.size < vertex_bytes.len() as u64)
+            {
+                vertex = Some(self.buffer(
                     vertex_bytes.len() as u64 * VERTEX_BUFFER_MULTIPLIER,
                     vk::BufferUsageFlags::VERTEX_BUFFER,
-                )?;
+                )?);
             }
-            None
-        } else {
-            Some(self.buffer(
-                vertex_bytes.len() as u64 * VERTEX_BUFFER_MULTIPLIER,
-                vk::BufferUsageFlags::VERTEX_BUFFER,
-            )?)
-        };
+            let buffer = vertex.as_ref().unwrap();
+            // SAFETY: The staging data is separate from the mapped buffer and
+            // fits its allocation. The frame slot is available for CPU writes
+            // because any previous GPU submission using this slot completed.
+            unsafe {
+                buffer
+                    .memory
+                    .as_ref()
+                    .unwrap()
+                    .access(buffer.size, |mapped| {
+                        std::ptr::copy_nonoverlapping(
+                            vertex_bytes.as_ptr(),
+                            mapped,
+                            vertex_bytes.len(),
+                        );
+                    })?;
+            }
+        }
         let mut images = reused
             .as_mut()
             .map(|r| std::mem::take(&mut r.images))
             .unwrap_or_default();
-        let vertex_buffer = new_vertex
-            .as_ref()
-            .unwrap_or_else(|| &reused.as_ref().unwrap().vertex);
-        unsafe {
-            let mapped = self
-                .device
-                .map_memory(
-                    vertex_buffer.memory,
-                    0,
-                    vertex_buffer.size,
-                    vk::MemoryMapFlags::empty(),
-                )
-                .map_err(vk_error)?;
-            std::ptr::copy_nonoverlapping(
-                vertex_bytes.as_ptr(),
-                mapped.cast::<u8>(),
-                vertex_bytes.len(),
-            );
-            self.device.unmap_memory(vertex_buffer.memory);
-        }
         if images.is_empty() {
             for pass in &plan.passes {
                 for spec in &pass.manifest.outputs {
-                    images.insert(
-                        pass.resource(&spec.name),
-                        self.image(width as u32, height as u32, format(&spec.format)?, false)?,
-                    );
+                    let id = pass.resource(&spec.name);
+                    let image =
+                        self.image(width as u32, height as u32, format(&spec.format)?, false)?;
+                    self.context.name(image.image, || id.clone());
+                    self.context.name(image.view, || format!("{id} view"));
+                    images.insert(id, image);
                 }
                 if pass.geometry() {
-                    images.insert(
-                        format!("{}.__hardware_depth", pass.id),
-                        self.image(width as u32, height as u32, vk::Format::D32_SFLOAT, true)?,
-                    );
+                    let id = format!("{}.__hardware_depth", pass.id);
+                    let image =
+                        self.image(width as u32, height as u32, vk::Format::D32_SFLOAT, true)?;
+                    self.context.name(image.image, || id.clone());
+                    self.context.name(image.view, || format!("{id} view"));
+                    images.insert(id, image);
                 }
             }
         }
@@ -1627,34 +2147,31 @@ impl VulkanRenderer {
         });
         let mut frame_work = FrameWork {
             vertex_write_bytes: vertex_bytes.len(),
-            atlas_upload_bytes: if upload { atlas.atlas.rgba.len() } else { 0 },
+            resident_scene: resident.is_some(),
+            atlas_upload_bytes: if atlas_needs_upload {
+                atlas.as_ref().unwrap().atlas.rgba.len()
+            } else {
+                0
+            },
             ..Default::default()
         };
-        let atlas_upload = if upload {
-            Some(self.buffer(
-                atlas.atlas.rgba.len() as u64,
-                vk::BufferUsageFlags::TRANSFER_SRC,
-            )?)
-        } else {
-            None
-        };
-        if let Some(buffer) = &atlas_upload {
-            unsafe {
-                let mapped = self
-                    .device
-                    .map_memory(buffer.memory, 0, buffer.size, vk::MemoryMapFlags::empty())
-                    .map_err(vk_error)?;
-                std::ptr::copy_nonoverlapping(
-                    atlas.atlas.rgba.as_ptr(),
-                    mapped.cast::<u8>(),
-                    atlas.atlas.rgba.len(),
-                );
-                self.device.unmap_memory(buffer.memory);
-            }
-        }
+        let atlas_upload = atlas_needs_upload
+            .then(|| self.stage_atlas(&atlas.as_ref().unwrap().atlas.rgba))
+            .transpose()?;
+        let uploads = resident
+            .as_ref()
+            .map_or(&material_uploads, |resident| &resident.uploads);
+        let bound_materials = resident
+            .as_ref()
+            .map(|r| &r.materials)
+            .or(materials.as_ref());
+        frame_work.material_images = bound_materials.map_or(0, |set| set.image_count());
+        frame_work.material_uploaded_images = uploads.image_count();
+        frame_work.material_upload_bytes = uploads.bytes;
+        let material_upload = uploads.stage(self)?;
         let capture = self.frame_profiling.then(|| {
             TimestampCapture::new(
-                &mut self.timestamp_pool,
+                &mut self.slots[index].timestamp_pool,
                 &self.context,
                 self.timestamp_valid_bits,
                 self.timestamp_period_ns,
@@ -1665,35 +2182,28 @@ impl VulkanRenderer {
             )
         });
         let timestamps = capture.as_ref().and_then(|capture| capture.as_ref().ok());
-        let recording_started = self.frame_profiling.then(Instant::now);
+        frame_work.cpu_prepare_ms = prepare_started.elapsed().as_secs_f64() * 1000.;
+        let recording_started = Instant::now();
         unsafe {
             self.device
-                .reset_command_pool(self.pool, vk::CommandPoolResetFlags::empty())
-                .map_err(vk_error)?;
-            self.device
-                .reset_descriptor_pool(self.descriptor_pool, vk::DescriptorPoolResetFlags::empty())
-                .map_err(vk_error)?;
-            self.device
-                .begin_command_buffer(
-                    self.command,
-                    &vk::CommandBufferBeginInfo::default()
-                        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
-                )
-                .map_err(vk_error)?;
+                .reset_descriptor_pool(descriptor_pool, vk::DescriptorPoolResetFlags::empty())
+                .map_err(VulkanError::api("reset descriptor pool"))?;
         }
+        self.slots[index].pools.graphics.begin()?;
         if let Some(timestamps) = timestamps {
-            timestamps.reset(self.command);
+            timestamps.reset(command);
         }
-        if let Some(buffer) = &atlas_upload {
-            transition(
-                &self.device,
-                self.command,
-                &mut atlas.image,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::AccessFlags::TRANSFER_WRITE,
-            );
+        if let Some(resident) = &resident {
+            self.gpu_scene
+                .record(resident, &self.device, command, &mut frame_work);
+        }
+        if let Some(staging) = &material_upload {
+            uploads.record(&self.device, command, staging);
+        }
+        let split_upload = atlas_upload.is_some() && self.transfer.is_some();
+        if let (Some(atlas), Some(upload)) = (&mut atlas, &atlas_upload) {
             let region = vk::BufferImageCopy::default()
+                .buffer_offset(upload.offset)
                 .image_subresource(vk::ImageSubresourceLayers {
                     aspect_mask: vk::ImageAspectFlags::COLOR,
                     mip_level: 0,
@@ -1705,39 +2215,75 @@ impl VulkanRenderer {
                     height: atlas.atlas.height,
                     depth: 1,
                 });
-            unsafe {
-                self.device.cmd_copy_buffer_to_image(
-                    self.command,
-                    buffer.buffer,
+            if let Some(transfer) = &self.transfer {
+                crate::transfer::record_upload(
+                    &self.device,
+                    self.slots[index].pools.transfer.as_ref().unwrap(),
+                    command,
+                    upload.buffer.buffer,
                     atlas.image.image,
+                    region,
+                    [transfer.family, self.family],
+                )?;
+                atlas.image.layout = vk::ImageLayout::GENERAL;
+                atlas.image.stage = vk::PipelineStageFlags::FRAGMENT_SHADER;
+                atlas.image.access = vk::AccessFlags::SHADER_READ;
+            } else {
+                transition(
+                    &self.device,
+                    command,
+                    &mut atlas.image,
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    &[region],
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::AccessFlags::TRANSFER_WRITE,
                 );
+                unsafe {
+                    self.device.cmd_copy_buffer_to_image(
+                        command,
+                        upload.buffer.buffer,
+                        atlas.image.image,
+                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                        &[region],
+                    );
+                }
             }
         }
-        transition(
-            &self.device,
-            self.command,
-            &mut atlas.image,
-            vk::ImageLayout::GENERAL,
-            vk::PipelineStageFlags::FRAGMENT_SHADER,
-            vk::AccessFlags::SHADER_READ,
-        );
+        if let Some(atlas) = &mut atlas
+            && !split_upload
+        {
+            transition(
+                &self.device,
+                command,
+                &mut atlas.image,
+                vk::ImageLayout::GENERAL,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+                vk::AccessFlags::SHADER_READ,
+            );
+        }
         if let Some(timestamps) = timestamps {
-            timestamps.begin(self.command, 0);
+            timestamps.begin(command, 0);
         }
         for (index, pass) in plan.passes.iter().enumerate() {
             if let Some(timestamps) = timestamps {
-                timestamps.begin(self.command, index as u32 + 1);
+                timestamps.begin(command, index as u32 + 1);
             }
-            let pipeline = &self.pipelines[&pipeline_key(pass)];
+            let enabled = pass_enabled(pass, overrides);
+            let key = pipeline_key(pass);
+            let key = if resident.is_some() && enabled && pass.resident_geometry() {
+                resident_pipeline_key(&key)
+            } else if atlas_overflow_fallback && enabled && pass.has_bindless_variant() {
+                atlas_pipeline_key(&key)
+            } else {
+                key
+            };
+            let pipeline = &self.pipelines[&key];
             let compute = pipeline.compute;
             let stage = if compute {
                 vk::PipelineStageFlags::COMPUTE_SHADER
             } else {
                 vk::PipelineStageFlags::FRAGMENT_SHADER | vk::PipelineStageFlags::VERTEX_SHADER
             };
-            if !pass_enabled(pass, overrides) {
+            if !enabled {
                 let from = &pass
                     .inputs
                     .iter()
@@ -1747,7 +2293,7 @@ impl VulkanRenderer {
                 let to = pass.resource(&pass.manifest.outputs[0].name);
                 copy_image(
                     &self.device,
-                    self.command,
+                    command,
                     &mut images,
                     from,
                     &to,
@@ -1758,7 +2304,7 @@ impl VulkanRenderer {
                 for (_, resource) in pass.inputs.iter().filter(|(s, _)| s.format != "scene") {
                     transition(
                         &self.device,
-                        self.command,
+                        command,
                         images.get_mut(resource).unwrap(),
                         vk::ImageLayout::GENERAL,
                         stage,
@@ -1769,7 +2315,7 @@ impl VulkanRenderer {
                     let image = images.get_mut(&pass.resource(&spec.name)).unwrap();
                     transition(
                         &self.device,
-                        self.command,
+                        command,
                         image,
                         if compute {
                             vk::ImageLayout::GENERAL
@@ -1788,7 +2334,7 @@ impl VulkanRenderer {
                         },
                     );
                 }
-                let material_input = pass.manifest.scene_materials;
+                let material_input = pass.manifest.scene_materials && !pipeline.bindless_materials;
                 let descriptor_images: Vec<_> = pass
                     .inputs
                     .iter()
@@ -1813,17 +2359,17 @@ impl VulkanRenderer {
                     self.device
                         .allocate_descriptor_sets(
                             &vk::DescriptorSetAllocateInfo::default()
-                                .descriptor_pool(self.descriptor_pool)
+                                .descriptor_pool(descriptor_pool)
                                 .set_layouts(&[pipeline.set_layout]),
                         )
-                        .map_err(vk_error)?[0]
+                        .map_err(VulkanError::api("allocate descriptor set"))?[0]
                 };
                 let image_infos: Vec<_> = descriptor_images
                     .iter()
                     .map(|name| {
                         vk::DescriptorImageInfo::default()
                             .image_view(if name == "__material_atlas" {
-                                atlas.image.view
+                                atlas.as_ref().unwrap().image.view
                             } else {
                                 images[name].view
                             })
@@ -1836,7 +2382,7 @@ impl VulkanRenderer {
                     .filter(|(s, _)| s.format != "scene")
                     .count()
                     + usize::from(material_input);
-                let writes: Vec<_> = image_infos
+                let mut writes: Vec<_> = image_infos
                     .iter()
                     .enumerate()
                     .map(|(i, info)| {
@@ -1851,6 +2397,25 @@ impl VulkanRenderer {
                             .image_info(std::slice::from_ref(info))
                     })
                     .collect();
+                let buffer_infos = resident
+                    .as_ref()
+                    .filter(|_| pipeline.resident_scene)
+                    .map(|r| {
+                        r.buffers.bind().map(|buffer| {
+                            vk::DescriptorBufferInfo::default()
+                                .buffer(buffer.buffer)
+                                .range(buffer.size)
+                        })
+                    });
+                if let Some(infos) = &buffer_infos {
+                    writes.extend(infos.iter().enumerate().map(|(index, info)| {
+                        vk::WriteDescriptorSet::default()
+                            .dst_set(set)
+                            .dst_binding(index as u32 + 1)
+                            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                            .buffer_info(std::slice::from_ref(info))
+                    }));
+                }
                 let mut constants = geometry::camera_constants(camera, width, height);
                 for (i, name) in pass.manifest.parameters.iter().enumerate() {
                     let configured = overrides
@@ -1864,7 +2429,9 @@ impl VulkanRenderer {
                             Some("reinhard") => 0.,
                             None => configured.and_then(|v| v.as_f64()).unwrap_or(1.) as f32,
                             Some(other) => {
-                                return Err(format!("Unknown tone mapping mode {other}"));
+                                return Err(VulkanError::Overrides(format!(
+                                    "Unknown tone mapping mode {other}"
+                                )));
                             }
                         }
                     } else {
@@ -1873,6 +2440,9 @@ impl VulkanRenderer {
                             .unwrap_or(if name == "shift" { 0. } else { 1. })
                             as f32
                     };
+                }
+                if pipeline.bindless_materials {
+                    constants[31] = f32::from_bits(materials::FIRST_MATERIAL_ROW);
                 }
                 let mut push_bytes = Vec::with_capacity(128);
                 for value in constants {
@@ -1886,17 +2456,27 @@ impl VulkanRenderer {
                 unsafe {
                     self.device.update_descriptor_sets(&writes, &[]);
                     self.device
-                        .cmd_bind_pipeline(self.command, bind_point, pipeline.pipeline);
+                        .cmd_bind_pipeline(command, bind_point, pipeline.pipeline);
                     self.device.cmd_bind_descriptor_sets(
-                        self.command,
+                        command,
                         bind_point,
                         pipeline.layout,
                         0,
                         &[set],
                         &[],
                     );
+                    if pipeline.bindless_materials {
+                        self.device.cmd_bind_descriptor_sets(
+                            command,
+                            bind_point,
+                            pipeline.layout,
+                            1,
+                            &[bound_materials.unwrap().set],
+                            &[],
+                        );
+                    }
                     self.device.cmd_push_constants(
-                        self.command,
+                        command,
                         pipeline.layout,
                         vk::ShaderStageFlags::VERTEX
                             | vk::ShaderStageFlags::FRAGMENT
@@ -1906,7 +2486,7 @@ impl VulkanRenderer {
                     );
                     if compute {
                         self.device.cmd_dispatch(
-                            self.command,
+                            command,
                             (width as u32).div_ceil(pass.manifest.workgroup[0]),
                             (height as u32).div_ceil(pass.manifest.workgroup[1]),
                             1,
@@ -1952,7 +2532,7 @@ impl VulkanRenderer {
                                 .unwrap();
                             transition(
                                 &self.device,
-                                self.command,
+                                command,
                                 depth,
                                 vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
                                 vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
@@ -1973,9 +2553,9 @@ impl VulkanRenderer {
                                 });
                             rendering = rendering.depth_attachment(&depth_attachment);
                         }
-                        self.device.cmd_begin_rendering(self.command, &rendering);
+                        self.device.cmd_begin_rendering(command, &rendering);
                         self.device.cmd_set_viewport(
-                            self.command,
+                            command,
                             0,
                             &[vk::Viewport {
                                 x: 0.,
@@ -1987,7 +2567,7 @@ impl VulkanRenderer {
                             }],
                         );
                         self.device.cmd_set_scissor(
-                            self.command,
+                            command,
                             0,
                             &[vk::Rect2D {
                                 offset: vk::Offset2D { x: 0, y: 0 },
@@ -1997,20 +2577,31 @@ impl VulkanRenderer {
                                 },
                             }],
                         );
-                        if pass.geometry() {
-                            self.device.cmd_bind_vertex_buffers(
-                                self.command,
-                                0,
-                                &[vertex_buffer.buffer],
-                                &[0],
-                            );
-                            self.device
-                                .cmd_draw(self.command, (submitted * 3) as u32, 1, 0, 0);
+                        frame_work.draw_calls += if pipeline.resident_scene {
+                            let resident = resident.as_ref().unwrap();
+                            resident.buffers.draw(
+                                &self.device,
+                                command,
+                                pipeline.layout,
+                                &resident.runs,
+                                self.max_indirect_draws,
+                            )
                         } else {
-                            self.device.cmd_draw(self.command, 3, 1, 0, 0);
-                        }
-                        frame_work.draw_calls += 1;
-                        self.device.cmd_end_rendering(self.command);
+                            if pass.geometry() {
+                                self.device.cmd_bind_vertex_buffers(
+                                    command,
+                                    0,
+                                    &[vertex.as_ref().unwrap().buffer],
+                                    &[0],
+                                );
+                                self.device
+                                    .cmd_draw(command, (submitted * 3) as u32, 1, 0, 0);
+                            } else {
+                                self.device.cmd_draw(command, 3, 1, 0, 0);
+                            }
+                            1
+                        };
+                        self.device.cmd_end_rendering(command);
                     }
                 }
             }
@@ -2021,7 +2612,7 @@ impl VulkanRenderer {
                             let image = images.get_mut(name).unwrap();
                             transition(
                                 &self.device,
-                                self.command,
+                                command,
                                 image,
                                 vk::ImageLayout::GENERAL,
                                 vk::PipelineStageFlags::TRANSFER,
@@ -2029,7 +2620,7 @@ impl VulkanRenderer {
                             );
                             unsafe {
                                 self.device.cmd_clear_color_image(
-                                    self.command,
+                                    command,
                                     image.image,
                                     vk::ImageLayout::GENERAL,
                                     &vk::ClearColorValue { float32: *value },
@@ -2039,7 +2630,7 @@ impl VulkanRenderer {
                         }
                         RenderResourceCommand::CopyResource { from, to } => copy_image(
                             &self.device,
-                            self.command,
+                            command,
                             &mut images,
                             from,
                             to,
@@ -2050,35 +2641,39 @@ impl VulkanRenderer {
                 }
             }
             if let Some(timestamps) = timestamps {
-                timestamps.end(self.command, index as u32 + 1);
+                timestamps.end(command, index as u32 + 1);
             }
         }
         if let Some(timestamps) = timestamps {
-            timestamps.end(self.command, 0);
+            timestamps.end(command, 0);
         }
         let mut offset = 0u64;
         if let Some(shared) = presentation {
             let output = images
                 .get_mut(&plan.output)
-                .ok_or("GPU presentation output has no allocated image")?;
+                .ok_or(VulkanError::Presentation(
+                    "GPU presentation output has no allocated image".into(),
+                ))?;
             if output.format != vk::Format::R8G8B8A8_UNORM {
-                return Err("GPU presentation requires RGBA8_UNORM graph output".into());
+                return Err(VulkanError::Presentation(
+                    "GPU presentation requires RGBA8_UNORM graph output".into(),
+                ));
             }
             transition(
                 &self.device,
-                self.command,
+                command,
                 output,
                 vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                 vk::PipelineStageFlags::TRANSFER,
                 vk::AccessFlags::TRANSFER_READ,
             );
-            shared.record_copy(self.command, output.image, self.family);
+            shared.record_copy(command, output.image, self.family);
         }
         for (name, _, size) in &readback {
             let image = images.get_mut(name).unwrap();
             transition(
                 &self.device,
-                self.command,
+                command,
                 image,
                 vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                 vk::PipelineStageFlags::TRANSFER,
@@ -2099,7 +2694,7 @@ impl VulkanRenderer {
                 });
             unsafe {
                 self.device.cmd_copy_image_to_buffer(
-                    self.command,
+                    command,
                     image.image,
                     vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                     staging.unwrap().buffer,
@@ -2122,7 +2717,7 @@ impl VulkanRenderer {
                     .offset(0)
                     .size(staging.size);
                 self.device.cmd_pipeline_barrier(
-                    self.command,
+                    command,
                     vk::PipelineStageFlags::TRANSFER,
                     vk::PipelineStageFlags::HOST,
                     vk::DependencyFlags::empty(),
@@ -2132,50 +2727,63 @@ impl VulkanRenderer {
                 );
             }
             self.device
-                .end_command_buffer(self.command)
-                .map_err(vk_error)?;
+                .end_command_buffer(command)
+                .map_err(VulkanError::api("end command buffer"))?;
         }
-        let timings = capture
-            .zip(recording_started)
-            .map(|(capture, started)| PendingTimings {
-                capture,
-                record_ms: started.elapsed().as_secs_f64() * 1000.,
-                submit_ms: None,
-            });
+        frame_work.cpu_record_ms = recording_started.elapsed().as_secs_f64() * 1000.;
+        let timings = capture.map(|capture| PendingTimings {
+            capture,
+            record_ms: frame_work.cpu_record_ms,
+            submit_ms: None,
+        });
         let resources = if let Some(mut resources) = reused {
             resources.images = images;
+            resources.vertex = vertex;
             resources
         } else {
             FrameResources {
                 key: resource_key,
                 images,
-                vertex: new_vertex.unwrap(),
+                vertex,
                 staging: new_staging,
             }
         };
         let ticket = if presentation.is_some() {
             self.next_ticket
                 .checked_add(1)
-                .ok_or("GPU presentation ticket exhausted")?
+                .ok_or(VulkanError::TicketExhausted)?
         } else {
             0
         };
-        let fence =
-            unsafe { self.device.create_fence(&Default::default(), None) }.map_err(vk_error)?;
+        let completion = Completion::new(&self.context, self.timeline.as_ref(), serial)?;
+        let transfer = self.transfer.as_ref().filter(|_| split_upload);
+        let staging_range = atlas_upload
+            .as_ref()
+            .and_then(|upload| upload.ring_range.clone());
+        let transfer_command =
+            transfer.map(|_| self.slots[index].pools.transfer.as_ref().unwrap().command);
         // Install ownership BEFORE submission. Any submit/completion failure
         // leaves this entire bundle pinned, including pools and upload buffers.
-        self.pending = Some(ProducerFlight {
+        self.slots[index].pending = Some(ProducerFlight {
             ticket,
-            fence,
+            completion,
+            serial,
+            work: frame_work,
             shared: presentation.cloned(),
             resources,
             atlas,
             _upload: atlas_upload,
+            materials: bound_materials.cloned(),
+            _material_upload: material_upload,
+            _scene_buffers: resident
+                .as_ref()
+                .map(|r| (r.buffers.clone(), self.gpu_scene.prior_buffers())),
+            _transfer_timeline: transfer.map(|queue| queue.timeline.clone()),
             _pipelines: self.pipelines.values().cloned().collect(),
             _context: self.context.clone(),
             size: [width, height],
             stats: RenderStats {
-                objects: scene.items.len(),
+                objects,
                 submitted_triangles: submitted,
                 ..Default::default()
             },
@@ -2183,24 +2791,79 @@ impl VulkanRenderer {
             cancelled: Arc::new(AtomicBool::new(false)),
             failure: None,
         });
-        let submit_started = self.frame_profiling.then(Instant::now);
-        if let Err(error) = unsafe {
-            self.device.queue_submit(
+        let submit_started = Instant::now();
+        let flight = self.slots[index].pending.as_mut().unwrap();
+        let result = if let (Some(queue), Some(command)) = (transfer, transfer_command) {
+            queue
+                .timeline
+                .submit(queue.queue, command, serial, None)
+                .inspect(|()| {
+                    if let Some(trace) = self.trace {
+                        eprintln!(
+                            "Vulkan transfer submit renderer={trace} serial={serial} slot={index}"
+                        );
+                    }
+                })
+        } else {
+            Ok(())
+        }
+        .and_then(|()| {
+            flight.completion.submit(
                 self.queue,
-                &[vk::SubmitInfo::default().command_buffers(&[self.command])],
-                fence,
+                command,
+                transfer.map(|queue| queue.timeline.as_ref()),
             )
-        } {
-            let error = format!("GPU producer submit: {error:?}; resources remain pinned");
-            self.pending.as_mut().unwrap().failure = Some(error.clone());
+        });
+        if let Err(error) = result {
+            let error = VulkanError::ProducerUnconfirmed {
+                operation: "producer submit",
+                source: error,
+            };
+            flight.failure = Some(error.clone());
             self.producer_error = Some(error.clone());
             return Err(error);
         }
-        if let Some(started) = submit_started
-            && let Some(timings) = &mut self.pending.as_mut().unwrap().timings
-        {
-            timings.submit_ms = Some(started.elapsed().as_secs_f64() * 1000.);
+        // New image uploads and all users are on the same graphics queue.
+        // An earlier flight keeps its immutable descriptor generation alive.
+        frame_work.cpu_queue_submit_ms = submit_started.elapsed().as_secs_f64() * 1000.;
+        flight.work = frame_work;
+        if let Some(timings) = &mut flight.timings {
+            timings.submit_ms = Some(frame_work.cpu_queue_submit_ms);
         }
+        if let Some(resident) = resident {
+            let SceneInput::Retained(source) = &mut input else {
+                unreachable!()
+            };
+            self.gpu_scene.commit(resident, source);
+        } else {
+            if let SceneInput::Retained(source) = &mut input {
+                // A compatibility draw leaves the resident buffers untouched.
+                source.require_reconciliation();
+            }
+            self.materials = flight.materials.clone();
+        }
+        self.performance.mesh_upload_bytes +=
+            (frame_work.vertex_write_bytes * usize::from(frame_work.resident_scene)
+                + frame_work.mesh_index_write_bytes) as u64;
+        self.performance.instance_upload_bytes += frame_work.instance_write_bytes as u64;
+        self.performance.material_row_upload_bytes += frame_work.material_row_write_bytes as u64;
+        self.serial = serial;
+        self.slots[index].last_serial = serial;
+        if let Some(range) = staging_range {
+            self.staging.cursor.commit(serial, range);
+        }
+        if let Some(trace) = self.trace {
+            let pending = self
+                .slots
+                .iter()
+                .filter(|slot| slot.pending.is_some())
+                .count();
+            eprintln!(
+                "Vulkan frame submit renderer={trace} serial={serial} ticket={ticket} slot={index} previous={previous} pending={pending} timeline={}",
+                self.timeline.is_some()
+            );
+        }
+        let flight = self.slots[index].pending.as_mut().unwrap();
         self.last_frame_work = Some(frame_work);
         if presentation.is_some() {
             self.next_ticket = ticket;
@@ -2208,16 +2871,25 @@ impl VulkanRenderer {
             return Ok(None);
         }
         // Explicit CPU capture/readback is the only render call that waits.
-        if let Err(error) = unsafe { self.device.wait_for_fences(&[fence], true, 30_000_000_000) } {
-            let error = format!("GPU diagnostic completion: {error:?}; resources remain pinned");
-            self.pending.as_mut().unwrap().failure = Some(error.clone());
+        if let Some(trace) = self.trace {
+            eprintln!(
+                "Vulkan frame wait renderer={trace} reason=diagnostic serial={serial} latest={serial}"
+            );
+        }
+        let wait_started = Instant::now();
+        if let Err(error) = flight.completion.wait() {
+            let error = VulkanError::ProducerUnconfirmed {
+                operation: "diagnostic completion",
+                source: error,
+            };
+            flight.failure = Some(error.clone());
             self.producer_error = Some(error.clone());
             return Err(error);
         }
-        let flight = self.pending.take().unwrap();
-        unsafe {
-            self.device.destroy_fence(fence, None);
-        }
+        frame_work.cpu_wait_ms = wait_started.elapsed().as_secs_f64() * 1000.;
+        self.last_frame_work = Some(frame_work);
+        let slot = &mut self.slots[index];
+        let flight = slot.pending.take().unwrap();
         let staging = flight
             .resources
             .staging
@@ -2225,16 +2897,17 @@ impl VulkanRenderer {
             .expect("CPU readback allocation");
         let mut data = vec![0u8; staging.size as usize];
         unsafe {
-            let mapped = self
-                .device
-                .map_memory(staging.memory, 0, staging.size, vk::MemoryMapFlags::empty())
-                .map_err(vk_error)?;
-            std::ptr::copy_nonoverlapping(mapped.cast::<u8>(), data.as_mut_ptr(), data.len());
-            self.device.unmap_memory(staging.memory);
-            self.performance.cpu_readback_bytes += staging.size;
+            staging
+                .memory
+                .as_ref()
+                .unwrap()
+                .access(staging.size, |mapped| {
+                    std::ptr::copy_nonoverlapping(mapped, data.as_mut_ptr(), data.len());
+                })?;
         }
+        self.performance.cpu_readback_bytes += staging.size;
         let mut stats = RenderStats {
-            objects: scene.items.len(),
+            objects,
             submitted_triangles: submitted,
             ..Default::default()
         };
@@ -2292,48 +2965,48 @@ impl VulkanRenderer {
                 .as_ref()
                 .map(|timings| Box::new(timings.completed())),
         };
-        self.frame_resources = Some(flight.resources);
-        self.atlas = Some(flight.atlas);
+        slot.resources = Some(flight.resources);
+        slot.atlas = flight.atlas;
         Ok(Some(frame))
     }
 }
 impl Drop for VulkanRenderer {
     fn drop(&mut self) {
         let bundle = ProducerRetirement {
-            device: self.device.clone(),
-            flight: self.pending.take(),
-            pipelines: std::mem::take(&mut self.pipelines),
-            resources: self.frame_resources.take(),
-            atlas: self.atlas.take(),
-            pool: self.pool,
-            descriptors: self.descriptor_pool,
+            slots: std::mem::take(&mut self.slots),
+            _pipelines: std::mem::take(&mut self.pipelines),
             _context: self.context.clone(),
         };
         self.presentation_slots.clear();
-        if bundle.flight.is_some() {
+        if bundle.slots.iter().any(|slot| slot.pending.is_some()) {
+            let trace = self.trace;
             let mut pinned = std::mem::ManuallyDrop::new(bundle);
             crate::retirement::retire(move || {
-                let flight = pinned.flight.as_ref().unwrap();
-                if let Some(error) = &flight.failure {
-                    return Err(error.clone());
+                let flights = pinned.slots.iter().filter_map(|slot| slot.pending.as_ref());
+                if let Some(error) = flights.clone().find_map(|flight| flight.failure.clone()) {
+                    return Poll::Ready(Err(error));
                 }
-                // Only a background retirement owner may wait. Timeout/error
-                // deliberately leaks ALL native owners and their device pin.
-                unsafe {
-                    pinned
-                        .device
-                        .wait_for_fences(&[flight.fence], true, 30_000_000_000)
+                let last = flights.max_by_key(|flight| flight.serial).unwrap();
+                match last.completion.ready() {
+                    Ok(false) => Poll::Pending,
+                    Err(source) => Poll::Ready(Err(VulkanError::ProducerUnconfirmed {
+                        operation: "producer retirement",
+                        source,
+                    })),
+                    Ok(true) => {
+                        if let Some(trace) = trace {
+                            eprintln!(
+                                "Vulkan retirement complete renderer={trace} serial={}",
+                                last.serial
+                            );
+                        }
+                        // Completion of the last graphics signal also covers
+                        // its transfer dependency and all earlier submissions.
+                        unsafe { std::mem::ManuallyDrop::drop(&mut pinned) };
+                        Poll::Ready(Ok(()))
+                    }
                 }
-                .map_err(|error| {
-                    format!("GPU producer retirement: {error:?}; resources remain pinned")
-                })?;
-                unsafe {
-                    std::mem::ManuallyDrop::drop(&mut pinned);
-                }
-                Ok(())
             });
-        } else {
-            drop(bundle);
         }
     }
 }
@@ -2344,6 +3017,7 @@ mod content_player_tests {
     use module_engine_core::{ObjectsWorld, WorldProvider};
     #[test]
     fn actual_imported_uv_texture_changes_forward_and_deferred_gpu_pixels_and_cache_is_reused() {
+        crate::requires_capabilities!(Vulkan, Dxc);
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let mut content = module_engine_content::ContentLibrary::new(&root).unwrap();
         let mut scene = ObjectsWorld::demo().snapshot();
@@ -2381,6 +3055,46 @@ mod content_player_tests {
                 .unwrap();
             assert_eq!(textured.rgba, repeat.rgba);
             assert!(textured.stats.shaded_pixels > 100);
+            if renderer.capabilities().resident_scene {
+                let mut retained = ResidentScene::default();
+                retained
+                    .apply(module_engine_core::SceneUpdate::Reset {
+                        revision: 0,
+                        snapshot: scene.clone(),
+                    })
+                    .unwrap();
+                let resident = renderer
+                    .render_scene(
+                        SceneInput::Retained(&mut retained),
+                        Camera::default(),
+                        160,
+                        120,
+                        &graph,
+                        &BTreeMap::new(),
+                        &RenderOverrides::default(),
+                    )
+                    .unwrap();
+                assert!(renderer.last_frame_work().unwrap().resident_scene);
+                assert_eq!(textured.rgba, resident.rgba, "{path:?}");
+                assert_eq!(textured.stats, resident.stats);
+            }
+
+            if let Some(transfer) = renderer.transfer.take() {
+                renderer.slots[0].atlas = None;
+                let graphics_upload = renderer
+                    .render(
+                        &scene,
+                        Camera::default(),
+                        160,
+                        120,
+                        &graph,
+                        &BTreeMap::new(),
+                        &RenderOverrides::default(),
+                    )
+                    .unwrap();
+                assert_eq!(textured.rgba, graphics_upload.rgba);
+                renderer.transfer = Some(transfer);
+            }
             let mut plain = scene.clone();
             plain.items[0].material.base_color_texture = None;
             let untextured = renderer
@@ -2409,7 +3123,136 @@ mod content_player_tests {
         }
     }
     #[test]
+    fn gpu_scene_capacity_fallback_does_not_keep_unsubmitted_meshes() {
+        crate::requires_capabilities!(Vulkan, Dxc);
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut renderer = VulkanRenderer::new_at(root).unwrap();
+        if !renderer.capabilities().resident_scene {
+            eprintln!("Adapter does not support resident geometry");
+            return;
+        }
+        // Two cube meshes fit; a third would overflow either pool buffer.
+        renderer.storage_buffer_limit = 400;
+        let scene = ObjectsWorld::demo().snapshot();
+        let original = scene.items[0].clone();
+        let item = |id, offset| {
+            let mut item = original.clone();
+            item.id = id;
+            item.mesh.vertices[0][1] += offset;
+            item
+        };
+        let first = vec![item(1, 0.)];
+        let oversized = vec![item(1, 0.1), item(2, 0.2)];
+        let next = vec![item(1, 0.), item(2, 0.3)];
+        let graph = default_graph(RenderPath::Forward);
+        let sources = BTreeMap::new();
+        let controls = RenderOverrides::default();
+        let mut retained = ResidentScene::default();
+        let mut render = |renderer: &mut VulkanRenderer, revision, items| {
+            retained
+                .apply(module_engine_core::SceneUpdate::Reset {
+                    revision,
+                    snapshot: SceneSnapshot { items, time: 0. },
+                })
+                .unwrap();
+            renderer
+                .render_scene(
+                    SceneInput::Retained(&mut retained),
+                    Camera::default(),
+                    96,
+                    64,
+                    &graph,
+                    &sources,
+                    &controls,
+                )
+                .unwrap()
+        };
+        render(&mut renderer, 0, first);
+        assert!(renderer.last_frame_work().unwrap().resident_scene);
+        render(&mut renderer, 1, oversized);
+        assert!(!renderer.last_frame_work().unwrap().resident_scene);
+        let actual = render(&mut renderer, 2, next.clone());
+        let work = renderer.last_frame_work().unwrap();
+        assert!(work.resident_scene, "Unsubmitted meshes exhausted the pool");
+        assert_eq!(work.vertex_write_bytes, 8 * 20);
+        assert_eq!(work.mesh_index_write_bytes, 36 * 4);
+        let reference = renderer
+            .render(
+                &SceneSnapshot {
+                    items: next.clone(),
+                    time: 0.,
+                },
+                Camera::default(),
+                96,
+                64,
+                &graph,
+                &sources,
+                &controls,
+            )
+            .unwrap();
+        assert_eq!(actual.rgba, reference.rgba);
+
+        // A sparse model delta that can overflow the world-point evaluation
+        // must use the expanded compatibility stream and preserve its counts.
+        let mut extreme = next.clone();
+        extreme[0].model[0] = [f32::MAX, f32::MAX, 0., f32::MAX];
+        for (revision, items) in [(3, &extreme), (4, &next)] {
+            retained
+                .apply(module_engine_core::SceneUpdate::Delta {
+                    base: revision - 1,
+                    revision,
+                    time: 0.,
+                    changes: &[module_engine_core::SceneChange {
+                        id: items[0].id,
+                        kind: module_engine_core::SceneChangeKind::Edited {
+                            moved: true,
+                            material_changed: false,
+                            mesh_changed: false,
+                        },
+                        items: &items[..1],
+                    }],
+                })
+                .unwrap();
+            let result = renderer
+                .render_scene(
+                    SceneInput::Retained(&mut retained),
+                    Camera::default(),
+                    96,
+                    64,
+                    &graph,
+                    &sources,
+                    &controls,
+                )
+                .unwrap();
+            let work = renderer.last_frame_work().unwrap();
+            assert_eq!(work.resident_scene, revision == 4);
+            let reference = renderer
+                .render(
+                    &SceneSnapshot {
+                        items: items.clone(),
+                        time: 0.,
+                    },
+                    Camera::default(),
+                    96,
+                    64,
+                    &graph,
+                    &sources,
+                    &controls,
+                )
+                .unwrap();
+            assert_eq!(result.rgba, reference.rgba);
+            assert_eq!(result.stats, reference.stats);
+            if revision == 4 {
+                assert_eq!(work.vertex_write_bytes, 0);
+                assert_eq!(work.mesh_index_write_bytes, 0);
+                assert_eq!(work.instance_write_bytes, 0);
+            }
+        }
+    }
+
+    #[test]
     fn sealed_custom_root_eol_variants_render_equal_without_dxc_and_content_changes_fail() {
+        crate::requires_capabilities!(Vulkan, Dxc);
         let parent = std::env::temp_dir().canonicalize().unwrap();
         let package = parent.join(format!(
             "module-native-sealed-eol-{}-{}",
@@ -2487,22 +3330,19 @@ mod content_player_tests {
             .prepare(&graph, &changed)
             .unwrap_err();
         assert!(
-            error.contains("Precompiled Player shader") && error.contains("re-export"),
+            error.to_string().contains("Precompiled Player shader")
+                && error.to_string().contains("re-export"),
             "{error}"
         );
-        let artifact = std::fs::read_dir(package.join(".spirv"))
-            .unwrap()
-            .next()
-            .unwrap()
-            .unwrap()
-            .path();
-        std::fs::remove_file(artifact).unwrap();
+        let key = crate::compiler::shader_key(&package, &source, "main", "cs_6_0").unwrap();
+        std::fs::remove_file(package.join(format!(".spirv/{key:016x}.spv"))).unwrap();
         let error = VulkanRenderer::new_at(package.clone())
             .unwrap()
             .prepare(&graph, &sources)
             .unwrap_err();
         assert!(
-            error.contains("Precompiled Player shader") && error.contains("re-export"),
+            error.to_string().contains("Precompiled Player shader")
+                && error.to_string().contains("re-export"),
             "{error}"
         );
         // Native checks run serially; sealed consumers must not compile on PATH.
@@ -2519,6 +3359,7 @@ mod content_player_tests {
 
     #[test]
     fn sealed_player_renders_from_exported_spirv_without_dxc_and_missing_artifact_fails() {
+        crate::requires_capabilities!(Vulkan, Dxc);
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let package = root.join(format!(
             ".work/precompiled-player-test-{}",
@@ -2545,14 +3386,65 @@ mod content_player_tests {
             )
             .unwrap();
         assert_eq!(frame.rgba.len(), 96 * 72 * 4);
+        let indexed = renderer.capabilities().bindless_materials;
+        if indexed {
+            use crate::capabilities::MATERIAL_IMAGE_COUNT;
+            let mut overflow = scene.clone();
+            let template = &scene.items[0];
+            overflow.items = (0..MATERIAL_IMAGE_COUNT)
+                .map(|i| {
+                    let mut item = template.clone();
+                    item.id = u64::from(i) + 1;
+                    item.material.base_color_texture =
+                        Some(Arc::new(module_engine_core::TextureImage {
+                            width: 1,
+                            height: 1,
+                            rgba8: vec![i as u8, (i >> 8) as u8, 160, 255],
+                        }));
+                    item
+                })
+                .collect();
+            let render = |renderer: &mut VulkanRenderer, scene| {
+                renderer
+                    .render(
+                        scene,
+                        Camera::default(),
+                        96,
+                        72,
+                        &graph,
+                        &sources,
+                        &RenderOverrides::default(),
+                    )
+                    .unwrap()
+            };
+            let legacy = render(&mut renderer, &overflow);
+            assert_ne!(legacy.rgba, frame.rgba);
+            let work = renderer.last_frame_work().unwrap();
+            assert_eq!(
+                work.atlas_upload_bytes,
+                (MATERIAL_IMAGE_COUNT as usize + 1) * 4
+            );
+            assert_eq!(work.material_images, 0);
+            assert_eq!(render(&mut renderer, &overflow).rgba, legacy.rgba);
+            assert_eq!(renderer.last_frame_work().unwrap().atlas_upload_bytes, 0);
+            assert_eq!(render(&mut renderer, &scene).rgba, frame.rgba);
+            assert_eq!(renderer.last_frame_work().unwrap().atlas_upload_bytes, 0);
+        }
         drop(renderer);
-        let artifact = std::fs::read_dir(package.join(".spirv"))
-            .unwrap()
-            .next()
-            .unwrap()
-            .unwrap()
-            .path();
-        std::fs::remove_file(artifact).unwrap();
+        let plan = build_plan_at(&graph, &sources, &package).unwrap();
+        let pass = plan
+            .passes
+            .iter()
+            .find(|p| p.module == "gpu.forward")
+            .unwrap();
+        let fragment = if indexed {
+            bindless_source(pass)
+        } else {
+            pass.source.clone()
+        };
+        let key = crate::compiler::shader_key(&package, &fragment, &pass.manifest.entry, "ps_6_0")
+            .unwrap();
+        std::fs::remove_file(package.join(format!(".spirv/{key:016x}.spv"))).unwrap();
         assert!(
             VulkanRenderer::new_at(package.clone())
                 .unwrap()
@@ -2569,15 +3461,18 @@ fn pipeline_key(pass: &Pass) -> String {
     serde_json::to_string(&pass.manifest).unwrap().hash(&mut h);
     format!("{:016x}", h.finish())
 }
-fn vk_error(error: vk::Result) -> String {
-    format!("Vulkan: {error:?}")
+fn resident_pipeline_key(default: &str) -> String {
+    format!("{default}:resident")
 }
-fn format(name: &str) -> Result<vk::Format, String> {
+fn atlas_pipeline_key(default: &str) -> String {
+    format!("atlas/{default}")
+}
+fn format(name: &str) -> Result<vk::Format, VulkanError> {
     match name {
         "rgba32float" => Ok(vk::Format::R32G32B32A32_SFLOAT),
         "r32float" => Ok(vk::Format::R32_SFLOAT),
         "rgba8unorm" => Ok(vk::Format::R8G8B8A8_UNORM),
-        _ => Err(format!("Unknown GPU format {name}")),
+        _ => Err(VulkanError::Resource(format!("Unknown GPU format {name}"))),
     }
 }
 fn range(aspect: vk::ImageAspectFlags) -> vk::ImageSubresourceRange {
@@ -2629,13 +3524,15 @@ fn copy_image(
     to: &str,
     width: u32,
     height: u32,
-) -> Result<(), String> {
+) -> Result<(), VulkanError> {
     if from == to {
-        return Err("Resource copy cannot alias itself".into());
+        return Err(VulkanError::Resource(
+            "Resource copy cannot alias itself".into(),
+        ));
     }
     let source = images
         .get_mut(from)
-        .ok_or_else(|| format!("Unknown GPU resource {from}"))?;
+        .ok_or_else(|| VulkanError::Resource(format!("Unknown GPU resource {from}")))?;
     transition(
         device,
         command,
@@ -2648,9 +3545,11 @@ fn copy_image(
     let format = source.format;
     let target = images
         .get_mut(to)
-        .ok_or_else(|| format!("Unknown GPU resource {to}"))?;
+        .ok_or_else(|| VulkanError::Resource(format!("Unknown GPU resource {to}")))?;
     if target.format != format {
-        return Err("Resource copy requires identical image formats".into());
+        return Err(VulkanError::Resource(
+            "Resource copy requires identical image formats".into(),
+        ));
     }
     transition(
         device,
@@ -2689,13 +3588,13 @@ fn copy_image(
 fn schedule_overrides(
     plan: &Plan,
     overrides: &RenderOverrides,
-) -> Result<BTreeMap<usize, Vec<RenderResourceCommand>>, String> {
+) -> Result<BTreeMap<usize, Vec<RenderResourceCommand>>, VulkanError> {
     for (id, params) in &overrides.parameters {
         let pass = plan
             .passes
             .iter()
             .find(|p| &p.id == id)
-            .ok_or_else(|| format!("Unknown render pass {id}"))?;
+            .ok_or_else(|| VulkanError::Overrides(format!("Unknown render pass {id}")))?;
         for (name, value) in params {
             if !pass.manifest.parameters.contains(name)
                 || !value.as_f64().is_some_and(|v| {
@@ -2704,15 +3603,15 @@ fn schedule_overrides(
                         && (name != "mode" || v == 0. || v == 1.)
                 })
             {
-                return Err(format!(
+                return Err(VulkanError::Overrides(format!(
                     "Pass {id}: unsupported/nonfinite scalar parameter {name}"
-                ));
+                )));
             }
         }
     }
     for id in overrides.enabled.keys() {
         if !plan.passes.iter().any(|pass| &pass.id == id) {
-            return Err(format!("Unknown render pass {id}"));
+            return Err(VulkanError::Overrides(format!("Unknown render pass {id}")));
         }
     }
     for pass in &plan.passes {
@@ -2729,9 +3628,9 @@ fn schedule_overrides(
                     .zip(output)
                     .is_some_and(|(a, b)| a.format == b.format && a.semantic == b.semantic)
             {
-                return Err(format!(
+                return Err(VulkanError::Overrides(format!(
                     "Pass {id} cannot be disabled: no type-preserving single-image bypass"
-                ));
+                )));
             }
         }
     }
@@ -2751,28 +3650,34 @@ fn schedule_overrides(
         let (needed, destination) = match command {
             RenderResourceCommand::ClearResource { name, value } => {
                 if !value.iter().all(|v| v.is_finite()) {
-                    return Err("Resource clear requires finite values".into());
+                    return Err(VulkanError::Overrides(
+                        "Resource clear requires finite values".into(),
+                    ));
                 }
                 (
                     producers
                         .get(name)
-                        .ok_or_else(|| format!("Unknown resource {name}"))?
+                        .ok_or_else(|| VulkanError::Overrides(format!("Unknown resource {name}")))?
                         .0,
                     name,
                 )
             }
             RenderResourceCommand::CopyResource { from, to } => {
                 if from == to {
-                    return Err("Resource copy must use distinct images".into());
+                    return Err(VulkanError::Overrides(
+                        "Resource copy must use distinct images".into(),
+                    ));
                 }
                 let a = producers
                     .get(from)
-                    .ok_or_else(|| format!("Unknown resource {from}"))?;
+                    .ok_or_else(|| VulkanError::Overrides(format!("Unknown resource {from}")))?;
                 let b = producers
                     .get(to)
-                    .ok_or_else(|| format!("Unknown resource {to}"))?;
+                    .ok_or_else(|| VulkanError::Overrides(format!("Unknown resource {to}")))?;
                 if a.1.format != b.1.format || a.1.semantic != b.1.semantic {
-                    return Err("Resource copy requires matching format and semantic".into());
+                    return Err(VulkanError::Overrides(
+                        "Resource copy requires matching format and semantic".into(),
+                    ));
                 }
                 (a.0.max(b.0), to)
             }
@@ -2782,9 +3687,9 @@ fn schedule_overrides(
             .get(destination)
             .is_some_and(|first| *first <= last)
         {
-            return Err(
+            return Err(VulkanError::Overrides(
                 "Ordered resource operation would happen after its destination was consumed".into(),
-            );
+            ));
         }
         schedule.entry(last).or_default().push(command.clone());
     }
@@ -2793,14 +3698,14 @@ fn schedule_overrides(
 
 /// Validate portable render controls using only graph resource/parameter metadata.
 /// No shader compilation, world mutation, Vulkan work, or source replacement occurs.
-pub fn validate_overrides(graph: &Graph, overrides: &RenderOverrides) -> Result<(), String> {
+pub fn validate_overrides(graph: &Graph, overrides: &RenderOverrides) -> Result<(), VulkanError> {
     RenderGraphValidator::new(graph)?.validate(overrides)
 }
 pub fn validate_overrides_at(
     graph: &Graph,
     overrides: &RenderOverrides,
     _resource_root: &std::path::Path,
-) -> Result<(), String> {
+) -> Result<(), VulkanError> {
     RenderGraphValidator::new(graph)?.validate(overrides)
 }
 
@@ -2810,12 +3715,12 @@ pub struct RenderGraphValidator {
     plan: Plan,
 }
 impl RenderGraphValidator {
-    pub fn new(graph: &Graph) -> Result<Self, String> {
+    pub fn new(graph: &Graph) -> Result<Self, VulkanError> {
         Ok(Self {
             plan: build_metadata_plan(graph)?,
         })
     }
-    pub fn validate(&self, overrides: &RenderOverrides) -> Result<(), String> {
+    pub fn validate(&self, overrides: &RenderOverrides) -> Result<(), VulkanError> {
         schedule_overrides(&self.plan, overrides).map(|_| ())
     }
 }
@@ -2826,35 +3731,43 @@ mod tests {
     use module_engine_core::{ObjectsWorld, WorldProvider, make_edge};
     #[test]
     fn failed_partial_native_allocations_release_owned_handles_and_device_recovers() {
+        crate::requires_capabilities!(Vulkan);
         let mut renderer = VulkanRenderer::new().unwrap();
         let counts = renderer.allocations.clone();
         let initial = counts.snapshot();
-        for fault in [
-            AllocationFault::BufferHandle,
-            AllocationFault::BufferMemory,
-            AllocationFault::ImageHandle,
-            AllocationFault::ImageMemory,
-            AllocationFault::ImageView,
-        ] {
-            renderer.allocation_fault = Some(fault);
-            let error = match fault {
-                AllocationFault::BufferHandle | AllocationFault::BufferMemory => renderer
-                    .buffer(4096, vk::BufferUsageFlags::VERTEX_BUFFER)
-                    .err(),
-                _ => renderer
-                    .image(32, 32, vk::Format::R8G8B8A8_UNORM, false)
-                    .err(),
+        // Exercise standalone allocations even on a device that offers the allocator.
+        let allocator = renderer.allocator.take();
+        for allocator in allocator.into_iter().map(Some).chain([None]) {
+            renderer.allocator = allocator;
+            for fault in [
+                AllocationFault::BufferHandle,
+                AllocationFault::BufferMemory,
+                AllocationFault::ImageHandle,
+                AllocationFault::ImageMemory,
+                AllocationFault::ImageView,
+            ] {
+                renderer.allocation_fault = Some(fault);
+                let error = match fault {
+                    AllocationFault::BufferHandle | AllocationFault::BufferMemory => renderer
+                        .buffer(4096, vk::BufferUsageFlags::VERTEX_BUFFER)
+                        .err(),
+                    _ => renderer
+                        .image(32, 32, vk::Format::R8G8B8A8_UNORM, false)
+                        .err(),
+                }
+                .expect("injected allocation point must reject the partial object");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("Injected Vulkan allocation failure"),
+                    "{error}"
+                );
+                assert_eq!(
+                    counts.snapshot(),
+                    initial,
+                    "no handle or device-memory allocation may survive {fault:?}"
+                );
             }
-            .expect("injected allocation point must reject the partial object");
-            assert!(
-                error.contains("Injected Vulkan allocation failure"),
-                "{error}"
-            );
-            assert_eq!(
-                counts.snapshot(),
-                initial,
-                "no handle or device-memory allocation may survive {fault:?}"
-            );
         }
         renderer.allocation_fault = None;
         let frame = renderer
@@ -2924,7 +3837,8 @@ mod tests {
         let error =
             validate_frame_images(&renamed_plan, &available, &renamed_readback).unwrap_err();
         assert!(
-            error.contains("gpu_ssao_added.color") && error.contains("allocated image"),
+            error.to_string().contains("gpu_ssao_added.color")
+                && error.to_string().contains("allocated image"),
             "{error}"
         );
         assert_ne!(
@@ -2951,6 +3865,7 @@ mod tests {
     }
     #[test]
     fn gpu_resource_cache_renames_ssao_geometry_and_output_without_stale_images() {
+        crate::requires_capabilities!(Vulkan, Dxc);
         let scene = ObjectsWorld::demo().snapshot();
         let camera = Camera::default();
         for path in [RenderPath::Forward, RenderPath::Deferred] {
@@ -2979,7 +3894,7 @@ mod tests {
                     renderer.performance.pipeline_creations, pipeline_count,
                     "resource IDs change while pipeline identities remain reusable"
                 );
-                let resources = renderer.frame_resources.as_ref().unwrap();
+                let resources = renderer.slots[0].resources.as_ref().unwrap();
                 assert!(
                     resources
                         .images
@@ -3008,8 +3923,8 @@ mod tests {
                 .unwrap();
             assert_eq!(resized.rgba.len(), 128 * 72 * 4);
             assert_eq!(
-                renderer
-                    .frame_resources
+                renderer.slots[0]
+                    .resources
                     .as_ref()
                     .unwrap()
                     .staging
@@ -3035,11 +3950,13 @@ mod tests {
             validator
                 .validate(&controls)
                 .unwrap_err()
+                .to_string()
                 .contains("Unknown render pass")
         );
     }
     #[test]
     fn prepared_plan_reuse_skips_layout_rebuilds_but_keeps_real_edits_and_explicit_freshness() {
+        crate::requires_capabilities!(Vulkan, Dxc);
         let mut renderer = VulkanRenderer::new().unwrap();
         let mut graph = default_graph(RenderPath::Forward);
         let mut sources = BTreeMap::new();
@@ -3095,6 +4012,7 @@ mod tests {
         assert!(
             build_plan(&graph, &BTreeMap::new())
                 .unwrap_err()
+                .to_string()
                 .contains("cycle")
         );
         let (mut graph, sources) = custom_graph();
@@ -3107,6 +4025,7 @@ mod tests {
         assert!(
             build_plan(&graph, &sources)
                 .unwrap_err()
+                .to_string()
                 .contains("expects")
         );
         let mut overrides = RenderOverrides::default();
@@ -3120,6 +4039,7 @@ mod tests {
         assert!(
             validate_overrides(&default_graph(RenderPath::Forward), &overrides)
                 .unwrap_err()
+                .to_string()
                 .contains("type-preserving")
         );
         overrides = RenderOverrides::default();
@@ -3132,11 +4052,13 @@ mod tests {
         assert!(
             validate_overrides(&default_graph(RenderPath::Forward), &overrides)
                 .unwrap_err()
+                .to_string()
                 .contains("semantic")
         );
     }
     #[test]
     fn compiled_hlsl_must_match_manifest_bindings_workgroup_and_storage_format() {
+        crate::requires_capabilities!(Dxc);
         let (graph, sources) = custom_graph();
         let plan = build_plan(&graph, &sources).unwrap();
         let pass = plan.passes.iter().find(|p| p.id == "ao").unwrap();
@@ -3160,12 +4082,14 @@ mod tests {
             assert!(
                 verify_shader(pass, &shader.words, false)
                     .unwrap_err()
+                    .to_string()
                     .contains(expected)
             );
         }
     }
     #[test]
     fn actual_gpu_bypass_and_copy_agree_and_invalid_candidate_retains_prepared_graph() {
+        crate::requires_capabilities!(Vulkan, Dxc);
         let mut renderer = VulkanRenderer::new().expect("GPU regression requires Vulkan1.3 driver");
         let scene = ObjectsWorld::demo().snapshot();
         let graph = default_graph(RenderPath::Forward);
@@ -3294,6 +4218,7 @@ mod fullscreen_tests {
     use module_engine_core::{ObjectsWorld, WorldProvider};
     #[test]
     fn independent_fullscreen_raster_and_compute_execute_equivalent_shader_math() {
+        crate::requires_capabilities!(Vulkan, Dxc);
         let mut renderer = VulkanRenderer::new().unwrap();
         let scene = ObjectsWorld::demo().snapshot();
         let mut graph = default_graph(RenderPath::Forward);
@@ -3343,8 +4268,19 @@ mod conversion_tests {
     use module_engine_core::{ObjectsWorld, WorldProvider};
     #[test]
     fn builtins_including_fxaa_and_color_encode_become_editable_custom_without_pixel_changes() {
+        crate::requires_capabilities!(Vulkan, Dxc);
         let mut renderer = VulkanRenderer::new().unwrap();
-        let scene = ObjectsWorld::demo().snapshot();
+        let mut scene = ObjectsWorld::demo().snapshot();
+        let item = &mut scene.items[0];
+        item.mesh.texcoords = vec![[0.38, 0.63]; item.mesh.vertices.len()];
+        item.material.base_color_texture = Some(Arc::new(module_engine_core::TextureImage {
+            width: 3,
+            height: 2,
+            rgba8: vec![
+                232, 163, 38, 255, 16, 18, 193, 255, 49, 224, 58, 255, 186, 24, 139, 255, 22, 175,
+                98, 255, 243, 201, 143, 255,
+            ],
+        }));
         for path in [RenderPath::Forward, RenderPath::Deferred] {
             let mut graph = default_graph(path);
             let mut sources = BTreeMap::new();
@@ -3410,7 +4346,7 @@ mod authored_configuration_tests {
     use crate::{RenderPath, custom_compute_manifest, default_graph};
     use module_engine_core::{ObjectsWorld, WorldProvider};
     #[test]
-    fn authored_config_typos_are_rejected_before_execution_and_disable_has_explicit_precedence() {
+    fn authored_config_typos_are_rejected_by_metadata_validation() {
         let mut graph = default_graph(RenderPath::Forward);
         graph
             .nodes
@@ -3421,6 +4357,7 @@ mod authored_configuration_tests {
         assert!(
             validate_overrides(&graph, &RenderOverrides::default())
                 .unwrap_err()
+                .to_string()
                 .contains("unknown parameter exposue")
         );
         let mut value = serde_json::to_value(custom_compute_manifest()).unwrap();
@@ -3449,9 +4386,15 @@ mod authored_configuration_tests {
         assert!(
             validate_overrides(&graph, &RenderOverrides::default())
                 .unwrap_err()
+                .to_string()
                 .contains("cannot be disabled")
         );
-        graph = default_graph(RenderPath::Forward);
+    }
+
+    #[test]
+    fn authored_disable_has_explicit_precedence_in_rendered_frames() {
+        crate::requires_capabilities!(Vulkan, Dxc);
+        let mut graph = default_graph(RenderPath::Forward);
         graph
             .nodes
             .iter_mut()
@@ -3532,6 +4475,7 @@ mod include_regression {
     use module_engine_core::{ObjectsWorld, WorldProvider};
     #[test]
     fn actual_nested_include_mutation_recompiles_unchanged_inline_shader_and_gpu_pipeline() {
+        crate::requires_capabilities!(Vulkan, Dxc);
         let mut renderer =
             VulkanRenderer::new().expect("Real Vulkan adapter required for GPU regression");
         let name = format!("include-regression-{}", std::process::id());
@@ -3640,12 +4584,16 @@ mod include_regression {
             "Inline authored source remains byte-identical"
         );
         std::fs::write(&child, "this is invalid included HLSL\n").unwrap();
-        assert!(
-            renderer
-                .prepare(&graph, &sources)
-                .unwrap_err()
-                .contains("HLSL compilation failed")
-        );
+        let error = renderer.prepare(&graph, &sources).unwrap_err();
+        let VulkanError::Pass { pass, source } = &error else {
+            panic!("expected pass preparation context: {error}");
+        };
+        assert_eq!(pass, "ao");
+        assert!(matches!(
+            source.as_ref(),
+            VulkanError::Shader(crate::ShaderError::Compile { status, .. }) if !status.success()
+        ));
+        assert!(error.to_string().contains("HLSL compilation failed"));
         let rejected = renderer.performance();
         for _ in 0..120 {
             renderer.rejected_inputs.as_mut().unwrap().checked = Instant::now();
@@ -3661,6 +4609,7 @@ mod include_regression {
                         &RenderOverrides::default()
                     )
                     .unwrap_err()
+                    .to_string()
                     .contains("HLSL compilation failed")
             );
         }

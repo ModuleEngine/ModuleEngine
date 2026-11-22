@@ -1,5 +1,6 @@
-param([switch]$Restore, [switch]$Json)
+param([switch]$Restore, [switch]$Json, [switch]$RustOnly)
 $ErrorActionPreference = 'Stop'
+if ($Restore -and $RustOnly) { throw '-RustOnly is a verification mode and cannot restore tools.' }
 $projectRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $pins = Get-Content -LiteralPath (Join-Path $projectRoot 'toolchain-manifest.json') -Raw | ConvertFrom-Json
 if ($pins.schema_version -ne 1) { throw 'Unsupported tool manifest' }
@@ -109,7 +110,7 @@ if ($Restore -and $rustTools.cargo.ok) {
 $rustValid=$rustTools.rust.ok
 $dxcValid=$dxcValid -and ($dxcVersion -match [regex]::Escape($pins.dxc.version))
 $loader=Join-Path $env:WINDIR 'System32/vulkan-1.dll'
-$report=[ordered]@{ok=($rustTools.ok -and $dxcValid);restoration_requested=[bool]$Restore;rust=$rustTools.rust;cargo=$rustTools.cargo;rustfmt=$rustTools.rustfmt;cargo_fmt=$rustTools.cargo_fmt;clippy=$rustTools.clippy;clippy_driver=$rustTools.clippy_driver;dxc=[ordered]@{ok=$dxcValid;path=$dxc;version=$dxcVersion};vulkan_loader_present=(Test-Path -LiteralPath $loader);native_requirements=$pins.native_requirements;note='Loader presence is not device/pass validation. Run the GPU self-check. Restore downloads only project-local Rust/DXC tools; native MSVC SDK and GPU driver require the host installation.'}
+$report=[ordered]@{ok=($rustTools.ok -and ($RustOnly -or $dxcValid));restoration_requested=[bool]$Restore;rust=$rustTools.rust;cargo=$rustTools.cargo;rustfmt=$rustTools.rustfmt;cargo_fmt=$rustTools.cargo_fmt;clippy=$rustTools.clippy;clippy_driver=$rustTools.clippy_driver;dxc=[ordered]@{ok=$dxcValid;path=$dxc;version=$dxcVersion};vulkan_loader_present=(Test-Path -LiteralPath $loader);native_requirements=$pins.native_requirements;note='Loader presence is not device/pass validation. Run the GPU self-check. Restore downloads only project-local Rust/DXC tools; native MSVC SDK and GPU driver require the host installation.'}
 if ($Json) { $report | ConvertTo-Json -Depth 8 } else { Write-Output "Rust pinned: $rustValid; Cargo pinned: $($rustTools.cargo.ok); rustfmt: $($rustTools.rustfmt.ok); cargo-fmt: $($rustTools.cargo_fmt.ok); Clippy: $($rustTools.clippy.ok); Clippy driver: $($rustTools.clippy_driver.ok); DXC pinned + component hashes: $dxcValid; Vulkan loader: $($report.vulkan_loader_present)"; $pins.native_requirements | ForEach-Object { Write-Output $_ }; if (-not $report.ok) { Write-Output 'Invoke scripts/bootstrap.ps1 -Restore to restore pinned portable tools and Cargo dependencies.' } }
 if (-not $report.ok) { exit 1 }
 

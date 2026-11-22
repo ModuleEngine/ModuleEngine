@@ -27,6 +27,7 @@ jobs:
     outputs:
       native: ${{ steps.routes.outputs.native }}
       package: ${{ steps.routes.outputs.package }}
+      roadmap_only: ${{ steps.routes.outputs.roadmap_only }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -43,6 +44,7 @@ jobs:
   checks:
     name: Contracts and selected routes (${{ matrix.os }})
     needs: plan
+    if: needs.plan.outputs.roadmap_only == 'false'
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -92,6 +94,8 @@ jobs:
             target/${{ steps.cargo-cache-context.outputs.native_host }}/release
       - name: Fetch locked dependencies before offline verification
         run: cargo fetch --locked
+      - name: Third-party license policy and notices file
+        run: python scripts/third_party_licenses.py --check
       - name: Launcher and CI policy unit checks
         run: python -B -m unittest discover -s scripts -p "test_*.py" -v
       - name: Inspect contracts plan
@@ -102,6 +106,8 @@ jobs:
         run: python scripts/verify.py --profile clippy --timeout 1800
       - name: Contracts
         run: python scripts/verify.py --profile contracts --timeout 1800
+      - name: Standalone ECS spike contracts (Release)
+        run: cargo test --release --locked --manifest-path crates/ecs-spike/Cargo.toml --target-dir target/ecs-spike
       - name: Windows native toolchain contracts (no GPU acceptance)
         if: runner.os == 'Windows' && needs.plan.outputs.native == 'true'
         run: python scripts/verify.py --profile native-tools --timeout 1800
@@ -122,7 +128,7 @@ jobs:
           vulkaninfo --summary
       - name: Linux native offscreen contracts (Mesa software device)
         if: runner.os == 'Linux' && needs.plan.outputs.native == 'true'
-        run: python scripts/verify.py --profile native --timeout 1800
+        run: python scripts/verify.py --profile native --require-capabilities --timeout 1800
       - name: Native package fixture contracts
         if: needs.plan.outputs.package == 'true'
         run: python scripts/verify.py --profile package --timeout 1800
@@ -135,10 +141,32 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  roadmap_status:
+    name: Roadmap status checks
+    needs: plan
+    if: needs.plan.outputs.roadmap_only == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Check the bilingual roadmap and its Node model
+        run: |
+          node --version
+          python -B -m unittest discover -s scripts -p test_roadmap_map.py -v
+          python -B scripts/roadmap_map.py --check
+          python -B scripts/roadmap_map.py --out _site/index.html
+          test -s _site/index.html
+          test -s _site/world/index.html
+
   required:
     name: CI required
     if: always()
-    needs: [plan, checks]
+    needs: [plan, checks, roadmap_status]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -152,6 +180,8 @@ jobs:
         env:
           CI_PLAN_RESULT: ${{ needs.plan.result }}
           CI_CHECKS_RESULT: ${{ needs.checks.result }}
+          CI_ROADMAP_RESULT: ${{ needs.roadmap_status.result }}
           CI_NATIVE: ${{ needs.plan.outputs.native }}
           CI_PACKAGE: ${{ needs.plan.outputs.package }}
+          CI_ROADMAP_ONLY: ${{ needs.plan.outputs.roadmap_only }}
         run: python scripts/ci_plan.py --gate

@@ -1,7 +1,7 @@
 //! Owned, portable command packets shared by world implementations and compiled
 //! Rust workers. Commands use stable object/pass/resource IDs, not Rust pointers.
 
-use crate::Transform;
+use crate::{ComponentRegistry, Transform};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -156,6 +156,10 @@ pub struct ScriptContext {
     #[serde(default)]
     pub world_queries_available: bool,
     pub objects: Vec<WorldObject>,
+    /// Named references supplied by GameHost, keyed by the source object's stable ID.
+    /// Legacy Update, Speed and older packets supply no named references.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub references: BTreeMap<u64, BTreeMap<String, u64>>,
     /// Project asset IDs resolve to portable paths beneath the worker's project
     /// working directory. Older hosts and packets supply an empty map.
     #[serde(default)]
@@ -207,6 +211,7 @@ impl ScriptContext {
             base: 1.0,
             world_queries_available: true,
             objects,
+            references: BTreeMap::new(),
             asset_paths: BTreeMap::new(),
             parameters: BTreeMap::new(),
             properties: crate::PropertyData::default(),
@@ -235,6 +240,10 @@ impl ScriptContext {
     /// missing object; both otherwise produce None.
     pub fn object(&self, id: u64) -> Option<&WorldObject> {
         self.objects.iter().find(|o| o.id == id)
+    }
+    /// Read a named reference as the target's stable ID in the input snapshot.
+    pub fn reference(&self, object: u64, name: &str) -> Option<u64> {
+        self.references.get(&object)?.get(name).copied()
     }
     /// Resolve a stable asset ID (or asset://ID) for filesystem/content access.
     pub fn asset_path(&self, id: &str) -> Option<&str> {
@@ -366,63 +375,33 @@ fn validate_name(name: &str) -> Result<(), String> {
     }
 }
 
-fn valid_transform(transform: &Transform) -> bool {
-    transform
-        .translation
-        .iter()
-        .chain(&transform.rotation)
-        .chain(&transform.scale)
-        .all(|v| v.is_finite())
+impl WorldCommand {
+    pub(crate) fn value_target(&self) -> Option<u64> {
+        match *self {
+            Self::SetPosition { id, .. }
+            | Self::Translate { id, .. }
+            | Self::SetTransform { id, .. }
+            | Self::SetColor { id, .. } => Some(id),
+            Self::Spawn { .. } | Self::Remove { .. } => None,
+        }
+    }
 }
 
-/// Common transactional semantics, using temporary DTOs rather than dictating
-/// either provider's persistent storage representation.
-pub(crate) fn apply_object_commands(
-    objects: &mut BTreeMap<u64, WorldObject>,
-    commands: &[WorldCommand],
-) -> Result<(), String> {
+pub(crate) fn check_world_packet_size(commands: &[WorldCommand]) -> Result<(), String> {
     if commands.len() > 4096 {
         return Err("World command batch exceeds 4096 operations".into());
     }
-    let mut candidate = objects.clone();
+    Ok(())
+}
+
+/// Common transactional semantics, using an owned DTO map as scratch space.
+pub(crate) fn edit_object_map(
+    candidate: &mut BTreeMap<u64, WorldObject>,
+    commands: &[WorldCommand],
+) -> Result<(), String> {
+    check_world_packet_size(commands)?;
     for command in commands {
         match command {
-            WorldCommand::SetPosition { id, position } => {
-                if !position.iter().all(|v| v.is_finite()) {
-                    return Err("Position must be finite".into());
-                }
-                candidate
-                    .get_mut(id)
-                    .ok_or_else(|| format!("Object {id} does not exist"))?
-                    .transform
-                    .translation = *position;
-            }
-            WorldCommand::Translate { id, delta } => {
-                if !delta.iter().all(|v| v.is_finite()) {
-                    return Err("Translation delta must be finite".into());
-                }
-                let object = candidate
-                    .get_mut(id)
-                    .ok_or_else(|| format!("Object {id} does not exist"))?;
-                for (value, delta) in object.transform.translation.iter_mut().zip(delta) {
-                    *value += delta;
-                }
-            }
-            WorldCommand::SetTransform { id, transform } => {
-                if !valid_transform(transform) {
-                    return Err("Transform must be finite".into());
-                }
-                candidate
-                    .get_mut(id)
-                    .ok_or_else(|| format!("Object {id} does not exist"))?
-                    .transform = *transform;
-            }
-            WorldCommand::SetColor { id, color } => {
-                candidate
-                    .get_mut(id)
-                    .ok_or_else(|| format!("Object {id} does not exist"))?
-                    .color = *color
-            }
             WorldCommand::Spawn { object } => {
                 if candidate.contains_key(&object.id) {
                     return Err(format!("Object {} already exists", object.id));
@@ -450,15 +429,63 @@ pub(crate) fn apply_object_commands(
                 }
                 candidate.retain(|id, _| !removed.contains(id));
             }
+            command => {
+                edit_object_values(command, candidate.get_mut(&command.value_target().unwrap()))?
+            }
         }
     }
+    validate_object_map(candidate)
+}
+
+pub(crate) fn edit_object_values(
+    command: &WorldCommand,
+    object: Option<&mut WorldObject>,
+) -> Result<(), String> {
+    let target = || {
+        object.ok_or_else(|| format!("Object {} does not exist", command.value_target().unwrap()))
+    };
+    match command {
+        WorldCommand::SetPosition { position, .. } => {
+            if !position.iter().all(|v| v.is_finite()) {
+                return Err("Position must be finite".into());
+            }
+            target()?.transform.translation = *position;
+        }
+        WorldCommand::Translate { delta, .. } => {
+            if !delta.iter().all(|v| v.is_finite()) {
+                return Err("Translation delta must be finite".into());
+            }
+            for (value, delta) in target()?.transform.translation.iter_mut().zip(delta) {
+                *value += delta;
+            }
+        }
+        WorldCommand::SetTransform { transform, .. } => {
+            if !ComponentRegistry::TRANSFORM.is_finite(transform) {
+                return Err("Transform must be finite".into());
+            }
+            target()?.transform = *transform;
+        }
+        WorldCommand::SetColor { color, .. } => target()?.color = *color,
+        WorldCommand::Spawn { .. } | WorldCommand::Remove { .. } => {
+            unreachable!("Structural commands use the object map")
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_object_transform(id: u64, transform: &Transform) -> Result<(), String> {
+    if !ComponentRegistry::TRANSFORM.is_finite(transform) {
+        return Err(format!("Object {id} has a nonfinite transform"));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_object_map(candidate: &BTreeMap<u64, WorldObject>) -> Result<(), String> {
     if candidate.len() > 65536 {
         return Err("Built-in editable world exceeds 65536 objects".into());
     }
     for object in candidate.values() {
-        if !valid_transform(&object.transform) {
-            return Err(format!("Object {} has a nonfinite transform", object.id));
-        }
+        validate_object_transform(object.id, &object.transform)?;
         let mut visited = BTreeSet::from([object.id]);
         let mut parent = object.parent;
         while let Some(id) = parent {
@@ -474,7 +501,6 @@ pub(crate) fn apply_object_commands(
                 .parent;
         }
     }
-    *objects = candidate;
     Ok(())
 }
 
@@ -488,7 +514,7 @@ pub fn validate_world_commands(
     if map.len() != objects.len() {
         return Err("Object packet has duplicate IDs".into());
     }
-    apply_object_commands(&mut map, commands)
+    edit_object_map(&mut map, commands)
 }
 
 #[cfg(test)]
@@ -513,6 +539,39 @@ mod tests {
         assert_eq!(legacy.base, 1.0);
         assert!(legacy.commands.is_empty());
         assert!(legacy.asset_paths.is_empty());
+        assert!(legacy.references.is_empty());
+        assert!(!json.contains("\"references\""));
+    }
+
+    #[test]
+    fn named_reference_wire_extension_preserves_old_object_input() {
+        #[derive(Deserialize)]
+        struct PreviousObjectInput {
+            objects: Vec<WorldObject>,
+        }
+
+        let target = 9_007_199_254_740_993;
+        let child = u64::MAX;
+        let mut packet = ScriptContext::new(
+            0.,
+            0.,
+            vec![WorldObject {
+                id: child,
+                parent: Some(target),
+                transform: Transform::default(),
+                color: [255; 4],
+            }],
+        );
+        packet
+            .references
+            .insert(child, BTreeMap::from([("owner".into(), target)]));
+
+        let wire = serde_json::to_value(&packet).unwrap();
+        let older: PreviousObjectInput = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(older.objects, packet.objects);
+        let current: ScriptContext = serde_json::from_value(wire).unwrap();
+        assert_eq!(current.reference(child, "owner"), Some(target));
+        assert_eq!(current, packet);
     }
     #[test]
     fn stable_asset_paths_resolve_in_script_context_and_survive_wire_roundtrip() {

@@ -12,7 +12,7 @@ param(
     [Parameter(Mandatory)][string]$CargoHome,
     [string]$RustOutput = (Join-Path $PSScriptRoot '../crates/runtime-script/src/freshness/audited_dependencies.rs'),
     [Parameter(Mandatory)][string]$EvidenceOutput,
-    [int]$ExpectedPackageCount = 23
+    [int]$ExpectedPackageCount = 113
 )
 $ErrorActionPreference = 'Stop'
 $utf8 = [Text.UTF8Encoding]::new($false, $true)

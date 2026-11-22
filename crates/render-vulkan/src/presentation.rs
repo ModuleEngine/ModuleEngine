@@ -4,10 +4,12 @@
 //! with no create flags and TRANSFER_SRC | TRANSFER_DST | SAMPLED usage. A newly
 //! allocated source is uninitialized: the producer performs the first write.
 //! Every subsequent handoff uses EXTERNAL ownership and GENERAL layout. The
-//! producer confirms its submission fence before publishing a frame. Consumers must retain
+//! producer confirms submission completion before publishing a frame. Consumers must retain
 //! the entire `Frame::gpu` lease until their GPU work has completed, and release
 //! the image to EXTERNAL/GENERAL before allowing that lease to drop.
-use ash::{Entry, vk};
+use crate::VulkanError;
+use ash::vk;
+use instance::InstanceLifetime;
 use module_engine_core::{GpuFrame, PresentationTarget};
 use std::{
     any::Any,
@@ -78,17 +80,267 @@ impl GpuFrame for VulkanGpuFrame {
 }
 
 pub(crate) struct DeviceLifetime {
-    pub instance: ash::Instance,
+    pub instance: InstanceLifetime,
     pub device: ash::Device,
-    pub _entry: Entry,
 }
+impl DeviceLifetime {
+    pub(crate) fn name(&self, _object: impl vk::Handle, _name: impl FnOnce() -> String) {
+        #[cfg(debug_assertions)]
+        self.instance.name(&self.device, _object, &_name());
+    }
+}
+
 impl Drop for DeviceLifetime {
     fn drop(&mut self) {
         unsafe {
             // Every producer submission is confirmed before its resources drop,
             // or its entire owner/device is quarantined on an unknown result.
             self.device.destroy_device(None);
-            self.instance.destroy_instance(None);
+        }
+    }
+}
+
+pub(crate) mod instance {
+    use crate::VulkanError;
+    use ash::{Entry, vk};
+    use std::sync::Arc;
+
+    pub(crate) struct InstanceLifetime {
+        // Keep the Vulkan loader mapped until after vkDestroyInstance.
+        _entry: Entry,
+        pub raw: ash::Instance,
+        #[cfg(debug_assertions)]
+        debug: debug::Diagnostics,
+    }
+
+    impl InstanceLifetime {
+        pub(crate) fn new() -> Result<Self, VulkanError> {
+            let entry =
+                unsafe { Entry::load() }.map_err(|source| VulkanError::Loader(Arc::new(source)))?;
+            let app = vk::ApplicationInfo::default()
+                .application_name(c"ModuleEngine GPU graph")
+                .api_version(vk::API_VERSION_1_3);
+            #[cfg(debug_assertions)]
+            let (raw, debug) = debug::Diagnostics::create(&entry, &app)?;
+            #[cfg(not(debug_assertions))]
+            let raw = unsafe {
+                entry.create_instance(
+                    &vk::InstanceCreateInfo::default().application_info(&app),
+                    None,
+                )
+            }
+            .map_err(VulkanError::api("1.3 instance"))?;
+
+            Ok(Self {
+                _entry: entry,
+                raw,
+                #[cfg(debug_assertions)]
+                debug,
+            })
+        }
+
+        #[cfg(debug_assertions)]
+        pub(crate) fn name(&self, device: &ash::Device, object: impl vk::Handle, name: &str) {
+            self.debug.name(&self.raw, device, object, name);
+        }
+    }
+
+    impl Drop for InstanceLifetime {
+        fn drop(&mut self) {
+            #[cfg(debug_assertions)]
+            self.debug.destroy();
+            unsafe { self.raw.destroy_instance(None) };
+            #[cfg(debug_assertions)]
+            self.debug.report();
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    mod debug {
+        use super::*;
+        use std::{
+            ffi::{CStr, CString, c_void},
+            io::Write,
+            sync::atomic::{AtomicU64, Ordering::Relaxed},
+        };
+
+        const LAYER: &CStr = c"VK_LAYER_KHRONOS_validation";
+        static ERRORS: AtomicU64 = AtomicU64::new(0);
+
+        #[derive(Default)]
+        struct Counts {
+            warnings: AtomicU64,
+            errors: AtomicU64,
+            named: AtomicU64,
+        }
+
+        pub(super) struct Diagnostics {
+            counts: Box<Counts>,
+            validation: bool,
+            messenger: Option<(ash::ext::debug_utils::Instance, vk::DebugUtilsMessengerEXT)>,
+        }
+
+        fn log(args: std::fmt::Arguments<'_>) {
+            let _ = writeln!(std::io::stderr().lock(), "{args}");
+        }
+
+        unsafe extern "system" fn callback(
+            severity: vk::DebugUtilsMessageSeverityFlagsEXT,
+            _: vk::DebugUtilsMessageTypeFlagsEXT,
+            data: *const vk::DebugUtilsMessengerCallbackDataEXT<'_>,
+            user: *mut c_void,
+        ) -> vk::Bool32 {
+            let counts = unsafe { &*user.cast::<Counts>() };
+            if severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR) {
+                counts.errors.fetch_add(1, Relaxed);
+                ERRORS.fetch_add(1, Relaxed);
+            } else {
+                counts.warnings.fetch_add(1, Relaxed);
+            }
+            let message = unsafe { CStr::from_ptr((*data).p_message) }.to_string_lossy();
+            log(format_args!("Vulkan validation {severity:?}: {message}"));
+            vk::FALSE
+        }
+
+        pub(super) fn error_count() -> u64 {
+            ERRORS.load(Relaxed)
+        }
+
+        impl Diagnostics {
+            pub(super) fn create(
+                entry: &Entry,
+                app: &vk::ApplicationInfo<'_>,
+            ) -> Result<(ash::Instance, Self), VulkanError> {
+                let layers = unsafe { entry.enumerate_instance_layer_properties() }
+                    .map_err(VulkanError::api("enumerate instance layers"))?;
+                let extensions = unsafe { entry.enumerate_instance_extension_properties(None) }
+                    .map_err(VulkanError::api("enumerate instance extensions"))?;
+                let validation = layers
+                    .iter()
+                    .any(|layer| unsafe { CStr::from_ptr(layer.layer_name.as_ptr()) == LAYER });
+                let utils = extensions.iter().any(|extension| unsafe {
+                    CStr::from_ptr(extension.extension_name.as_ptr()) == ash::ext::debug_utils::NAME
+                });
+                let counts = Box::<Counts>::default();
+                let layer_names = [LAYER.as_ptr()];
+                let extension_names = [ash::ext::debug_utils::NAME.as_ptr()];
+                let callback_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
+                    .message_severity(
+                        vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
+                            | vk::DebugUtilsMessageSeverityFlagsEXT::ERROR,
+                    )
+                    .message_type(
+                        vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
+                            | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
+                    )
+                    .pfn_user_callback(Some(callback))
+                    .user_data(std::ptr::from_ref(counts.as_ref()).cast_mut().cast());
+                let mut info = vk::InstanceCreateInfo::default().application_info(app);
+                if validation {
+                    info = info.enabled_layer_names(&layer_names);
+                }
+                let instance = if utils {
+                    let mut instance_callback = callback_info;
+                    unsafe {
+                        entry.create_instance(
+                            &info
+                                .enabled_extension_names(&extension_names)
+                                .push_next(&mut instance_callback),
+                            None,
+                        )
+                    }
+                } else {
+                    unsafe { entry.create_instance(&info, None) }
+                }
+                .map_err(VulkanError::api("1.3 instance"))?;
+                let messenger = if utils {
+                    let loader = ash::ext::debug_utils::Instance::new(entry, &instance);
+                    match unsafe { loader.create_debug_utils_messenger(&callback_info, None) } {
+                        Ok(messenger) => Some((loader, messenger)),
+                        Err(error) => {
+                            unsafe { instance.destroy_instance(None) };
+                            return Err(VulkanError::api("create debug messenger")(error));
+                        }
+                    }
+                } else {
+                    None
+                };
+                let status = if validation { "active" } else { "unavailable" };
+                let utils_status = if utils { "active" } else { "unavailable" };
+                log(format_args!(
+                    "Vulkan debug: {LAYER:?}={status}; VK_EXT_debug_utils={utils_status}"
+                ));
+                Ok((
+                    instance,
+                    Self {
+                        counts,
+                        validation,
+                        messenger,
+                    },
+                ))
+            }
+
+            pub(super) fn name(
+                &self,
+                instance: &ash::Instance,
+                device: &ash::Device,
+                object: impl vk::Handle,
+                name: &str,
+            ) {
+                if self.messenger.is_none() {
+                    return;
+                }
+                let name = CString::new(name.replace('\0', "\\0")).expect("NUL was escaped");
+                let loader = ash::ext::debug_utils::Device::new(instance, device);
+                let info = vk::DebugUtilsObjectNameInfoEXT::default()
+                    .object_handle(object)
+                    .object_name(&name);
+                match unsafe { loader.set_debug_utils_object_name(&info) } {
+                    Ok(()) => {
+                        // Record a bounded sample of successful names, even when
+                        // transient resources are created every frame.
+                        if self.counts.named.fetch_add(1, Relaxed) < 64 {
+                            log(format_args!(
+                                "Vulkan debug named {:?}: {name:?}",
+                                info.object_type
+                            ));
+                        }
+                    }
+                    Err(error) => log(format_args!("Vulkan debug cannot name {name:?}: {error:?}")),
+                }
+            }
+
+            pub(super) fn destroy(&mut self) {
+                if let Some((loader, messenger)) = self.messenger.take() {
+                    unsafe { loader.destroy_debug_utils_messenger(messenger, None) };
+                }
+            }
+
+            pub(super) fn report(&self) {
+                log(format_args!(
+                    "Vulkan debug summary: validation={} named={} warnings={} errors={}",
+                    if self.validation {
+                        "active"
+                    } else {
+                        "unavailable"
+                    },
+                    self.counts.named.load(Relaxed),
+                    self.counts.warnings.load(Relaxed),
+                    self.counts.errors.load(Relaxed),
+                ));
+            }
+        }
+    }
+
+    /// Count debug-messenger errors reported by this process.
+    pub fn validation_error_count() -> u64 {
+        #[cfg(debug_assertions)]
+        {
+            debug::error_count()
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            0
         }
     }
 }
@@ -146,7 +398,7 @@ pub(crate) fn validate_external_format(
     physical: vk::PhysicalDevice,
     width: u32,
     height: u32,
-) -> Result<(), String> {
+) -> Result<(), VulkanError> {
     let mut external =
         vk::PhysicalDeviceExternalImageFormatInfo::default().handle_type(handle_type());
     let info = vk::PhysicalDeviceImageFormatInfo2::default()
@@ -162,9 +414,10 @@ pub(crate) fn validate_external_format(
         unsafe {
             context
                 .instance
+                .raw
                 .get_physical_device_image_format_properties2(physical, &info, &mut properties)
         }
-        .map_err(|error| format!("GPU shared RGBA8 image format is unsupported: {error:?}"))?;
+        .map_err(VulkanError::api("query external RGBA8 image format"))?;
         properties.image_format_properties.max_extent
     };
     if !external_properties
@@ -178,7 +431,9 @@ pub(crate) fn validate_external_format(
         || width > max_extent.width
         || height > max_extent.height
     {
-        return Err("GPU adapter cannot import the GUI's dedicated shared RGBA8 image".into());
+        return Err(VulkanError::Presentation(
+            "GPU adapter cannot import the GUI's dedicated shared RGBA8 image".into(),
+        ));
     }
     Ok(())
 }
@@ -214,8 +469,8 @@ impl<T> PresentationPool<T> {
     pub fn reserve(
         &mut self,
         size: [u32; 2],
-        allocate: impl FnOnce() -> Result<Arc<T>, String>,
-    ) -> Result<Option<Arc<T>>, String> {
+        allocate: impl FnOnce() -> Result<Arc<T>, VulkanError>,
+    ) -> Result<Option<Arc<T>>, VulkanError> {
         let reusable = self
             .slots
             .iter()
@@ -257,7 +512,7 @@ impl SharedImage {
         width: u32,
         height: u32,
         info: SharedImageInfo,
-    ) -> Result<Arc<Self>, String> {
+    ) -> Result<Arc<Self>, VulkanError> {
         validate_external_format(&context, physical, width, height)?;
         let mut external = vk::ExternalMemoryImageCreateInfo::default().handle_types(handle_type());
         let image_info = vk::ImageCreateInfo::default()
@@ -276,7 +531,8 @@ impl SharedImage {
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .push_next(&mut external);
         let image = unsafe { context.device.create_image(&image_info, None) }
-            .map_err(|e| format!("GPU shared image: {e:?}"))?;
+            .map_err(VulkanError::api("create shared image"))?;
+        context.name(image, || format!("GUI shared RGBA8 frame {width}x{height}"));
         let mut result = Self {
             size: [width, height],
             image,
@@ -292,14 +548,16 @@ impl SharedImage {
         // OPAQUE_FD still requires the exact exporter size and memory type.
         #[cfg(unix)]
         if info.allocation_size < requirements.size {
-            return Err("GUI shared allocation is smaller than Vulkan image requirements".into());
+            return Err(VulkanError::Presentation(
+                "GUI shared allocation is smaller than Vulkan image requirements".into(),
+            ));
         }
         #[cfg(windows)]
         let compatible = {
             use std::os::windows::io::AsRawHandle;
             let SharedMemoryHandle::Win32(handle) = &info.handle;
             let extension = ash::khr::external_memory_win32::Device::new(
-                &result.context.instance,
+                &result.context.instance.raw,
                 &result.context.device,
             );
             let mut properties = vk::MemoryWin32HandlePropertiesKHR::default();
@@ -310,15 +568,17 @@ impl SharedImage {
                     &mut properties,
                 )
             }
-            .map_err(|e| format!("GUI shared handle memory properties: {e:?}"))?;
+            .map_err(VulkanError::api(
+                "query GUI shared handle memory properties",
+            ))?;
             requirements.memory_type_bits & properties.memory_type_bits
         };
         #[cfg(unix)]
         let compatible = {
             if info.memory_type_bits.count_ones() != 1 {
-                return Err(
+                return Err(VulkanError::Presentation(
                     "Opaque-FD shared image requires its exact exported memory type".into(),
-                );
+                ));
             }
             requirements.memory_type_bits & info.memory_type_bits
         };
@@ -329,7 +589,9 @@ impl SharedImage {
                         .property_flags
                         .contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
             })
-            .ok_or("GUI shared image has no compatible device-local Vulkan memory type")?;
+            .ok_or(VulkanError::Presentation(
+                "GUI shared image has no compatible device-local Vulkan memory type".into(),
+            ))?;
         let mut dedicated = vk::MemoryDedicatedAllocateInfo::default().image(image);
         // allocationSize is ignored for D3D12_RESOURCE imports; the driver
         // queries the OS payload. Supply Vulkan's own requirements value for
@@ -370,7 +632,7 @@ impl SharedImage {
             }
         };
         result.memory =
-            allocation_result.map_err(|e| format!("Import GUI shared image memory: {e:?}"))?;
+            allocation_result.map_err(VulkanError::api("import GUI shared image memory"))?;
         #[cfg(unix)]
         {
             use std::os::fd::IntoRawFd;
@@ -383,7 +645,7 @@ impl SharedImage {
                 .device
                 .bind_image_memory(image, result.memory, 0)
         }
-        .map_err(|e| format!("Bind GUI shared image memory: {e:?}"))?;
+        .map_err(VulkanError::api("bind GUI shared image memory"))?;
         Ok(Arc::new(result))
     }
 

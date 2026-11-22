@@ -1,3 +1,4 @@
+use crate::VulkanError;
 use module_engine_core::{Graph, ModuleDescriptor, PortDescriptor, make_edge, make_node};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -39,6 +40,9 @@ pub struct PassManifest {
     /// Scene raster pass accepts the native UV/base-color image atlas ABI.
     #[serde(default)]
     pub scene_materials: bool,
+    /// Also compile the fragment's indexed material interface when supported.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub bindless_materials: bool,
     #[serde(default = "groups")]
     pub workgroup: [u32; 3],
     #[serde(default)]
@@ -49,6 +53,9 @@ pub struct PassManifest {
 }
 fn main_entry() -> String {
     "main".into()
+}
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 fn fullscreen() -> String {
     "fullscreen".into()
@@ -72,6 +79,16 @@ impl Pass {
     }
     pub fn geometry(&self) -> bool {
         self.manifest.stage == "raster" && self.manifest.raster_mode == "scene"
+    }
+    pub fn resident_geometry(&self) -> bool {
+        matches!(
+            self.module.as_str(),
+            "gpu.forward" | "gpu.gbuffer" | "gpu.depth_normal"
+        )
+    }
+
+    pub fn has_bindless_variant(&self) -> bool {
+        self.manifest.bindless_materials
     }
 }
 #[derive(Clone, Debug)]
@@ -106,6 +123,7 @@ fn manifest(
         }
         .into(),
         scene_materials: false,
+        bindless_materials: false,
         workgroup: groups(),
         inputs,
         outputs,
@@ -145,6 +163,7 @@ pub fn builtin_manifest(module: &str) -> Option<PassManifest> {
                 &[],
             );
             result.scene_materials = module != "gpu.depth_normal";
+            result.bindless_materials = result.scene_materials;
             result
         }
         "gpu.deferred" => manifest(
@@ -480,20 +499,20 @@ pub fn custom_raster_manifest() -> PassManifest {
 pub(crate) fn build_plan(
     graph: &Graph,
     sources: &BTreeMap<String, String>,
-) -> Result<Plan, String> {
+) -> Result<Plan, VulkanError> {
     build_plan_at(graph, sources, &crate::compiler::resource_root())
 }
 pub(crate) fn build_plan_at(
     graph: &Graph,
     sources: &BTreeMap<String, String>,
     resource_root: &std::path::Path,
-) -> Result<Plan, String> {
+) -> Result<Plan, VulkanError> {
     build_plan_impl(graph, sources, Some(resource_root))
 }
 
 /// Validate only declared resource/parameter contracts. Shader dependencies are
 /// irrelevant to these contracts and must not perform filesystem work here.
-pub(crate) fn build_metadata_plan(graph: &Graph) -> Result<Plan, String> {
+pub(crate) fn build_metadata_plan(graph: &Graph) -> Result<Plan, VulkanError> {
     let sources = graph
         .nodes
         .iter()
@@ -506,10 +525,12 @@ fn build_plan_impl(
     graph: &Graph,
     sources: &BTreeMap<String, String>,
     resource_root: Option<&std::path::Path>,
-) -> Result<Plan, String> {
+) -> Result<Plan, VulkanError> {
     let nodes: BTreeMap<_, _> = graph.nodes.iter().map(|n| (n.id.clone(), n)).collect();
     if nodes.len() != graph.nodes.len() {
-        return Err("GPU graph contains duplicate node IDs".into());
+        return Err(VulkanError::Graph(
+            "GPU graph contains duplicate node IDs".into(),
+        ));
     }
     let outputs: Vec<_> = graph
         .nodes
@@ -518,15 +539,19 @@ fn build_plan_impl(
         .collect();
     if outputs.len() != 1 || outputs[0].params.get("port").and_then(|v| v.as_str()) != Some("frame")
     {
-        return Err("GPU graph needs exactly one interface.output(frame)".into());
+        return Err(VulkanError::Graph(
+            "GPU graph needs exactly one interface.output(frame)".into(),
+        ));
     }
     if graph.nodes.iter().any(|n| n.id.is_empty()) {
-        return Err("GPU node IDs must be nonempty".into());
+        return Err(VulkanError::Graph("GPU node IDs must be nonempty".into()));
     }
     let mut incoming = BTreeMap::<(String, String), (String, String)>::new();
     for edge in &graph.edges {
         if !nodes.contains_key(&edge.from_node) || !nodes.contains_key(&edge.to_node) {
-            return Err("GPU edge references missing node".into());
+            return Err(VulkanError::Graph(
+                "GPU edge references missing node".into(),
+            ));
         }
         if incoming
             .insert(
@@ -535,7 +560,9 @@ fn build_plan_impl(
             )
             .is_some()
         {
-            return Err("GPU input has multiple connections".into());
+            return Err(VulkanError::Graph(
+                "GPU input has multiple connections".into(),
+            ));
         }
     }
     let mut order = vec![];
@@ -552,7 +579,7 @@ fn build_plan_impl(
             .cloned()
             .collect();
         if ready.is_empty() {
-            return Err("GPU graph dependency cycle".into());
+            return Err(VulkanError::Graph("GPU graph dependency cycle".into()));
         }
         for id in ready {
             remaining.remove(&id);
@@ -566,10 +593,14 @@ fn build_plan_impl(
         let node = nodes[&id];
         if node.module == "interface.input" {
             if incoming.keys().any(|(to, _)| to == &id) {
-                return Err("GPU interface.input cannot have incoming edges".into());
+                return Err(VulkanError::Graph(
+                    "GPU interface.input cannot have incoming edges".into(),
+                ));
             }
             if node.params.get("port").and_then(|v| v.as_str()) != Some("scene") {
-                return Err("Only scene GPU interface input is supported".into());
+                return Err(VulkanError::Graph(
+                    "Only scene GPU interface input is supported".into(),
+                ));
             }
             resources.insert(
                 (id, "value".into()),
@@ -579,37 +610,47 @@ fn build_plan_impl(
         }
         if node.module == "interface.output" {
             if incoming.keys().any(|(to, pin)| to == &id && pin != "value") {
-                return Err("GPU interface.output only accepts value".into());
+                return Err(VulkanError::Graph(
+                    "GPU interface.output only accepts value".into(),
+                ));
             }
             let from = incoming
                 .get(&(id.clone(), "value".into()))
-                .ok_or("GPU frame output has no connection")?;
-            let spec = resources
-                .get(from)
-                .ok_or("GPU frame output references nonexistent resource pin")?;
+                .ok_or(VulkanError::Graph(
+                    "GPU frame output has no connection".into(),
+                ))?;
+            let spec = resources.get(from).ok_or(VulkanError::Graph(
+                "GPU frame output references nonexistent resource pin".into(),
+            ))?;
             if spec.format != "rgba8unorm" || spec.semantic != "srgb_display" {
-                return Err(
+                return Err(VulkanError::Graph(
                     "Frame output requires color encoding to rgba8unorm/srgb_display".into(),
-                );
+                ));
             }
             output = Some(format!("{}.{}", from.0, from.1));
             continue;
         }
         let m = if node.module == "gpu.custom" {
-            serde_json::from_value::<PassManifest>(
-                node.params
-                    .get("manifest")
-                    .cloned()
-                    .ok_or("Custom HLSL needs params.manifest")?,
-            )
-            .map_err(|e| format!("Custom {} manifest: {e}", id))?
+            serde_json::from_value::<PassManifest>(node.params.get("manifest").cloned().ok_or(
+                VulkanError::Graph("Custom HLSL needs params.manifest".into()),
+            )?)
+            .map_err(|source| VulkanError::Manifest {
+                pass: id.clone(),
+                source: std::sync::Arc::new(source),
+            })?
         } else {
-            builtin_manifest(&node.module)
-                .ok_or_else(|| format!("GPU module {} is not executable", node.module))?
+            builtin_manifest(&node.module).ok_or_else(|| {
+                VulkanError::Graph(format!("GPU module {} is not executable", node.module))
+            })?
         };
-        validate_manifest(&m).map_err(|e| format!("GPU pass {id}: {e}"))?;
+        validate_manifest(&m).map_err(|source| VulkanError::Pass {
+            pass: id.clone(),
+            source: std::sync::Arc::new(source),
+        })?;
         if !node.params.is_null() && !node.params.is_object() {
-            return Err(format!("GPU pass {id}: params must be an object"));
+            return Err(VulkanError::Graph(format!(
+                "GPU pass {id}: params must be an object"
+            )));
         }
         if let Some(params) = node.params.as_object() {
             for (key, value) in params {
@@ -617,10 +658,14 @@ fn build_plan_impl(
                     node.module == "gpu.custom" && (key == "source_id" || key == "manifest");
                 if key == "enabled" {
                     if !value.is_boolean() {
-                        return Err(format!("GPU pass {id}: enabled must be boolean"));
+                        return Err(VulkanError::Graph(format!(
+                            "GPU pass {id}: enabled must be boolean"
+                        )));
                     }
                 } else if !custom_metadata && !m.parameters.contains(key) {
-                    return Err(format!("GPU pass {id}: unknown parameter {key}"));
+                    return Err(VulkanError::Graph(format!(
+                        "GPU pass {id}: unknown parameter {key}"
+                    )));
                 }
             }
         }
@@ -637,9 +682,9 @@ fn build_plan_impl(
                         .is_some_and(|v| v.is_finite() && v.abs() <= f32::MAX as f64)
                 };
                 if !valid {
-                    return Err(format!(
+                    return Err(VulkanError::Graph(format!(
                         "GPU pass {id}: parameter {name} violates scalar contract"
-                    ));
+                    )));
                 }
             }
         }
@@ -647,19 +692,21 @@ fn build_plan_impl(
         for spec in &m.inputs {
             let from = incoming
                 .get(&(id.clone(), spec.name.clone()))
-                .ok_or_else(|| format!("GPU pass {id} missing input {}", spec.name))?;
+                .ok_or_else(|| {
+                    VulkanError::Graph(format!("GPU pass {id} missing input {}", spec.name))
+                })?;
             let produced = resources.get(from).ok_or_else(|| {
-                format!(
+                VulkanError::Graph(format!(
                     "GPU pass {id} input {} references nonexistent resource",
                     spec.name
-                )
+                ))
             })?;
             if produced.format != spec.format
                 || produced.semantic != spec.semantic
                 || produced.samples != spec.samples
                 || produced.extent != spec.extent
             {
-                return Err(format!(
+                return Err(VulkanError::Graph(format!(
                     "GPU pass {id} input {} expects {}/{}/{} samples, received {}/{}/{}",
                     spec.name,
                     spec.format,
@@ -668,13 +715,15 @@ fn build_plan_impl(
                     produced.format,
                     produced.semantic,
                     produced.samples
-                ));
+                )));
             }
             bindings.push((spec.clone(), format!("{}.{}", from.0, from.1)));
         }
         for (to, pin) in incoming.keys().filter(|(to, _)| to == &id) {
             if !m.inputs.iter().any(|s| &s.name == pin) {
-                return Err(format!("GPU pass {to} has unknown input {pin}"));
+                return Err(VulkanError::Graph(format!(
+                    "GPU pass {to} has unknown input {pin}"
+                )));
             }
         }
         for spec in &m.outputs {
@@ -685,11 +734,11 @@ fn build_plan_impl(
                 .params
                 .get("source_id")
                 .and_then(|v| v.as_str())
-                .ok_or("Custom HLSL needs source_id")?;
+                .ok_or(VulkanError::Graph("Custom HLSL needs source_id".into()))?;
             sources
                 .get(key)
                 .cloned()
-                .ok_or_else(|| format!("HLSL source {key} missing"))?
+                .ok_or_else(|| VulkanError::Graph(format!("HLSL source {key} missing")))?
         } else {
             builtin_source(&node.module).into()
         };
@@ -707,7 +756,7 @@ fn build_plan_impl(
             params: node.params.clone(),
         });
     }
-    let output = output.ok_or("GPU frame output missing")?;
+    let output = output.ok_or(VulkanError::Graph("GPU frame output missing".into()))?;
     let mut reachable = BTreeSet::new();
     let mut todo = vec![outputs[0].id.clone()];
     while let Some(id) = todo.pop() {
@@ -722,26 +771,41 @@ fn build_plan_impl(
         }
     }
     if passes.iter().any(|p| !reachable.contains(&p.id)) {
-        return Err(
+        return Err(VulkanError::Graph(
             "Disconnected GPU passes are not executed; connect or remove them before activation"
                 .into(),
-        );
+        ));
     }
     Ok(Plan { passes, output })
 }
-fn validate_manifest(m: &PassManifest) -> Result<(), String> {
+fn validate_manifest(m: &PassManifest) -> Result<(), VulkanError> {
     if !["compute", "raster"].contains(&m.stage.as_str()) {
-        return Err("stage must be compute or raster".into());
+        return Err(VulkanError::Graph("stage must be compute or raster".into()));
     }
     if m.inputs.len() > 16 || m.outputs.is_empty() || m.outputs.len() > 3 || m.parameters.len() > 16
     {
-        return Err("one to three outputs and at most 16 scalar parameters are supported".into());
+        return Err(VulkanError::Graph(
+            "one to three outputs and at most 16 scalar parameters are supported".into(),
+        ));
     }
     if m.stage == "raster" && !(["scene", "fullscreen"].contains(&m.raster_mode.as_str())) {
-        return Err("raster_mode must be scene or fullscreen".into());
+        return Err(VulkanError::Graph(
+            "raster_mode must be scene or fullscreen".into(),
+        ));
     }
     if m.scene_materials && (m.stage != "raster" || m.raster_mode != "scene") {
-        return Err("scene_materials is available only for scene raster passes".into());
+        return Err(VulkanError::Graph(
+            "scene_materials is available only for scene raster passes".into(),
+        ));
+    }
+    if m.bindless_materials
+        && (!m.scene_materials
+            || m.inputs.iter().any(|s| s.format != "scene")
+            || m.parameters.len() > 15)
+    {
+        return Err(VulkanError::Graph(
+            "bindless_materials requires scene_materials, only a Scene3D input and at most 15 scalar parameters".into(),
+        ));
     }
     if m.stage == "compute"
         && (m.workgroup[0] == 0
@@ -751,16 +815,20 @@ fn validate_manifest(m: &PassManifest) -> Result<(), String> {
                 .checked_mul(m.workgroup[1])
                 .is_none_or(|v| v > 256))
     {
-        return Err("compute workgroup must be 1..256 invocations, z=1".into());
+        return Err(VulkanError::Graph(
+            "compute workgroup must be 1..256 invocations, z=1".into(),
+        ));
     }
     for list in [&m.inputs, &m.outputs] {
         let mut names = BTreeSet::new();
         for s in list {
             if s.name.is_empty() || !names.insert(&s.name) {
-                return Err("resource names must be unique and nonempty per direction".into());
+                return Err(VulkanError::Graph(
+                    "resource names must be unique and nonempty per direction".into(),
+                ));
             }
             if s.extent != "viewport" || s.samples != 1 {
-                return Err("0.2 supports viewport-sized single-sample resources; MSAA requires a future explicit resolve contract".into());
+                return Err(VulkanError::Graph("0.2 supports viewport-sized single-sample resources; MSAA requires a future explicit resolve contract".into()));
             }
             if s.format == "scene" {
                 if s.semantic != "scene3d"
@@ -768,10 +836,15 @@ fn validate_manifest(m: &PassManifest) -> Result<(), String> {
                     || m.raster_mode != "scene"
                     || s.access != "vertex_read"
                 {
-                    return Err("Scene3D is only a geometry raster input".into());
+                    return Err(VulkanError::Graph(
+                        "Scene3D is only a geometry raster input".into(),
+                    ));
                 }
             } else if !["rgba32float", "r32float", "rgba8unorm"].contains(&s.format.as_str()) {
-                return Err(format!("unsupported image format {}", s.format));
+                return Err(VulkanError::Graph(format!(
+                    "unsupported image format {}",
+                    s.format
+                )));
             }
         }
     }
@@ -783,17 +856,21 @@ fn validate_manifest(m: &PassManifest) -> Result<(), String> {
                 "color_write"
             }
     }) {
-        return Err("output access does not match pass stage".into());
+        return Err(VulkanError::Graph(
+            "output access does not match pass stage".into(),
+        ));
     }
     if m.inputs
         .iter()
         .any(|s| s.format != "scene" && s.access != "sampled_read")
     {
-        return Err("texture inputs require sampled_read access".into());
+        return Err(VulkanError::Graph(
+            "texture inputs require sampled_read access".into(),
+        ));
     }
     let scenes = m.inputs.iter().filter(|s| s.format == "scene").count();
     if scenes != usize::from(m.stage == "raster" && m.raster_mode == "scene") {
-        return Err("scene raster needs exactly one Scene3D input; fullscreen/compute do not consume Scene3D".into());
+        return Err(VulkanError::Graph("scene raster needs exactly one Scene3D input; fullscreen/compute do not consume Scene3D".into()));
     }
     Ok(())
 }

@@ -1,6 +1,14 @@
 use crate::{WorldCommand, WorldObject};
+use bevy_ecs::reflect::ReflectComponent;
+use bevy_ecs::{
+    change_detection::{DetectChangesMut, MAX_CHANGE_AGE, Tick},
+    prelude::{Changed, Component, Entity, Or, World},
+    world::WorldId,
+};
+use bevy_reflect::Reflect;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::Arc;
 
 /// Identifies built-in world storage or a separately registered source provider.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -118,7 +126,8 @@ pub trait WorldProvider: Send {
 }
 
 /// Local translation, Euler rotation in radians and scale.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Component, Reflect)]
+#[reflect(Component)]
 pub struct Transform {
     pub translation: [f32; 3],
     pub rotation: [f32; 3],
@@ -348,7 +357,7 @@ impl WorldProvider for ObjectsWorld {
             velocities(root, &mut velocities_map);
         }
         let mut objects = self.objects()?.into_iter().map(|o| (o.id, o)).collect();
-        crate::control::apply_object_commands(&mut objects, commands)?;
+        crate::control::edit_object_map(&mut objects, commands)?;
         for command in commands {
             if let WorldCommand::Spawn { object } = command {
                 velocities_map.remove(&object.id);
@@ -408,18 +417,175 @@ impl WorldProvider for ObjectsWorld {
     }
 }
 
-/// Canonical entity/component storage. Owned DTOs are extracted at boundaries;
-/// systems query component columns directly and never share a second entity map.
-#[derive(Clone, Debug)]
+#[derive(Component, Reflect)]
+#[component(immutable)]
+struct StableId(u64);
+
+#[derive(Clone, Debug, Component, PartialEq, Reflect)]
+struct ObjectData {
+    parent: Option<u64>,
+    color: [u8; 4],
+    angular_velocity: [f32; 3],
+    references: BTreeMap<String, u64>,
+}
+
+impl ObjectData {
+    fn from_object(object: WorldObject) -> Self {
+        Self {
+            parent: object.parent,
+            color: object.color,
+            angular_velocity: [0.; 3],
+            references: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Component, Reflect)]
+#[component(immutable)]
+struct EntityLifetime(u64);
+
+// The values still live in the lossless JSON columns. Only the two columns
+// that feed the stock drawable mark this native component.
+#[derive(Component)]
+struct RenderBindings;
+
+#[derive(Default)]
+pub struct RenderChangeCursor {
+    position: Option<RenderChangePosition>,
+}
+
+#[derive(Clone, Copy)]
+struct RenderChangePosition {
+    world: WorldId,
+    tick: Tick,
+    epoch: u64,
+    writes: u64,
+}
+
+/// Candidate object IDs from committed Bevy storage. An individual candidate
+/// can still have an unchanged render projection (for example, a reference edit).
+pub struct WorldRenderChanges {
+    pub reset: bool,
+    pub changed: Vec<u64>,
+    pub removed: Vec<u64>,
+}
+
+/// Canonical gameplay storage. Native object rows live in Bevy, and schema
+/// component columns keep their existing stable-ID keys and lossless JSON.
+#[derive(Debug)]
 pub struct EcsWorld {
-    transforms: BTreeMap<u64, Transform>,
-    parents: BTreeMap<u64, u64>,
-    colors: BTreeMap<u64, [u8; 4]>,
-    angular_velocities: BTreeMap<u64, [f32; 3]>,
-    components: BTreeMap<String, BTreeMap<u64, serde_json::Value>>,
-    references: BTreeMap<u64, BTreeMap<String, u64>>,
-    lifetimes: BTreeMap<u64, u64>,
+    rows: Arc<EcsRows>,
+    staged: Option<StagedRows>,
     time: f32,
+}
+
+#[derive(Debug, Default)]
+struct EcsRows {
+    world: World,
+    index: BTreeMap<u64, Entity>,
+    components: BTreeMap<String, BTreeMap<u64, serde_json::Value>>,
+    change_epoch: u64,
+    render_writes: u64,
+    render_removals: VecDeque<(u64, u64)>,
+    dropped_removal_epoch: u64,
+}
+
+#[derive(Clone, Debug)]
+struct StagedRows {
+    validated_base: bool,
+    // None marks a removed lifetime. Existing rows are copied on first write.
+    edits: BTreeMap<u64, Option<EntityRow>>,
+    parent: Option<Arc<Self>>,
+    unchecked_transforms: BTreeSet<u64>,
+    parent_transforms_checked: bool,
+}
+
+impl StagedRows {
+    fn new(validated_base: bool, parent: Option<Arc<Self>>) -> Self {
+        Self {
+            validated_base,
+            edits: BTreeMap::new(),
+            parent,
+            unchecked_transforms: BTreeSet::new(),
+            parent_transforms_checked: false,
+        }
+    }
+
+    fn layers(&self) -> impl Iterator<Item = &Self> {
+        std::iter::successors(Some(self), |layer| layer.parent.as_deref())
+    }
+
+    fn edit(&self, id: u64) -> Option<&Option<EntityRow>> {
+        self.layers().find_map(|layer| layer.edits.get(&id))
+    }
+
+    fn changes(&self) -> impl Iterator<Item = (u64, &Option<EntityRow>)> {
+        let mut combined = BTreeMap::new();
+        let local = if self.parent.is_none() {
+            Some(&self.edits)
+        } else {
+            // Nested enumeration needs a sorted, deduplicated view of the edits.
+            for layer in self.layers() {
+                for (&id, edit) in &layer.edits {
+                    combined.entry(id).or_insert(edit);
+                }
+            }
+            None
+        };
+        local
+            .into_iter()
+            .flatten()
+            .map(|(&id, edit)| (id, edit))
+            .chain(combined)
+    }
+
+    fn unchecked_transform_ids(&self) -> impl Iterator<Item = u64> + '_ {
+        std::iter::successors(Some(self), |layer| {
+            if layer.parent_transforms_checked {
+                None
+            } else {
+                layer.parent.as_deref()
+            }
+        })
+        .flat_map(|layer| layer.unchecked_transforms.iter().copied())
+    }
+
+    fn mark_transforms_checked(&mut self) {
+        self.unchecked_transforms.clear();
+        self.parent_transforms_checked = true;
+    }
+
+    fn compact(&mut self) {
+        while let Some(parent) = self.parent.as_mut().and_then(Arc::get_mut) {
+            if self.parent_transforms_checked {
+                parent.mark_transforms_checked();
+            }
+            parent
+                .unchecked_transforms
+                .extend(std::mem::take(&mut self.unchecked_transforms));
+            parent.edits.extend(std::mem::take(&mut self.edits));
+            *self = std::mem::replace(parent, Self::new(self.validated_base, None));
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct EntityRow {
+    data: ObjectData,
+    transform: Transform,
+    lifetime: u64,
+    components: BTreeMap<String, serde_json::Value>,
+}
+
+impl EntityRow {
+    fn new(object: WorldObject) -> Self {
+        Self {
+            transform: object.transform,
+            data: ObjectData::from_object(object),
+            lifetime: new_entity_lifetime(),
+            components: BTreeMap::new(),
+        }
+    }
 }
 
 fn new_entity_lifetime() -> u64 {
@@ -432,44 +598,325 @@ fn new_entity_lifetime() -> u64 {
     .expect("Entity lifetime token space exhausted")
 }
 
-/// Runtime lifetime tokens are private identity bookkeeping, outside the saved
-/// semantic DTO state. Clone retains them; deserialization creates new ones.
+impl Clone for EcsRows {
+    fn clone(&self) -> Self {
+        let mut world = World::new();
+        let index = world
+            .spawn_batch(self.index.iter().map(|(&id, &handle)| {
+                (
+                    StableId(id),
+                    *self.world.get::<Transform>(handle).unwrap(),
+                    self.world.get::<ObjectData>(handle).unwrap().clone(),
+                    EntityLifetime(self.world.get::<EntityLifetime>(handle).unwrap().0),
+                    RenderBindings,
+                )
+            }))
+            .zip(self.index.keys().copied())
+            .map(|(handle, id)| (id, handle))
+            .collect();
+        Self {
+            world,
+            index,
+            components: self.components.clone(),
+            change_epoch: 0,
+            render_writes: 0,
+            render_removals: VecDeque::new(),
+            dropped_removal_epoch: 0,
+        }
+    }
+}
+
+impl EcsRows {
+    fn mark_binding_changed(&mut self, id: u64, name: &str) {
+        if matches!(name, "mesh" | "material") {
+            self.render_writes += 1;
+            self.world
+                .get_mut::<RenderBindings>(self.index[&id])
+                .unwrap()
+                .set_changed();
+        }
+    }
+
+    fn advance_removals(&mut self) {
+        self.world.clear_trackers();
+        self.change_epoch += 1;
+        self.world.check_change_ticks();
+    }
+
+    fn record_removal(&mut self, id: u64) {
+        // Bevy's removal messages age on each structural publication. Keep
+        // stable IDs available to slower readers across several publications.
+        const MAX_RENDER_REMOVALS: usize = 4096;
+        if self.render_removals.len() == MAX_RENDER_REMOVALS {
+            self.dropped_removal_epoch = self.render_removals.pop_front().unwrap().0;
+        }
+        self.render_removals.push_back((self.change_epoch + 1, id));
+    }
+
+    fn native<T: Component>(&self, id: u64) -> Option<&T> {
+        let handle = *self.index.get(&id)?;
+        debug_assert_eq!(self.world.get::<StableId>(handle).map(|id| id.0), Some(id));
+        self.world.get(handle)
+    }
+
+    fn native_mut<T: Component<Mutability = bevy_ecs::component::Mutable>>(
+        &mut self,
+        id: u64,
+    ) -> Option<&mut T> {
+        let value = self
+            .world
+            .get_mut::<T>(*self.index.get(&id)?)
+            .map(|value| value.into_inner())?;
+        self.render_writes += 1;
+        Some(value)
+    }
+
+    fn components_for(&self, id: u64) -> BTreeMap<String, serde_json::Value> {
+        self.components
+            .iter()
+            .filter_map(|(name, column)| column.get(&id).map(|value| (name.clone(), value.clone())))
+            .collect()
+    }
+
+    fn row(&self, id: u64) -> Option<EntityRow> {
+        Some(EntityRow {
+            data: self.native::<ObjectData>(id)?.clone(),
+            transform: *self.native::<Transform>(id)?,
+            lifetime: self.native::<EntityLifetime>(id)?.0,
+            components: self.components_for(id),
+        })
+    }
+
+    fn remove_row(&mut self, id: u64) -> bool {
+        let Some(handle) = self.index.remove(&id) else {
+            return false;
+        };
+        let removed = self.world.despawn(handle);
+        debug_assert!(removed);
+        self.record_removal(id);
+        self.replace_components(id, BTreeMap::new());
+        true
+    }
+
+    fn put_row(&mut self, id: u64, row: EntityRow) {
+        if let Some(previous) = self.native::<EntityLifetime>(id) {
+            debug_assert_eq!(previous.0, row.lifetime);
+            let old_data = self.native::<ObjectData>(id).unwrap();
+            if old_data != &row.data
+                || old_data.angular_velocity.map(f32::to_bits)
+                    != row.data.angular_velocity.map(f32::to_bits)
+            {
+                *self.native_mut(id).unwrap() = row.data;
+            }
+            if !crate::ComponentRegistry::TRANSFORM
+                .same_wire_value(self.native::<Transform>(id).unwrap(), &row.transform)
+            {
+                *self.native_mut(id).unwrap() = row.transform;
+            }
+            for name in ["mesh", "material"] {
+                if self.components.get(name).and_then(|column| column.get(&id))
+                    != row.components.get(name)
+                {
+                    self.mark_binding_changed(id, name);
+                }
+            }
+            self.replace_components(id, row.components);
+            return;
+        }
+        let handle = self
+            .world
+            .spawn((
+                StableId(id),
+                row.transform,
+                row.data,
+                EntityLifetime(row.lifetime),
+                RenderBindings,
+            ))
+            .id();
+        self.render_writes += 1;
+        self.index.insert(id, handle);
+        for (name, value) in row.components {
+            self.components.entry(name).or_default().insert(id, value);
+        }
+    }
+
+    fn replace_components(&mut self, id: u64, mut values: BTreeMap<String, serde_json::Value>) {
+        self.components.retain(|name, column| {
+            if let Some(value) = values.remove(name) {
+                column.insert(id, value);
+            } else {
+                column.remove(&id);
+            }
+            !column.is_empty()
+        });
+        for (name, value) in values {
+            self.components.entry(name).or_default().insert(id, value);
+        }
+    }
+}
+
+/// An explicit clone still creates an independent Bevy world (used, for
+/// example, by lifecycle scratch state). Tick checkpoints share frozen rows.
+impl Clone for EcsWorld {
+    fn clone(&self) -> Self {
+        let mut copy = Self {
+            rows: Arc::new((*self.rows).clone()),
+            staged: self.staged.clone(),
+            time: self.time,
+        };
+        copy.publish_staged();
+        copy
+    }
+}
+
 impl PartialEq for EcsWorld {
     fn eq(&self, other: &Self) -> bool {
-        self.transforms == other.transforms
-            && self.parents == other.parents
-            && self.colors == other.colors
-            && self.angular_velocities == other.angular_velocities
-            && self.components == other.components
-            && self.references == other.references
-            && self.time == other.time
+        let materialized = self.staged.is_none() && other.staged.is_none();
+        self.time == other.time
+            && (!materialized || self.rows.components == other.rows.components)
+            && self.entity_ids().eq(other.entity_ids())
+            && self.entity_ids().all(|id| {
+                self.object_data(id) == other.object_data(id)
+                    && self.transform(id) == other.transform(id)
+                    && (materialized || self.entity_components(id) == other.entity_components(id))
+            })
     }
 }
 
 impl EcsWorld {
-    /// Construct authored entities in independent component tables, without motion.
+    pub(crate) fn checkpoint_tick(&mut self, validated_base: bool) -> Self {
+        let parent = self.staged.take().map(Arc::new);
+        let validated_base = parent
+            .as_ref()
+            .map_or(validated_base, |parent| parent.validated_base);
+        let original = Self {
+            rows: Arc::clone(&self.rows),
+            staged: parent
+                .as_ref()
+                .map(|parent| StagedRows::new(validated_base, Some(Arc::clone(parent)))),
+            time: self.time,
+        };
+        self.staged = Some(StagedRows::new(validated_base, parent));
+        original
+    }
+
+    pub(crate) fn finish_tick(&mut self, original: Self) {
+        let outermost = original.staged.is_none();
+        drop(original);
+        if outermost {
+            self.publish_staged();
+        } else {
+            self.compact_staged();
+        }
+    }
+
+    pub(crate) fn compact_staged(&mut self) {
+        if let Some(staged) = &mut self.staged {
+            staged.compact();
+        }
+    }
+
+    fn publish_staged(&mut self) {
+        let Some(mut staged) = self.staged.take() else {
+            return;
+        };
+        staged.compact();
+        while let Some(parent) = staged.parent.take() {
+            let parent = Arc::unwrap_or_clone(parent);
+            for (id, edit) in parent.edits {
+                staged.edits.entry(id).or_insert(edit);
+            }
+            staged.parent = parent.parent;
+        }
+        if staged.edits.is_empty() {
+            return;
+        }
+        let rows = Arc::make_mut(&mut self.rows);
+        let mut despawned = false;
+        for (&id, edit) in &staged.edits {
+            if edit.as_ref().is_none_or(|row| {
+                rows.native::<EntityLifetime>(id)
+                    .is_some_and(|previous| previous.0 != row.lifetime)
+            }) {
+                despawned |= rows.remove_row(id);
+            }
+        }
+        if despawned {
+            // Age removal messages before writes so the tracker update keeps
+            // this publication's new and changed components visible.
+            rows.advance_removals();
+        }
+        for (id, row) in staged
+            .edits
+            .into_iter()
+            .filter_map(|(id, edit)| edit.map(|row| (id, row)))
+        {
+            rows.put_row(id, row);
+        }
+    }
+
+    fn stage_row(&mut self, id: u64) -> Option<&mut EntityRow> {
+        use std::collections::btree_map::Entry;
+        let staged = self.staged.as_mut().unwrap();
+        match staged.edits.entry(id) {
+            Entry::Occupied(edit) => edit.into_mut().as_mut(),
+            Entry::Vacant(edit) => {
+                let row = match staged.parent.as_ref().and_then(|parent| parent.edit(id)) {
+                    Some(row) => row.clone(),
+                    None => self.rows.row(id),
+                }?;
+                edit.insert(Some(row)).as_mut()
+            }
+        }
+    }
+
+    fn edit(&self, id: u64) -> Option<&Option<EntityRow>> {
+        self.staged.as_ref()?.edit(id)
+    }
+
+    fn spawn_object(&mut self, object: WorldObject) {
+        let id = object.id;
+        debug_assert!(!self.contains(id));
+        let row = EntityRow::new(object);
+        if let Some(staged) = &mut self.staged {
+            staged.edits.insert(id, Some(row));
+        } else {
+            Arc::make_mut(&mut self.rows).put_row(id, row);
+        }
+    }
+
+    fn object_data(&self, id: u64) -> Option<&ObjectData> {
+        match self.edit(id) {
+            Some(edit) => edit.as_ref().map(|row| &row.data),
+            None => self.rows.native(id),
+        }
+    }
+
+    fn object_data_mut(&mut self, id: u64) -> Option<&mut ObjectData> {
+        if self.staged.is_some() {
+            self.stage_row(id).map(|row| &mut row.data)
+        } else {
+            Arc::make_mut(&mut self.rows).native_mut(id)
+        }
+    }
+
+    /// Construct authored rows without demo motion.
     pub fn from_objects(objects: Vec<WorldObject>) -> Result<Self, String> {
         if objects.iter().any(|object| object.id == 0) {
             return Err("Entity IDs must be nonzero".into());
         }
         crate::validate_world_commands(&objects, &[])?;
-        Ok(Self {
-            transforms: objects.iter().map(|o| (o.id, o.transform)).collect(),
-            parents: objects
-                .iter()
-                .filter_map(|o| o.parent.map(|p| (o.id, p)))
-                .collect(),
-            colors: objects.iter().map(|o| (o.id, o.color)).collect(),
-            angular_velocities: objects.iter().map(|o| (o.id, [0.; 3])).collect(),
-            components: BTreeMap::new(),
-            references: objects.iter().map(|o| (o.id, BTreeMap::new())).collect(),
-            lifetimes: objects
-                .iter()
-                .map(|o| (o.id, new_entity_lifetime()))
-                .collect(),
+        let mut world = Self {
+            rows: Arc::new(EcsRows::default()),
+            staged: None,
             time: 0.,
-        })
+        };
+        for object in objects {
+            world.spawn_object(object);
+        }
+        Ok(world)
     }
+
     pub fn from_entities(entities: Vec<crate::GameEntity>) -> Result<Self, String> {
         if entities.iter().any(|entity| entity.object.id == 0) {
             return Err("Entity IDs must be nonzero".into());
@@ -482,7 +929,7 @@ impl EcsWorld {
         )?;
         for entity in entities {
             let id = entity.object.id;
-            world.references.insert(id, entity.references);
+            *world.references_mut(id).unwrap() = entity.references;
             for (name, value) in entity.components {
                 world.insert_component(id, name, value)?;
             }
@@ -490,65 +937,221 @@ impl EcsWorld {
         world.validate_references()?;
         Ok(world)
     }
+
     pub fn entity_ids(&self) -> impl Iterator<Item = u64> + '_ {
-        self.transforms.keys().copied()
+        let mut base = self.rows.index.keys().copied().peekable();
+        let mut edits = self.staged.iter().flat_map(StagedRows::changes).peekable();
+        std::iter::from_fn(move || {
+            loop {
+                let Some(&(id, _)) = edits.peek() else {
+                    return base.next();
+                };
+                if base.peek().is_some_and(|base_id| *base_id < id) {
+                    return base.next();
+                }
+                base.next_if_eq(&id);
+                if edits.next().unwrap().1.is_some() {
+                    return Some(id);
+                }
+            }
+        })
     }
+
     pub fn contains(&self, id: u64) -> bool {
-        self.transforms.contains_key(&id)
+        self.edit(id)
+            .map_or_else(|| self.rows.index.contains_key(&id), Option::is_some)
     }
+
     /// Opaque process-local identity for module-owned transient state. Tokens
     /// survive checkpoints/ordinary edits but are fresh after spawn or reload.
     pub fn lifetime(&self, id: u64) -> Option<u64> {
-        self.lifetimes.get(&id).copied()
+        match self.edit(id) {
+            Some(edit) => edit.as_ref().map(|row| row.lifetime),
+            None => self.rows.native::<EntityLifetime>(id).map(|value| value.0),
+        }
     }
+
     pub fn len(&self) -> usize {
-        self.transforms.len()
+        let mut count = self.rows.index.len();
+        for (id, row) in self.staged.iter().flat_map(StagedRows::changes) {
+            match (self.rows.index.contains_key(&id), row.is_some()) {
+                (true, false) => count -= 1,
+                (false, true) => count += 1,
+                _ => (),
+            }
+        }
+        count
     }
+
     pub fn is_empty(&self) -> bool {
-        self.transforms.is_empty()
+        self.len() == 0
     }
-    /// Query the smallest requested component column, retaining stable ID order.
+
     pub fn entities_with(&self, required: &[&str]) -> Vec<u64> {
         if required.is_empty() {
             return self.entity_ids().collect();
         }
-        let Some(columns) = required
+        let mut matches = Vec::new();
+        if let Some(smallest) = required
             .iter()
-            .map(|name| self.components.get(*name))
-            .collect::<Option<Vec<_>>>()
-        else {
-            return vec![];
-        };
-        let smallest = columns
-            .iter()
-            .min_by_key(|column| column.len())
-            .expect("Nonempty required columns");
-        smallest
-            .keys()
-            .filter(|id| columns.iter().all(|column| column.contains_key(id)))
-            .copied()
-            .collect()
+            .map(|name| self.rows.components.get(*name))
+            .min_by_key(|column| column.map_or(0, BTreeMap::len))
+            .flatten()
+        {
+            matches.extend(smallest.keys().copied().filter(|&id| {
+                self.edit(id).is_none()
+                    && required
+                        .iter()
+                        .all(|name| self.rows.components[*name].contains_key(&id))
+            }));
+        }
+        if let Some(staged) = &self.staged {
+            let unchanged_count = matches.len();
+            matches.extend(staged.changes().filter_map(|(id, edit)| {
+                let row = edit.as_ref()?;
+                required
+                    .iter()
+                    .all(|name| row.components.contains_key(*name))
+                    .then_some(id)
+            }));
+            if matches.len() != unchanged_count {
+                matches.sort_unstable();
+            }
+        }
+        matches
     }
+
     pub fn object(&self, id: u64) -> Option<WorldObject> {
+        let data = self.object_data(id)?;
         Some(WorldObject {
             id,
-            parent: self.parents.get(&id).copied(),
-            transform: *self.transforms.get(&id)?,
-            color: self.colors[&id],
+            parent: data.parent,
+            transform: *self.transform(id)?,
+            color: data.color,
         })
     }
+
     pub fn objects_snapshot(&self) -> Vec<WorldObject> {
         self.entity_ids().filter_map(|id| self.object(id)).collect()
     }
+
+    /// Resolve accepted local transforms in hierarchy order. Callers gathering
+    /// several models can share a scratch cache within the same world view.
+    pub fn render_model(&self, id: u64, cache: &mut BTreeMap<u64, [[f32; 4]; 4]>) -> [[f32; 4]; 4] {
+        if let Some(model) = cache.get(&id) {
+            return *model;
+        }
+        let parent = self
+            .object_data(id)
+            .unwrap()
+            .parent
+            .map_or_else(identity_matrix, |parent| self.render_model(parent, cache));
+        let model = multiply_matrices(parent, self.transform(id).unwrap().matrix());
+        cache.insert(id, model);
+        model
+    }
+
+    pub(crate) fn read_render_changes(
+        &mut self,
+        cursor: &mut RenderChangeCursor,
+    ) -> WorldRenderChanges {
+        assert!(
+            self.staged.is_none(),
+            "render extraction requires committed ECS rows"
+        );
+        let rows = Arc::get_mut(&mut self.rows).expect("committed ECS has no open checkpoint");
+        let world_id = rows.world.id();
+        let previous = cursor.position.filter(|position| {
+            position.world == world_id
+                && position.epoch >= rows.dropped_removal_epoch
+                && rows.change_epoch - position.epoch < u64::from(MAX_CHANGE_AGE)
+        });
+        // A reader with no intervening writes skips even Bevy's Changed scan.
+        let changed = match previous {
+            None => rows.index.keys().copied().collect(),
+            Some(position) if position.writes == rows.render_writes => Vec::new(),
+            Some(position) => rows.world.last_change_tick_scope(position.tick, |world| {
+                let mut query = world.query_filtered::<&StableId, Or<(
+                    Changed<Transform>,
+                    Changed<ObjectData>,
+                    Changed<RenderBindings>,
+                )>>();
+                query.iter(world).map(|id| id.0).collect()
+            }),
+        };
+        let tick = rows.world.increment_change_tick();
+        rows.change_epoch += 1;
+        rows.world.check_change_ticks();
+        cursor.position = Some(RenderChangePosition {
+            world: world_id,
+            tick,
+            epoch: rows.change_epoch,
+            writes: rows.render_writes,
+        });
+        let removed = previous.map_or_else(Vec::new, |position| {
+            rows.render_removals
+                .iter()
+                .rev()
+                .take_while(|(epoch, _)| *epoch > position.epoch)
+                .map(|(_, id)| *id)
+                .collect()
+        });
+        WorldRenderChanges {
+            reset: previous.is_none(),
+            changed,
+            removed,
+        }
+    }
+
+    fn transform(&self, id: u64) -> Option<&Transform> {
+        match self.edit(id) {
+            Some(edit) => edit.as_ref().map(|row| &row.transform),
+            None => self.rows.native(id),
+        }
+    }
+
     pub fn transform_mut(&mut self, id: u64) -> Option<&mut Transform> {
-        self.transforms.get_mut(&id)
+        if let Some(staged) = &mut self.staged {
+            staged.unchecked_transforms.insert(id);
+            self.stage_row(id).map(|row| &mut row.transform)
+        } else {
+            Arc::make_mut(&mut self.rows).native_mut(id)
+        }
     }
+
     pub fn component(&self, id: u64, name: &str) -> Option<&serde_json::Value> {
-        self.components.get(name)?.get(&id)
+        match self.edit(id) {
+            Some(edit) => edit.as_ref()?.components.get(name),
+            None => self.rows.components.get(name)?.get(&id),
+        }
     }
+
+    // A staged removal can empty a base column. Conservatively treat it as
+    // present until publication so callers need only inspect staged writes.
+    pub(crate) fn may_have_component(&self, name: &str) -> bool {
+        self.rows.components.contains_key(name)
+            || self.staged.as_ref().is_some_and(|staged| {
+                staged.layers().any(|layer| {
+                    layer
+                        .edits
+                        .values()
+                        .flatten()
+                        .any(|row| row.components.contains_key(name))
+                })
+            })
+    }
+
     pub fn component_mut(&mut self, id: u64, name: &str) -> Option<&mut serde_json::Value> {
-        self.components.get_mut(name)?.get_mut(&id)
+        self.component(id, name)?;
+        if self.staged.is_some() {
+            self.stage_row(id)?.components.get_mut(name)
+        } else {
+            let rows = Arc::make_mut(&mut self.rows);
+            rows.mark_binding_changed(id, name);
+            rows.components.get_mut(name)?.get_mut(&id)
+        }
     }
+
     pub fn insert_component(
         &mut self,
         id: u64,
@@ -562,38 +1165,58 @@ impl EcsWorld {
         if name.trim().is_empty() {
             return Err("Component ID must be nonempty".into());
         }
-        Ok(self.components.entry(name).or_default().insert(id, value))
+        if self.staged.is_some() {
+            Ok(self.stage_row(id).unwrap().components.insert(name, value))
+        } else {
+            let rows = Arc::make_mut(&mut self.rows);
+            rows.mark_binding_changed(id, &name);
+            Ok(rows.components.entry(name).or_default().insert(id, value))
+        }
     }
+
     pub fn remove_component(&mut self, id: u64, name: &str) -> Option<serde_json::Value> {
-        let column = self.components.get_mut(name)?;
+        self.component(id, name)?;
+        if self.staged.is_some() {
+            return self.stage_row(id)?.components.remove(name);
+        }
+        let rows = Arc::make_mut(&mut self.rows);
+        rows.mark_binding_changed(id, name);
+        let components = &mut rows.components;
+        let column = components.get_mut(name)?;
         let removed = column.remove(&id);
         if column.is_empty() {
-            self.components.remove(name);
+            components.remove(name);
         }
         removed
     }
+
     pub fn references(&self, id: u64) -> Option<&BTreeMap<String, u64>> {
-        self.references.get(&id)
+        Some(&self.object_data(id)?.references)
     }
+
     pub fn references_mut(&mut self, id: u64) -> Option<&mut BTreeMap<String, u64>> {
-        self.references.get_mut(&id)
+        Some(&mut self.object_data_mut(id)?.references)
     }
+
+    fn entity_components(&self, id: u64) -> BTreeMap<String, serde_json::Value> {
+        match self.edit(id) {
+            Some(edit) => edit.as_ref().unwrap().components.clone(),
+            None => self.rows.components_for(id),
+        }
+    }
+
     pub fn entity(&self, id: u64) -> Option<crate::GameEntity> {
         Some(crate::GameEntity {
             object: self.object(id)?,
-            components: self
-                .components
-                .iter()
-                .filter_map(|(name, column)| {
-                    column.get(&id).map(|value| (name.clone(), value.clone()))
-                })
-                .collect(),
-            references: self.references.get(&id).cloned().unwrap_or_default(),
+            components: self.entity_components(id),
+            references: self.references(id).unwrap().clone(),
         })
     }
+
     pub fn entities_snapshot(&self) -> Vec<crate::GameEntity> {
         self.entity_ids().filter_map(|id| self.entity(id)).collect()
     }
+
     /// Replace one entity's complete DTO without treating the update as a new
     /// lifetime. Structural validation completes before any column is changed.
     /// References may be transiently dangling while systems stage a tick; the
@@ -609,74 +1232,273 @@ impl EcsWorld {
             .map(|object| (object.id, object))
             .collect();
         objects.insert(id, entity.object.clone());
-        crate::validate_world_commands(&objects.into_values().collect::<Vec<_>>(), &[])?;
-        self.transforms.insert(id, entity.object.transform);
-        self.colors.insert(id, entity.object.color);
-        if let Some(parent) = entity.object.parent {
-            self.parents.insert(id, parent);
+        crate::control::edit_object_map(&mut objects, &[])?;
+        let mut row = match self.object_data(id) {
+            Some(data) => EntityRow {
+                data: data.clone(),
+                lifetime: self.lifetime(id).unwrap(),
+                transform: entity.object.transform,
+                components: BTreeMap::new(),
+            },
+            None => EntityRow::new(entity.object.clone()),
+        };
+        row.data.parent = entity.object.parent;
+        row.data.color = entity.object.color;
+        row.data.references = entity.references;
+        row.components = entity.components;
+        if let Some(staged) = &mut self.staged {
+            staged.edits.insert(id, Some(row));
+            staged.mark_transforms_checked();
         } else {
-            self.parents.remove(&id);
+            Arc::make_mut(&mut self.rows).put_row(id, row);
         }
-        self.angular_velocities.entry(id).or_insert([0.; 3]);
-        self.lifetimes.entry(id).or_insert_with(new_entity_lifetime);
-        for column in self.components.values_mut() {
-            column.remove(&id);
-        }
-        self.components.retain(|_, column| !column.is_empty());
-        for (name, value) in entity.components {
-            self.components.entry(name).or_default().insert(id, value);
-        }
-        self.references.insert(id, entity.references);
         Ok(())
     }
-    pub fn validate_references(&self) -> Result<(), String> {
-        for (id, references) in &self.references {
-            for (name, target) in references {
-                if !self.contains(*target) {
-                    return Err(format!(
-                        "Object {id} reference '{name}' points to missing {target}; clear references before removing their targets"
-                    ));
-                }
+
+    fn validate_entity_references(&self, id: u64) -> Result<(), String> {
+        for (name, target) in self.references(id).unwrap() {
+            if !self.contains(*target) {
+                return Err(format!(
+                    "Object {id} reference '{name}' points to missing {target}; clear references before removing their targets"
+                ));
             }
         }
         Ok(())
     }
-    pub fn clear(&mut self) {
-        self.transforms.clear();
-        self.parents.clear();
-        self.colors.clear();
-        self.angular_velocities.clear();
-        self.components.clear();
-        self.references.clear();
-        self.lifetimes.clear();
+
+    pub fn validate_references(&self) -> Result<(), String> {
+        self.entity_ids()
+            .try_for_each(|id| self.validate_entity_references(id))
     }
-    /// Build the demo independently as Transform/Parent/Color/Motion tables.
-    pub fn demo() -> Self {
-        Self {
-            transforms: BTreeMap::from([
-                (1, transform([-1.35, 0.0, 0.0], [0.8; 3])),
-                (2, transform([0.0, 2.0, 0.0], [0.32; 3])),
-                (3, transform([1.5, -0.15, 0.2], [0.65; 3])),
-                (4, transform([0.0, -1.0, 0.0], [4.0, 0.08, 3.0])),
-            ]),
-            parents: BTreeMap::from([(2, 1)]),
-            colors: BTreeMap::from([
-                (1, [80, 175, 245, 255]),
-                (2, [255, 182, 75, 255]),
-                (3, [189, 128, 240, 255]),
-                (4, [79, 103, 111, 255]),
-            ]),
-            angular_velocities: BTreeMap::from([
-                (1, [0.18, 0.65, 0.0]),
-                (2, [0.3, -0.7, 0.0]),
-                (3, [0.25, -0.45, 0.0]),
-                (4, [0.; 3]),
-            ]),
-            components: BTreeMap::new(),
-            references: (1..=4).map(|id| (id, BTreeMap::new())).collect(),
-            lifetimes: (1..=4).map(|id| (id, new_entity_lifetime())).collect(),
-            time: 0.0,
+
+    pub(crate) fn unchanged_since(&self, before: &Self) -> bool {
+        Arc::ptr_eq(&self.rows, &before.rows)
+            && self
+                .staged
+                .as_ref()
+                .is_some_and(|staged| staged.layers().all(|layer| layer.edits.is_empty()))
+    }
+
+    pub(crate) fn validate_changes_since(&self, before: &Self) -> Result<(), String> {
+        if Arc::ptr_eq(&self.rows, &before.rows)
+            && let Some(staged) = &self.staged
+            && staged.changes().all(|(id, edit)| {
+                edit.as_ref()
+                    .zip(self.rows.native::<ObjectData>(id))
+                    .is_some_and(|(edit, original)| edit.data.parent == original.parent)
+            })
+        {
+            for (id, _) in staged.changes() {
+                self.validate_entity_references(id)?;
+            }
+            for (id, edit) in staged.changes() {
+                crate::control::validate_object_transform(id, &edit.as_ref().unwrap().transform)?;
+            }
+            return Ok(());
         }
+        self.validate_references()?;
+        self.validate_objects()
+    }
+
+    pub(crate) fn validate_objects(&self) -> Result<(), String> {
+        let objects = self
+            .entity_ids()
+            .map(|id| (id, self.object(id).unwrap()))
+            .collect();
+        crate::control::validate_object_map(&objects)
+    }
+
+    fn remove_rows(&mut self, ids: impl IntoIterator<Item = u64>) {
+        if let Some(staged) = &mut self.staged {
+            for id in ids {
+                staged.edits.insert(id, None);
+                staged.unchecked_transforms.remove(&id);
+            }
+        } else {
+            let rows = Arc::make_mut(&mut self.rows);
+            let mut removed = false;
+            for id in ids {
+                removed |= rows.remove_row(id);
+            }
+            if removed {
+                rows.advance_removals();
+            }
+        }
+    }
+
+    pub fn clear(&mut self) {
+        if self.staged.is_some() {
+            let ids = self.entity_ids().collect::<Vec<_>>();
+            self.remove_rows(ids);
+        } else if !self.rows.index.is_empty() {
+            let rows = Arc::make_mut(&mut self.rows);
+            for (id, handle) in std::mem::take(&mut rows.index) {
+                let removed = rows.world.despawn(handle);
+                debug_assert!(removed);
+                rows.record_removal(id);
+            }
+            rows.advance_removals();
+            rows.components.clear();
+        }
+    }
+    /// Build the built-in demo with its original motion.
+    pub fn demo() -> Self {
+        let mut world = Self::from_objects(vec![
+            WorldObject {
+                id: 1,
+                parent: None,
+                transform: transform([-1.35, 0.0, 0.0], [0.8; 3]),
+                color: [80, 175, 245, 255],
+            },
+            WorldObject {
+                id: 2,
+                parent: Some(1),
+                transform: transform([0.0, 2.0, 0.0], [0.32; 3]),
+                color: [255, 182, 75, 255],
+            },
+            WorldObject {
+                id: 3,
+                parent: None,
+                transform: transform([1.5, -0.15, 0.2], [0.65; 3]),
+                color: [189, 128, 240, 255],
+            },
+            WorldObject {
+                id: 4,
+                parent: None,
+                transform: transform([0.0, -1.0, 0.0], [4.0, 0.08, 3.0]),
+                color: [79, 103, 111, 255],
+            },
+        ])
+        .unwrap();
+        for (id, velocity) in [
+            (1, [0.18, 0.65, 0.0]),
+            (2, [0.3, -0.7, 0.0]),
+            (3, [0.25, -0.45, 0.0]),
+        ] {
+            world.object_data_mut(id).unwrap().angular_velocity = velocity;
+        }
+        world
+    }
+}
+
+/// A world packet validated against the candidate at the point it was issued.
+/// Dropping the buffer leaves the candidate untouched. Applying it makes the
+/// writes visible to following systems inside the same tick.
+pub struct PreparedWorldCommands<'a> {
+    world: &'a mut EcsWorld,
+    removed: Vec<u64>,
+    objects: BTreeMap<u64, WorldObject>,
+}
+
+impl PreparedWorldCommands<'_> {
+    pub fn apply(self) {
+        if !self.removed.is_empty() {
+            self.world.remove_rows(self.removed);
+        }
+        for (id, object) in self.objects {
+            if let Some(data) = self.world.object_data_mut(id) {
+                data.parent = object.parent;
+                data.color = object.color;
+                *self.world.transform_mut(id).unwrap() = object.transform;
+            } else {
+                self.world.spawn_object(object);
+            }
+        }
+        if let Some(staged) = &mut self.world.staged {
+            staged.mark_transforms_checked();
+        }
+    }
+}
+
+impl EcsWorld {
+    /// Validate and apply a portable command batch to the current ECS view.
+    pub fn apply_commands(&mut self, commands: &[WorldCommand]) -> Result<(), String> {
+        self.prepare_commands(commands)?.apply();
+        Ok(())
+    }
+
+    pub fn prepare_commands(
+        &mut self,
+        commands: &[WorldCommand],
+    ) -> Result<PreparedWorldCommands<'_>, String> {
+        use crate::control::{
+            check_world_packet_size, edit_object_map, edit_object_values, validate_object_transform,
+        };
+
+        if commands
+            .iter()
+            .any(|command| matches!(command, WorldCommand::Spawn { object } if object.id == 0))
+        {
+            return Err("Entity IDs must be nonzero".into());
+        }
+        check_world_packet_size(commands)?;
+        if let Some(staged) = &self.staged
+            && staged.validated_base
+            && commands
+                .iter()
+                .all(|command| command.value_target().is_some())
+        {
+            let mut edits = BTreeMap::new();
+            for command in commands {
+                let id = command.value_target().unwrap();
+                let object = edits.entry(id).or_insert_with(|| self.object(id));
+                edit_object_values(command, object.as_mut())?;
+            }
+            let ids = staged
+                .unchecked_transform_ids()
+                .chain(edits.keys().copied())
+                .collect::<BTreeSet<_>>();
+            for id in ids {
+                if let Some(transform) = edits
+                    .get(&id)
+                    .and_then(Option::as_ref)
+                    .map(|o| &o.transform)
+                    .or_else(|| self.transform(id))
+                {
+                    validate_object_transform(id, transform)?;
+                }
+            }
+            let objects = edits
+                .into_iter()
+                .map(|(id, object)| (id, object.unwrap()))
+                .collect();
+            return Ok(PreparedWorldCommands {
+                world: self,
+                removed: Vec::new(),
+                objects,
+            });
+        }
+
+        let mut objects = self
+            .entity_ids()
+            .map(|id| (id, self.object(id).unwrap()))
+            .collect();
+        edit_object_map(&mut objects, commands)?;
+        let spawned: BTreeSet<_> = commands
+            .iter()
+            .filter_map(|command| match command {
+                WorldCommand::Spawn { object } => Some(object.id),
+                _ => None,
+            })
+            .collect();
+        let removed = self
+            .entity_ids()
+            .filter(|id| !objects.contains_key(id) || spawned.contains(id))
+            .collect();
+        objects.retain(|id, object| {
+            spawned.contains(id)
+                || self.object(*id).is_none_or(|old| {
+                    old.color != object.color
+                        || old.parent != object.parent
+                        || !crate::ComponentRegistry::TRANSFORM
+                            .same_wire_value(&old.transform, &object.transform)
+                })
+        });
+        Ok(PreparedWorldCommands {
+            world: self,
+            removed,
+            objects,
+        })
     }
 }
 
@@ -686,87 +1508,30 @@ impl WorldProvider for EcsWorld {
     }
 
     fn apply_commands(&mut self, commands: &[WorldCommand]) -> Result<(), String> {
-        if commands
-            .iter()
-            .any(|command| matches!(command, WorldCommand::Spawn { object } if object.id == 0))
-        {
-            return Err("Entity IDs must be nonzero".into());
-        }
-        let mut objects = self.objects()?.into_iter().map(|o| (o.id, o)).collect();
-        crate::control::apply_object_commands(&mut objects, commands)?;
-        // DTO validation completed before touching any component table.
-        self.transforms = objects.values().map(|o| (o.id, o.transform)).collect();
-        self.parents = objects
-            .values()
-            .filter_map(|o| o.parent.map(|p| (o.id, p)))
-            .collect();
-        self.colors = objects.values().map(|o| (o.id, o.color)).collect();
-        self.angular_velocities
-            .retain(|id, _| objects.contains_key(id));
-        for column in self.components.values_mut() {
-            column.retain(|id, _| objects.contains_key(id));
-        }
-        self.references.retain(|id, _| objects.contains_key(id));
-        self.lifetimes.retain(|id, _| objects.contains_key(id));
-        for command in commands {
-            if let WorldCommand::Spawn { object } = command {
-                self.angular_velocities.remove(&object.id);
-                for column in self.components.values_mut() {
-                    column.remove(&object.id);
-                }
-                self.references.remove(&object.id);
-                self.lifetimes.remove(&object.id);
-            }
-        }
-        self.components.retain(|_, column| !column.is_empty());
-        for id in objects.keys() {
-            self.angular_velocities.entry(*id).or_insert([0.; 3]);
-            self.references.entry(*id).or_default();
-            self.lifetimes
-                .entry(*id)
-                .or_insert_with(new_entity_lifetime);
-        }
-        Ok(())
+        EcsWorld::apply_commands(self, commands)
     }
 
     fn step(&mut self, dt: f32, speed: f32) {
         self.time += dt;
         let amount = dt * speed;
-        for (entity, velocity) in &self.angular_velocities {
-            if let Some(transform) = self.transforms.get_mut(entity) {
-                for (i, component) in velocity.iter().enumerate() {
-                    transform.rotation[i] += component * amount;
-                }
+        for id in self.entity_ids().collect::<Vec<_>>() {
+            let velocity = self.object_data(id).unwrap().angular_velocity;
+            let transform = self.transform_mut(id).unwrap();
+            for (rotation, velocity) in transform.rotation.iter_mut().zip(velocity) {
+                *rotation += velocity * amount;
             }
         }
     }
 
     fn snapshot(&self) -> SceneSnapshot {
-        fn resolve(
-            entity: u64,
-            transforms: &BTreeMap<u64, Transform>,
-            parents: &BTreeMap<u64, u64>,
-            cache: &mut BTreeMap<u64, [[f32; 4]; 4]>,
-        ) -> [[f32; 4]; 4] {
-            if let Some(model) = cache.get(&entity) {
-                return *model;
-            }
-            let parent = parents
-                .get(&entity)
-                .map_or_else(identity_matrix, |p| resolve(*p, transforms, parents, cache));
-            let model = multiply_matrices(parent, transforms[&entity].matrix());
-            cache.insert(entity, model);
-            model
-        }
         let mut cache = BTreeMap::new();
         let items = self
-            .transforms
-            .keys()
+            .entity_ids()
             .map(|entity| RenderItem {
-                id: *entity,
+                id: entity,
                 mesh: Mesh::cube(),
-                model: resolve(*entity, &self.transforms, &self.parents, &mut cache),
-                color: self.colors[entity],
+                model: self.render_model(entity, &mut cache),
+                color: self.object_data(entity).unwrap().color,
                 material: Material::default(),
             })
             .collect();
@@ -850,6 +1615,171 @@ mod tests {
             references: BTreeMap::new(),
         }
     }
+
+    #[test]
+    fn nested_tick_shares_prior_edits_and_merges_only_committed_rows() {
+        let mut world =
+            EcsWorld::from_entities(vec![entity(1, None, &[]), entity(2, None, &[])]).unwrap();
+        let committed = world.checkpoint_tick(true);
+        world.transform_mut(1).unwrap().translation[0] = 1.;
+        let parent = world.checkpoint_tick(false);
+        let staged = world.staged.as_ref().unwrap();
+        assert!(staged.edits.is_empty());
+        assert!(Arc::ptr_eq(
+            staged.parent.as_ref().unwrap(),
+            parent.staged.as_ref().unwrap().parent.as_ref().unwrap()
+        ));
+        world.transform_mut(1).unwrap().translation[0] = 99.;
+        world
+            .apply_commands(&[WorldCommand::Remove { id: 2 }])
+            .unwrap();
+        assert_eq!(world.entity_ids().collect::<Vec<_>>(), [1]);
+        world = parent;
+        world.compact_staged();
+        assert!(world.staged.as_ref().unwrap().parent.is_none());
+        assert_eq!(world.object(1).unwrap().transform.translation[0], 1.);
+        assert_eq!(world.entity_ids().collect::<Vec<_>>(), [1, 2]);
+
+        let parent = world.checkpoint_tick(false);
+        world.transform_mut(2).unwrap().translation[0] = 2.;
+        world.finish_tick(parent);
+        assert!(world.staged.as_ref().unwrap().parent.is_none());
+        world.finish_tick(committed);
+        assert_eq!(world.object(1).unwrap().transform.translation[0], 1.);
+        assert_eq!(world.object(2).unwrap().transform.translation[0], 2.);
+    }
+
+    #[test]
+    fn unchecked_transforms_survive_dropped_packets_and_clear_after_validated_apply() {
+        let mut world =
+            EcsWorld::from_entities(vec![entity(1, None, &[]), entity(2, None, &[])]).unwrap();
+        let committed = world.checkpoint_tick(true);
+        world.transform_mut(1).unwrap().translation[0] = f32::NAN;
+        let repair = [WorldCommand::SetPosition {
+            id: 1,
+            position: [0.; 3],
+        }];
+        drop(world.prepare_commands(&repair).unwrap());
+        let unrelated = [WorldCommand::SetColor {
+            id: 2,
+            color: [0; 4],
+        }];
+        assert_eq!(
+            world.apply_commands(&unrelated).unwrap_err(),
+            "Object 1 has a nonfinite transform"
+        );
+        let parent = world.checkpoint_tick(false);
+        world.apply_commands(&repair).unwrap();
+        world.finish_tick(parent);
+        assert!(
+            world
+                .staged
+                .as_ref()
+                .unwrap()
+                .unchecked_transform_ids()
+                .next()
+                .is_none()
+        );
+        world.apply_commands(&unrelated).unwrap();
+        world.finish_tick(committed);
+        assert_eq!(world.object(1).unwrap().transform.translation, [0.; 3]);
+        assert_eq!(world.object(2).unwrap().color, [0; 4]);
+    }
+
+    #[test]
+    fn publishing_a_row_marks_only_changed_native_components() {
+        use bevy_ecs::change_detection::DetectChanges;
+
+        let mut world = EcsWorld::from_objects(vec![
+            entity(1, None, &[]).object,
+            entity(2, None, &[]).object,
+            entity(3, None, &[]).object,
+            entity(4, None, &[]).object,
+        ])
+        .unwrap();
+        let handles = [1, 2, 3].map(|id| world.rows.index[&id]);
+        Arc::get_mut(&mut world.rows)
+            .unwrap()
+            .world
+            .clear_trackers();
+        let committed = world.checkpoint_tick(true);
+        world
+            .insert_component(1, "fixture", serde_json::Value::Null)
+            .unwrap();
+        world.transform_mut(2).unwrap().translation[0] = -0.;
+        world
+            .apply_commands(&[
+                WorldCommand::SetColor {
+                    id: 3,
+                    color: [0; 4],
+                },
+                WorldCommand::Remove { id: 4 },
+                WorldCommand::Spawn {
+                    object: entity(5, None, &[]).object,
+                },
+            ])
+            .unwrap();
+        world.finish_tick(committed);
+        let rows = Arc::get_mut(&mut world.rows).unwrap();
+        assert_eq!(
+            handles.map(|handle| rows
+                .world
+                .get_mut::<Transform>(handle)
+                .unwrap()
+                .is_changed()),
+            [false, true, false]
+        );
+        assert_eq!(
+            handles.map(|handle| rows
+                .world
+                .get_mut::<ObjectData>(handle)
+                .unwrap()
+                .is_changed()),
+            [false, false, true]
+        );
+        assert!(!rows.index.contains_key(&4));
+        let spawned = rows.index[&5];
+        assert!(rows.world.get_mut::<Transform>(spawned).unwrap().is_added());
+        assert_eq!(
+            world.transform(2).unwrap().translation[0].to_bits(),
+            (-0.0_f32).to_bits()
+        );
+    }
+
+    #[test]
+    fn repeated_remove_and_clear_bound_bevy_removal_messages() {
+        let retained = [false, true].map(|clear| {
+            let mut world = EcsWorld::from_objects(Vec::new()).unwrap();
+            for _ in 0..1024 {
+                world
+                    .apply_commands(&[WorldCommand::Spawn {
+                        object: entity(1, None, &[]).object,
+                    }])
+                    .unwrap();
+                if clear {
+                    world.clear();
+                } else {
+                    world
+                        .apply_commands(&[WorldCommand::Remove { id: 1 }])
+                        .unwrap();
+                }
+                assert!(world.is_empty());
+            }
+            let component = world.rows.world.component_id::<StableId>().unwrap();
+            world
+                .rows
+                .world
+                .removed_components()
+                .get(component)
+                .unwrap()
+                .len()
+        });
+        assert!(
+            retained.into_iter().all(|count| count <= 1),
+            "Remove / clear: {retained:?}"
+        );
+    }
+
     #[test]
     fn component_column_queries_and_owned_dtos_keep_one_mutable_store() {
         let mut world = EcsWorld::from_entities(vec![
@@ -901,6 +1831,77 @@ mod tests {
                 .is_err()
         );
     }
+
+    #[test]
+    fn stable_index_rejects_a_stale_handle_when_bevy_reuses_its_slot() {
+        let target = 9_007_199_254_740_993;
+        let child = 9_007_199_254_740_994;
+        let mut observer = entity(1, None, &[]);
+        observer.references.insert("target".into(), target);
+        let mut world = EcsWorld::from_entities(vec![
+            observer,
+            entity(target, None, &[("marker", serde_json::Value::Null)]),
+            entity(child, Some(target), &[]),
+        ])
+        .unwrap();
+        let handle = world.rows.index[&target];
+        let lifetime = world.lifetime(target);
+        let remove = WorldCommand::Remove { id: target };
+        let duplicate = WorldCommand::Spawn {
+            object: entity(1, None, &[]).object,
+        };
+        assert!(world.apply_commands(&[remove.clone(), duplicate]).is_err());
+        assert_eq!(world.rows.index[&target], handle);
+        assert_eq!(world.lifetime(target), lifetime);
+        assert_eq!(world.object(child).unwrap().parent, Some(target));
+        assert_eq!(world.references(1).unwrap()["target"], target);
+        assert_eq!(
+            world.component(target, "marker"),
+            Some(&serde_json::Value::Null)
+        );
+
+        // Keep the child so that the target is the first slot released.
+        let mut child_dto = world.entity(child).unwrap();
+        child_dto.object.parent = None;
+        world.upsert_entity(child_dto).unwrap();
+
+        // Bevy 0.20 publishes freed slots in groups of 128. Fill the group
+        // through ordinary spawns and removals, then spawn enough to reuse it.
+        const RECYCLE_BATCH: u64 = 128;
+        let fillers = 2..=1 + RECYCLE_BATCH;
+        let spawns = |ids: std::ops::RangeInclusive<u64>| {
+            ids.map(|id| WorldCommand::Spawn {
+                object: entity(id, None, &[]).object,
+            })
+            .collect::<Vec<_>>()
+        };
+        world.apply_commands(&spawns(fillers.clone())).unwrap();
+        world.apply_commands(&[remove]).unwrap();
+        world
+            .apply_commands(
+                &fillers
+                    .map(|id| WorldCommand::Remove { id })
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        let mut replacements = (u64::MAX - (RECYCLE_BATCH - 1))..=u64::MAX;
+        world.apply_commands(&spawns(replacements.clone())).unwrap();
+        let replacement = replacements
+            .find(|id| world.rows.index[id].index() == handle.index())
+            .expect("A new stable ID should reuse the deleted target's Bevy slot");
+        let new_handle = world.rows.index[&replacement];
+        assert_ne!(handle.generation(), new_handle.generation());
+        assert!(world.rows.world.get::<StableId>(handle).is_none());
+        assert!(!world.contains(target));
+        assert!(
+            world
+                .entity(world.references(1).unwrap()["target"])
+                .is_none()
+        );
+        assert!(world.validate_references().is_err());
+        assert_eq!(world.object(replacement).unwrap().id, replacement);
+        assert!(world.entities_with(&["marker"]).is_empty());
+    }
     #[test]
     fn subtree_reused_ids_clear_all_columns_references_and_motion_in_one_batch() {
         let mut parent = entity(1, None, &[("marker", serde_json::json!({"old":true}))]);
@@ -910,7 +1911,7 @@ mod tests {
             entity(2, Some(1), &[("marker", serde_json::json!({}))]),
         ])
         .unwrap();
-        world.angular_velocities.insert(1, [1., 0., 0.]);
+        world.object_data_mut(1).unwrap().angular_velocity = [1., 0., 0.];
         let old_lifetimes = [world.lifetime(1).unwrap(), world.lifetime(2).unwrap()];
         world
             .apply_commands(&[

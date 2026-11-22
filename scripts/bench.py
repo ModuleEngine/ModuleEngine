@@ -28,6 +28,9 @@ GATE_METRICS = {
     "S5": ("frame_interval_ms", "cpu_submit_ms"),
 }
 LIMIT_PERCENT = 5.0
+BUILD_COMMAND = ["cargo", "build", "--locked", "--release", "--features", "bench",
+                 "--message-format=json-render-diagnostics",
+                 "-p", "module-engine-editor"]
 NVIDIA_QUERY = (
     "timestamp,index,name,driver_version,pstate,temperature.gpu,"
     "utilization.gpu,memory.total,memory.used,clocks.sm,power.draw"
@@ -52,12 +55,24 @@ def command_output(*args):
         return None
 
 
+def nearest_rank(sorted_values, fraction):
+    return sorted_values[math.ceil(len(sorted_values) * fraction) - 1]
+
+
 def stats(values):
     values = sorted(values)
     if not values:
         return None
     return {"samples": len(values), "mean_ms": statistics.mean(values),
-            "p95_ms": values[math.ceil(len(values) * 0.95) - 1], "max_ms": values[-1]}
+            "p95_ms": nearest_rank(values, 0.95), "p99_ms": nearest_rank(values, 0.99),
+            "max_ms": values[-1]}
+
+
+def with_tail(summary, samples):
+    """Add a nearest-rank p99 to a Player summary when its raw samples are reported."""
+    if not summary or not samples:
+        return summary
+    return {**summary, "p99_ms": nearest_rank(sorted(samples), 0.99)}
 
 
 def summarize_frame_timings(observations):
@@ -159,7 +174,7 @@ def peak_working_set(pid):
     return None
 
 
-def execute_scene(exe, scene, group, env):
+def execute_scene(exe, scene, group, env, cwd=ROOT):
     folder = group / scene
     args = [str(exe), "--bench-scene", scene, str(folder)]
     stdout = group / f"{scene}.log"
@@ -172,7 +187,7 @@ def execute_scene(exe, scene, group, env):
     scene_env["MODULE_ENGINE_BENCH_AVAILABLE_RAM_BYTES"] = str(memory_available or "")
     gpu_started_at = datetime.now().astimezone().isoformat()
     with stdout.open("x", encoding="utf-8") as log:
-        with subprocess.Popen(args, cwd=ROOT, env=scene_env, stdout=log, stderr=subprocess.STDOUT) as proc:
+        with subprocess.Popen(args, cwd=cwd, env=scene_env, stdout=log, stderr=subprocess.STDOUT) as proc:
             try:
                 while proc.poll() is None:
                     rss = peak_working_set(proc.pid)
@@ -240,7 +255,8 @@ def summarize_scene(scene, raw):
         )
         return (
             "complete" if player_valid else "incomplete",
-            {"frame_interval_ms": raw.get("ui_observed_unique_frame_interval"),
+            {"frame_interval_ms": with_tail(raw.get("ui_observed_unique_frame_interval"),
+                                            raw.get("ui_observed_unique_frame_interval_samples_ms")),
              "game_step_ms": raw.get("game_step") if scene == "S2" else None,
              "render_ms": raw.get("renderer_content_render_readback"),
              "profiling": summarize_frame_timings(raw.get("presentation_samples", []))},
@@ -303,11 +319,16 @@ def compare(runs):
     return result
 
 
-def ensure_bench_assets():
-    """Download pinned third-party models that the repository does not redistribute."""
-    manifest_path = ROOT / "examples/bench/sponza/manifest.json"
+def ensure_bench_assets(root=None):
+    """Download pinned third-party models that the repository does not redistribute.
+
+    A compare worktree reuses verified files from the main checkout's cache
+    before downloading anything."""
+    root = root or ROOT
+    manifest_path = root / "examples/bench/sponza/manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    cache = ROOT / ".tools/bench-assets/sponza"
+    cache = root / ".tools/bench-assets/sponza"
+    seed = ROOT / ".tools/bench-assets/sponza"
     cache.mkdir(parents=True, exist_ok=True)
     downloaded = 0
     for item in manifest["files"]:
@@ -316,6 +337,9 @@ def ensure_bench_assets():
             raise ValueError(f"Unsafe benchmark asset name: {name}")
         target = cache / name
         if target.is_file() and entry(cache, name)["sha256"] == item["sha256"]:
+            continue
+        if seed != cache and (seed / name).is_file() and entry(seed, name)["sha256"] == item["sha256"]:
+            shutil.copy2(seed / name, target)
             continue
         print(f"Downloading benchmark asset {name}", flush=True)
         partial = cache / (name + ".part")
@@ -327,7 +351,7 @@ def ensure_bench_assets():
             raise ValueError(f"Downloaded {name} does not match the pinned SHA-256")
         partial.replace(target)
         downloaded += 1
-    return {"manifest": str(manifest_path.relative_to(ROOT)), "commit": manifest["commit"],
+    return {"manifest": str(manifest_path.relative_to(root)), "commit": manifest["commit"],
             "files": len(manifest["files"]), "downloaded_now": downloaded,
             "manifest_sha256": entry(manifest_path.parent, manifest_path.name)["sha256"]}
 
@@ -351,10 +375,11 @@ def dxc_inputs(env):
     return {str(path): entry(path.parent, path.name)["sha256"] for path in sorted(resolved)}
 
 
-def built_editor(messages, host):
+def built_editor(messages, host, source_root=None, target_dir=None):
     bins = set()
-    source = ROOT / "crates/editor/src/main.rs"
-    allowed_folders = {ROOT / "target/release", ROOT / "target" / host / "release"}
+    source = (source_root or ROOT) / "crates/editor/src/main.rs"
+    target_dir = (target_dir or ROOT / "target").resolve()
+    allowed_folders = {target_dir / "release", target_dir / host / "release"}
     with messages.open(encoding="utf-8") as events:
         for line in events:
             event = json.loads(line)
@@ -373,26 +398,34 @@ def built_editor(messages, host):
     return exe
 
 
-def run_series(series, diagnostic, vsync, profiling, once):
+def bench_env(vsync, profiling, root=None):
     env = os.environ.copy()
     for variable in ("EFRAME_SCREENSHOT_TO", "MODULE_ENGINE_UI_SCREENSHOT_TO",
                      "MODULE_ENGINE_CAPTURE_ATTACK", "MODULE_ENGINE_RESOURCE_ROOT"):
         env.pop(variable, None)
     env.update(MODULE_ENGINE_BENCHMARK_ARM="automatic", MODULE_ENGINE_BENCHMARK_FRAMES="240",
-               MODULE_ENGINE_RESOURCE_ROOT=str(ROOT),
+               MODULE_ENGINE_RESOURCE_ROOT=str(root or ROOT),
                MODULE_ENGINE_BENCHMARK_PROFILING="on" if profiling else "off",
                MODULE_ENGINE_GUI_VSYNC="on" if vsync else "off")
-    bench_assets = ensure_bench_assets()
-    source = capture(ROOT)
-    write_json(series / "source.json", source)
-    build = ["cargo", "build", "--locked", "--release", "--features", "bench",
-             "--message-format=json-render-diagnostics",
-             "-p", "module-engine-editor", "--target-dir", str(ROOT / "target")]
+    return env
+
+
+def native_host():
     rustc = command_output("rustc", "-vV")
     host = next((line.removeprefix("host: ") for line in (rustc or "").splitlines()
                  if line.startswith("host: ")), None)
     if not host:
         raise ValueError("Cannot determine the native host from rustc -vV")
+    return rustc, host
+
+
+def run_series(series, diagnostic, vsync, profiling, once):
+    env = bench_env(vsync, profiling)
+    bench_assets = ensure_bench_assets()
+    source = capture(ROOT)
+    write_json(series / "source.json", source)
+    build = [*BUILD_COMMAND, "--target-dir", str(ROOT / "target")]
+    rustc, host = native_host()
     smi = shutil.which("nvidia-smi")
     telemetry = [smi, f"--query-gpu={NVIDIA_QUERY}", "--format=csv"] if smi else None
     manifest = {
@@ -481,6 +514,355 @@ def run_series(series, diagnostic, vsync, profiling, once):
     return 0 if accepted else 1
 
 
+# --- Baseline comparison ("not worse than the baseline", docs/bench.md#not-worse) ---------
+
+COMPARE_ROUNDS = 5
+TIMING_FLOOR_PERCENT = 5.0
+MEMORY_FLOOR_PERCENT = 1.0
+SPREAD_FACTOR = 2.0
+BORDERLINE_FRACTION = 0.25
+SIDES = ("baseline", "candidate")
+PASSING = ("same", "better")
+# Every run must report these; a null present mode means unknown or changed during the run.
+REQUIRED_EVIDENCE = ("effective_present_mode", "vsync_requested", "frame_profiling")
+# Presentation-path fields that may differ between sides when declared (R2.6). The adapter,
+# resolution, workload and present mode never may.
+DECLARABLE_CHANGES = ("gui_graphics.backend", "gui_graphics.renderer",
+                      "gui_graphics.requested_renderer", "gui_graphics.requested_gpu_backend")
+
+
+def compare_rows(scene):
+    """(metric, statistic, kind, blocking) for one scene, in report order."""
+    rows = []
+    for key in GATE_METRICS[scene]:
+        rows += [(key, "mean_ms", "timing", True), (key, "p95_ms", "timing", True),
+                 (key, "p99_ms", "tail", False)]
+    rows.append(("peak_working_set_bytes", None, "memory", True))
+    return rows
+
+
+def metric_value(case, key, stat):
+    if stat is None:
+        return case.get(key)
+    return ((case.get("metrics") or {}).get(key) or {}).get(stat)
+
+
+def judge_metric(kind, baseline, candidate, blocking):
+    """Median-based verdict; positive change means slower or larger."""
+    row = {"kind": kind, "blocking": blocking, "baseline": baseline, "candidate": candidate}
+    if not baseline or not candidate or any(
+            value is None or value <= 0 for value in [*baseline, *candidate]):
+        return {**row, "verdict": "missing", "borderline": False}
+    base = statistics.median(baseline)
+    cand = statistics.median(candidate)
+    spread = 100 * (max(baseline) - min(baseline)) / base
+    floor = MEMORY_FLOOR_PERCENT if kind == "memory" else TIMING_FLOOR_PERCENT
+    tolerance = max(floor, SPREAD_FACTOR * spread)
+    change = 100 * (cand - base) / base
+    verdict = "worse" if change > tolerance else "better" if change < -tolerance else "same"
+    return {**row, "baseline_median": base, "candidate_median": cand,
+            "baseline_spread_percent": spread, "tolerance_percent": tolerance,
+            "change_percent": change, "verdict": verdict,
+            "borderline": abs(change - tolerance) <= BORDERLINE_FRACTION * tolerance}
+
+
+def flatten(value, prefix):
+    if isinstance(value, dict) and value:
+        result = {}
+        for key, item in value.items():
+            result.update(flatten(item, f"{prefix}.{key}"))
+        return result
+    return {prefix: value}
+
+
+def comparison_fields(case):
+    return {**flatten(case.get("signature") or {}, "signature"),
+            **flatten(case.get("fixture") or {}, "fixture")}
+
+
+def signature_differences(cases, declared=()):
+    """Dotted signature/fixture fields that differ from the first case, except declared ones."""
+    ignored = {f"signature.{field}" for field in declared}
+    first = comparison_fields(cases[0])
+    keys = set()
+    for case in cases[1:]:
+        other = comparison_fields(case)
+        keys |= {key for key in set(first) | set(other)
+                 if key not in ignored and first.get(key) != other.get(key)}
+    return sorted(keys)
+
+
+def run_label(case):
+    return f"{case.get('side', '?')} run {case.get('run', '?')}"
+
+
+def missing_evidence(cases, declared=()):
+    """Runs whose presentation evidence is unknown, e.g. a null or changing present mode.
+
+    A declared change must be observed in every run, otherwise the report
+    could accept a migration without knowing what the candidate used."""
+    problems = []
+    for case in cases:
+        signature = case.get("signature") or {}
+        fields = flatten(signature, "signature")
+        unknown = [key for key in REQUIRED_EVIDENCE if signature.get(key) is None]
+        unknown += [f"signature.{field} (declared)" for field in declared
+                    if fields.get(f"signature.{field}") is None]
+        if unknown:
+            problems.append(f"{run_label(case)}: {', '.join(unknown)} unknown or changed")
+    return problems
+
+
+def compare_scene(scene, baseline_cases, candidate_cases, declared=()):
+    cases = [*baseline_cases, *candidate_cases]
+    reasons = []
+    if not baseline_cases or not candidate_cases:
+        reasons.append("No measured runs on one side")
+    incomplete = [f"{run_label(case)}: {case['status']}"
+                  for case in cases if case["status"] != "complete"]
+    if incomplete:
+        reasons.append("Incomplete runs: " + ", ".join(incomplete))
+    if evidence := missing_evidence(cases, declared):
+        reasons.append("Missing run evidence: " + "; ".join(evidence))
+    for side_cases in (baseline_cases, candidate_cases):
+        if side_cases and (differences := signature_differences(side_cases)):
+            reasons.append(f"Signature or fixture changes within {side_cases[0].get('side', '?')} runs: "
+                           + ", ".join(differences))
+    declared_changes = {}
+    if baseline_cases and candidate_cases:
+        pair = [baseline_cases[0], candidate_cases[0]]
+        if differences := signature_differences(pair, declared):
+            reasons.append("Signature or fixture differs: " + ", ".join(differences))
+        fields = [comparison_fields(case) for case in pair]
+        declared_changes = {field: {"baseline": fields[0].get(f"signature.{field}"),
+                                    "candidate": fields[1].get(f"signature.{field}")}
+                            for field in declared}
+    metrics = []
+    for key, stat, kind, blocking in compare_rows(scene):
+        verdict = judge_metric(kind, [metric_value(case, key, stat) for case in baseline_cases],
+                               [metric_value(case, key, stat) for case in candidate_cases], blocking)
+        metrics.append({"metric": key, "statistic": stat, **verdict})
+    comparable = not reasons
+    passed = comparable and all(row["verdict"] in PASSING for row in metrics if row["blocking"])
+    return {"comparable": comparable, "reasons": reasons, "passed": passed,
+            "borderline": comparable and any(row["blocking"] and row["borderline"] for row in metrics),
+            "runs": {"baseline": len(baseline_cases), "candidate": len(candidate_cases)},
+            "declared_changes": declared_changes, "metrics": metrics}
+
+
+def compare_sides(runs, scenes, declared=()):
+    """runs: [{"side", "run", "results": {scene: case}}] from every session that counts."""
+    result = {}
+    for scene in scenes:
+        sides = {side: [{**run["results"][scene], "side": side, "run": run["run"]}
+                        for run in runs if run["side"] == side and scene in run["results"]]
+                 for side in SIDES}
+        result[scene] = compare_scene(scene, sides["baseline"], sides["candidate"], declared)
+    return result
+
+
+def interleaved_schedule(rounds, candidate_first=False):
+    order = ("candidate", "baseline") if candidate_first else SIDES
+    return [(side, number) for number in range(1, rounds + 1) for side in order]
+
+
+def format_metric_value(row, key):
+    value = row.get(key)
+    if value is None:
+        return "—"
+    if row["kind"] == "memory":
+        return f"{value / 1024 ** 2:.1f} MiB"
+    return f"{value:.3f} ms"
+
+
+def render_table(scenes):
+    lines = ["| Scene | Metric | Baseline median | Candidate median | Change | Tolerance | Verdict |",
+             "| --- | --- | --- | --- | --- | --- | --- |"]
+    for scene, item in scenes.items():
+        if not item["comparable"]:
+            lines.append(f"| {scene} | — | — | — | — | — | INCOMPARABLE: {'; '.join(item['reasons'])} |")
+            continue
+        for row in item["metrics"]:
+            name = row["metric"] + (f" {row['statistic'].removesuffix('_ms')}" if row["statistic"] else "")
+            change = row.get("change_percent")
+            tolerance = row.get("tolerance_percent")
+            verdict = row["verdict"].upper() if row["blocking"] else f"{row['verdict']} (tracked)"
+            if row["borderline"] and row["blocking"]:
+                verdict += ", borderline"
+            lines.append(
+                f"| {scene} | {name} | {format_metric_value(row, 'baseline_median')} | "
+                f"{format_metric_value(row, 'candidate_median')} | "
+                f"{'—' if change is None else f'{change:+.2f} %'} | "
+                f"{'—' if tolerance is None else f'±{tolerance:.2f} %'} | {verdict} |")
+    for scene, item in scenes.items():
+        for field, values in item.get("declared_changes", {}).items():
+            lines.append(f"\n{scene}: declared change `{field}`: "
+                         f"{values['baseline']} → {values['candidate']}")
+    return "\n".join(lines) + "\n"
+
+
+def git_output(cwd, *args):
+    return subprocess.check_output(["git", *args], cwd=cwd, text=True,
+                                   stderr=subprocess.STDOUT, timeout=120).strip()
+
+
+def resolve_commit(ref):
+    try:
+        return git_output(ROOT, "rev-parse", "--verify", f"{ref}^{{commit}}")
+    except subprocess.CalledProcessError as error:
+        raise ValueError(f"Unknown commit {ref!r}: {error.output.strip()}") from error
+
+
+def provision_worktree(worktree):
+    """Copy Git-ignored native tools (DXC) from the main checkout into a worktree."""
+    ignored = git_output(ROOT, "ls-files", "--others", "--ignored", "--exclude-standard",
+                         "-z", "--", "tools/dxc")
+    copied = []
+    for name in filter(None, ignored.split("\0")):
+        target = worktree / name
+        if not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT / name, target)
+            copied.append(name)
+    return copied
+
+
+def build_side(folder, root, env, host):
+    """Build one side and copy the exact executable into the series."""
+    folder.mkdir()
+    # Shared Cargo products can remain fresh across checkouts with different sources.
+    target_dir = folder / "target"
+    build = [*BUILD_COMMAND, "--target-dir", str(target_dir)]
+    messages = folder / "build.jsonl"
+    with (folder / "build.log").open("x", encoding="utf-8") as log, messages.open("xb") as events:
+        result = subprocess.run(build, cwd=root, env=env, stdout=events, stderr=log)
+    if result.returncode:
+        raise ValueError(f"Build failed in {root}; see {folder / 'build.log'}")
+    executable = built_editor(messages, host, root, target_dir)
+    exe = folder / executable.name
+    shutil.copy2(executable, exe)
+    return exe, entry(folder, exe.name)["sha256"]
+
+
+def prepare_side(series, side, ref, vsync, profiling, host, worktrees):
+    """Return the runtime description of one side; ref None means the current checkout."""
+    if ref is None:
+        root = ROOT
+    else:
+        root = ROOT / ".work" / "bench-compare" / f"{series.parent.name}-{series.name}-{side}"
+        root.parent.mkdir(parents=True, exist_ok=True)
+        git_output(ROOT, "worktree", "add", "--detach", str(root), ref)
+        worktrees.append(root)
+        provision_worktree(root)
+    env = bench_env(vsync, profiling, root)
+    assets = ensure_bench_assets(root)
+    source = capture(root)
+    write_json(series / f"{side}-source.json", source)
+    print(f"Building {side} ({ref or 'current checkout'} at {source['head'][:12]})", flush=True)
+    exe, exe_hash = build_side(series / f"{side}-build", root, env, host)
+    return {"side": side, "ref": ref or "current checkout", "root": root, "env": env, "exe": exe,
+            "head": source["head"], "source_digest": source["source_digest"],
+            "binary_sha256": exe_hash, "bench_assets": assets}
+
+
+def measure_pass(side, label, folder, scenes, number):
+    folder.mkdir(parents=True)
+    run = {"side": side["side"], "run": number, "started_at": datetime.now().astimezone().isoformat(),
+           "source_digest": side["source_digest"], "binary_sha256": side["binary_sha256"],
+           "results": {}}
+    for scene in scenes:
+        result = execute_scene(side["exe"], scene, folder, side["env"], side["root"])
+        run["results"][scene] = result
+        write_json(folder / f"{scene}.json", result)
+    write_json(folder / "run.json", run)
+    print(f"{label} done", flush=True)
+    return run
+
+
+def measure_session(series, sides, session, scenes, rounds, candidate_first=False):
+    folder = series / f"session-{session}"
+    runs = []
+    for side_name, number in interleaved_schedule(rounds, candidate_first):
+        name = f"run-{number:02}-{side_name}"
+        runs.append(measure_pass(sides[side_name], f"session {session} {name}",
+                                 folder / name, scenes, number + (session - 1) * rounds))
+    return runs
+
+
+def run_compare(series, baseline_ref, candidate_ref, rounds, scenes, vsync, profiling, declared=()):
+    baseline = resolve_commit(baseline_ref)
+    candidate = resolve_commit(candidate_ref) if candidate_ref else None
+    _, host = native_host()
+    worktrees = []
+    try:
+        sides = {"baseline": prepare_side(series, "baseline", baseline, vsync, profiling, host, worktrees)}
+        sides["candidate"] = prepare_side(series, "candidate", candidate, vsync, profiling, host, worktrees)
+        rule = {"rounds_per_side": rounds, "order": "interleaved ABAB…; a rerun starts with B",
+                "statistic": "median of per-run values",
+                "tolerance": "max(floor, 2 × baseline (max − min) / median)",
+                "timing_floor_percent": TIMING_FLOOR_PERCENT,
+                "memory_floor_percent": MEMORY_FLOOR_PERCENT, "spread_factor": SPREAD_FACTOR,
+                "borderline": f"|change − tolerance| ≤ {BORDERLINE_FRACTION} × tolerance",
+                "blocking": "mean and p95 of declared timing metrics, peak working set",
+                "tracked": "p99 of declared timing metrics",
+                "required_evidence": list(REQUIRED_EVIDENCE),
+                "declared_changes": list(declared)}
+        write_json(series / "compare-manifest.json", {
+            "version": 1, "local_started": datetime.now().astimezone().isoformat(),
+            "scenes": scenes, "gui_vsync": vsync, "frame_profiling": profiling, "rule": rule,
+            "sides": {name: {key: str(value) if isinstance(value, Path) else value
+                             for key, value in side.items() if key not in ("env",)}
+                      for name, side in sides.items()},
+        })
+        result = compare_series(series, sides, scenes, rounds, rule, declared)
+    finally:
+        for worktree in worktrees:
+            subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=ROOT,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return result
+
+
+def compare_series(series, sides, scenes, rounds, rule, declared=()):
+    print("Unscored prewarm pass for each side", flush=True)
+    for name in SIDES:
+        measure_pass(sides[name], f"prewarm {name}", series / f"prewarm-{name}", scenes, 0)
+    runs = measure_session(series, sides, 1, scenes, rounds)
+    verdict = compare_sides(runs, scenes, declared)
+    rerun = [scene for scene, item in verdict.items() if item["borderline"]]
+    if rerun:
+        print(f"Borderline result in {', '.join(rerun)}; repeating once", flush=True)
+        runs += measure_session(series, sides, 2, rerun, rounds, candidate_first=True)
+        verdict.update(compare_sides(runs, rerun, declared))
+    integrity = {name: {
+        "source_matches": capture(side["root"])["source_digest"] == side["source_digest"],
+        "binary_matches": entry(side["exe"].parent, side["exe"].name)["sha256"] == side["binary_sha256"],
+    } for name, side in sides.items()}
+    intact = all(all(item.values()) for item in integrity.values())
+    accepted = intact and all(item["passed"] for item in verdict.values())
+    table = render_table(verdict)
+    write_json(series / "compare.json", {
+        "accepted": accepted, "integrity": integrity, "rerun_scenes": rerun, "rule": rule,
+        "sides": {name: {key: side[key] for key in ("ref", "head", "source_digest", "binary_sha256")}
+                  for name, side in sides.items()},
+        "scenes": verdict,
+    })
+    with (series / "compare.md").open("x", encoding="utf-8", newline="\n") as output:
+        output.write(table)
+    print(table, flush=True)
+    if not intact:
+        print("Sources or binaries changed during the series", flush=True)
+    print("ACCEPTED: not worse than baseline" if accepted else "REJECTED", flush=True)
+    return 0 if accepted else 1
+
+
+def parse_scenes(text):
+    scenes = [scene.strip().upper() for scene in text.split(",") if scene.strip()]
+    unknown = [scene for scene in scenes if scene not in SCENES]
+    if unknown or not scenes:
+        raise argparse.ArgumentTypeError(f"Expected a comma-separated subset of {', '.join(SCENES)}")
+    return [scene for scene in SCENES if scene in scenes]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--diagnostic", action="store_true", help="Record a series with known competing load")
@@ -490,12 +872,35 @@ def main():
                         help="Disable CPU and GPU frame profiling for baseline comparisons")
     parser.add_argument("--once", action="store_true",
                         help="Run one diagnostic S1–S5 pass with per-scene warmup only")
+    parser.add_argument("--compare", metavar="BASELINE",
+                        help="Judge the candidate against this baseline commit by the not-worse rule")
+    parser.add_argument("--candidate", metavar="REF",
+                        help="Candidate commit for --compare (default: the current checkout as is)")
+    parser.add_argument("--rounds", type=int, default=COMPARE_ROUNDS,
+                        help=f"Interleaved runs per side for --compare (default {COMPARE_ROUNDS})")
+    parser.add_argument("--scenes", type=parse_scenes, default=list(SCENES),
+                        help="Comma-separated scenes for --compare, for example S2,S3")
+    parser.add_argument("--declare-change", action="append", default=[], choices=DECLARABLE_CHANGES,
+                        metavar="FIELD", help="Presentation field allowed to differ between sides "
+                        f"under --compare (repeatable): {', '.join(DECLARABLE_CHANGES)}")
     args = parser.parse_args()
+    if args.compare is None and (args.candidate or args.rounds != COMPARE_ROUNDS
+                                 or args.scenes != list(SCENES) or args.declare_change):
+        parser.error("--candidate, --rounds, --scenes and --declare-change require --compare")
+    if args.compare is not None and (args.once or args.diagnostic):
+        parser.error("--compare cannot be combined with --once or --diagnostic")
+    if args.rounds < 3:
+        parser.error("--rounds must be at least 3")
     now = datetime.now().astimezone()
     series = ROOT / "outputs" / "bench" / now.date().isoformat() / now.strftime("%H%M%S-%f")
+    if args.compare is not None:
+        series = series.with_name(series.name + "-compare")
     series.mkdir(parents=True)
     print(f"Reports: {series}", flush=True)
     try:
+        if args.compare is not None:
+            return run_compare(series, args.compare, args.candidate, args.rounds, args.scenes,
+                               args.vsync, not args.no_profiling, tuple(args.declare_change))
         return run_series(series, args.diagnostic, args.vsync, not args.no_profiling, args.once)
     except (ValueError, OSError, subprocess.SubprocessError, KeyError) as error:
         write_json(series / "failure.json", {"error": str(error)})

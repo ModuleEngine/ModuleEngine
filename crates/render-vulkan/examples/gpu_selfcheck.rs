@@ -24,7 +24,7 @@ fn main() -> Result<(), String> {
         .unwrap_or(".work/gpu-selfcheck".into());
     let directory = Path::new(&directory);
     std::fs::create_dir_all(directory).map_err(|e| e.to_string())?;
-    let mut renderer = VulkanRenderer::new()?;
+    let mut renderer = VulkanRenderer::new().map_err(|error| error.to_string())?;
     println!("Actual Vulkan adapter: {}", renderer.device_name());
     let mut objects = ObjectsWorld::demo();
     let mut ecs = EcsWorld::demo();
@@ -37,7 +37,9 @@ fn main() -> Result<(), String> {
     let mut graph = default_graph(RenderPath::Forward);
     let mut sources = BTreeMap::new();
     let overrides = RenderOverrides::default();
-    let forward = renderer.render(&scene, camera, 320, 240, &graph, &sources, &overrides)?;
+    let forward = renderer
+        .render(&scene, camera, 320, 240, &graph, &sources, &overrides)
+        .map_err(|error| error.to_string())?;
     save(directory, "forward-aces", &forward)?;
     assert!(
         forward.stats.shaded_pixels > 1000
@@ -45,28 +47,32 @@ fn main() -> Result<(), String> {
             && forward.stats.triangles > 0,
         "GPU must show actual depth-tested geometry"
     );
-    let ecs_frame = renderer.render(
-        &ecs.snapshot(),
-        camera,
-        320,
-        240,
-        &graph,
-        &sources,
-        &overrides,
-    )?;
+    let ecs_frame = renderer
+        .render(
+            &ecs.snapshot(),
+            camera,
+            320,
+            240,
+            &graph,
+            &sources,
+            &overrides,
+        )
+        .map_err(|error| error.to_string())?;
     assert_eq!(
         forward.rgba, ecs_frame.rgba,
         "Same neutral snapshot must render identically for both world stores"
     );
-    let deferred = renderer.render(
-        &scene,
-        camera,
-        320,
-        240,
-        &default_graph(RenderPath::Deferred),
-        &sources,
-        &overrides,
-    )?;
+    let deferred = renderer
+        .render(
+            &scene,
+            camera,
+            320,
+            240,
+            &default_graph(RenderPath::Deferred),
+            &sources,
+            &overrides,
+        )
+        .map_err(|error| error.to_string())?;
     save(directory, "deferred", &deferred)?;
     assert_ne!(
         forward.rgba, deferred.rgba,
@@ -78,7 +84,9 @@ fn main() -> Result<(), String> {
         .find(|n| n.id == "tonemap")
         .unwrap()
         .params["mode"] = serde_json::json!("reinhard");
-    let reinhard = renderer.render(&scene, camera, 320, 240, &graph, &sources, &overrides)?;
+    let reinhard = renderer
+        .render(&scene, camera, 320, 240, &graph, &sources, &overrides)
+        .map_err(|error| error.to_string())?;
     save(directory, "forward-reinhard", &reinhard)?;
     assert_ne!(
         forward.rgba, reinhard.rgba,
@@ -92,7 +100,9 @@ fn main() -> Result<(), String> {
         .edges
         .retain(|e| e.to_node != "ao" || e.to_port == "color");
     sources.insert("custom_compute".into(), demo_custom_compute_source());
-    let compute = renderer.render(&scene, camera, 320, 240, &graph, &sources, &overrides)?;
+    let compute = renderer
+        .render(&scene, camera, 320, 240, &graph, &sources, &overrides)
+        .map_err(|error| error.to_string())?;
     save(directory, "custom-compute", &compute)?;
     assert_ne!(forward.rgba, compute.rgba);
     let mut bad = sources.clone();
@@ -101,9 +111,12 @@ fn main() -> Result<(), String> {
         renderer
             .prepare(&graph, &bad)
             .unwrap_err()
+            .to_string()
             .contains("HLSL compilation failed")
     );
-    let retained = renderer.render(&scene, camera, 320, 240, &graph, &sources, &overrides)?;
+    let retained = renderer
+        .render(&scene, camera, 320, 240, &graph, &sources, &overrides)
+        .map_err(|error| error.to_string())?;
     assert_eq!(
         compute.rgba, retained.rgba,
         "Failed candidate must retain valid pipelines and exact source"
@@ -120,7 +133,9 @@ fn main() -> Result<(), String> {
     custom.module = "gpu.custom".into();
     custom.params = serde_json::json!({"source_id":"custom_scene","shift":0.0,"manifest":custom_raster_manifest()});
     sources.insert("custom_scene".into(), demo_custom_raster_source());
-    let raster = renderer.render(&scene, camera, 320, 240, &graph, &sources, &overrides)?;
+    let raster = renderer
+        .render(&scene, camera, 320, 240, &graph, &sources, &overrides)
+        .map_err(|error| error.to_string())?;
     save(directory, "custom-raster", &raster)?;
     assert!(raster.stats.shaded_pixels > 1000);
     graph
@@ -129,7 +144,9 @@ fn main() -> Result<(), String> {
         .find(|n| n.id == "geometry")
         .unwrap()
         .params["shift"] = serde_json::json!(1.2);
-    let shifted = renderer.render(&scene, camera, 320, 240, &graph, &sources, &overrides)?;
+    let shifted = renderer
+        .render(&scene, camera, 320, 240, &graph, &sources, &overrides)
+        .map_err(|error| error.to_string())?;
     save(directory, "custom-vertex-shift", &shifted)?;
     assert_ne!(
         raster.rgba, shifted.rgba,
@@ -142,7 +159,9 @@ fn main() -> Result<(), String> {
             name: "encode.frame".into(),
             value: [1., 0., 0., 1.],
         });
-    let cleared = renderer.render(&scene, camera, 320, 240, &graph, &sources, &clearing)?;
+    let cleared = renderer
+        .render(&scene, camera, 320, 240, &graph, &sources, &clearing)
+        .map_err(|error| error.to_string())?;
     assert!(
         cleared
             .rgba

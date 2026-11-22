@@ -145,6 +145,7 @@ pub fn install(registry: &mut SystemRegistry) -> Result<(), String> {
         service_requests: |_| Ok(vec![]),
         diagnostics,
     })?;
+    registry.register_presentation_scope("puzzle.presentation", Default::default())?;
     registry.describe_contribution("puzzle.presentation", module_engine_core::CapabilityMetadata::new(
         "Puzzle host integration", "Supply this puzzle's camera, input adaptation and outcome diagnostics; optional UI is installed separately.",
         module_engine_core::CapabilityOwner::Project, module_engine_core::CapabilityKind::HostContribution, env!("CARGO_PKG_NAME"),

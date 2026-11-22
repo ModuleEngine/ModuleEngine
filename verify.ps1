@@ -1,10 +1,11 @@
 param(
     [switch]$NativeBenchmarks,
-    [ValidateSet('quick', 'contracts', 'clippy', 'native', 'native-tools', 'package')]
+    [ValidateSet('quick', 'contracts', 'clippy', 'native', 'native-tools', 'package', 'render')]
     [string]$Profile,
     [string]$Python,
     [switch]$Plan,
     [switch]$List,
+    [switch]$RequireCapabilities,
     [string]$OutputRoot,
     [ValidateScript({ $_ -gt 0 -and -not [double]::IsInfinity($_) -and -not [double]::IsNaN($_) })]
     [double]$Timeout
@@ -13,7 +14,7 @@ $ErrorActionPreference = "Stop"
 
 # The opt-in runner dispatches before legacy environment/bootstrap work. In
 # particular --plan and --list must remain read-only on an unprepared checkout.
-$verificationNewArguments = @(@('Profile', 'Python', 'Plan', 'List', 'OutputRoot', 'Timeout') |
+$verificationNewArguments = @(@('Profile', 'Python', 'Plan', 'List', 'OutputRoot', 'Timeout', 'RequireCapabilities') |
     Where-Object { $PSBoundParameters.ContainsKey($_) })
 if ($verificationNewArguments.Count -gt 0) {
     if ($NativeBenchmarks) { throw '-NativeBenchmarks cannot be combined with profile runner arguments.' }
@@ -70,6 +71,7 @@ if ($verificationNewArguments.Count -gt 0) {
     if ($Profile) { $verificationRunnerArguments += @('--profile', $Profile) }
     if ($Plan) { $verificationRunnerArguments += '--plan' }
     if ($List) { $verificationRunnerArguments += '--list' }
+    if ($RequireCapabilities) { $verificationRunnerArguments += '--require-capabilities' }
     if ($PSBoundParameters.ContainsKey('OutputRoot')) { $verificationRunnerArguments += @('--output-root', $OutputRoot) }
     if ($PSBoundParameters.ContainsKey('Timeout')) {
         $verificationRunnerArguments += @('--timeout', $Timeout.ToString([System.Globalization.CultureInfo]::InvariantCulture))
@@ -112,7 +114,7 @@ public static class ModuleEngineVerificationNativePath {
     return [ModuleEngineVerificationNativePath]::Resolve([System.IO.Path]::GetFullPath($Path), [bool]$Directory)
 }
 
-function Get-VerificationLegacyEditorExecutable {
+function Get-VerificationLegacyEditorExecutable([string]$CargoExecutable) {
     $LASTEXITCODE = 0
     $verificationHostLines = @(rustc -vV)
     if ($LASTEXITCODE -ne 0) { throw 'Native Rust host discovery failed.' }
@@ -136,7 +138,7 @@ function Get-VerificationLegacyEditorExecutable {
     if ($verificationMachine -ne $verificationOsMachine) { throw "Rust host $verificationHost does not match the native Windows architecture." }
 
     $LASTEXITCODE = 0
-    $verificationMetadataLines = @(cargo metadata --offline --locked --no-deps --format-version 1)
+    $verificationMetadataLines = @(& $CargoExecutable metadata --offline --locked --no-deps --format-version 1)
     if ($LASTEXITCODE -ne 0) { throw 'Cargo metadata failed.' }
     $verificationMetadata = ($verificationMetadataLines -join "`n") | ConvertFrom-Json
     $verificationExpectedManifest = Get-VerificationCanonicalPath (Join-Path $PSScriptRoot 'crates/editor/Cargo.toml')
@@ -152,7 +154,7 @@ function Get-VerificationLegacyEditorExecutable {
     if ($verificationTargets.Count -ne 1) { throw 'Cargo metadata did not identify exactly one Editor binary target.' }
     $verificationTarget = $verificationTargets[0]
     $LASTEXITCODE = 0
-    $verificationBuildLines = @(cargo build --offline --locked --release --target $verificationHost -p module-engine-editor --bin module-engine-editor --message-format=json)
+    $verificationBuildLines = @(& $CargoExecutable build --offline --locked --release --target $verificationHost -p module-engine-editor --bin module-engine-editor --message-format=json)
     $verificationBuildExit = $LASTEXITCODE
     $verificationFinished = @()
     $verificationExecutables = @()
@@ -227,6 +229,26 @@ function Get-VerificationLegacyEditorExecutable {
     return $verificationExecutable
 }
 
+function Invoke-VerificationLegacyTests([string]$CargoExecutable, [string]$Failure, [string[]]$TestArguments) {
+    $validationFailed = $false
+    & {
+        # Windows PowerShell reports redirected native stderr as errors.
+        # Read the output and check Cargo's exit code ourselves.
+        $ErrorActionPreference = 'Continue'
+        $PSNativeCommandUseErrorActionPreference = $false
+        & $CargoExecutable test @TestArguments 2>&1
+    } | ForEach-Object {
+        $line = $_.ToString()
+        if ($line.StartsWith('Vulkan validation ERROR:', [StringComparison]::Ordinal)) {
+            $validationFailed = $true
+        }
+        Write-Output $line
+    }
+    if ($LASTEXITCODE -ne 0) { throw $Failure }
+    if ($validationFailed) { throw 'Vulkan validation reported errors during legacy tests' }
+}
+
+$verificationOriginalSerial = $env:MODULE_ENGINE_VERIFY_SERIAL
 $verificationOriginalTemp = $env:TEMP
 $verificationOriginalTmp = $env:TMP
 $verificationOriginalIncremental = $env:CARGO_INCREMENTAL
@@ -239,30 +261,37 @@ try {
     $env:TEMP = (Resolve-Path -LiteralPath $verificationTemp).Path
     $env:TMP = $env:TEMP
     $env:CARGO_INCREMENTAL = '0'
+    $env:MODULE_ENGINE_VERIFY_SERIAL = '1'
     $localEnvironment=Join-Path $PSScriptRoot '.tools/env.ps1'
     if (Test-Path -LiteralPath $localEnvironment) { . $localEnvironment }
     $projectCargoCache=Join-Path $PSScriptRoot '.work/cargo-home'
     if (Test-Path -LiteralPath $projectCargoCache -PathType Container) { $env:CARGO_HOME=$projectCargoCache }
-    & (Join-Path $PSScriptRoot 'scripts/bootstrap.ps1') -Json
+    & (Join-Path $PSScriptRoot 'scripts/bootstrap.ps1') -Json -RustOnly
     if ($LASTEXITCODE -ne 0) { throw "Pinned tools are missing. Run scripts/bootstrap.ps1 -Restore explicitly." }
+    $verificationCargo = (Get-Command cargo.exe -CommandType Application -ErrorAction Stop |
+        Select-Object -First 1).Source
     # Integration-style units invoke the same Cargo cache, GPU and hard wall
     # timeouts. Serialize these fixtures so setup does not distort tick timing.
-    cargo test --offline --locked --workspace --lib --bins -- --test-threads=1
-    if ($LASTEXITCODE -ne 0) { throw "Tests failed" }
-    cargo test --offline --locked -p module-engine-editor game_ui::tests::interactive_game_ui_keeps_drawing_and_applying_rust_during_slow_ticks -- --ignored --exact --test-threads=1
-    if ($LASTEXITCODE -ne 0) { throw "Isolated native Game UI/slow Rust acceptance failed" }
-    cargo test --offline --locked --workspace --doc
+    Invoke-VerificationLegacyTests $verificationCargo 'Tests failed' @(
+        '--offline', '--locked', '--workspace', '--lib', '--bins', '--', '--show-output', '--test-threads=1'
+    )
+    Invoke-VerificationLegacyTests $verificationCargo 'Isolated native Game UI/slow Rust acceptance failed' @(
+        '--offline', '--locked', '-p', 'module-engine-editor',
+        'game_ui::tests::interactive_game_ui_keeps_drawing_and_applying_rust_during_slow_ticks',
+        '--', '--ignored', '--exact', '--show-output', '--test-threads=1'
+    )
+    & $verificationCargo test --offline --locked --workspace --doc
     if ($LASTEXITCODE -ne 0) { throw "Doc-tests failed" }
-    cargo clippy --offline --locked --workspace --all-targets -- -D warnings
+    & $verificationCargo clippy --offline --locked --workspace --all-targets '--' -D warnings
     if ($LASTEXITCODE -ne 0) { throw "Clippy failed" }
     $env:RUSTDOCFLAGS='-D warnings'
-    cargo doc --offline --locked --workspace --no-deps
+    & $verificationCargo doc --offline --locked --workspace --no-deps
     if ($LASTEXITCODE -ne 0) { throw "Rustdoc failed" }
-    cargo run --offline --locked -p module-engine-editor -- --self-check outputs/verification-v04/cpu
+    & $verificationCargo run --offline --locked -p module-engine-editor '--' --self-check outputs/verification-v04/cpu
     if ($LASTEXITCODE -ne 0) { throw "CPU runtime self-check failed" }
-    cargo run --offline --locked -p module-engine-editor -- --integration-check outputs/verification-v04/integration
+    & $verificationCargo run --offline --locked -p module-engine-editor '--' --legacy-verify-check --integration-check outputs/verification-v04/integration
     if ($LASTEXITCODE -ne 0) { throw "Vulkan/Rust/project integration check failed" }
-    cargo run --offline --locked -p module-engine-editor -- --settings-check outputs/verification-v04/settings
+    & $verificationCargo run --offline --locked -p module-engine-editor '--' --legacy-verify-check --settings-check outputs/verification-v04/settings
     if ($LASTEXITCODE -ne 0) { throw "Settings/properties policy check failed" }
     $verificationGame = Join-Path $PSScriptRoot 'game-project-v4.json'
     if (-not (Test-Path -LiteralPath $verificationGame -PathType Leaf)) {
@@ -275,24 +304,25 @@ try {
         $null -eq (Get-Content -LiteralPath $verificationGame -Raw | ConvertFrom-Json).game) {
         throw 'No authored game exists. Create the example with: cargo run --locked -p module-engine-editor -- --new-game game-project.json; then run verify.ps1 again.'
     }
-    cargo run --offline --locked -p module-engine-editor -- --game-check $verificationGame outputs/verification-v04/game
+    & $verificationCargo run --offline --locked -p module-engine-editor '--' --legacy-verify-check --game-check $verificationGame outputs/verification-v04/game
     if ($LASTEXITCODE -ne 0) { throw "Authored game/Player pipeline check failed" }
-    cargo run --offline --locked -p module-engine-editor -- --editor-ui-check $verificationGame outputs/verification-v04/editor-ui
+    & $verificationCargo run --offline --locked -p module-engine-editor '--' --legacy-verify-check --editor-ui-check $verificationGame outputs/verification-v04/editor-ui
     if ($LASTEXITCODE -ne 0) { throw "Editor workflow check failed" }
-    cargo run --offline --locked -p module-engine-editor -- --scene-assets-check $verificationGame outputs/verification-v04/scene-assets
+    & $verificationCargo run --offline --locked -p module-engine-editor '--' --legacy-verify-check --scene-assets-check $verificationGame outputs/verification-v04/scene-assets
     if ($LASTEXITCODE -ne 0) { throw "Scene/Assets/export check failed" }
-    cargo run --offline --locked -p module-engine-editor -- --game-worker-check $verificationGame outputs/verification-v04/game-worker
+    & $verificationCargo run --offline --locked -p module-engine-editor '--' --legacy-verify-check --game-worker-check $verificationGame outputs/verification-v04/game-worker
     if ($LASTEXITCODE -ne 0) { throw "Background simulation/lifecycle check failed" }
     if ($NativeBenchmarks) {
         # A real desktop is required; CPU processing and native cadence are
         # reported separately. Do not run other builds during these samples.
-        $verificationExe = Get-VerificationLegacyEditorExecutable
+        $verificationExe = Get-VerificationLegacyEditorExecutable $verificationCargo
         & $verificationExe --editor-benchmark $verificationGame outputs/verification-v04/editor-native
         if ($LASTEXITCODE -ne 0) { throw "Native Editor benchmark failed" }
         & $verificationExe --player-benchmark $verificationGame outputs/verification-v04/player-native
         if ($LASTEXITCODE -ne 0) { throw "Native Player benchmark failed" }
     }
 } finally {
+    $env:MODULE_ENGINE_VERIFY_SERIAL = $verificationOriginalSerial
     $env:TEMP = $verificationOriginalTemp
     $env:TMP = $verificationOriginalTmp
     $env:CARGO_INCREMENTAL = $verificationOriginalIncremental

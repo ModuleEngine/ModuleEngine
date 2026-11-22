@@ -1,0 +1,68 @@
+# Visual roadmap
+
+[English](roadmap-map.md) | [Русский](ru/roadmap-map.md) | [Documentation](README.md)
+
+The visual roadmap is an HTML page with the phase map of the [engine rebuild track](product-roadmap.md#rebuild), the current task, the next steps and rough timing. It is built automatically from [docs/product-roadmap.md](product-roadmap.md); nobody edits task statuses in the page by hand.
+
+## Where to see it
+
+After every merge to `main` that touches the roadmap, the [Roadmap map workflow](../.github/workflows/roadmap.yml) publishes the page to GitHub Pages: `https://myjname.github.io/ModuleEngine/`. The same workflow publishes the [campaign map](#campaign-map) next to it at `https://myjname.github.io/ModuleEngine/world/`.
+
+One-time setup: in the repository **Settings → Pages → Build and deployment**, set **Source** to **GitHub Actions**. Until then the deploy job fails while the build and check still run.
+
+## How to change a status
+
+The last column of every phase task table in the roadmap is the status:
+
+| Value in the English table | Value in the Russian table | Meaning on the map |
+| --- | --- | --- |
+| `Done` | `Сделано` (also `Выполнено` or `Готово`) | Task done |
+| `In progress`, optionally `In progress (2–3 d)` | `В работе`, optionally `В работе (2–3 д)` | Task in progress |
+| An estimate such as `2–3 d` or `1.5 w` | An estimate such as `2–3 д` or `1,5 н` | Not started |
+
+The dedicated roadmap chat records status transitions. Implementation chats pass along accepted results and verification evidence and update technical contracts in their own pull requests. When a transition is ready, the planning chat compares `main` with the working chats and proposes one status pull request for the confirmed completions and work that has actually started. Apply the proposal from the dedicated roadmap chat and edit both language tables together. Keep the original estimate in parentheses when marking a task in progress if the estimate still applies.
+
+The phase colour, the “Done / Now / Next” cards, the progress bar, the header label and the column headers are derived from these statuses:
+
+- a phase is done when all its tasks are done, and current when at least one is done or in progress;
+- a phase is next when every phase it depends on is done or current;
+- a checkpoint (R1+R3+R4, R2+R5) is passed when all its phases are done, including a phase whose arrow is drawn through another phase (R1 through R4);
+- the header shows the task in progress, otherwise the next available task; when all tasks are done it says the track is complete, and when open tasks remain but no phase can start (for example, a dependency was removed from the plan) it says work is blocked and names what the phase waits for.
+
+Only sections with a heading of the form `### <ID> — <title>` (for example `### R1 — ...` or `### AI-A — ...`) and task rows whose ID starts with that phase ID (`R1.3`, `AI-A.0`) are read.
+
+## What stays hand-written
+
+The page template [scripts/roadmap_map.html](../scripts/roadmap_map.html) holds the Russian wording: short task titles, phase descriptions, dependencies, the map layout, the timing chart and the version route. For a task that is not in the template yet, the page uses the first sentence of the task from the Russian roadmap. A new phase needs a node in the template (`phases` and `pos`) and an arrow for each of its dependencies (`add('from>to', ...)`); until the node exists the build prints a warning and the phase is not shown. A phase removed from the roadmap keeps its node but loses its tasks and is marked “not in plan”; the template's old tasks never come back.
+
+`scripts/test_roadmap_map.py` runs the data model of both pages in Node.js and checks, on small EN/RU fixtures, that a phase removed from both Markdown versions disappears from the map and the header reports blocked work, that the 0.5 checkpoint needs R1, R3 and R4, and that every dependency listed in a phase card has an arrow. Checks against the live roadmap derive their expectations from its tables, so ordinary plan edits do not break them.
+
+<a id="campaign-map"></a>
+
+## Campaign map
+
+The campaign map is the same roadmap as a game-style pixel-art map, built from the same tables. Every phase (R0–R10) is a region with its own theme, every task is a province inside it, and arrows show which phase opens which. Checkpoints and version milestones are lighthouse islands, the AI branch is a set of wizard towers.
+
+| Task status | On the map |
+| --- | --- |
+| `Done` | Captured: bright colours, golden border, blue flag. A phase with every task done is marked with a crown |
+| `In progress` | Under siege: animated flame frame, camp and campfire |
+| Not started, the first one of a phase that has been started | The next move: yellow pennant and tent. Shown only while nothing in that phase is in progress |
+| Not started, anything else | Fog of war: the farther from the front, the thicker the fog |
+
+Hover a province for its title and status; click it for the acceptance criterion and the estimate, click a region ribbon for the phase goal and the list of its provinces. Task titles and criteria come from the Russian roadmap, the card shows the full text of the task and acceptance cells; the English table only supplies statuses. A task that waits for a task of another phase (R2.3 needs R1.6) is not offered as the next move until that task is done. These dependencies are declared in `TASK_DEPS` of the template; if the waiting task is in the roadmap but the task it waits for is not, the build (including `--check`) fails and names both tasks.
+
+The page is a static file with no network access: a Content-Security-Policy blocks every request. All art is drawn in code on a canvas, with no external assets. Animation stops with `prefers-reduced-motion`.
+
+What stays hand-written lives in [scripts/roadmap_world.html](../scripts/roadmap_world.html): region names and themes, the position of each region and landmark, and `STATIC` with the dependencies and goals of each phase. `STATIC` mirrors `phases` of the table page, and `scripts/test_roadmap_map.py` fails if they diverge. Provinces are laid out automatically in the order of the tasks, so a new task needs no edit in the template. A new phase needs an entry in `STATIC` and `REGS`; until it exists the build prints a warning and the phase is not shown. A phase removed from the roadmap disappears from the map together with its arrows.
+
+## Checks and local build
+
+```sh
+python scripts/roadmap_map.py            # writes outputs/roadmap/index.html and outputs/roadmap/world/index.html
+python scripts/roadmap_map.py --check    # validation only
+```
+
+The build fails when the English and Russian tables list different tasks or states, or a task has an unsupported status or estimate. Estimates use days (`d`/`д`) or weeks (`w`/`н`), with an optional range. Use a decimal point in English and a comma in Russian.
+
+`ModuleEngine CI` uses the `Roadmap status checks` job for a nonempty change limited to existing task status cells in both exact roadmap files. It validates both tables, runs the generator tests and their Node model, checks without writing, and builds both pages. Other changes use the ordinary OS matrix and its existing route selection. `CI required` requires successful planning and all jobs required by the selected route. The separate Roadmap map workflow retains the Chromium regression and GitHub Pages publication.

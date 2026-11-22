@@ -14,6 +14,24 @@ pub type GameStateValidator = fn(&GameState) -> Result<(), String>;
 pub type GamePoseProjection =
     fn(&SceneSnapshot, &GameState) -> Result<BTreeMap<u64, [[f32; 4]; 4]>, String>;
 
+/// Opt into sparse presentation. Select every ID the corresponding hook can
+/// modify in the current state. Hooks must give the same result for each
+/// selected object in a partial input, and decoration must preserve IDs,
+/// primitive counts and ordering. A pose hook may only return IDs in its input.
+#[derive(Clone, Copy)]
+pub struct GamePresentationScope {
+    pub pose_objects: fn(&GameState) -> Vec<u64>,
+    pub appearance_objects: fn(&GameState) -> Vec<u64>,
+}
+impl Default for GamePresentationScope {
+    fn default() -> Self {
+        Self {
+            pose_objects: |_| Vec::new(),
+            appearance_objects: |_| Vec::new(),
+        }
+    }
+}
+
 /// A source-owned request for an optional application service. The ID selects
 /// an installed native factory; configuration is interpreted only by it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

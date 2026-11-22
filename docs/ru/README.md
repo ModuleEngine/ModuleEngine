@@ -15,6 +15,7 @@
 - [Текущее состояние ModuleEngine](current-status.md)
 - [Запуск нативных бенчмарков S1–S5](bench.md) · [Принятая серия R0.2, 21 ноября 2026](bench-r02-20261121.md)
 - [Продуктовая карта по версиям: стабильные конфигурации, самостоятельные авторы и пять игр](product-roadmap.md#map)
+- [Визуальная дорожная карта, собираемая автоматически из статусов задач](roadmap-map.md)
 - [План 0.4.2: изображение Player и docking редактора](release-042-plan.md) · [Объём в дорожной карте](product-roadmap.md#image-and-docking)
 - [Задание и передача 0.4.1: от настройки сглаживания в Editor до Player](release-041-plan.md) · [Проверки владельца по версиям](product-roadmap-checks.md)
 - [Реализация 0.4.1, кадры Editor/Player и ограниченные инженерные проверки](release-041-verification.md)
@@ -83,6 +84,7 @@
 
 - [Закреплённые инструменты Windows](toolchain.md)
 - [CI ModuleEngine](ci.md)
+- [Лицензии и атрибуция](licensing.md)
 - [Маршруты проверок](verification.md)
 - [Диагностика редактора](editor-diagnostics.md)
 - [Независимое ревью изменений](review.md)

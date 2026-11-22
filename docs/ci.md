@@ -4,11 +4,11 @@
 
 [English](ci.md) | [Русский](ru/ci.md) | [Documentation](README.md)
 
-Goal: every PR receives separate `contracts` and `clippy` checks on Windows and Linux; changes to executable
-sources add native and package checks. Documentation PRs do not receive
-expensive native/package builds. Non-goals: performance, desktop dialogs, hardware GPU,
-and full Full/Team/Player delivery. Criterion: `CI required` succeeds only after
-successful planning and both platforms, including selected additional routes.
+Ordinary PRs receive separate `contracts` and `clippy` checks on Windows and Linux.
+Executable-source changes add native and package checks. Status-only roadmap
+transitions have a dedicated check. `CI required` succeeds after planning and
+every job required by the selected route. Performance, desktop dialogs, hardware
+GPU and full Full/Team/Player delivery are outside this CI scope.
 
 <a id="что-выполняется"></a>
 
@@ -16,24 +16,29 @@ successful planning and both platforms, including selected additional routes.
 
 The [workflow](../.github/workflows/ci.yml) runs for all PRs, pushes to `main`, the merge queue,
 and manual invocation; there are no workflow-level path filters. [ci_plan.py](../scripts/ci_plan.py)
-reads the Git diff, including deleted files and both sides of renames. Only changes
-to `docs/`, Markdown, LICENSE, and `.gitignore` skip additional routes;
-an unknown new source path enables them. An initial push/manual run enables everything.
-Failure to determine the diff fails planning.
+reads the Git diff, including deleted files and both sides of renames. A nonempty
+edit restricted to existing status cells in both [roadmap tables](roadmap-map.md)
+can use `Roadmap status checks` after bilingual validation. This job runs the
+generator and Node model tests, `--check`, and builds both HTML pages. The
+standalone Roadmap map workflow still checks Chromium and publishes Pages.
 
-| Runner | Always | When sources change |
+Other changes use the ordinary matrix. Within it, edits limited to `docs/`,
+Markdown, `LICENSE-MIT`, `LICENSE-APACHE`, or `.gitignore` skip native and package
+routes. Unknown source paths, empty diffs, initial pushes and manual runs enable
+them. Failure to determine the diff fails planning.
+
+| Runner | Ordinary matrix | When sources change |
 | --- | --- | --- |
-| `windows-2022` | Python unit checks, `contracts`, `clippy` | `native-tools`, then `package` |
-| `ubuntu-24.04` | Python unit checks, `contracts`, `clippy` | `native` on explicitly selected Mesa lavapipe, then `package` |
+| `windows-2022` | Python unit checks, [license policy](licensing.md#third-party-code), `contracts`, `clippy` | `native-tools`, then `package` |
+| `ubuntu-24.04` | Python unit checks, [license policy](licensing.md#third-party-code), `contracts`, `clippy` | `native` on explicitly selected Mesa lavapipe, then `package` |
 
-The existing checks job always plans and runs `clippy` separately on both platforms,
-including documentation PRs. Its command is
+The ordinary matrix plans and runs `clippy` separately on both platforms,
+including documentation PRs outside the status-only route. Its command is
 `cargo clippy --offline --locked --target {native_host} --workspace --all-targets --all-features -- -D warnings`.
 The launcher resolves `{native_host}` from the actual verbose Rust toolchain output
 and rejects a release/target mismatch with the platform manifest before Cargo metadata.
 Clippy does not run formatting, tests, or runtime scenarios; `contracts` still checks
-formatting exactly once. The fail-closed `CI required` aggregate is unchanged.
-This workflow change requires new hosted results for its own SHA.
+formatting exactly once. A workflow change requires new hosted results for its own SHA.
 
 `native-tools` comprises three existing checks of native linker/cache/executable
 spellings without GPU or UI. This is part of `native`, not a replacement for its two GameUI tests.
@@ -41,7 +46,7 @@ Linux full `native` runs offscreen tests with software Vulkan, without a desktop
 session. Windows GPU native acceptance remains a targeted local route.
 Successful CI does not confirm hardware Linux, strict 60 FPS, cold-start, or
 interactive desktop acceptance. `package` uses minimal Cargo fixtures,
-not a real game export.
+not a real game export. Linux CI passes `--require-capabilities` so missing Vulkan or DXC fails the required offscreen check.
 
 The two platforms run in parallel on separate hosted VMs; commands within
 each VM run sequentially. Each job receives a fresh hosted checkout
@@ -79,9 +84,10 @@ workflow appears in the target GitHub repository and the first successful PR/pus
 3. Check a test failure in a separate PR: a failed prerequisite must block
    `CI required`. A new PR version must pass again; the old SHA is insufficient.
 
-The aggregate with `if: always()` explicitly rejects `failure`, `cancelled`, `skipped`, and
-missing route outputs. Individual conditional native/package steps are not declared
-passed when their route is not selected. If branch protection/ruleset has not yet been
+The aggregate with `if: always()` rejects any required job result other than
+`success` and rejects missing route outputs. It expects the unselected job to be
+skipped. The ordinary matrix requires success on both OSes, including its selected
+native/package steps. If branch protection/ruleset has not yet been
 applied, CI provides a signal but does not technically prohibit merging. Enabling the rule
 requires a known repository and appropriate permissions; local unit checks
 do not prove execution of GitHub Actions.

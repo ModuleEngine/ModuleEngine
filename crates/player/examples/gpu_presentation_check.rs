@@ -3,15 +3,16 @@
 use eframe::{egui, egui_wgpu, wgpu};
 use module_engine_core::{
     Camera, Frame, FrameRenderer, Graph, GraphDocument, ModuleRegistry, ObjectsWorld,
-    RenderOverrides, RenderSubmission, SceneSnapshot, TextureImage, WorldKind, WorldProvider,
-    demo_document,
+    RenderOverrides, RenderSubmission, SceneChange, SceneChangeKind, SceneSnapshot, SceneUpdate,
+    TextureImage, WorldKind, WorldProvider, demo_document,
 };
 use module_engine_player::gpu_presentation::{
     GpuPresentationBridge, GpuTexture, finish_gpu_retirements,
 };
 use module_engine_vulkan::presentation::{AdapterIdentity, VulkanPresentationTarget};
 use module_engine_vulkan::{
-    RenderPath, builtin_hlsl_source, builtin_manifest, default_graph, remove_pass_with_bypass,
+    RenderPath, ResidentScene, SceneInput, VulkanRenderer, builtin_hlsl_source, builtin_manifest,
+    default_graph, remove_pass_with_bypass,
 };
 use serde_json::{Value, json};
 use std::{
@@ -270,7 +271,7 @@ fn run(report: &Arc<Mutex<Value>>, report_path: &Path, png: bool) -> Result<Fram
         .join("../..")
         .canonicalize()
         .map_err(|e| e.to_string())?;
-    module_engine_vulkan::install(&mut registry, &root)?;
+    module_engine_vulkan::install(&mut registry, &root).map_err(|error| error.to_string())?;
     let png_folder = png.then(|| {
         report_path
             .parent()
@@ -426,6 +427,8 @@ fn run(report: &Arc<Mutex<Value>>, report_path: &Path, png: bool) -> Result<Fram
 
     fixture.pool_check(&alpha_document)?;
     fixture.async_check(&alpha_document, &render_state)?;
+    fixture.material_replacement_check(&root, false)?;
+    fixture.material_replacement_check(&root, true)?;
     // Publishing a replacement shares the actual backend; replacing authored
     // configuration never substitutes synthetic pixels for graph output.
     alpha_document = custom_alpha_document(RenderPath::Deferred)?;
@@ -516,6 +519,273 @@ fn custom_alpha_document(path: RenderPath) -> Result<GraphDocument, String> {
 }
 
 impl Fixture<'_> {
+    fn material_replacement_check(&self, root: &Path, resident: bool) -> Result<(), String> {
+        // The FrameRenderer adapter admits one pending request per caller.
+        // Exercise the same direct two-slot producer used by the native S3 window.
+        let mut renderer = VulkanRenderer::new_at(root.to_owned()).map_err(|e| e.to_string())?;
+        let target = self.bridge.target();
+        let target = target
+            .as_any()
+            .downcast_ref::<VulkanPresentationTarget>()
+            .ok_or("Vulkan presentation target is required")?;
+        renderer
+            .set_presentation_target(Some(Arc::new(VulkanPresentationTarget {
+                identity: target.identity.clone(),
+                allocator: target.allocator.clone(),
+            })))
+            .map_err(|e| e.to_string())?;
+        let case = if resident {
+            "resident_scene_replacement"
+        } else {
+            "bindless_material_replacement"
+        };
+        if !renderer.capabilities().bindless_materials
+            || resident && !renderer.capabilities().resident_scene
+        {
+            record(
+                self.report,
+                json!({"case":case, "skipped":"Adapter lacks the required material/scene capabilities"}),
+            );
+            return Ok(());
+        }
+        ensure(
+            renderer.frame_capacity() == 2 && self.scene.items.len() >= 2,
+            "Replacement requires two slots and two material users",
+        )?;
+        let solid = |color: [u8; 4]| {
+            Arc::new(TextureImage {
+                width: 9,
+                height: 5,
+                rgba8: color.repeat(45),
+            })
+        };
+        let mut a = self.scene.clone();
+        let original = solid([239, 18, 62, 255]);
+        for item in &mut a.items {
+            item.material.base_color_texture = Some(original.clone());
+        }
+        a.items.sort_by_key(|item| item.id);
+        let mut b = a.clone();
+        b.items[0].material.base_color_texture = Some(solid([35, 238, 69, 255]));
+        if resident {
+            for vertex in &mut b.items[0].mesh.vertices {
+                vertex[1] *= 0.65;
+            }
+            b.items[0].model[0][0] *= -0.85;
+            b.items[0].model[0][3] += 0.3;
+        }
+        let camera = Camera::default();
+        let size = [160, 96];
+        let graph = default_graph(RenderPath::Forward);
+        let sources = BTreeMap::new();
+        let controls = RenderOverrides::default();
+        let mut reference = VulkanRenderer::new_at(root.to_owned()).map_err(|e| e.to_string())?;
+        let expected = [&a, &b].map(|scene| {
+            reference
+                .render(scene, camera, size[0], size[1], &graph, &sources, &controls)
+                .map(|frame| {
+                    egui::ColorImage::from_rgba_unmultiplied(size, &frame.rgba)
+                        .pixels
+                        .iter()
+                        .flat_map(|p| p.to_array())
+                        .collect::<Vec<_>>()
+                })
+                .map_err(|e| e.to_string())
+        });
+        let [expected_a, expected_b] = expected;
+        let (expected_a, expected_b) = (expected_a?, expected_b?);
+        ensure(
+            expected_a != expected_b,
+            "Material replacement positive control did not change pixels",
+        )?;
+        let mut submit = |scene: SceneInput<'_>| match renderer
+            .render_scene_presented(scene, camera, size[0], size[1], &graph, &sources, &controls)
+            .map_err(|e| e.to_string())?
+        {
+            RenderSubmission::Pending(ticket) => Ok(ticket),
+            _ => Err("Both material generations must be admitted before polling".to_owned()),
+        };
+        let mut retained = ResidentScene::default();
+        let (a_ticket, b_ticket) = if resident {
+            retained.apply(SceneUpdate::Reset {
+                revision: 0,
+                snapshot: a.clone(),
+            })?;
+            let a_ticket = submit(SceneInput::Retained(&mut retained))?;
+            retained.apply(SceneUpdate::Delta {
+                base: 0,
+                revision: 1,
+                time: 0.,
+                changes: &[SceneChange {
+                    id: b.items[0].id,
+                    kind: SceneChangeKind::Edited {
+                        moved: true,
+                        material_changed: true,
+                        mesh_changed: true,
+                    },
+                    items: &b.items[..1],
+                }],
+            })?;
+            (a_ticket, submit(SceneInput::Retained(&mut retained))?)
+        } else {
+            (
+                submit(SceneInput::Snapshot(&a))?,
+                submit(SceneInput::Snapshot(&b))?,
+            )
+        };
+        let mut display = GpuTexture::default();
+        for (ticket, expected, images, uploads) in
+            [(b_ticket, &expected_b, 2, 1), (a_ticket, &expected_a, 1, 2)]
+        {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let frame = loop {
+                if let Some(frame) = renderer.poll_presented(ticket).map_err(|e| e.to_string())? {
+                    break frame;
+                }
+                ensure(
+                    Instant::now() < deadline,
+                    "Material generation completion timed out",
+                )?;
+                std::thread::sleep(Duration::from_millis(1));
+            };
+            let work = renderer
+                .last_frame_work()
+                .ok_or("Missing material submission work")?;
+            ensure(
+                work.material_images == images
+                    && work.material_uploaded_images == uploads
+                    && work.atlas_upload_bytes == 0,
+                format!("Material generations did not reuse their shared resident image: {work:?}"),
+            )?;
+            if resident && ticket == b_ticket {
+                ensure(
+                    work.vertex_write_bytes == b.items[0].mesh.vertices.len() * 20
+                        && work.mesh_index_write_bytes == b.items[0].mesh.triangles.len() * 12
+                        && work.instance_write_bytes == 64
+                        && work.material_row_write_bytes == 4,
+                    format!("Replacement rewrote unchanged scene data: {work:?}"),
+                )?;
+            }
+            ensure(
+                display.update(&self.bridge, &frame)?.is_some()
+                    && display.diagnostic_readback()? == *expected,
+                "Published material generation does not match its individual reference",
+            )?;
+            self.reap(&mut display)?;
+        }
+        if resident {
+            let repeat = |renderer: &mut VulkanRenderer, scene: &mut ResidentScene| match renderer
+                .render_scene_presented(
+                    SceneInput::Retained(scene),
+                    camera,
+                    size[0],
+                    size[1],
+                    &graph,
+                    &sources,
+                    &controls,
+                )
+                .map_err(|e| e.to_string())?
+            {
+                RenderSubmission::Pending(ticket) => Ok::<_, String>(ticket),
+                _ => Err("Repeat should be accepted".into()),
+            };
+            let mut c = b.clone();
+            c.items[0].model[0][3] += 0.9;
+            let expected_c = reference
+                .render(&c, camera, size[0], size[1], &graph, &sources, &controls)
+                .map_err(|e| e.to_string())?;
+            let expected_c: Vec<_> =
+                egui::ColorImage::from_rgba_unmultiplied(size, &expected_c.rgba)
+                    .pixels
+                    .iter()
+                    .flat_map(|p| p.to_array())
+                    .collect();
+            ensure(
+                expected_b != expected_c,
+                "Cancelled transform positive control did not change pixels",
+            )?;
+            retained.apply(SceneUpdate::Delta {
+                base: 1,
+                revision: 2,
+                time: 0.,
+                changes: &[SceneChange {
+                    id: c.items[0].id,
+                    kind: SceneChangeKind::Edited {
+                        moved: true,
+                        material_changed: false,
+                        mesh_changed: false,
+                    },
+                    items: &c.items[..1],
+                }],
+            })?;
+            let cancelled = repeat(&mut renderer, &mut retained)?;
+            ensure(
+                renderer.last_frame_work().unwrap().instance_write_bytes == 64,
+                "Cancelled request did not submit a resident transform update",
+            )?;
+            renderer
+                .discard_presented(cancelled)
+                .map_err(|e| e.to_string())?;
+            let repeated = repeat(&mut renderer, &mut retained)?;
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                ensure(
+                    renderer
+                        .poll_presented(cancelled)
+                        .map_err(|e| e.to_string())?
+                        .is_none(),
+                    "Cancelled retained frame published a lease",
+                )?;
+                if let Some(frame) = renderer
+                    .poll_presented(repeated)
+                    .map_err(|e| e.to_string())?
+                {
+                    let work = renderer.last_frame_work().unwrap();
+                    ensure(
+                        work.resident_scene
+                            && work.vertex_write_bytes == 0
+                            && work.mesh_index_write_bytes == 0
+                            && work.instance_write_bytes == 0
+                            && work.material_row_write_bytes == 0
+                            && work.draw_write_bytes == 0
+                            && work.material_upload_bytes == 0
+                            && work.atlas_upload_bytes == 0,
+                        format!("Repeat after cancellation rewrote scene data: {work:?}"),
+                    )?;
+                    ensure(
+                        display.update(&self.bridge, &frame)?.is_some()
+                            && display.diagnostic_readback()? == expected_c,
+                        "Retained scene lost accepted updates after cancellation",
+                    )?;
+                    self.reap(&mut display)?;
+                    break;
+                }
+                ensure(Instant::now() < deadline, "Retained repeat timed out")?;
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+        ensure(
+            renderer.performance().cpu_readback_bytes == 0,
+            "Async materials performed a producer readback",
+        )?;
+        record(
+            self.report,
+            json!({
+                "case":case,
+                "passed":true,
+                "mesh_and_transform_replaced":resident,
+                "zero_scene_bytes_after_cancel":resident,
+                "admitted_before_polling":2,
+                "first_slot_uploaded_images_including_white":2,
+                "second_slot_uploaded_images":1,
+                "second_slot_reused_material_images":1,
+                "differing_bytes":0,
+                "producer_cpu_readback_bytes":0,
+            }),
+        );
+        Ok(())
+    }
+
     fn async_check(
         &self,
         document: &GraphDocument,

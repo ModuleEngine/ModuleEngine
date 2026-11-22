@@ -308,14 +308,16 @@ pub fn verify_package(root: &Path, output: Option<&Path>, headless: bool) -> Res
     if hash_file(&project_path)? != before {
         return Err("Player verification changed authored bytes".into());
     }
-    let report = json!({
+    let state = serde_json::to_value(host.session.state()).map_err(|error| error.to_string())?;
+    let mut report = json!({
         "schema_version":1,"kind":"standalone-player-package","package_root":root.canonicalize().map_err(|error|error.to_string())?,
         "engine_version":env!("CARGO_PKG_VERSION"),"native_features":crate::compiled_features(),"sdk_data_api_fingerprint":SDK_DATA_API_FINGERPRINT,
         "package_hashes_verified":true,"exact_contract_lock_verified":true,"source_compilation":false,"headless":headless,
-        "state":host.session.state(),"diagnostics":host.game_diagnostics(),"device":host.device,
+        "diagnostics":host.game_diagnostics(),"device":host.device,
         "frame":rendered.as_ref().map(|frame|json!({"width":frame.width,"height":frame.height,"stats":frame.stats})),
         "services_enabled":false,"services":host.services.diagnostics(),"authored_project_bytes_unchanged":true,
     });
+    report["state"] = state;
     if let Some(output) = output {
         fs::write(
             output.join("player-verification.json"),

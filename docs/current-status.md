@@ -4,6 +4,88 @@
 
 [English](current-status.md) | [Русский](ru/current-status.md) | [Documentation](README.md)
 
+**22 November 2026 — R2.3 keeps the accepted ECS scene in Vulkan buffers.**
+On eligible devices stock geometry shares a GPU mesh pool and updates the
+instance and material rows from GameHost's retained scene. The internal
+vertex shader applies transforms. Custom scene shaders retain their
+published vertex interface. See the [device and lifetime contract](hardware-tiers.md#r23-scene)
+and [S3 measurements and boundaries](bench.md#r23-scene-checks).
+
+**22 November 2026 — R1.7 routes live gameplay reads through Core ECS.**
+Crate Garden, Puzzle and ARPG read selected values by stable ID. GameHost
+projects the current tick's world into the existing Rust IPC packet. The
+Object provider remains a compatibility adapter.
+See the [consumer contract and verification routes](ecs-world.md#r17-consumers).
+
+**22 November 2026 — R1.6 streams changes in the accepted ECS scene to Vulkan.**
+Game, Scene and the Player use the retained CPU scene through GameHost.
+Bevy change tracking supplies candidates, and Host sends drawable edits after
+hierarchy resolution, interpolation and material projection. A receiver
+with a missing base revision gets a fresh snapshot. See the
+[scene update contract and S3 check](shared-game-host.md#r16-scene-updates).
+
+**22 November 2026 — R2.2 adds indexed Vulkan materials.** Forward and G-buffer
+sample separate sRGB images with mipmaps and anisotropy on qualifying hardware.
+S4 loads its original base-color images on that path. Older `scene_materials`
+passes retain the atlas ABI, and new Built-in → Custom conversions carry
+both variants. See the [device contract](hardware-tiers.md#r22-materials) and
+[1,000-texture and S4 checks](bench.md#r22-material-checks).
+
+**22 November 2026 — R1.5 completed. Saved game nodes run in a Bevy schedule at 60 Hz.**
+Core and ARPG use the same single-threaded schedule in saved stage and node
+order. Two Windows runs match the pre-change event log for all ten Crate Garden
+levels and the Small monsters encounter from the checked-in ARPG project.
+The Crate Garden run uses a composition without ARPG, and the `GameHost`
+late-rejection test confirms whole-tick rollback and retry.
+See [R1.5 verification](module-execution.md#r15-verification).
+
+**22 November 2026 — R2.1 adds a Vulkan device layer.** Tier A adapters
+with timeline support get two frame slots, gpu-allocator, a staging ring
+and the dedicated transfer route when available. Existing compatible devices
+can use the single-slot fence path. The S3 prototype measured a lower
+window-observed frame interval and higher peak working set with two slots.
+See the [measured decision](decisions.md#r21-device-prototype) and the
+[device contract and native S1–S3 check](hardware-tiers.md#r21-device).
+
+**22 November 2026 — R1.4 stages fixed-tick writes without cloning `GameState`.**
+Systems see earlier writes in schedule order. Late rejection discards the ECS
+journal and retains the accepted state for retry. On the 2,000-entity S3 CPU
+fixture, the empty fixed tick averaged 17.25 ms before and 3.88 µs after, while
+the surrounding `GameHost::step` averaged 22.16 ms and 2.63 ms respectively.
+That measurement includes the pre-R1.6 full-snapshot extraction.
+See [R1.4 verification](ecs-world.md#r14-verification).
+
+**22 November 2026 — R1.3 connects component codecs to Inspector, save,
+validation and gameplay Rust IPC.** Core's registry provides the reflected
+native Transform codec and the source-owned schema contracts. The Windows
+round-trip covers the 12 legacy example graphs, all ten Crate Garden levels
+and both Two Arenas scenes, including the migrated checked-in ARPG project.
+The completed G2 campaign is pending. See [R1.3 verification](ecs-world.md#r13-verification).
+
+**22 November 2026 — R1.2 integrated stable IDs into the gameplay ECS.** The
+Windows integration case preserved the object ID `9007199254740993`, its
+prefab instance and both links through scene files, repeated saves, Player
+export and compiled Rust IPC. The checked-in game passed the byte comparison
+on a migrated copy. See [R1.2 verification](ecs-world.md#r12-verification).
+
+The R1.2 memory fix advances Bevy's removal message buffers after a batch
+despawns entities in `EcsWorld`. The Core regression covers successive
+`WorldCommand::Remove` and `clear()` operations in long-lived worlds.
+
+**22 November 2026 — R1.1 selected hybrid Bevy storage for R1.2.** In
+matched Release runs on the CPU, the S3 tick averaged 0.5363 ms in Core,
+0.1168 ms in Bevy with dynamic JSON, and 0.0154 ms in hybrid Bevy. The
+hybrid achieves 34.82× speedup and passed the spike's stable-ID, JSON,
+deterministic save and rejected-candidate cases.
+See the [storage decision and reproduction](ecs-storage-decision.md#r11).
+
+**22 November 2026 — R0.6 baseline recorded.** Three scored native S1–S5
+passes on the RTX 4080 SUPER after R0.5 passed repeatability (maximum
+declared spread 2.39 %). S1/S2 passed their frame and memory budgets.
+The Core ECS tick in S3 averaged 0.756 ms for the upcoming R1.1 spike.
+See the [baseline report](bench-r06-20261122.md) for per-run mean, p95 and
+memory, the comparison with R0.2, and the raw evidence location.
+
 **21 November 2026 — engine rebuild track started; 0.5 paused.** The owner made the
 [engine rebuild track](product-roadmap.md#rebuild) the current priority and paused the
 0.5 brief and new UI work until its phases R1, R3 and R4 are accepted.
@@ -13,6 +95,10 @@ R0.3 adds [frame timings](bench.md#frame-timings) in Game and benchmark JSON.
 R0.4 records [hardware tiers and Windows device evidence](hardware-tiers.md).
 The GTX 1660 SUPER is a candidate for minimum Windows tier A hardware.
 The RTX 4080 SUPER configuration is the only one verified in R0.4.
+R0.5 adds [capability skips in verification](verification.md#vulkan-dxc-capabilities),
+[debug Vulkan diagnostics](bench.md#vulkan-validation), and typed renderer and
+shader errors. The Windows debug S1 run reached Playing at 1920×1080 with zero
+validation errors, including producer retirement.
 See the
 [dated decision](decisions.md#engine-rebuild-20261121).
 

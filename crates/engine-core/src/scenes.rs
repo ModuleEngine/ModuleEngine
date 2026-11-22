@@ -1,5 +1,8 @@
 //! Persisted, renderer-neutral scenes and linked templates. Runtime owns a copy.
-use crate::{ComponentValidationContext, ExecutionGraph, SystemRegistry, WorldObject};
+use crate::{
+    ComponentRegistry, ComponentValidationContext, ExecutionGraph, SystemRegistry, WorldObject,
+    same_component_payloads,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -78,7 +81,7 @@ pub struct AuthoredScene {
 }
 
 /// Template component defaults and visual color; instance transforms stay local.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Prefab {
     pub color: [u8; 4],
@@ -87,7 +90,7 @@ pub struct Prefab {
 }
 
 /// Object source, linked template and explicit per-instance field overrides.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AuthoredObject {
     pub object: WorldObject,
@@ -104,6 +107,27 @@ pub struct AuthoredObject {
     /// Scene-local object references; missing targets reject the complete scene.
     #[serde(default)]
     pub references: BTreeMap<String, u64>,
+}
+
+impl PartialEq for Prefab {
+    fn eq(&self, other: &Self) -> bool {
+        self.color == other.color && same_component_payloads(&self.components, &other.components)
+    }
+}
+
+impl PartialEq for AuthoredObject {
+    fn eq(&self, other: &Self) -> bool {
+        self.object.id == other.object.id
+            && self.object.parent == other.object.parent
+            && self.object.color == other.object.color
+            && ComponentRegistry::TRANSFORM
+                .same_wire_value(&self.object.transform, &other.object.transform)
+            && self.name == other.name
+            && self.prefab == other.prefab
+            && same_component_payloads(&self.components, &other.components)
+            && same_component_payloads(&self.overrides, &other.overrides)
+            && self.references == other.references
+    }
 }
 
 /// Resolved source object and active component data shared by world stores.

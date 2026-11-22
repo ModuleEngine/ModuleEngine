@@ -82,6 +82,9 @@ def validate(report):
             fail("Invalid step id/status")
         if "reason" in step and not isinstance(step["reason"], str):
             fail("Invalid step reason")
+        skipped = step.get("test_skips", {})
+        if not isinstance(skipped, dict) or any(not isinstance(reason, str) or not reason for reason in skipped.values()):
+            fail("Invalid per-test capability skips")
     for command in report["commands"]:
         if not isinstance(command, dict):
             fail("Invalid command")
@@ -170,6 +173,10 @@ def summarize(path, report, excerpts=False, max_chars=6000, excerpt_chars=1000):
         for step in report["steps"]:
             if step["status"] == status:
                 chunks.append("Step %s: %s | %s" % (status, short(step["id"]), short(step.get("reason", "reason not recorded"))))
+    for step in report["steps"]:
+        if step["status"] == "passed":
+            for test, reason in step.get("test_skips", {}).items():
+                chunks.append("Test skipped: %s | %s" % (short(test), short(reason)))
     for index, command in command_details:
         chunk = "Command %d: exit=%s | timeout_seconds=%s | error=%s" % (
             index, command["exit_code"], command["timeout_seconds"], short(command.get("error", "none")))

@@ -665,7 +665,8 @@ fn dependencies(
     let root = metadata["resolve"]["root"]
         .as_str()
         .ok_or(MissReason::UnsupportedDependency)?;
-    if packages.len() > 64 {
+    // The audited registry closure plus the generated worker and the local SDK.
+    if packages.len() != audited_dependencies::PACKAGES.len() + 2 {
         return Err(MissReason::UnsupportedDependency);
     }
     let locked = lock_checksums(&context.worker_lock)?;
@@ -675,7 +676,7 @@ fn dependencies(
     let mut snapshots = BTreeMap::new();
     let mut audited_seen = BTreeSet::new();
     let mut entries = packages.iter().collect::<Vec<_>>();
-    entries.sort_by_key(|package| package["name"].as_str().unwrap_or_default());
+    entries.sort_by_key(|package| (package["name"].as_str(), package["version"].as_str()));
     for package in entries {
         check(cancel)?;
         let id = package["id"]
@@ -723,7 +724,9 @@ fn dependencies(
             text(&mut normalized, source);
             text(&mut normalized, &digest);
             snapshots.extend(files);
-            audited_seen.insert(name);
+            if !audited_seen.insert((name, version, source)) {
+                return Err(MissReason::UnsupportedDependency);
+            }
             true
         } else {
             if name != "module-engine-core"
@@ -1861,7 +1864,8 @@ mod tests {
                 "\n[[package]]\nname = {:?}\nversion = {:?}\nsource = {:?}\nchecksum = {:?}\n",
                 package.name, package.version, package.source, package.archive
             ));
-            packages.push(json!({"id":package.name,"name":package.name,"version":package.version,"source":package.source,"manifest_path":registry.join(format!("{}-{}/Cargo.toml",package.name,package.version)),"targets":[{"kind":["lib"],"name":package.name.replace('-',"_")}]}));
+            let id = format!("{}@{}", package.name, package.version);
+            packages.push(json!({"id":id,"name":package.name,"version":package.version,"source":package.source,"manifest_path":registry.join(format!("{}-{}/Cargo.toml",package.name,package.version)),"targets":[{"kind":["lib"],"name":package.name.replace('-',"_")}]}));
         }
         write(&sdk.join("Cargo.lock"), &lock);
         write(&work.join("Cargo.toml"), "[package]\n");

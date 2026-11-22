@@ -6,14 +6,14 @@
 candidate for minimum Windows Player hardware at tier A. R0.4 verified one
 configuration, the Windows reference system with a **GeForce RTX 4080 SUPER**.
 The tier requirements describe the [rebuild](product-roadmap.md#rebuild-r0).
-Device selection in the current code comes from
+The R0.4 snapshot came from
 `b50e76d20006598cae423bc8e8d3a78f8007d147`.
 
 ## Device requirements and fallbacks
 
 | Tier | Required device capabilities | Path and fallback | RTX 4080 SUPER on Windows |
 | --- | --- | --- | --- |
-| A — base raster | Vulkan ≥1.3 with a graphics + compute queue and `dynamicRendering`, `synchronization2`, `bufferDeviceAddress`, `descriptorIndexing`, `shaderSampledImageArrayNonUniformIndexing`, `runtimeDescriptorArray`. These use core Vulkan. The current Player also needs the platform interop described below. | The current path uses fixed descriptor bindings per pass, a texture atlas, conventional draws and barriers. R2 builds the GPU-driven raster path. On devices missing the new A capabilities the existing path remains available during R2 parity where its own requirements pass. The final Vulkan baseline has no promised lower tier. | All listed bits reported. The existing raster path and DX12 bridge ran S1/S2. R2's path is pending. |
+| A — base raster | Vulkan ≥1.3 with a graphics + compute queue and `dynamicRendering`, `synchronization2`, `bufferDeviceAddress`, `descriptorIndexing`, `shaderSampledImageArrayNonUniformIndexing`, `runtimeDescriptorArray`. These use core Vulkan. The current Player also needs the platform interop described below. | R2.1 adds [two frame slots](#r21-device). R2.2 adds [indexed material images](#r22-materials) on qualifying devices. The compatibility path retains the atlas. During R2 parity it remains available wherever its own requirements pass. The final Vulkan baseline has no promised lower tier. | All listed bits reported. The Windows DX12 bridge and R2.2 indexed material path were exercised on this adapter. |
 | B — mesh shaders | A plus `VK_EXT_mesh_shader` with `meshShader` and `taskShader` for R8's task/mesh pipeline. | R8 falls back to compute culling and indexed indirect drawing on A using the same meshlet data. | Extension and both bits reported. R8 and its fallback are pending. |
 | C — hybrid rays | A plus `VK_KHR_acceleration_structure` (`accelerationStructure`), its dependency `VK_KHR_deferred_host_operations`, and `VK_KHR_ray_query` (`rayQuery`). A separate ray-tracing pipeline also needs `VK_KHR_ray_tracing_pipeline` (`rayTracingPipeline`). | R9 falls back to raster shadow maps, SSAO, screen-space reflections and IBL as applicable. B and C are independent upgrades over A. | All listed extensions and bits reported. R9 and its GPU timings are pending. |
 
@@ -40,11 +40,10 @@ and [ray pipelines](https://docs.vulkan.org/refpages/latest/refpages/source/VK_K
 ## What the current Player uses
 
 The [Vulkan producer](../crates/render-vulkan/src/vulkan.rs) requests Vulkan
-1.3, checks the device API and graphics + compute queue, and queries and
-enables `dynamicRendering`. Renderer-only mode prefers a qualifying discrete
-GPU and enables no device extensions. With a native presentation target, the
-producer must match the GUI adapter. Among the tier bits above, the producer
-enables only `dynamicRendering`. There is no A/B/C selection in this version.
+1.3 and a graphics + compute queue with dynamic rendering. It prefers a
+qualifying discrete adapter without a presentation target and matches the GUI
+adapter with a target. [Device selection and enabled features](#r21-device)
+are separate from the native presentation import contract.
 
 - **Windows.** WGPU uses DX12 for the window. The Vulkan device must match the
   D3D12 adapter by valid LUID, expose and enable
@@ -61,6 +60,146 @@ report an error with no automatic CPU fallback. The explicit software and
 diagnostic routes have their own contracts. Vulkan-only game presentation is
 planned for R2.6. See the [import checks](../crates/render-vulkan/src/presentation.rs),
 [GUI bridge](../crates/player/src/gpu_presentation.rs) and [Player contract](player.md).
+
+
+<a id="r21-device"></a>
+
+## R2.1 device layer and verification
+
+The producer queries individual A, B and C features on the selected adapter.
+B and C are independent. The renderer enables the bits it uses. Tier A
+with `timelineSemaphore` activates two command and descriptor slots,
+synchronization2 and the gpu-allocator path. Other adapters that pass the
+existing Vulkan 1.3 and dynamic rendering checks use one slot with a fence
+and standalone resource allocations. Descriptor indexing, device addresses,
+mesh shaders and rays are reported capabilities at this stage.
+
+The allocator suballocates producer buffers and images and honors mandatory
+dedicated allocations. Imported external memory stays dedicated. Vertex writes
+and explicit diagnostic readback use coherent mapped memory. New atlases use a
+mapped staging ring. The last graphics completion value controls reuse of each
+range and the lifetime of replaced staging buffers. The producer sends whole
+atlas uploads to a dedicated transfer family when exposed, releases the image
+there, and acquires it on the graphics queue after a GPU-side timeline
+dependency. Otherwise the graphics command buffer records the upload. Slots
+hold GPU resources and pipeline references up to confirmed completion. A shared
+deletion worker polls detached busy slots. The normal native producer returns
+`Busy` when the slots or leased output images are full. Explicit diagnostic
+readback can wait for its own submission.
+
+Run on an idle Windows desktop with DXC and the Khronos validation layer
+installed or extracted locally. Point `VK_LAYER_PATH` at the directory
+containing the layer manifest. Keep the benchmark window unobstructed and run
+the scenes sequentially with no competing builds. The Cargo override enables
+Vulkan diagnostics in the optimized Editor's Vulkan crate.
+
+
+```powershell
+$env:VK_LAYER_PATH = (Resolve-Path 'work/verification/r21/layer').Path
+$env:VK_LOADER_DEBUG = 'layer'
+$env:VK_LAYER_ENABLES = 'VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT'
+$env:MODULE_ENGINE_VULKAN_TRACE = '1'
+$env:MODULE_ENGINE_BENCHMARK_ARM = 'automatic'
+$env:MODULE_ENGINE_BENCHMARK_FRAMES = '240'
+$env:MODULE_ENGINE_BENCHMARK_PROFILING = 'off'
+$env:MODULE_ENGINE_GUI_VSYNC = 'off'
+cargo --config 'profile.release.package.module-engine-vulkan.debug-assertions=true' build --locked --release --features bench -p module-engine-editor
+if ($LASTEXITCODE) { throw 'Editor build failed' }
+$out = New-Item -ItemType Directory "outputs/r21-repeat-$(Get-Date -Format yyyyMMdd-HHmmss)"
+$exe = (Resolve-Path 'target/release/module-engine-editor.exe').Path
+foreach ($scene in 'S1','S2','S3') {
+    & $exe --bench-scene $scene (Join-Path $out.FullName $scene) *> (Join-Path $out.FullName "$scene.log")
+    if ($LASTEXITCODE) { throw "$scene failed" }
+}
+git rev-parse HEAD
+Get-FileHash $exe
+```
+
+The loader log should show insertion of `VK_LAYER_KHRONOS_validation`.
+Every producer summary should show `validation=active` and `errors=0`
+through teardown. Check 240 measured frames and GPU-only native presentation
+in each scene's JSON report. In the log, `Vulkan frame begin`, `submit`,
+`complete`, and `wait` identify the renderer and queue serial. On the
+timeline path the serial is the semaphore value. `previous` records the
+old use of a slot, and `completed` is the graphics timeline counter when
+CPU recording begins. A previous serial must have completed before a new use.
+S3 should reach two outstanding tickets on the timeline path. Normal S1–S3
+should show no `Vulkan frame wait`. The explicit diagnostic route logs its
+synchronous wait as `reason=diagnostic`. The `Vulkan transfer submit` event
+records the dedicated upload signal when that family is available.
+Local evidence, including the [S3 prototype measurements](decisions.md#r21-device-prototype),
+is under `outputs/r21/`. The published hardware qualification limits below
+still apply.
+
+<a id="r22-materials"></a>
+
+## R2.2 indexed materials
+
+The indexed path requires the R2.1 timeline and allocator path,
+`shaderSampledImageArrayNonUniformIndexing`, `runtimeDescriptorArray` and
+`samplerAnisotropy`. The renderer checks the regular sampled-image limits
+per fragment stage and descriptor set for 1,024 descriptors, the aggregate
+stage limit, room for a sampler and a storage buffer, and two bound sets.
+`R8G8B8A8_SRGB` must support optimal-tiled sampling, linear filtering,
+transfer and blits. The sampler uses repeat addressing, linear filtering
+between texels and mip levels, and up to 16× anisotropy within device limits.
+
+A material descriptor set contains 1,023 usable image slots and a white
+fallback. The graphics queue uploads the original level and generates the
+remaining mip levels by linear blits in sRGB images. Each image uses its own
+device extent limit. A replacement descriptor set shares unchanged images.
+On the snapshot path each set retains its own object-to-texture index buffer.
+Submitted frames keep their set, images and staging buffer until GPU completion. Descriptor sets
+are populated before submission and stay immutable, so this path needs no
+update-after-bind, partially-bound or variable-count binding features.
+
+The atlas path applies on devices that fail the indexed checks, for Custom
+passes using the original material ABI, and when a scene exceeds the indexed
+table capacity. An atlas must fit within 8192 pixels on each axis. See the
+[pass ABI](gpu-hlsl.md#hlsl-abi) and
+[reproduction](bench.md#r22-material-checks).
+
+<a id="r23-scene"></a>
+
+## R2.3 GPU-resident scene
+
+The resident scene requires the indexed material path, `multiDrawIndirect`,
+`drawIndirectFirstInstance`, and room for four vertex-stage storage buffers
+and five storage descriptors across the pipeline layout. An eligible device
+reports `resident_scene: true` in the Vulkan capabilities. A retained scene
+uses the resident path when its active scene raster passes are stock Forward,
+G-buffer or Depth/Normal, its data fit within the storage and material
+limits, and its transforms can be represented safely. Direct snapshots, Custom scene passes, and compatibility hardware
+use the existing vertex stream. Custom fullscreen and compute passes can run
+after resident geometry.
+
+Vulkan pools indexed mesh payloads for the lifetime of the device. The
+vertex stage reads local positions, UVs and triangle indices, applies the
+instance transform and computes the world-space face normal. A persistent
+instance buffer holds the transforms and material row indices. Persistent
+material rows hold the effective color and the R2.2 image index. The renderer
+keeps texture slots for unchanged images when it builds a new descriptor set.
+The mesh pool grows by copying its populated prefix on the GPU and recording
+only new mesh payloads from the CPU. Each stable object ID and primitive
+ordinal keeps its GPU slot while that drawable is present. Removing one
+drawable omits its slot from the ordered draw runs. Insertion can reuse a
+vacant slot, and changing a mesh updates the rows of that object. Unchanged
+buffer regions are copied on the GPU when an allocation grows.
+
+Draw runs preserve the published order and IDs. A run covers consecutive
+physical slots that share the same differences between physical and
+published object and triangle IDs. Three stock-pass constants restore the
+published IDs and map material reads back to physical slots. A structural
+edit still traverses the ordered scene on the CPU to assemble runs. Churn
+can fragment runs and increase the number of indirect commands. The
+[structural benchmark](bench.md#r23-scene-checks) measures those boundaries.
+
+Both frame slots use the same resident buffers. Queue barriers order
+previous vertex, fragment and indirect reads before transfer writes and
+make those writes visible to subsequent draws. A frame retains the buffers
+and descriptor generation it references through graphics completion.
+Cancellation suppresses publication and the submitted scene edits remain
+valid for the next frame. See the [S3 reproduction](bench.md#r23-scene-checks).
 
 <a id="reference-gpu"></a>
 
