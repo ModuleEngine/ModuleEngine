@@ -795,6 +795,7 @@ impl SystemExecutor {
                 rollback_errors.push(format!("Host transaction: {error}"));
             }
             *game = checkpoint.game;
+            game.world.compact_staged();
             self.resources = original_resources;
             *events = original_events;
             for (system, (state, initialized)) in self.systems.iter_mut().zip(checkpoint.states) {

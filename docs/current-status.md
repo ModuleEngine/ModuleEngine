@@ -7,8 +7,8 @@
 **22 November 2026 — R1.4 stages fixed-tick writes without cloning `GameState`.**
 Systems see earlier writes in schedule order. Late rejection discards the ECS
 journal and retains the accepted state for retry. On the 2,000-entity S3 CPU
-fixture, the empty fixed tick averaged 17.25 ms before and 2.02 µs after, while
-the surrounding `GameHost::step` averaged 22.16 ms and 2.44 ms respectively.
+fixture, the empty fixed tick averaged 17.25 ms before and 2.46 µs after, while
+the surrounding `GameHost::step` averaged 22.16 ms and 2.45 ms respectively.
 Presentation extraction still scales with world size. See [R1.4 verification](ecs-world.md#r14-verification).
 
 **22 November 2026 — R1.3 connects component codecs to Inspector, save,

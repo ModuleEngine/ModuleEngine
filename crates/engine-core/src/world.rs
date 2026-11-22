@@ -461,6 +461,78 @@ struct StagedRows {
     validated_base: bool,
     // None marks a removed lifetime. Existing rows are copied on first write.
     edits: BTreeMap<u64, Option<EntityRow>>,
+    parent: Option<Arc<Self>>,
+    unchecked_transforms: BTreeSet<u64>,
+    parent_transforms_checked: bool,
+}
+
+impl StagedRows {
+    fn new(validated_base: bool, parent: Option<Arc<Self>>) -> Self {
+        Self {
+            validated_base,
+            edits: BTreeMap::new(),
+            parent,
+            unchecked_transforms: BTreeSet::new(),
+            parent_transforms_checked: false,
+        }
+    }
+
+    fn layers(&self) -> impl Iterator<Item = &Self> {
+        std::iter::successors(Some(self), |layer| layer.parent.as_deref())
+    }
+
+    fn edit(&self, id: u64) -> Option<&Option<EntityRow>> {
+        self.layers().find_map(|layer| layer.edits.get(&id))
+    }
+
+    fn changes(&self) -> impl Iterator<Item = (u64, &Option<EntityRow>)> {
+        let mut combined = BTreeMap::new();
+        let local = if self.parent.is_none() {
+            Some(&self.edits)
+        } else {
+            // Nested enumeration needs a sorted, deduplicated view of the edits.
+            for layer in self.layers() {
+                for (&id, edit) in &layer.edits {
+                    combined.entry(id).or_insert(edit);
+                }
+            }
+            None
+        };
+        local
+            .into_iter()
+            .flatten()
+            .map(|(&id, edit)| (id, edit))
+            .chain(combined)
+    }
+
+    fn unchecked_transform_ids(&self) -> impl Iterator<Item = u64> + '_ {
+        std::iter::successors(Some(self), |layer| {
+            if layer.parent_transforms_checked {
+                None
+            } else {
+                layer.parent.as_deref()
+            }
+        })
+        .flat_map(|layer| layer.unchecked_transforms.iter().copied())
+    }
+
+    fn mark_transforms_checked(&mut self) {
+        self.unchecked_transforms.clear();
+        self.parent_transforms_checked = true;
+    }
+
+    fn compact(&mut self) {
+        while let Some(parent) = self.parent.as_mut().and_then(Arc::get_mut) {
+            if self.parent_transforms_checked {
+                parent.mark_transforms_checked();
+            }
+            parent
+                .unchecked_transforms
+                .extend(std::mem::take(&mut self.unchecked_transforms));
+            parent.edits.extend(std::mem::take(&mut self.edits));
+            *self = std::mem::replace(parent, Self::new(self.validated_base, None));
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -561,8 +633,18 @@ impl EcsRows {
         let mut despawned = false;
         if let Some(previous) = self.native::<EntityLifetime>(id) {
             if previous.0 == row.lifetime {
-                *self.native_mut(id).unwrap() = row.data;
-                *self.native_mut(id).unwrap() = row.transform;
+                let old_data = self.native::<ObjectData>(id).unwrap();
+                if old_data != &row.data
+                    || old_data.angular_velocity.map(f32::to_bits)
+                        != row.data.angular_velocity.map(f32::to_bits)
+                {
+                    *self.native_mut(id).unwrap() = row.data;
+                }
+                if !crate::ComponentRegistry::TRANSFORM
+                    .same_wire_value(self.native::<Transform>(id).unwrap(), &row.transform)
+                {
+                    *self.native_mut(id).unwrap() = row.transform;
+                }
                 self.replace_components(id, row.components);
                 return false;
             }
@@ -629,15 +711,18 @@ impl PartialEq for EcsWorld {
 
 impl EcsWorld {
     pub(crate) fn checkpoint_tick(&mut self, validated_base: bool) -> Self {
+        let parent = self.staged.take().map(Arc::new);
+        let validated_base = parent
+            .as_ref()
+            .map_or(validated_base, |parent| parent.validated_base);
         let original = Self {
             rows: Arc::clone(&self.rows),
-            staged: self.staged.clone(),
+            staged: parent
+                .as_ref()
+                .map(|parent| StagedRows::new(validated_base, Some(Arc::clone(parent)))),
             time: self.time,
         };
-        self.staged.get_or_insert_with(|| StagedRows {
-            validated_base,
-            edits: BTreeMap::new(),
-        });
+        self.staged = Some(StagedRows::new(validated_base, parent));
         original
     }
 
@@ -646,13 +731,29 @@ impl EcsWorld {
         drop(original);
         if outermost {
             self.publish_staged();
+        } else {
+            self.compact_staged();
+        }
+    }
+
+    pub(crate) fn compact_staged(&mut self) {
+        if let Some(staged) = &mut self.staged {
+            staged.compact();
         }
     }
 
     fn publish_staged(&mut self) {
-        let Some(staged) = self.staged.take() else {
+        let Some(mut staged) = self.staged.take() else {
             return;
         };
+        staged.compact();
+        while let Some(parent) = staged.parent.take() {
+            let parent = Arc::unwrap_or_clone(parent);
+            for (id, edit) in parent.edits {
+                staged.edits.entry(id).or_insert(edit);
+            }
+            staged.parent = parent.parent;
+        }
         if staged.edits.is_empty() {
             return;
         }
@@ -672,14 +773,21 @@ impl EcsWorld {
 
     fn stage_row(&mut self, id: u64) -> Option<&mut EntityRow> {
         use std::collections::btree_map::Entry;
-        match self.staged.as_mut().unwrap().edits.entry(id) {
+        let staged = self.staged.as_mut().unwrap();
+        match staged.edits.entry(id) {
             Entry::Occupied(edit) => edit.into_mut().as_mut(),
-            Entry::Vacant(edit) => edit.insert(Some(self.rows.row(id)?)).as_mut(),
+            Entry::Vacant(edit) => {
+                let row = match staged.parent.as_ref().and_then(|parent| parent.edit(id)) {
+                    Some(row) => row.clone(),
+                    None => self.rows.row(id),
+                }?;
+                edit.insert(Some(row)).as_mut()
+            }
         }
     }
 
     fn edit(&self, id: u64) -> Option<&Option<EntityRow>> {
-        self.staged.as_ref()?.edits.get(&id)
+        self.staged.as_ref()?.edit(id)
     }
 
     fn spawn_object(&mut self, object: WorldObject) {
@@ -748,14 +856,10 @@ impl EcsWorld {
 
     pub fn entity_ids(&self) -> impl Iterator<Item = u64> + '_ {
         let mut base = self.rows.index.keys().copied().peekable();
-        let mut edits = self
-            .staged
-            .iter()
-            .flat_map(|staged| &staged.edits)
-            .peekable();
+        let mut edits = self.staged.iter().flat_map(StagedRows::changes).peekable();
         std::iter::from_fn(move || {
             loop {
-                let Some(&(&id, _)) = edits.peek() else {
+                let Some(&(id, _)) = edits.peek() else {
                     return base.next();
                 };
                 if base.peek().is_some_and(|base_id| *base_id < id) {
@@ -785,7 +889,7 @@ impl EcsWorld {
 
     pub fn len(&self) -> usize {
         let mut count = self.rows.index.len();
-        for (&id, row) in self.staged.iter().flat_map(|staged| &staged.edits) {
+        for (id, row) in self.staged.iter().flat_map(StagedRows::changes) {
             match (self.rows.index.contains_key(&id), row.is_some()) {
                 (true, false) => count -= 1,
                 (false, true) => count += 1,
@@ -817,17 +921,18 @@ impl EcsWorld {
                         .all(|name| self.rows.components[*name].contains_key(&id))
             }));
         }
-        if let Some(staged) = &self.staged
-            && !staged.edits.is_empty()
-        {
-            matches.extend(staged.edits.iter().filter_map(|(&id, edit)| {
+        if let Some(staged) = &self.staged {
+            let unchanged_count = matches.len();
+            matches.extend(staged.changes().filter_map(|(id, edit)| {
                 let row = edit.as_ref()?;
                 required
                     .iter()
                     .all(|name| row.components.contains_key(*name))
                     .then_some(id)
             }));
-            matches.sort_unstable();
+            if matches.len() != unchanged_count {
+                matches.sort_unstable();
+            }
         }
         matches
     }
@@ -854,7 +959,8 @@ impl EcsWorld {
     }
 
     pub fn transform_mut(&mut self, id: u64) -> Option<&mut Transform> {
-        if self.staged.is_some() {
+        if let Some(staged) = &mut self.staged {
+            staged.unchecked_transforms.insert(id);
             self.stage_row(id).map(|row| &mut row.transform)
         } else {
             Arc::make_mut(&mut self.rows).native_mut(id)
@@ -873,11 +979,13 @@ impl EcsWorld {
     pub(crate) fn may_have_component(&self, name: &str) -> bool {
         self.rows.components.contains_key(name)
             || self.staged.as_ref().is_some_and(|staged| {
-                staged
-                    .edits
-                    .values()
-                    .flatten()
-                    .any(|row| row.components.contains_key(name))
+                staged.layers().any(|layer| {
+                    layer
+                        .edits
+                        .values()
+                        .flatten()
+                        .any(|row| row.components.contains_key(name))
+                })
             })
     }
 
@@ -989,6 +1097,7 @@ impl EcsWorld {
         row.components = entity.components;
         if let Some(staged) = &mut self.staged {
             staged.edits.insert(id, Some(row));
+            staged.mark_transforms_checked();
         } else {
             Arc::make_mut(&mut self.rows).put_row(id, row);
         }
@@ -1016,22 +1125,22 @@ impl EcsWorld {
             && self
                 .staged
                 .as_ref()
-                .is_some_and(|staged| staged.edits.is_empty())
+                .is_some_and(|staged| staged.layers().all(|layer| layer.edits.is_empty()))
     }
 
     pub(crate) fn validate_changes_since(&self, before: &Self) -> Result<(), String> {
         if Arc::ptr_eq(&self.rows, &before.rows)
             && let Some(staged) = &self.staged
-            && staged.edits.iter().all(|(&id, edit)| {
+            && staged.changes().all(|(id, edit)| {
                 edit.as_ref()
                     .zip(self.rows.native::<ObjectData>(id))
                     .is_some_and(|(edit, original)| edit.data.parent == original.parent)
             })
         {
-            for &id in staged.edits.keys() {
+            for (id, _) in staged.changes() {
                 self.validate_entity_references(id)?;
             }
-            for (&id, edit) in &staged.edits {
+            for (id, edit) in staged.changes() {
                 crate::control::validate_object_transform(id, &edit.as_ref().unwrap().transform)?;
             }
             return Ok(());
@@ -1052,6 +1161,7 @@ impl EcsWorld {
         if let Some(staged) = &mut self.staged {
             for id in ids {
                 staged.edits.insert(id, None);
+                staged.unchecked_transforms.remove(&id);
             }
         } else {
             let rows = Arc::make_mut(&mut self.rows);
@@ -1142,6 +1252,9 @@ impl PreparedWorldCommands<'_> {
                 self.world.spawn_object(object);
             }
         }
+        if let Some(staged) = &mut self.world.staged {
+            staged.mark_transforms_checked();
+        }
     }
 }
 
@@ -1174,17 +1287,15 @@ impl EcsWorld {
                 edit_object_values(command, object.as_mut())?;
             }
             let ids = staged
-                .edits
-                .keys()
-                .chain(edits.keys())
-                .copied()
+                .unchecked_transform_ids()
+                .chain(edits.keys().copied())
                 .collect::<BTreeSet<_>>();
             for id in ids {
                 if let Some(transform) = edits
                     .get(&id)
                     .and_then(Option::as_ref)
                     .map(|o| &o.transform)
-                    .or_else(|| staged.edits.get(&id)?.as_ref().map(|row| &row.transform))
+                    .or_else(|| self.transform(id))
                 {
                     validate_object_transform(id, transform)?;
                 }
@@ -1363,6 +1474,127 @@ mod tests {
             references: BTreeMap::new(),
         }
     }
+
+    #[test]
+    fn nested_tick_shares_prior_edits_and_merges_only_committed_rows() {
+        let mut world =
+            EcsWorld::from_entities(vec![entity(1, None, &[]), entity(2, None, &[])]).unwrap();
+        let committed = world.checkpoint_tick(true);
+        world.transform_mut(1).unwrap().translation[0] = 1.;
+        let parent = world.checkpoint_tick(false);
+        let staged = world.staged.as_ref().unwrap();
+        assert!(staged.edits.is_empty());
+        assert!(Arc::ptr_eq(
+            staged.parent.as_ref().unwrap(),
+            parent.staged.as_ref().unwrap().parent.as_ref().unwrap()
+        ));
+        world.transform_mut(1).unwrap().translation[0] = 99.;
+        world
+            .apply_commands(&[WorldCommand::Remove { id: 2 }])
+            .unwrap();
+        assert_eq!(world.entity_ids().collect::<Vec<_>>(), [1]);
+        world = parent;
+        world.compact_staged();
+        assert!(world.staged.as_ref().unwrap().parent.is_none());
+        assert_eq!(world.object(1).unwrap().transform.translation[0], 1.);
+        assert_eq!(world.entity_ids().collect::<Vec<_>>(), [1, 2]);
+
+        let parent = world.checkpoint_tick(false);
+        world.transform_mut(2).unwrap().translation[0] = 2.;
+        world.finish_tick(parent);
+        assert!(world.staged.as_ref().unwrap().parent.is_none());
+        world.finish_tick(committed);
+        assert_eq!(world.object(1).unwrap().transform.translation[0], 1.);
+        assert_eq!(world.object(2).unwrap().transform.translation[0], 2.);
+    }
+
+    #[test]
+    fn unchecked_transforms_survive_dropped_packets_and_clear_after_validated_apply() {
+        let mut world =
+            EcsWorld::from_entities(vec![entity(1, None, &[]), entity(2, None, &[])]).unwrap();
+        let committed = world.checkpoint_tick(true);
+        world.transform_mut(1).unwrap().translation[0] = f32::NAN;
+        let repair = [WorldCommand::SetPosition {
+            id: 1,
+            position: [0.; 3],
+        }];
+        drop(world.prepare_commands(&repair).unwrap());
+        let unrelated = [WorldCommand::SetColor {
+            id: 2,
+            color: [0; 4],
+        }];
+        assert_eq!(
+            world.apply_commands(&unrelated).unwrap_err(),
+            "Object 1 has a nonfinite transform"
+        );
+        let parent = world.checkpoint_tick(false);
+        world.apply_commands(&repair).unwrap();
+        world.finish_tick(parent);
+        assert!(
+            world
+                .staged
+                .as_ref()
+                .unwrap()
+                .unchecked_transform_ids()
+                .next()
+                .is_none()
+        );
+        world.apply_commands(&unrelated).unwrap();
+        world.finish_tick(committed);
+        assert_eq!(world.object(1).unwrap().transform.translation, [0.; 3]);
+        assert_eq!(world.object(2).unwrap().color, [0; 4]);
+    }
+
+    #[test]
+    fn publishing_a_row_marks_only_changed_native_components() {
+        use bevy_ecs::change_detection::DetectChanges;
+
+        let mut world = EcsWorld::from_objects(vec![
+            entity(1, None, &[]).object,
+            entity(2, None, &[]).object,
+            entity(3, None, &[]).object,
+        ])
+        .unwrap();
+        let handles = [1, 2, 3].map(|id| world.rows.index[&id]);
+        Arc::get_mut(&mut world.rows)
+            .unwrap()
+            .world
+            .clear_trackers();
+        let committed = world.checkpoint_tick(true);
+        world
+            .insert_component(1, "fixture", serde_json::Value::Null)
+            .unwrap();
+        world.transform_mut(2).unwrap().translation[0] = -0.;
+        world
+            .apply_commands(&[WorldCommand::SetColor {
+                id: 3,
+                color: [0; 4],
+            }])
+            .unwrap();
+        world.finish_tick(committed);
+        let rows = Arc::get_mut(&mut world.rows).unwrap();
+        assert_eq!(
+            handles.map(|handle| rows
+                .world
+                .get_mut::<Transform>(handle)
+                .unwrap()
+                .is_changed()),
+            [false, true, false]
+        );
+        assert_eq!(
+            handles.map(|handle| rows
+                .world
+                .get_mut::<ObjectData>(handle)
+                .unwrap()
+                .is_changed()),
+            [false, false, true]
+        );
+        assert_eq!(
+            world.transform(2).unwrap().translation[0].to_bits(),
+            (-0.0_f32).to_bits()
+        );
+    }
+
     #[test]
     fn repeated_remove_and_clear_bound_bevy_removal_messages() {
         let retained = [false, true].map(|clear| {

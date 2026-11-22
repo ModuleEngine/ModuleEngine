@@ -76,19 +76,30 @@ in authored system order. A portable command buffer validates as a batch
 before its writes join the journal. Custom Rust still receives a world IPC DTO.
 Its world buffer joins the journal only after its other outputs pass staging.
 
+A nested executor checkpoint shares the earlier journal and starts an empty
+layer for its own writes. Success merges that layer, and rejection restores
+the earlier view. Value-only command packets validate their targets and the
+transforms exposed to mutation since the last applied, validated packet.
+Discarding a prepared packet also discards its proposed repairs. Publication
+marks a native component as changed only when its final stored value differs.
+
 On success, the executor validates the candidate, publishes any compatibility
 provider commands, runs system commit hooks, and applies the journal to the
 canonical ECS. On error, it discards the journal and restores the portable
 system state, resources, events and session metadata. Existing rollback hooks
 restore external targets, including published Rust worker state and renderer
 controls. A retry starts from the last accepted tick.
+The checkpoint still copies the session's scene ID, `module_data`, and
+control data. The cost depends on the size of those values, which source
+systems can edit directly through `&mut GameState`.
 
 An unchanged ECS world with no populated active semantic validators needs no
 world traversal for the transaction.
-Ordinary writes validate only touched objects and named references. Topology
+For ordinary writes, structural and named-reference checks cover touched rows. Topology
 changes or wholesale world replacement can still require a full structural and
-reference check. A dirty world with active schema components still runs full
-schema validation when those components are present, including cross-object
+reference check. Spawn/remove command packets can walk the world to resolve
+descendants and validate the final hierarchy. An edited world with active
+schema components still runs full schema validation, including cross-object
 references. Source semantic validators for populated active components also
 run on unchanged worlds because they can consult external state.
 The compatibility provider projection, Custom Rust IPC snapshot and rendered
@@ -136,12 +147,12 @@ on an AMD Ryzen 9 3900X, Windows x86-64, Rust 1.99.0. The baseline is
 
 | Entities | Writes | Fixed tick before, mean / p95 (µs) | Fixed tick after (µs) | `GameHost::step` before (µs) | `GameHost::step` after (µs) |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 200 | 0 | 1532.570 / 1662.100 | 0.653 / 1.000 | 1935.508 / 2128.100 | 184.513 / 231.600 |
-| 200 | 2 | 1066.685 / 1499.800 | 4.445 / 6.000 | 1378.088 / 1883.100 | 200.252 / 254.600 |
-| 2,000 | 0 | 17251.587 / 20035.200 | 2.024 / 5.200 | 22155.184 / 25306.400 | 2437.820 / 2826.200 |
-| 2,000 | 2 | 16784.722 / 19349.800 | 10.851 / 19.600 | 21450.796 / 24151.400 | 2380.663 / 2876.900 |
-| 10,000 | 0 | 103857.167 / 111397.400 | 6.793 / 8.000 | 130191.694 / 139514.300 | 14993.799 / 15829.000 |
-| 10,000 | 2 | 104344.325 / 110555.400 | 23.720 / 27.700 | 130599.360 / 138174.800 | 15049.292 / 16053.900 |
+| 200 | 0 | 1532.570 / 1662.100 | 0.864 / 1.400 | 1935.508 / 2128.100 | 184.501 / 225.900 |
+| 200 | 2 | 1066.685 / 1499.800 | 4.889 / 6.700 | 1378.088 / 1883.100 | 199.331 / 246.300 |
+| 2,000 | 0 | 17251.587 / 20035.200 | 2.461 / 5.400 | 22155.184 / 25306.400 | 2452.334 / 2847.000 |
+| 2,000 | 2 | 16784.722 / 19349.800 | 11.956 / 19.700 | 21450.796 / 24151.400 | 2493.243 / 2971.400 |
+| 10,000 | 0 | 103857.167 / 111397.400 | 8.300 / 9.800 | 130191.694 / 139514.300 | 14775.274 / 15483.700 |
+| 10,000 | 2 | 104344.325 / 110555.400 | 25.502 / 31.300 | 130599.360 / 138174.800 | 15086.958 / 15959.900 |
 
 The inner timer includes the transaction, schedule, and the probe's single
 system. The empty case leaves the world journal empty, uses a shared checkpoint,
