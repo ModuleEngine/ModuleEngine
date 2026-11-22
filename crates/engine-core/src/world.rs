@@ -1411,6 +1411,12 @@ impl PreparedWorldCommands<'_> {
 }
 
 impl EcsWorld {
+    /// Validate and apply a portable command batch to the current ECS view.
+    pub fn apply_commands(&mut self, commands: &[WorldCommand]) -> Result<(), String> {
+        self.prepare_commands(commands)?.apply();
+        Ok(())
+    }
+
     pub fn prepare_commands(
         &mut self,
         commands: &[WorldCommand],
@@ -1502,8 +1508,7 @@ impl WorldProvider for EcsWorld {
     }
 
     fn apply_commands(&mut self, commands: &[WorldCommand]) -> Result<(), String> {
-        self.prepare_commands(commands)?.apply();
-        Ok(())
+        EcsWorld::apply_commands(self, commands)
     }
 
     fn step(&mut self, dt: f32, speed: f32) {

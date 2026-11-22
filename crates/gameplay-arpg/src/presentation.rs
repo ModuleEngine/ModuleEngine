@@ -1,3 +1,4 @@
+use crate::queries::player_id;
 use crate::{GameStateExt, GameStatus, legacy_input};
 use module_engine_core::{Camera, GameContribution, GameProject, GameState, HostServiceRequest};
 use std::collections::BTreeSet;
@@ -61,15 +62,17 @@ pub fn initial_camera(_: &GameProject) -> Camera {
     }
 }
 pub fn follow_target(state: &GameState) -> Option<[f32; 3]> {
-    state
-        .player()
-        .map(|player| player.object.transform.translation)
+    let player = state.world.object(player_id(&state.world)?)?;
+    Some(player.transform.translation)
 }
 pub fn diagnostics(state: &GameState) -> serde_json::Value {
     serde_json::json!({
         "status": format!("{:?}", state.arpg().status),
         "active_enemies": state.living_enemies(),
-        "player_health":state.player().and_then(|player| player.components.get("health").and_then(|value|value.get("current")).and_then(serde_json::Value::as_f64))
+        "player_health": player_id(&state.world)
+            .and_then(|id| state.world.component(id, "health"))
+            .and_then(|value| value.get("current"))
+            .and_then(serde_json::Value::as_f64)
     })
 }
 

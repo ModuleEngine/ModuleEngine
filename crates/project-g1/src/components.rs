@@ -79,9 +79,11 @@ impl CellData {
     }
 }
 
+// Prepared catalogs carry entities for scene replacement. Live layouts need
+// only board data and share the same rules.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Level {
+pub(crate) struct Level<Entities = Vec<GameEntity>> {
     pub id: String,
     pub title: String,
     pub config: BoardConfig,
@@ -91,9 +93,9 @@ pub(crate) struct Level {
     pub initial: Position,
     pub pawn_id: u64,
     pub revision: String,
-    pub entities: Vec<GameEntity>,
+    pub entities: Entities,
 }
-impl Level {
+impl<Entities> Level<Entities> {
     pub fn bounds(&self) -> Result<GridBounds, String> {
         GridBounds::new(self.config.width as u32, self.config.height as u32)
     }
@@ -202,21 +204,36 @@ pub(crate) fn from_entities(
     title: &str,
     entities: Vec<GameEntity>,
 ) -> Result<Level, String> {
-    let boards = entities
+    let mut boards = entities
         .iter()
-        .filter(|entity| entity.components.contains_key(BOARD))
-        .collect::<Vec<_>>();
-    if boards.len() != 1 {
+        .filter_map(|entity| Some((&entity.object, entity.components.get(BOARD)?)));
+    let Some((board, raw)) = boards.next() else {
+        return Err("A Crate Garden scene needs exactly one board".into());
+    };
+    if boards.next().is_some() {
         return Err("A Crate Garden scene needs exactly one board".into());
     }
-    let board = boards[0];
-    let config: BoardConfig =
-        serde_json::from_value(board.components[BOARD].clone()).map_err(|e| e.to_string())?;
+    let config = BoardConfig::deserialize(raw).map_err(|e| e.to_string())?;
+    let cells = entities.iter().filter_map(|entity| {
+        entity
+            .components
+            .get(CELL)
+            .map(|raw| (entity.object.clone(), raw))
+    });
+    let mut level: Level = read_level(id, title, config, board, cells)?;
+    level.entities = entities;
+    Ok(level)
+}
+
+fn read_level<'a, Entities: Default>(
+    id: &str,
+    title: &str,
+    config: BoardConfig,
+    board: &WorldObject,
+    cells: impl Iterator<Item = (WorldObject, &'a Value)>,
+) -> Result<Level<Entities>, String> {
     validate_board(&config)?;
-    if config.level_id != id
-        || board.object.parent.is_some()
-        || board.object.transform.rotation != [0.; 3]
-    {
+    if config.level_id != id || board.parent.is_some() || board.transform.rotation != [0.; 3] {
         return Err("Board identity/root rotation differs from its level scene".into());
     }
     let mut index = Occupancy::new(GridBounds::new(config.width as u32, config.height as u32)?);
@@ -224,30 +241,28 @@ pub(crate) fn from_entities(
     let mut goals = BTreeSet::new();
     let mut crates = BTreeMap::new();
     let mut pawn = None;
-    for entity in &entities {
-        if let Some(raw) = entity.components.get(CELL) {
-            if entity.object.parent.is_some() || entity.components.contains_key(BOARD) {
-                return Err("Crate Garden cells must be independent root objects".into());
+    for (object, raw) in cells {
+        if object.parent.is_some() || object.id == board.id {
+            return Err("Crate Garden cells must be independent root objects".into());
+        }
+        let data = CellData::deserialize(raw).map_err(|e| e.to_string())?;
+        index.insert(data.cell(), data.kind.layer(), object.id)?;
+        match data.kind {
+            Kind::Wall => {
+                walls.insert(data.cell());
             }
-            let data: CellData = serde_json::from_value(raw.clone()).map_err(|e| e.to_string())?;
-            index.insert(data.cell(), data.kind.layer(), entity.object.id)?;
-            match data.kind {
-                Kind::Wall => {
-                    walls.insert(data.cell());
-                }
-                Kind::Goal => {
-                    goals.insert(data.cell());
-                }
-                Kind::Crate => {
-                    crates.insert(entity.object.id, data.cell());
-                }
-                Kind::Pawn => {
-                    if pawn.replace((entity.object.id, data.cell())).is_some() {
-                        return Err("A level needs exactly one pawn".into());
-                    }
-                }
-                Kind::Floor => {}
+            Kind::Goal => {
+                goals.insert(data.cell());
             }
+            Kind::Crate => {
+                crates.insert(object.id, data.cell());
+            }
+            Kind::Pawn => {
+                if pawn.replace((object.id, data.cell())).is_some() {
+                    return Err("A level needs exactly one pawn".into());
+                }
+            }
+            Kind::Floor => {}
         }
     }
     let (pawn_id, pawn) = pawn.ok_or("A level needs one pawn")?;
@@ -263,42 +278,42 @@ pub(crate) fn from_entities(
         moves: 0,
     };
     let revision = canonical_contract_hash(
-        &json!({"config":config,"origin":board.object.transform.translation,"walls":walls,"goals":goals,"initial":initial}),
+        &json!({"config":config,"origin":board.transform.translation,"walls":walls,"goals":goals,"initial":initial}),
     )?;
     let result = Level {
         id: id.into(),
         title: title.into(),
         config,
-        origin: board.object.transform.translation,
+        origin: board.transform.translation,
         walls,
         goals,
         initial,
         pawn_id,
         revision,
-        entities,
+        entities: Entities::default(),
     };
     result.validate_position(&result.initial)?;
     Ok(result)
 }
 
-pub(crate) fn world_level(world: &EcsWorld) -> Result<Level, String> {
-    let board_id = world
-        .entities_with(&[BOARD])
-        .first()
-        .copied()
-        .ok_or("Missing Crate Garden board")?;
-    let config: BoardConfig = serde_json::from_value(
-        world
-            .component(board_id, BOARD)
-            .ok_or("Missing board component")?
-            .clone(),
-    )
-    .map_err(|e| e.to_string())?;
-    from_entities(
-        &config.level_id,
-        &config.level_id,
-        world.entities_snapshot(),
-    )
+pub(crate) fn world_level(world: &EcsWorld) -> Result<Level<()>, String> {
+    let boards = world.entities_with(&[BOARD]);
+    let board_id = match boards.as_slice() {
+        [id] => *id,
+        [] => return Err("Missing Crate Garden board".into()),
+        _ => return Err("A Crate Garden scene needs exactly one board".into()),
+    };
+    let board = world.object(board_id).ok_or("Missing board object")?;
+    let raw = world
+        .component(board_id, BOARD)
+        .ok_or("Missing board component")?;
+    let config = BoardConfig::deserialize(raw).map_err(|e| e.to_string())?;
+    let id = config.level_id.clone();
+    let cells = world
+        .entities_with(&[CELL])
+        .into_iter()
+        .filter_map(|id| Some((world.object(id)?, world.component(id, CELL)?)));
+    read_level(&id, &id, config, &board, cells)
 }
 
 pub(crate) fn validate_board(board: &BoardConfig) -> Result<(), String> {
