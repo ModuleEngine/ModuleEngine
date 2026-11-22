@@ -12,6 +12,7 @@ on:
       - docs/ru/product-roadmap.md
       - scripts/roadmap_map.py
       - scripts/roadmap_map.html
+      - scripts/roadmap_world.html
       - .github/workflows/roadmap.yml
   pull_request:
     paths:
@@ -19,6 +20,7 @@ on:
       - docs/ru/product-roadmap.md
       - scripts/roadmap_map.py
       - scripts/roadmap_map.html
+      - scripts/roadmap_world.html
       - .github/workflows/roadmap.yml
   workflow_dispatch:
 

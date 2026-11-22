@@ -6,7 +6,7 @@ The visual roadmap is an HTML page with the phase map of the [engine rebuild tra
 
 ## Where to see it
 
-After every merge to `main` that touches the roadmap, the [Roadmap map workflow](../.github/workflows/roadmap.yml) publishes the page to GitHub Pages: `https://myjname.github.io/ModuleEngine/`.
+After every merge to `main` that touches the roadmap, the [Roadmap map workflow](../.github/workflows/roadmap.yml) publishes the page to GitHub Pages: `https://myjname.github.io/ModuleEngine/`. The same workflow publishes the [campaign map](#campaign-map) next to it at `https://myjname.github.io/ModuleEngine/world/`.
 
 One-time setup: in the repository **Settings → Pages → Build and deployment**, set **Source** to **GitHub Actions**. Until then the deploy job fails while the build and check still run.
 
@@ -33,12 +33,31 @@ Only sections with a heading of the form `### <ID> — <title>` (for example `##
 
 The page template [scripts/roadmap_map.html](../scripts/roadmap_map.html) holds the Russian wording: short task titles, phase descriptions, dependencies, the map layout, the timing chart and the version route. For a task that is not in the template yet, the page uses the first sentence of the task from the Russian roadmap. A new phase needs a node in the template (`phases` and `pos`) and an arrow for each of its dependencies (`add('from>to', ...)`); until the node exists the build prints a warning and the phase is not shown. A phase removed from the roadmap keeps its node but loses its tasks and is marked “not in plan”; the template's old tasks never come back.
 
-`scripts/test_roadmap_map.py` runs the page's data model in Node.js and checks, on small EN/RU fixtures, that a phase removed from both Markdown versions disappears from the map and the header reports blocked work, that the 0.5 checkpoint needs R1, R3 and R4, and that every dependency listed in a phase card has an arrow. Checks against the live roadmap derive their expectations from its tables, so ordinary plan edits do not break them.
+`scripts/test_roadmap_map.py` runs the data model of both pages in Node.js and checks, on small EN/RU fixtures, that a phase removed from both Markdown versions disappears from the map and the header reports blocked work, that the 0.5 checkpoint needs R1, R3 and R4, and that every dependency listed in a phase card has an arrow. Checks against the live roadmap derive their expectations from its tables, so ordinary plan edits do not break them.
+
+<a id="campaign-map"></a>
+
+## Campaign map
+
+The campaign map is the same roadmap as a game-style pixel-art map, built from the same tables. Every phase (R0–R10) is a region with its own theme, every task is a province inside it, and arrows show which phase opens which. Checkpoints and version milestones are lighthouse islands, the AI branch is a set of wizard towers.
+
+| Task status | On the map |
+| --- | --- |
+| `Done` | Captured: bright colours, golden border, blue flag. A phase with every task done is marked with a crown |
+| `In progress` | Under siege: animated flame frame, camp and campfire |
+| Not started, the first one of a phase that has been started | The next move: yellow pennant and tent. Shown only while nothing in that phase is in progress |
+| Not started, anything else | Fog of war: the farther from the front, the thicker the fog |
+
+Hover a province for its title and status; click it for the acceptance criterion and the estimate, click a region ribbon for the phase goal and the list of its provinces. Task titles and criteria come from the Russian roadmap; the English table only supplies statuses.
+
+The page is a static file with no network access: a Content-Security-Policy blocks every request. All art is drawn in code on a canvas, with no external assets. Animation stops with `prefers-reduced-motion`.
+
+What stays hand-written lives in [scripts/roadmap_world.html](../scripts/roadmap_world.html): region names and themes, the position of each region and landmark, and `STATIC` with the dependencies and goals of each phase. `STATIC` mirrors `phases` of the table page, and `scripts/test_roadmap_map.py` fails if they diverge. Provinces are laid out automatically in the order of the tasks, so a new task needs no edit in the template. A new phase needs an entry in `STATIC` and `REGS`; until it exists the build prints a warning and the phase is not shown. A phase removed from the roadmap disappears from the map together with its arrows.
 
 ## Checks and local build
 
 ```sh
-python scripts/roadmap_map.py            # writes outputs/roadmap/index.html
+python scripts/roadmap_map.py            # writes outputs/roadmap/index.html and outputs/roadmap/world/index.html
 python scripts/roadmap_map.py --check    # validation only
 ```
 

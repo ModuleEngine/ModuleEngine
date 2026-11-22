@@ -224,5 +224,101 @@ process.stdout.write(JSON.stringify({
             self.assertNotEqual(m["summary"]["kind"], "done")
 
 
+WORLD_TEMPLATE = ROOT / roadmap_map.WORLD_TEMPLATE_PATH
+
+
+class WorldBuildTest(unittest.TestCase):
+    def test_live_roadmap_builds_the_campaign_map(self):
+        page, warnings = roadmap_map.build_world(ROOT)
+        self.assertEqual(warnings, [])
+        self.assertNotIn(roadmap_map.PLACEHOLDER, page)
+        self.assertIn('"id":"R0"', page)
+
+    def test_template_has_one_placeholder(self):
+        self.assertEqual(WORLD_TEMPLATE.read_text(encoding="utf-8").count(roadmap_map.PLACEHOLDER), 1)
+
+    def test_phase_without_region_is_reported(self):
+        template = WORLD_TEMPLATE.read_text(encoding="utf-8")
+        phases = roadmap_map.parse(roadmap({"R0": ["todo"], "R42": ["todo"]}, "en"), "en")
+        self.assertEqual(roadmap_map.unplaced(template, phases), ["R42"])
+
+
+@unittest.skipUnless(shutil.which("node"), "Node.js is needed to run the page model")
+class WorldModelTest(unittest.TestCase):
+    """Runs the data part of scripts/roadmap_world.html (between @model markers) in Node."""
+
+    def model(self, en_text, ru_text):
+        merged = roadmap_map.merge(roadmap_map.parse(en_text, "en"), roadmap_map.parse(ru_text, "ru"))
+        template = WORLD_TEMPLATE.read_text(encoding="utf-8")
+        page = roadmap_map.render(template, merged, "test", "now")
+        code = page[page.index("// @model-begin"):page.index("// @model-end")]
+        script = code + """
+process.stdout.write(JSON.stringify({
+  provs: provs.map(p => [p.id, p.st]), regions: regs.filter(r => !r.landmark).map(r => r.key),
+  focus: focusIdx >= 0 ? provs[focusIdx].id : null, arrows: arrows.map(a => a.a.key + '>' + a.b.key),
+  landmarks: Object.fromEntries(provs.filter(p => p.kind !== 'task').map(p => [p.id, p.st]))
+}));
+"""
+        result = subprocess.run(["node", "-"], input=script, capture_output=True, text=True,
+                                encoding="utf-8", check=True)
+        return json.loads(result.stdout)
+
+    def fixture(self, spec):
+        return self.model(roadmap(spec, "en"), roadmap(spec, "ru"))
+
+    def test_every_task_becomes_a_province_with_its_status(self):
+        m = self.fixture({"R0": ["done", "cur"], "R1": ["todo", "todo"]})
+        tasks = [p for p in m["provs"] if re.fullmatch(r"R\d+\.\d+", p[0])]
+        self.assertEqual(tasks, [["R0.1", "done"], ["R0.2", "cur"], ["R1.1", "next"], ["R1.2", "next"]])
+        self.assertEqual(m["focus"], "R0.2")
+
+    def test_next_move_is_the_first_open_task_of_a_started_region(self):
+        m = self.fixture({"R0": ["done", "done"], "R1": ["done", "todo", "todo"], "R2": ["todo"]})
+        states = dict(m["provs"])
+        self.assertEqual((states["R1.2"], states["R1.3"], states["R2.1"]), ("front", "next", "next"))
+        self.assertEqual(m["focus"], "R1.2")
+
+    def test_first_open_task_is_the_next_move_at_the_very_start(self):
+        m = self.fixture({"R0": ["todo", "todo"]})
+        self.assertEqual(dict(m["provs"])["R0.1"], "front")
+
+    def test_removed_phase_leaves_the_map(self):
+        spec = {"R0": ["done"], "R1": ["todo"], "R4": ["todo"]}
+        en, ru = without_phase(roadmap(spec, "en"), "R1"), without_phase(roadmap(spec, "ru"), "R1")
+        m = self.model(en, ru)
+        self.assertNotIn("R1", m["regions"])
+        self.assertEqual([p for p in m["provs"] if p[0].startswith("R1.")], [])
+        self.assertNotIn("R1>R4", m["arrows"])
+
+    def test_checkpoint_is_passed_when_its_phases_are_done(self):
+        base = {"R0": ["done"], "R2": ["done"], "R1": ["done"], "R3": ["done"]}
+        self.assertEqual(self.fixture(dict(base, R4=["todo"]))["landmarks"]["R1+R3+R4"], "next")
+        self.assertEqual(self.fixture(dict(base, R4=["done"]))["landmarks"]["R1+R3+R4"], "done")
+
+    def test_live_statuses_reach_the_campaign_map(self):
+        en, ru = live()
+        m = self.model(en, ru)
+        shown = dict(m["provs"])
+        for phase in roadmap_map.parse(en, "en"):
+            for task in phase.tasks:
+                if task.id in shown and task.state == "done":
+                    self.assertEqual(shown[task.id], "done", task.id)
+                elif task.id in shown:
+                    self.assertNotEqual(shown[task.id], "done", task.id)
+
+    def test_dependencies_agree_with_the_table_page(self):
+        """Region metadata of the campaign map mirrors `phases` of the table page."""
+        table = (ROOT / roadmap_map.TEMPLATE_PATH).read_text(encoding="utf-8")
+        world = WORLD_TEMPLATE.read_text(encoding="utf-8")
+        script = ("const D = 'Готово', C = 'В работе', N = 'Впереди';\n"
+                  + table[table.index("const phases = {"):table.index("// ---- Statuses")]
+                  + "\n" + world[world.index("const STATIC = {"):world.index("const ST_OF")]
+                  + "\nprocess.stdout.write(JSON.stringify({ table: Object.fromEntries(Object.entries(phases).map(([k, p]) => [k, [p.id, p.deps, p.unlocks]])),"
+                  + " world: Object.fromEntries(Object.entries(STATIC).map(([k, p]) => [k, [p.id, p.deps, p.unlocks]])) }));")
+        out = json.loads(subprocess.run(["node", "-"], input=script, capture_output=True, text=True,
+                                        encoding="utf-8", check=True).stdout)
+        self.assertEqual(out["world"], out["table"])
+
+
 if __name__ == "__main__":
     unittest.main()

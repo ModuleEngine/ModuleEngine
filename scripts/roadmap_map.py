@@ -7,7 +7,8 @@ status: `Done`, `In progress`, or an effort estimate for work not started yet.
 The Russian counterpart uses `Сделано`/`Выполнено`/`Готово` and `В работе`.
 
 The script parses both language versions, checks that they agree, and injects
-the statuses into scripts/roadmap_map.html. See docs/roadmap-map.md.
+the statuses into scripts/roadmap_map.html and into the campaign map
+scripts/roadmap_world.html. See docs/roadmap-map.md.
 """
 
 from __future__ import annotations
@@ -26,7 +27,9 @@ ROOT = Path(__file__).resolve().parent.parent
 EN_PATH = "docs/product-roadmap.md"
 RU_PATH = "docs/ru/product-roadmap.md"
 TEMPLATE_PATH = "scripts/roadmap_map.html"
+WORLD_TEMPLATE_PATH = "scripts/roadmap_world.html"
 DEFAULT_OUT = "outputs/roadmap/index.html"
+WORLD_DIR = "world"  # the campaign map is written to <dir of --out>/world/index.html
 PLACEHOLDER = "/*@ROADMAP_DATA@*/null"
 
 HEADING = re.compile(r"^###\s+(?P<id>[A-Z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*)\s+—\s+(?P<title>.+?)\s*$")
@@ -200,6 +203,17 @@ def build(root: Path) -> tuple[str, list[str], list[str]]:
     return page, errors, warnings
 
 
+def build_world(root: Path) -> tuple[str, list[str]]:
+    """The campaign map page and warnings; statuses come from the same tables as the table page."""
+    en = parse((root / EN_PATH).read_text(encoding="utf-8"), "en")
+    ru = parse((root / RU_PATH).read_text(encoding="utf-8"), "ru")
+    template = (root / WORLD_TEMPLATE_PATH).read_text(encoding="utf-8")
+    warnings = [f"phase {pid} has no region on the campaign map in {WORLD_TEMPLATE_PATH}; its tasks are not shown"
+                for pid in unplaced(template, en)]
+    generated = dt.datetime.now(dt.timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
+    return render(template, merge(en, ru), source_commit(root), generated), warnings
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", default=DEFAULT_OUT, help=f"output HTML (default {DEFAULT_OUT})")
@@ -207,6 +221,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     page, errors, warnings = build(ROOT)
+    world, world_warnings = build_world(ROOT)
+    warnings += world_warnings
     for warning in warnings:
         print(f"warning: {warning}", file=sys.stderr)
     for error in errors:
@@ -219,6 +235,10 @@ def main(argv: list[str] | None = None) -> int:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(page, encoding="utf-8")
         print(f"wrote {out}")
+        world_out = out.parent / WORLD_DIR / "index.html"
+        world_out.parent.mkdir(parents=True, exist_ok=True)
+        world_out.write_text(world, encoding="utf-8")
+        print(f"wrote {world_out}")
     return 0
 
 
