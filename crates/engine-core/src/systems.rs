@@ -218,6 +218,14 @@ pub trait TickTransaction {
     fn validate(&mut self, _candidate: &GameState) -> Result<(), String> {
         Ok(())
     }
+    /// The previous state is still available while the candidate is staged.
+    fn validate_changes(
+        &mut self,
+        candidate: &GameState,
+        _before: &GameState,
+    ) -> Result<(), String> {
+        self.validate(candidate)
+    }
     fn commit(&mut self, _candidate: &GameState) -> Result<(), String> {
         Ok(())
     }
@@ -657,6 +665,7 @@ struct LiveSystem {
 }
 
 struct TickCheckpoint {
+    game: GameState,
     states: Vec<(Value, bool)>,
     entered: usize,
 }
@@ -740,10 +749,33 @@ impl SystemExecutor {
         events: &mut Vec<GameEvent>,
         transaction: &mut dyn TickTransaction,
     ) -> Result<(), String> {
-        let original_game = game.clone();
+        self.step_checkpointed(game, input, dt, events, transaction, false)
+    }
+
+    pub(crate) fn step_with_validated_world(
+        &mut self,
+        game: &mut GameState,
+        input: &GameInput,
+        dt: f32,
+        events: &mut Vec<GameEvent>,
+        transaction: &mut dyn TickTransaction,
+    ) -> Result<(), String> {
+        self.step_checkpointed(game, input, dt, events, transaction, true)
+    }
+
+    fn step_checkpointed(
+        &mut self,
+        game: &mut GameState,
+        input: &GameInput,
+        dt: f32,
+        events: &mut Vec<GameEvent>,
+        transaction: &mut dyn TickTransaction,
+        validated_world: bool,
+    ) -> Result<(), String> {
         let original_resources = self.resources.clone();
         let original_events = events.clone();
         let mut checkpoint = TickCheckpoint {
+            game: game.checkpoint_tick(validated_world),
             states: self
                 .systems
                 .iter()
@@ -762,7 +794,8 @@ impl SystemExecutor {
             if let Err(error) = transaction.rollback() {
                 rollback_errors.push(format!("Host transaction: {error}"));
             }
-            *game = original_game;
+            *game = checkpoint.game;
+            game.world.compact_staged();
             self.resources = original_resources;
             *events = original_events;
             for (system, (state, initialized)) in self.systems.iter_mut().zip(checkpoint.states) {
@@ -776,6 +809,8 @@ impl SystemExecutor {
                     rollback_errors.join("; ")
                 ));
             }
+        } else {
+            game.world.finish_tick(checkpoint.game.world);
         }
         result
     }
@@ -948,7 +983,7 @@ impl SystemExecutor {
             }
         }
         transaction
-            .validate(game)
+            .validate_changes(game, &checkpoint.game)
             .map_err(|e| format!("Host transaction validation: {e}"))?;
         transaction
             .commit(game)

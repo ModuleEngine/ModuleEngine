@@ -114,12 +114,16 @@ Put persistent state in the supplied state value instead of an unobservable
 process-global variable. The built-in combat module stores cooldowns, windup,
 attack direction and already-hit targets in that state.
 
-A failed tick restores the game state, owned system states, resource values and
-events to their pre-tick values. Systems stage external outputs during `step`.
+A failed tick discards the [ECS journal](ecs-world.md#lifetime-and-transactions)
+and restores session metadata, owned system states, resource values and events
+to their pre-tick values. Systems stage external outputs during `step`.
 `SystemExecutor::step_with_transaction` runs every system step, every
-`validate_tick`, then the host `TickTransaction::validate` and `commit`, and only
-then the system `commit_tick` hooks. In `GameSession`, that host transaction
-validates and applies the portable command packet to the selected World provider.
+`validate_tick`, then the host `TickTransaction::validate_changes` and `commit`,
+and then the system `commit_tick` hooks. `validate_changes` receives the previous
+state and defaults to the existing `validate` hook. In `GameSession`, the host
+validates the candidate and applies a portable command packet to the selected
+compatibility World provider, if present. The ECS journal is applied after all
+commit hooks succeed.
 Thus a provider rejection happens before script state or renderer overrides are
 published. The plain `SystemExecutor::step` uses a no-op host transaction.
 

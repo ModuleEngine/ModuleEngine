@@ -375,54 +375,33 @@ fn validate_name(name: &str) -> Result<(), String> {
     }
 }
 
-/// Common transactional semantics, using temporary DTOs rather than dictating
-/// either provider's persistent storage representation.
-pub(crate) fn apply_object_commands(
-    objects: &mut BTreeMap<u64, WorldObject>,
-    commands: &[WorldCommand],
-) -> Result<(), String> {
+impl WorldCommand {
+    pub(crate) fn value_target(&self) -> Option<u64> {
+        match *self {
+            Self::SetPosition { id, .. }
+            | Self::Translate { id, .. }
+            | Self::SetTransform { id, .. }
+            | Self::SetColor { id, .. } => Some(id),
+            Self::Spawn { .. } | Self::Remove { .. } => None,
+        }
+    }
+}
+
+pub(crate) fn check_world_packet_size(commands: &[WorldCommand]) -> Result<(), String> {
     if commands.len() > 4096 {
         return Err("World command batch exceeds 4096 operations".into());
     }
-    let mut candidate = objects.clone();
+    Ok(())
+}
+
+/// Common transactional semantics, using an owned DTO map as scratch space.
+pub(crate) fn edit_object_map(
+    candidate: &mut BTreeMap<u64, WorldObject>,
+    commands: &[WorldCommand],
+) -> Result<(), String> {
+    check_world_packet_size(commands)?;
     for command in commands {
         match command {
-            WorldCommand::SetPosition { id, position } => {
-                if !position.iter().all(|v| v.is_finite()) {
-                    return Err("Position must be finite".into());
-                }
-                candidate
-                    .get_mut(id)
-                    .ok_or_else(|| format!("Object {id} does not exist"))?
-                    .transform
-                    .translation = *position;
-            }
-            WorldCommand::Translate { id, delta } => {
-                if !delta.iter().all(|v| v.is_finite()) {
-                    return Err("Translation delta must be finite".into());
-                }
-                let object = candidate
-                    .get_mut(id)
-                    .ok_or_else(|| format!("Object {id} does not exist"))?;
-                for (value, delta) in object.transform.translation.iter_mut().zip(delta) {
-                    *value += delta;
-                }
-            }
-            WorldCommand::SetTransform { id, transform } => {
-                if !ComponentRegistry::TRANSFORM.is_finite(transform) {
-                    return Err("Transform must be finite".into());
-                }
-                candidate
-                    .get_mut(id)
-                    .ok_or_else(|| format!("Object {id} does not exist"))?
-                    .transform = *transform;
-            }
-            WorldCommand::SetColor { id, color } => {
-                candidate
-                    .get_mut(id)
-                    .ok_or_else(|| format!("Object {id} does not exist"))?
-                    .color = *color
-            }
             WorldCommand::Spawn { object } => {
                 if candidate.contains_key(&object.id) {
                     return Err(format!("Object {} already exists", object.id));
@@ -450,15 +429,63 @@ pub(crate) fn apply_object_commands(
                 }
                 candidate.retain(|id, _| !removed.contains(id));
             }
+            command => {
+                edit_object_values(command, candidate.get_mut(&command.value_target().unwrap()))?
+            }
         }
     }
+    validate_object_map(candidate)
+}
+
+pub(crate) fn edit_object_values(
+    command: &WorldCommand,
+    object: Option<&mut WorldObject>,
+) -> Result<(), String> {
+    let target = || {
+        object.ok_or_else(|| format!("Object {} does not exist", command.value_target().unwrap()))
+    };
+    match command {
+        WorldCommand::SetPosition { position, .. } => {
+            if !position.iter().all(|v| v.is_finite()) {
+                return Err("Position must be finite".into());
+            }
+            target()?.transform.translation = *position;
+        }
+        WorldCommand::Translate { delta, .. } => {
+            if !delta.iter().all(|v| v.is_finite()) {
+                return Err("Translation delta must be finite".into());
+            }
+            for (value, delta) in target()?.transform.translation.iter_mut().zip(delta) {
+                *value += delta;
+            }
+        }
+        WorldCommand::SetTransform { transform, .. } => {
+            if !ComponentRegistry::TRANSFORM.is_finite(transform) {
+                return Err("Transform must be finite".into());
+            }
+            target()?.transform = *transform;
+        }
+        WorldCommand::SetColor { color, .. } => target()?.color = *color,
+        WorldCommand::Spawn { .. } | WorldCommand::Remove { .. } => {
+            unreachable!("Structural commands use the object map")
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_object_transform(id: u64, transform: &Transform) -> Result<(), String> {
+    if !ComponentRegistry::TRANSFORM.is_finite(transform) {
+        return Err(format!("Object {id} has a nonfinite transform"));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_object_map(candidate: &BTreeMap<u64, WorldObject>) -> Result<(), String> {
     if candidate.len() > 65536 {
         return Err("Built-in editable world exceeds 65536 objects".into());
     }
     for object in candidate.values() {
-        if !ComponentRegistry::TRANSFORM.is_finite(&object.transform) {
-            return Err(format!("Object {} has a nonfinite transform", object.id));
-        }
+        validate_object_transform(object.id, &object.transform)?;
         let mut visited = BTreeSet::from([object.id]);
         let mut parent = object.parent;
         while let Some(id) = parent {
@@ -474,7 +501,6 @@ pub(crate) fn apply_object_commands(
                 .parent;
         }
     }
-    *objects = candidate;
     Ok(())
 }
 
@@ -488,7 +514,7 @@ pub fn validate_world_commands(
     if map.len() != objects.len() {
         return Err("Object packet has duplicate IDs".into());
     }
-    apply_object_commands(&mut map, commands)
+    edit_object_map(&mut map, commands)
 }
 
 #[cfg(test)]

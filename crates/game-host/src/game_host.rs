@@ -453,8 +453,7 @@ impl ExecutableSystem for RustSystem {
             (world, render)
         };
         // Both targets validate before publishing the candidate script state.
-        let mut candidate_world = ctx.game.world.clone();
-        candidate_world.apply_commands(&world)?;
+        let world_commands = ctx.game.world.prepare_commands(&world)?;
         let mut overrides = self
             .overrides
             .lock()
@@ -517,7 +516,7 @@ impl ExecutableSystem for RustSystem {
         }
         events.extend(preference_event);
         self.checkpoint = Some((checkpoint, overrides.clone(), old_settings));
-        ctx.game.world = candidate_world;
+        world_commands.apply();
         *overrides = candidate;
         *settings = candidate_settings;
         *state = tick.state.clone();
