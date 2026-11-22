@@ -629,26 +629,23 @@ impl EcsRows {
         true
     }
 
-    fn put_row(&mut self, id: u64, row: EntityRow) -> bool {
-        let mut despawned = false;
+    fn put_row(&mut self, id: u64, row: EntityRow) {
         if let Some(previous) = self.native::<EntityLifetime>(id) {
-            if previous.0 == row.lifetime {
-                let old_data = self.native::<ObjectData>(id).unwrap();
-                if old_data != &row.data
-                    || old_data.angular_velocity.map(f32::to_bits)
-                        != row.data.angular_velocity.map(f32::to_bits)
-                {
-                    *self.native_mut(id).unwrap() = row.data;
-                }
-                if !crate::ComponentRegistry::TRANSFORM
-                    .same_wire_value(self.native::<Transform>(id).unwrap(), &row.transform)
-                {
-                    *self.native_mut(id).unwrap() = row.transform;
-                }
-                self.replace_components(id, row.components);
-                return false;
+            debug_assert_eq!(previous.0, row.lifetime);
+            let old_data = self.native::<ObjectData>(id).unwrap();
+            if old_data != &row.data
+                || old_data.angular_velocity.map(f32::to_bits)
+                    != row.data.angular_velocity.map(f32::to_bits)
+            {
+                *self.native_mut(id).unwrap() = row.data;
             }
-            despawned = self.remove_row(id);
+            if !crate::ComponentRegistry::TRANSFORM
+                .same_wire_value(self.native::<Transform>(id).unwrap(), &row.transform)
+            {
+                *self.native_mut(id).unwrap() = row.transform;
+            }
+            self.replace_components(id, row.components);
+            return;
         }
         let handle = self
             .world
@@ -663,7 +660,6 @@ impl EcsRows {
         for (name, value) in row.components {
             self.components.entry(name).or_default().insert(id, value);
         }
-        despawned
     }
 
     fn replace_components(&mut self, id: u64, mut values: BTreeMap<String, serde_json::Value>) {
@@ -759,15 +755,25 @@ impl EcsWorld {
         }
         let rows = Arc::make_mut(&mut self.rows);
         let mut despawned = false;
-        for (id, edit) in staged.edits {
-            despawned |= match edit {
-                Some(row) => rows.put_row(id, row),
-                None => rows.remove_row(id),
-            };
+        for (&id, edit) in &staged.edits {
+            if edit.as_ref().is_none_or(|row| {
+                rows.native::<EntityLifetime>(id)
+                    .is_some_and(|previous| previous.0 != row.lifetime)
+            }) {
+                despawned |= rows.remove_row(id);
+            }
         }
         if despawned {
-            // Standalone Bevy does not age removal messages without a tracker update.
+            // Age removal messages before writes so the tracker update keeps
+            // this publication's new and changed components visible.
             rows.world.clear_trackers();
+        }
+        for (id, row) in staged
+            .edits
+            .into_iter()
+            .filter_map(|(id, edit)| edit.map(|row| (id, row)))
+        {
+            rows.put_row(id, row);
         }
     }
 
@@ -1553,6 +1559,7 @@ mod tests {
             entity(1, None, &[]).object,
             entity(2, None, &[]).object,
             entity(3, None, &[]).object,
+            entity(4, None, &[]).object,
         ])
         .unwrap();
         let handles = [1, 2, 3].map(|id| world.rows.index[&id]);
@@ -1566,10 +1573,16 @@ mod tests {
             .unwrap();
         world.transform_mut(2).unwrap().translation[0] = -0.;
         world
-            .apply_commands(&[WorldCommand::SetColor {
-                id: 3,
-                color: [0; 4],
-            }])
+            .apply_commands(&[
+                WorldCommand::SetColor {
+                    id: 3,
+                    color: [0; 4],
+                },
+                WorldCommand::Remove { id: 4 },
+                WorldCommand::Spawn {
+                    object: entity(5, None, &[]).object,
+                },
+            ])
             .unwrap();
         world.finish_tick(committed);
         let rows = Arc::get_mut(&mut world.rows).unwrap();
@@ -1589,6 +1602,9 @@ mod tests {
                 .is_changed()),
             [false, false, true]
         );
+        assert!(!rows.index.contains_key(&4));
+        let spawned = rows.index[&5];
+        assert!(rows.world.get_mut::<Transform>(spawned).unwrap().is_added());
         assert_eq!(
             world.transform(2).unwrap().translation[0].to_bits(),
             (-0.0_f32).to_bits()

@@ -80,8 +80,10 @@ A nested executor checkpoint shares the earlier journal and starts an empty
 layer for its own writes. Success merges that layer, and rejection restores
 the earlier view. Value-only command packets validate their targets and the
 transforms exposed to mutation since the last applied, validated packet.
-Discarding a prepared packet also discards its proposed repairs. Publication
-marks a native component as changed only when its final stored value differs.
+Discarding a prepared packet also discards its proposed repairs. For retained
+Bevy rows, publication marks a native component as changed only when its final
+stored value differs, even when the batch also despawns rows. Rebuilding or
+replacing the Bevy storage starts a fresh change history.
 
 On success, the executor validates the candidate, publishes any compatibility
 provider commands, runs system commit hooks, and applies the journal to the
@@ -147,12 +149,12 @@ on an AMD Ryzen 9 3900X, Windows x86-64, Rust 1.99.0. The baseline is
 
 | Entities | Writes | Fixed tick before, mean / p95 (µs) | Fixed tick after (µs) | `GameHost::step` before (µs) | `GameHost::step` after (µs) |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 200 | 0 | 1532.570 / 1662.100 | 0.864 / 1.400 | 1935.508 / 2128.100 | 184.501 / 225.900 |
-| 200 | 2 | 1066.685 / 1499.800 | 4.889 / 6.700 | 1378.088 / 1883.100 | 199.331 / 246.300 |
-| 2,000 | 0 | 17251.587 / 20035.200 | 2.461 / 5.400 | 22155.184 / 25306.400 | 2452.334 / 2847.000 |
-| 2,000 | 2 | 16784.722 / 19349.800 | 11.956 / 19.700 | 21450.796 / 24151.400 | 2493.243 / 2971.400 |
-| 10,000 | 0 | 103857.167 / 111397.400 | 8.300 / 9.800 | 130191.694 / 139514.300 | 14775.274 / 15483.700 |
-| 10,000 | 2 | 104344.325 / 110555.400 | 25.502 / 31.300 | 130599.360 / 138174.800 | 15086.958 / 15959.900 |
+| 200 | 0 | 1532.570 / 1662.100 | 0.893 / 1.200 | 1935.508 / 2128.100 | 190.932 / 253.500 |
+| 200 | 2 | 1066.685 / 1499.800 | 4.588 / 5.300 | 1378.088 / 1883.100 | 191.142 / 233.600 |
+| 2,000 | 0 | 17251.587 / 20035.200 | 3.878 / 6.800 | 22155.184 / 25306.400 | 2628.726 / 2909.600 |
+| 2,000 | 2 | 16784.722 / 19349.800 | 14.350 / 23.500 | 21450.796 / 24151.400 | 2626.197 / 2959.900 |
+| 10,000 | 0 | 103857.167 / 111397.400 | 8.867 / 11.300 | 130191.694 / 139514.300 | 15686.828 / 16957.600 |
+| 10,000 | 2 | 104344.325 / 110555.400 | 27.593 / 33.000 | 130599.360 / 138174.800 | 16268.487 / 17763.200 |
 
 The inner timer includes the transaction, schedule, and the probe's single
 system. The empty case leaves the world journal empty, uses a shared checkpoint,
