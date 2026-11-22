@@ -159,6 +159,9 @@ fn scene(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
             )))?;
             renderer.set_detailed_stats(false);
             renderer.set_frame_profiling(frame_profiling);
+            // S3 measures overlap. S4 and S5 keep the original one-request
+            // protocol and S5's single expanded-stream memory preflight.
+            let frame_window = if id == "S3" { renderer.frame_capacity() } else { 1 };
             let probe = renderer.probe_vertex_allocation(triangles);
             let mut blocked = probe.blocked.clone();
             if id == "S5" {
@@ -185,6 +188,7 @@ fn scene(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
                 let mut report = report.lock().unwrap();
                 report["gui_graphics"] = json!(graphics);
                 report["legacy_vertex_allocation"] = json!(probe);
+                report["vulkan_capabilities"] = json!(renderer.capabilities());
                 report["monitor"] = json!(window.current_monitor().map(|m| json!({
                     "pixels":<[u32;2]>::from(m.size()),"refresh_millihertz":m.refresh_rate_millihertz(),
                     "scale":m.scale_factor(),
@@ -195,7 +199,9 @@ fn scene(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
                 fixture, renderer, bridge, blocked, warmup, frames, triangles, report,
                 window_state: Box::new(move || (window.inner_size().into(), window.is_minimized())),
                 graph: default_graph(RenderPath::Forward), texture: GpuTexture::default(),
-                started: Instant::now(), completed: 0, in_flight: None, last_ui: None,
+                started: Instant::now(), completed: 0, submitted: 0,
+                in_flight: std::collections::VecDeque::new(), retry_tick: None,
+                max_pending: 0, frame_window, last_ui: None,
                 last_painted: None, samples: Vec::new(), initial_work: None, finished: false,
             }))
         }),
@@ -253,7 +259,11 @@ struct SceneApp {
     frames: usize,
     triangles: usize,
     completed: usize,
-    in_flight: Option<Flight>,
+    submitted: usize,
+    in_flight: std::collections::VecDeque<Flight>,
+    retry_tick: Option<(f64, f64)>,
+    max_pending: usize,
+    frame_window: usize,
     last_painted: Option<Instant>,
     last_ui: Option<u64>,
     samples: Vec<Sample>,
@@ -278,21 +288,21 @@ impl SceneApp {
         report["presentation"] = json!(self.texture.counters());
         report["first_completed_frame_work"] = json!(self.initial_work);
         report["samples"] = json!(self.samples);
+        report["producer_frame_slots"] = json!(self.renderer.frame_capacity());
+        report["producer_max_pending"] = json!(self.max_pending);
+        report["producer_allocator"] = json!(self.renderer.allocator_stats().map(
+            |[blocks, used, reserved]| json!({"blocks": blocks, "used_bytes": used, "reserved_bytes": reserved})
+        ));
     }
 
-    fn advance(&mut self) -> Result<(), String> {
-        if self.started.elapsed() > Duration::from_secs(300) {
-            return Err("Native scene watchdog expired".into());
-        }
-        self.texture.poll(&self.bridge)?;
-        let now = Instant::now();
-        if let Some(flight) = self.in_flight.take() {
+    fn observe(&mut self, now: Instant) -> Result<(), String> {
+        if let Some(flight) = self.in_flight.pop_front() {
             let Some(mut frame) = self
                 .renderer
                 .poll_presented(flight.ticket)
                 .map_err(|error| error.to_string())?
             else {
-                self.in_flight = Some(flight);
+                self.in_flight.push_front(flight);
                 return Ok(());
             };
             if frame.stats.objects != self.fixture.scene.items.len()
@@ -344,36 +354,62 @@ impl SceneApp {
             // Submit the next frame in this same callback. Waiting for another
             // UI callback would add one display interval to every sample.
         }
+        Ok(())
+    }
+
+    fn advance(&mut self) -> Result<(), String> {
+        if self.started.elapsed() > Duration::from_secs(300) {
+            return Err("Native scene watchdog expired".into());
+        }
+        self.texture.poll(&self.bridge)?;
+        let now = Instant::now();
+        self.observe(now)?;
         if self.completed == self.warmup + self.frames {
             if self.texture.counters().pending_copies == 0 {
                 self.finish("complete", None);
             }
             return Ok(());
         }
-        let ecs = self.fixture.tick(self.completed);
-        let started = Instant::now();
-        let submission = self
-            .renderer
-            .render_presented(
-                &self.fixture.scene,
-                self.fixture.camera,
-                SIZE[0],
-                SIZE[1],
-                &self.graph,
-                &BTreeMap::new(),
-                &RenderOverrides::default(),
-            )
-            .map_err(|error| error.to_string())?;
-        let cpu_submit_ms = started.elapsed().as_secs_f64() * 1000.;
-        let RenderSubmission::Pending(ticket) = submission else {
-            return Err("Expected one asynchronous Vulkan frame submission".into());
-        };
-        self.in_flight = Some(Flight {
-            ticket,
-            started,
-            cpu_submit_ms,
-            ecs,
-        });
+        while self.submitted < self.warmup + self.frames && self.in_flight.len() < self.frame_window
+        {
+            let ecs = self
+                .retry_tick
+                .take()
+                .or_else(|| self.fixture.tick(self.submitted));
+            let started = Instant::now();
+            let submission = self
+                .renderer
+                .render_presented(
+                    &self.fixture.scene,
+                    self.fixture.camera,
+                    SIZE[0],
+                    SIZE[1],
+                    &self.graph,
+                    &BTreeMap::new(),
+                    &RenderOverrides::default(),
+                )
+                .map_err(|error| error.to_string())?;
+            let cpu_submit_ms = started.elapsed().as_secs_f64() * 1000.;
+            match submission {
+                RenderSubmission::Pending(ticket) => {
+                    self.in_flight.push_back(Flight {
+                        ticket,
+                        started,
+                        cpu_submit_ms,
+                        ecs,
+                    });
+                    self.submitted += 1;
+                    self.max_pending = self.max_pending.max(self.in_flight.len());
+                }
+                RenderSubmission::Busy => {
+                    self.retry_tick = ecs;
+                    break;
+                }
+                RenderSubmission::Ready(_) => {
+                    return Err("Expected asynchronous Vulkan frame submission".into());
+                }
+            }
+        }
         Ok(())
     }
 }

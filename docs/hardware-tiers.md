@@ -6,7 +6,7 @@
 candidate for minimum Windows Player hardware at tier A. R0.4 verified one
 configuration, the Windows reference system with a **GeForce RTX 4080 SUPER**.
 The tier requirements describe the [rebuild](product-roadmap.md#rebuild-r0).
-Device selection in the current code comes from
+The R0.4 snapshot came from
 `b50e76d20006598cae423bc8e8d3a78f8007d147`.
 
 ## Device requirements and fallbacks
@@ -40,11 +40,10 @@ and [ray pipelines](https://docs.vulkan.org/refpages/latest/refpages/source/VK_K
 ## What the current Player uses
 
 The [Vulkan producer](../crates/render-vulkan/src/vulkan.rs) requests Vulkan
-1.3, checks the device API and graphics + compute queue, and queries and
-enables `dynamicRendering`. Renderer-only mode prefers a qualifying discrete
-GPU and enables no device extensions. With a native presentation target, the
-producer must match the GUI adapter. Among the tier bits above, the producer
-enables only `dynamicRendering`. There is no A/B/C selection in this version.
+1.3 and a graphics + compute queue with dynamic rendering. It prefers a
+qualifying discrete adapter without a presentation target and matches the GUI
+adapter with a target. [Device selection and enabled features](#r21-device)
+are separate from the native presentation import contract.
 
 - **Windows.** WGPU uses DX12 for the window. The Vulkan device must match the
   D3D12 adapter by valid LUID, expose and enable
@@ -61,6 +60,76 @@ report an error with no automatic CPU fallback. The explicit software and
 diagnostic routes have their own contracts. Vulkan-only game presentation is
 planned for R2.6. See the [import checks](../crates/render-vulkan/src/presentation.rs),
 [GUI bridge](../crates/player/src/gpu_presentation.rs) and [Player contract](player.md).
+
+
+<a id="r21-device"></a>
+
+## R2.1 device layer and verification
+
+The producer queries individual A, B and C features on the selected adapter.
+B and C are independent. The renderer enables the bits it uses. Tier A
+with `timelineSemaphore` activates two command and descriptor slots,
+synchronization2 and the gpu-allocator path. Other adapters that pass the
+existing Vulkan 1.3 and dynamic rendering checks use one slot with a fence
+and standalone resource allocations. Descriptor indexing, device addresses,
+mesh shaders and rays are reported capabilities at this stage.
+
+The allocator suballocates producer buffers and images and honors mandatory
+dedicated allocations. Imported external memory stays dedicated. Vertex writes
+and explicit diagnostic readback use coherent mapped memory. New atlases use a
+mapped staging ring. The last graphics completion value controls reuse of each
+range and the lifetime of replaced staging buffers. The producer sends whole
+atlas uploads to a dedicated transfer family when exposed, releases the image
+there, and acquires it on the graphics queue after a GPU-side timeline
+dependency. Otherwise the graphics command buffer records the upload. Slots
+hold GPU resources and pipeline references up to confirmed completion. A shared
+deletion worker polls detached busy slots. The normal native producer returns
+`Busy` when the slots or leased output images are full. Explicit diagnostic
+readback can wait for its own submission.
+
+Run on an idle Windows desktop with DXC and the Khronos validation layer
+installed or extracted locally. Point `VK_LAYER_PATH` at the directory
+containing the layer manifest. Keep the benchmark window unobstructed and run
+the scenes sequentially with no competing builds. The Cargo override enables
+Vulkan diagnostics in the optimized Editor's Vulkan crate.
+
+
+```powershell
+$env:VK_LAYER_PATH = (Resolve-Path 'work/verification/r21/layer').Path
+$env:VK_LOADER_DEBUG = 'layer'
+$env:VK_LAYER_ENABLES = 'VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT'
+$env:MODULE_ENGINE_VULKAN_TRACE = '1'
+$env:MODULE_ENGINE_BENCHMARK_ARM = 'automatic'
+$env:MODULE_ENGINE_BENCHMARK_FRAMES = '240'
+$env:MODULE_ENGINE_BENCHMARK_PROFILING = 'off'
+$env:MODULE_ENGINE_GUI_VSYNC = 'off'
+cargo --config 'profile.release.package.module-engine-vulkan.debug-assertions=true' build --locked --release --features bench -p module-engine-editor
+if ($LASTEXITCODE) { throw 'Editor build failed' }
+$out = New-Item -ItemType Directory "outputs/r21-repeat-$(Get-Date -Format yyyyMMdd-HHmmss)"
+$exe = (Resolve-Path 'target/release/module-engine-editor.exe').Path
+foreach ($scene in 'S1','S2','S3') {
+    & $exe --bench-scene $scene (Join-Path $out.FullName $scene) *> (Join-Path $out.FullName "$scene.log")
+    if ($LASTEXITCODE) { throw "$scene failed" }
+}
+git rev-parse HEAD
+Get-FileHash $exe
+```
+
+The loader log should show insertion of `VK_LAYER_KHRONOS_validation`.
+Every producer summary should show `validation=active` and `errors=0`
+through teardown. Check 240 measured frames and GPU-only native presentation
+in each scene's JSON report. In the log, `Vulkan frame begin`, `submit`,
+`complete`, and `wait` identify the renderer and queue serial. On the
+timeline path the serial is the semaphore value. `previous` records the
+old use of a slot, and `completed` is the graphics timeline counter when
+CPU recording begins. A previous serial must have completed before a new use.
+S3 should reach two outstanding tickets on the timeline path. Normal S1–S3
+should show no `Vulkan frame wait`. The explicit diagnostic route logs its
+synchronous wait as `reason=diagnostic`. The `Vulkan transfer submit` event
+records the dedicated upload signal when that family is available.
+Local evidence, including the [S3 prototype measurements](decisions.md#r21-device-prototype),
+is under `outputs/r21/`. The published hardware qualification limits below
+still apply.
 
 <a id="reference-gpu"></a>
 

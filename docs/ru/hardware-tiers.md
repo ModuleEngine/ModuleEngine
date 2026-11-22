@@ -6,7 +6,7 @@
 в минимальную карту уровня A для Player на Windows. В R0.4 проверена одна
 конфигурация, эталонная система Windows с **GeForce RTX 4080 SUPER**.
 Требования уровней относятся к [перестройке](product-roadmap.md#rebuild-r0).
-Текущий выбор устройства описан по коду
+Снимок R0.4 сделан на исходниках
 `b50e76d20006598cae423bc8e8d3a78f8007d147`.
 
 ## Требования к устройству и запасные пути
@@ -39,13 +39,11 @@ Vulkan API сама по себе не подтверждает необязат
 
 ## Что использует текущий Player
 
-[Производитель кадров Vulkan](../../crates/render-vulkan/src/vulkan.rs) запрашивает
-Vulkan 1.3, проверяет API устройства и очередь с graphics и compute, запрашивает
-и включает `dynamicRendering`. При работе без оконного вывода он предпочитает
-подходящую дискретную карту и не включает расширения устройства. Для нативного
-вывода производитель должен работать на том же адаптере, что и интерфейс.
-Из перечисленных в таблице битов он включает только `dynamicRendering`.
-Выбора между A, B и C в этой версии нет.
+[Производитель кадров Vulkan](../../crates/render-vulkan/src/vulkan.rs)
+запрашивает Vulkan 1.3 и очередь graphics + compute с dynamic rendering.
+Без цели вывода он предпочитает подходящий дискретный адаптер, а с целью
+сопоставляет устройство с адаптером GUI. [Выбор устройства и включаемые
+возможности](#r21-device) отделены от контракта импорта для нативного показа.
 
 - **Windows.** WGPU использует DX12 для окна. Устройство Vulkan должно совпадать
   с адаптером D3D12 по действительному LUID, предоставлять и включать
@@ -63,6 +61,80 @@ Vulkan 1.3, проверяет API устройства и очередь с gra
 Игровой вывод через собственный swapchain Vulkan запланирован в R2.6.
 См. [проверки импорта](../../crates/render-vulkan/src/presentation.rs),
 [мост интерфейса](../../crates/player/src/gpu_presentation.rs) и [контракт Player](player.md).
+
+
+<a id="r21-device"></a>
+
+## Слой устройства R2.1 и проверка
+
+Производитель проверяет отдельные возможности A, B и C на выбранном
+адаптере. B и C независимы. Renderer включает те биты, которые использует.
+На уровне A с `timelineSemaphore` включаются два слота команд и
+дескрипторов, synchronization2 и gpu-allocator. Другие адаптеры, которые
+проходят существующие проверки Vulkan 1.3 и dynamic rendering, используют
+один слот с fence и отдельными выделениями памяти. Индексация дескрипторов,
+адреса буферов, mesh shaders и лучи на этом этапе отражаются в возможностях.
+
+Аллокатор выдаёт участки памяти для буферов и изображений производителя
+и учитывает обязательные dedicated allocation. Импортируемая внешняя
+память выделяется отдельно. Запись вершин и явное диагностическое чтение
+используют когерентную отображённую память. Новые атласы проходят через
+отображённое staging-кольцо. Последнее значение завершения графических
+команд определяет повторное использование диапазонов и срок жизни
+заменённых staging-буферов. Производитель загружает атлас целиком в
+выделенном семействе transfer, когда оно доступно, освобождает владение
+изображением там и принимает в графической очереди после зависимости
+по timeline на GPU. Иначе копирование записывается в графический командный
+буфер. Слоты удерживают GPU-ресурсы и ссылки на pipelines до подтверждения
+завершения. Общий поток очереди удаления опрашивает отсоединённые занятые
+слоты. Обычный нативный производитель возвращает `Busy`, если слоты или
+арендуемые выходные изображения заняты. Явное диагностическое чтение может
+ждать свою отправку.
+
+Запускайте на свободном рабочем столе Windows с DXC и установленным или
+распакованным локально слоем валидации Khronos. Укажите в `VK_LAYER_PATH`
+каталог манифеста слоя. Выполните сцены последовательно без конкурирующих
+сборок и перекрытия окна замера. Переопределение Cargo включает диагностику
+Vulkan в crate Vulkan оптимизированного Editor.
+
+
+```powershell
+$env:VK_LAYER_PATH = (Resolve-Path 'work/verification/r21/layer').Path
+$env:VK_LOADER_DEBUG = 'layer'
+$env:VK_LAYER_ENABLES = 'VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT'
+$env:MODULE_ENGINE_VULKAN_TRACE = '1'
+$env:MODULE_ENGINE_BENCHMARK_ARM = 'automatic'
+$env:MODULE_ENGINE_BENCHMARK_FRAMES = '240'
+$env:MODULE_ENGINE_BENCHMARK_PROFILING = 'off'
+$env:MODULE_ENGINE_GUI_VSYNC = 'off'
+cargo --config 'profile.release.package.module-engine-vulkan.debug-assertions=true' build --locked --release --features bench -p module-engine-editor
+if ($LASTEXITCODE) { throw 'Editor build failed' }
+$out = New-Item -ItemType Directory "outputs/r21-repeat-$(Get-Date -Format yyyyMMdd-HHmmss)"
+$exe = (Resolve-Path 'target/release/module-engine-editor.exe').Path
+foreach ($scene in 'S1','S2','S3') {
+    & $exe --bench-scene $scene (Join-Path $out.FullName $scene) *> (Join-Path $out.FullName "$scene.log")
+    if ($LASTEXITCODE) { throw "$scene failed" }
+}
+git rev-parse HEAD
+Get-FileHash $exe
+```
+
+Журнал загрузчика должен показывать подключение `VK_LAYER_KHRONOS_validation`.
+Каждая сводка производителя должна содержать `validation=active` и
+`errors=0`, включая завершение приложения. Проверьте в JSON каждой сцены
+240 измеренных кадров и нативный вывод без чтения пикселей на CPU. События
+`Vulkan frame begin`, `submit`, `complete` и `wait` в журнале содержат
+производителя и порядковый номер отправки. На пути timeline этот номер
+равен значению семафора. `previous` — прежнее использование слота,
+`completed` — значение графического timeline на начало записи CPU.
+Прежний кадр должен завершиться до повторного использования слота. На пути
+timeline S3 должен достигнуть двух активных ticket. Для обычных S1–S3
+не должно быть событий `Vulkan frame wait`. Явная диагностика помечает
+синхронное ожидание как `reason=diagnostic`. Событие `Vulkan transfer submit`
+фиксирует сигнал загрузки, если доступно выделенное семейство.
+Локальные данные проверки лежат в `outputs/r21/`. Отдельно записаны
+[замеры прототипа S3](decisions.md#r21-device-prototype). Ограничения
+аппаратной квалификации указаны ниже.
 
 <a id="reference-gpu"></a>
 

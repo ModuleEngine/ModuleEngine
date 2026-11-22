@@ -4,7 +4,7 @@
 //! with no create flags and TRANSFER_SRC | TRANSFER_DST | SAMPLED usage. A newly
 //! allocated source is uninitialized: the producer performs the first write.
 //! Every subsequent handoff uses EXTERNAL ownership and GENERAL layout. The
-//! producer confirms its submission fence before publishing a frame. Consumers must retain
+//! producer confirms submission completion before publishing a frame. Consumers must retain
 //! the entire `Frame::gpu` lease until their GPU work has completed, and release
 //! the image to EXTERNAL/GENERAL before allowing that lease to drop.
 use crate::VulkanError;
