@@ -209,15 +209,41 @@ def build(root: Path) -> tuple[str, list[str], list[str]]:
     return page, errors, warnings
 
 
-def build_world(root: Path) -> tuple[str, list[str]]:
-    """The campaign map page and warnings; statuses come from the same tables as the table page."""
+TASK_DEPS = re.compile(r"const TASK_DEPS = \{(?P<body>[^}]*)\};")
+TASK_DEP_ENTRY = re.compile(r"'(?P<task>[^']+)'\s*:\s*\[(?P<deps>[^\]]*)\]")
+
+
+def task_deps(template: str) -> dict[str, list[str]]:
+    """Cross-phase task dependencies declared in the campaign map template."""
+    found = TASK_DEPS.search(template)
+    if not found:
+        return {}
+    return {m["task"]: re.findall(r"'([^']+)'", m["deps"]) for m in TASK_DEP_ENTRY.finditer(found["body"])}
+
+
+def dependency_errors(template: str, en: list[Phase], ru: list[Phase]) -> list[str]:
+    """A declared dependency is an error when the task is in the roadmap but the task it waits for is not."""
+    errors = []
+    for path, phases in ((EN_PATH, en), (RU_PATH, ru)):
+        ids = {t.id for p in phases for t in p.tasks}
+        for task, deps in task_deps(template).items():
+            for dep in deps:
+                if task in ids and dep not in ids:
+                    errors.append(f"{task} waits for {dep} (TASK_DEPS in {WORLD_TEMPLATE_PATH}), "
+                                  f"but {dep} is missing from {path}; update TASK_DEPS together with the roadmap")
+    return errors
+
+
+def build_world(root: Path) -> tuple[str, list[str], list[str]]:
+    """The campaign map page, errors and warnings; statuses come from the same tables as the table page."""
     en = parse((root / EN_PATH).read_text(encoding="utf-8"), "en")
     ru = parse((root / RU_PATH).read_text(encoding="utf-8"), "ru")
     template = (root / WORLD_TEMPLATE_PATH).read_text(encoding="utf-8")
     warnings = [f"phase {pid} has no region on the campaign map in {WORLD_TEMPLATE_PATH}; its tasks are not shown"
                 for pid in unplaced(template, en)]
     generated = dt.datetime.now(dt.timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
-    return render(template, merge(en, ru), source_commit(root), generated), warnings
+    errors = dependency_errors(template, en, ru)
+    return render(template, merge(en, ru), source_commit(root), generated), errors, warnings
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -227,7 +253,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     page, errors, warnings = build(ROOT)
-    world, world_warnings = build_world(ROOT)
+    world, world_errors, world_warnings = build_world(ROOT)
+    errors += world_errors
     warnings += world_warnings
     for warning in warnings:
         print(f"warning: {warning}", file=sys.stderr)

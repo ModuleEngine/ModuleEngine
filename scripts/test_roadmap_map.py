@@ -1,9 +1,13 @@
+import contextlib
+import io
 import json
 import re
 import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import roadmap_map
 
@@ -227,6 +231,62 @@ process.stdout.write(JSON.stringify({
 WORLD_TEMPLATE = ROOT / roadmap_map.WORLD_TEMPLATE_PATH
 
 
+def drop_row(markdown, task_id):
+    """Remove one task row from a roadmap table."""
+    kept = [line for line in markdown.splitlines() if not line.lstrip().startswith(f"| {task_id} |")]
+    assert len(kept) == len(markdown.splitlines()) - 1, task_id
+    return "\n".join(kept) + "\n"
+
+
+class WorldDependencyTest(unittest.TestCase):
+    """R2.3 waits for R1.6: removing only R1.6 must fail the build instead of unlocking R2.3."""
+
+    def tree(self, tmp, en, ru):
+        for rel, text in ((roadmap_map.EN_PATH, en), (roadmap_map.RU_PATH, ru),
+                          (roadmap_map.TEMPLATE_PATH, (ROOT / roadmap_map.TEMPLATE_PATH).read_text(encoding="utf-8")),
+                          (roadmap_map.WORLD_TEMPLATE_PATH, WORLD_TEMPLATE.read_text(encoding="utf-8"))):
+            path = Path(tmp) / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        return Path(tmp)
+
+    def test_declared_dependencies_are_read_from_the_template(self):
+        deps = roadmap_map.task_deps(WORLD_TEMPLATE.read_text(encoding="utf-8"))
+        self.assertEqual(deps.get("R2.3"), ["R1.6"])
+
+    def test_removing_only_the_required_task_is_an_error_naming_both(self):
+        en, ru = live()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.tree(tmp, drop_row(en, "R1.6"), drop_row(ru, "R1.6"))
+            _page, errors, _warnings = roadmap_map.build_world(root)
+            self.assertEqual(len(errors), 2, errors)
+            for error in errors:
+                self.assertIn("R2.3", error)
+                self.assertIn("R1.6", error)
+            self.assertTrue(any(roadmap_map.EN_PATH in e for e in errors))
+            self.assertTrue(any(roadmap_map.RU_PATH in e for e in errors))
+            with mock.patch.object(roadmap_map, "ROOT", root), contextlib.redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(roadmap_map.main(["--check"]), 1)
+                self.assertNotEqual(roadmap_map.main(["--out", str(Path(tmp) / "out" / "index.html")]), 0)
+            self.assertIn("R2.3 waits for R1.6", err.getvalue())
+
+    def test_removing_the_waiting_task_or_both_is_fine(self):
+        en, ru = live()
+        with tempfile.TemporaryDirectory() as tmp:
+            for tasks in (["R2.3"], ["R1.6", "R2.3"]):
+                e, r = en, ru
+                for task in tasks:
+                    e, r = drop_row(e, task), drop_row(r, task)
+                _page, errors, _warnings = roadmap_map.build_world(self.tree(tmp, e, r))
+                self.assertEqual(errors, [], tasks)
+
+    def test_present_required_task_is_not_an_error(self):
+        en, ru = live()
+        with tempfile.TemporaryDirectory() as tmp:
+            _page, errors, _warnings = roadmap_map.build_world(self.tree(tmp, en, ru))
+            self.assertEqual(errors, [])
+
+
 class WorldBuildTest(unittest.TestCase):
     def test_pages_link_to_each_other_by_file_name(self):
         """A link to a directory does not open its index.html from file://."""
@@ -254,8 +314,8 @@ class WorldBuildTest(unittest.TestCase):
         self.assertNotIn("${p.title}", line)
 
     def test_live_roadmap_builds_the_campaign_map(self):
-        page, warnings = roadmap_map.build_world(ROOT)
-        self.assertEqual(warnings, [])
+        page, errors, warnings = roadmap_map.build_world(ROOT)
+        self.assertEqual((errors, warnings), ([], []))
         self.assertNotIn(roadmap_map.PLACEHOLDER, page)
         self.assertIn('"id":"R0"', page)
 
@@ -315,6 +375,11 @@ process.stdout.write(JSON.stringify({
         after = self.fixture({"R0": ["done"], "R1": ["done"] * 6 + ["todo"], "R2": ["done", "done", "todo", "todo"]})
         states = dict(after["provs"])
         self.assertEqual((states["R1.7"], states["R2.3"]), ("front", "front"))
+
+    def test_missing_required_task_never_unlocks_the_waiting_one(self):
+        """Safety net behind the build error: the model keeps R2.3 blocked while R1.6 is absent."""
+        m = self.fixture({"R0": ["done"], "R1": ["done"] * 5, "R2": ["done", "done", "todo", "todo"]})
+        self.assertEqual(dict(m["provs"])["R2.3"], "next")
 
     def test_task_dependencies_come_from_the_roadmap(self):
         en, _ru = live()

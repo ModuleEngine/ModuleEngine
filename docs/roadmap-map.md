@@ -48,7 +48,7 @@ The campaign map is the same roadmap as a game-style pixel-art map, built from t
 | Not started, the first one of a phase that has been started | The next move: yellow pennant and tent. Shown only while nothing in that phase is in progress |
 | Not started, anything else | Fog of war: the farther from the front, the thicker the fog |
 
-Hover a province for its title and status; click it for the acceptance criterion and the estimate, click a region ribbon for the phase goal and the list of its provinces. Task titles and criteria come from the Russian roadmap, the card shows the full text of the task and acceptance cells; the English table only supplies statuses. A task that waits for a task of another phase (R2.3 needs R1.6) is not offered as the next move until that task is done.
+Hover a province for its title and status; click it for the acceptance criterion and the estimate, click a region ribbon for the phase goal and the list of its provinces. Task titles and criteria come from the Russian roadmap, the card shows the full text of the task and acceptance cells; the English table only supplies statuses. A task that waits for a task of another phase (R2.3 needs R1.6) is not offered as the next move until that task is done. These dependencies are declared in `TASK_DEPS` of the template; if the waiting task is in the roadmap but the task it waits for is not, the build (including `--check`) fails and names both tasks.
 
 The page is a static file with no network access: a Content-Security-Policy blocks every request. All art is drawn in code on a canvas, with no external assets. Animation stops with `prefers-reduced-motion`.
 

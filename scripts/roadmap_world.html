@@ -168,7 +168,7 @@ for (const k of Object.keys(LAND)) { const d = DATA[k], reg = k.startsWith('ai')
   const p = { i: provs.length, reg, id: d.id, key: k, title: d.title, crit: d.goal, eff: d.effort, st, x: LAND[k][0], y: LAND[k][1], kind: k.startsWith('ai') ? 'tower' : 'light', d }; provs.push(p); reg.provs.push(p); }
 /* the next move: in a region that is started but has nothing in progress, the first open task, unless it waits for a task of another phase */
 const taskById = Object.fromEntries(provs.filter(p => p.kind === 'task').map(p => [p.id, p]));
-const unblocked = p => (TASK_DEPS[p.id] || []).every(d => !taskById[d] || taskById[d].st === 'done');
+const unblocked = p => (TASK_DEPS[p.id] || []).every(d => taskById[d] && taskById[d].st === 'done'); // scripts/roadmap_map.py fails the build when a required task is missing
 for (const r of regs) { if (r.landmark) continue; const done = r.provs.filter(p => p.st === 'done').length; if (done > 0 && done < r.provs.length && !r.provs.some(p => p.st === 'cur')) { const f = r.provs.find(p => p.st === 'next'); if (unblocked(f)) f.st = 'front'; } }
 if (!provs.some(p => p.st === 'cur' || p.st === 'front')) { const f = provs.find(p => p.kind === 'task' && p.st === 'next' && unblocked(p)); if (f) f.st = 'front'; }
 const N = provs.length, curIdx = provs.findIndex(p => p.st === 'cur'), focusIdx = curIdx >= 0 ? curIdx : provs.findIndex(p => p.st === 'front');
