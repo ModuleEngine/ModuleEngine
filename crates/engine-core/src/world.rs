@@ -1,6 +1,7 @@
 use crate::{WorldCommand, WorldObject};
+use bevy_ecs::prelude::{Component, Entity, World};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Identifies built-in world storage or a separately registered source provider.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -408,17 +409,42 @@ impl WorldProvider for ObjectsWorld {
     }
 }
 
-/// Canonical entity/component storage. Owned DTOs are extracted at boundaries;
-/// systems query component columns directly and never share a second entity map.
-#[derive(Clone, Debug)]
+#[derive(Component)]
+#[component(immutable)]
+struct StableId(u64);
+
+#[derive(Clone, Component, PartialEq)]
+struct ObjectData {
+    transform: Transform,
+    parent: Option<u64>,
+    color: [u8; 4],
+    angular_velocity: [f32; 3],
+    references: BTreeMap<String, u64>,
+}
+
+impl ObjectData {
+    fn from_object(object: WorldObject) -> Self {
+        Self {
+            transform: object.transform,
+            parent: object.parent,
+            color: object.color,
+            angular_velocity: [0.; 3],
+            references: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Component)]
+#[component(immutable)]
+struct EntityLifetime(u64);
+
+/// Canonical gameplay storage. Native object rows live in Bevy, and schema
+/// component columns keep their existing stable-ID keys and lossless JSON.
+#[derive(Debug)]
 pub struct EcsWorld {
-    transforms: BTreeMap<u64, Transform>,
-    parents: BTreeMap<u64, u64>,
-    colors: BTreeMap<u64, [u8; 4]>,
-    angular_velocities: BTreeMap<u64, [f32; 3]>,
+    world: World,
+    index: BTreeMap<u64, Entity>,
     components: BTreeMap<String, BTreeMap<u64, serde_json::Value>>,
-    references: BTreeMap<u64, BTreeMap<String, u64>>,
-    lifetimes: BTreeMap<u64, u64>,
     time: f32,
 }
 
@@ -434,41 +460,81 @@ fn new_entity_lifetime() -> u64 {
 
 /// Runtime lifetime tokens are private identity bookkeeping, outside the saved
 /// semantic DTO state. Clone retains them; deserialization creates new ones.
+impl Clone for EcsWorld {
+    fn clone(&self) -> Self {
+        let mut world = World::new();
+        let index = world
+            .spawn_batch(self.index.iter().map(|(&id, &handle)| {
+                (
+                    StableId(id),
+                    self.world.get::<ObjectData>(handle).unwrap().clone(),
+                    EntityLifetime(self.world.get::<EntityLifetime>(handle).unwrap().0),
+                )
+            }))
+            .zip(self.entity_ids())
+            .map(|(handle, id)| (id, handle))
+            .collect();
+        Self {
+            world,
+            index,
+            components: self.components.clone(),
+            time: self.time,
+        }
+    }
+}
+
 impl PartialEq for EcsWorld {
     fn eq(&self, other: &Self) -> bool {
-        self.transforms == other.transforms
-            && self.parents == other.parents
-            && self.colors == other.colors
-            && self.angular_velocities == other.angular_velocities
+        self.time == other.time
             && self.components == other.components
-            && self.references == other.references
-            && self.time == other.time
+            && self.entity_ids().eq(other.entity_ids())
+            && self
+                .entity_ids()
+                .all(|id| self.object_data(id) == other.object_data(id))
     }
 }
 
 impl EcsWorld {
-    /// Construct authored entities in independent component tables, without motion.
+    fn spawn_object(&mut self, object: WorldObject) {
+        let id = object.id;
+        let handle = self
+            .world
+            .spawn((
+                StableId(id),
+                ObjectData::from_object(object),
+                EntityLifetime(new_entity_lifetime()),
+            ))
+            .id();
+        let previous = self.index.insert(id, handle);
+        debug_assert!(previous.is_none());
+    }
+
+    fn object_data(&self, id: u64) -> Option<&ObjectData> {
+        self.world.get(*self.index.get(&id)?)
+    }
+
+    fn object_data_mut(&mut self, id: u64) -> Option<&mut ObjectData> {
+        self.world
+            .get_mut::<ObjectData>(*self.index.get(&id)?)
+            .map(|data| data.into_inner())
+    }
+
+    /// Construct authored rows without demo motion.
     pub fn from_objects(objects: Vec<WorldObject>) -> Result<Self, String> {
         if objects.iter().any(|object| object.id == 0) {
             return Err("Entity IDs must be nonzero".into());
         }
         crate::validate_world_commands(&objects, &[])?;
-        Ok(Self {
-            transforms: objects.iter().map(|o| (o.id, o.transform)).collect(),
-            parents: objects
-                .iter()
-                .filter_map(|o| o.parent.map(|p| (o.id, p)))
-                .collect(),
-            colors: objects.iter().map(|o| (o.id, o.color)).collect(),
-            angular_velocities: objects.iter().map(|o| (o.id, [0.; 3])).collect(),
+        let mut world = Self {
+            world: World::new(),
+            index: BTreeMap::new(),
             components: BTreeMap::new(),
-            references: objects.iter().map(|o| (o.id, BTreeMap::new())).collect(),
-            lifetimes: objects
-                .iter()
-                .map(|o| (o.id, new_entity_lifetime()))
-                .collect(),
             time: 0.,
-        })
+        };
+        for object in objects {
+            world.spawn_object(object);
+        }
+        Ok(world)
     }
     pub fn from_entities(entities: Vec<crate::GameEntity>) -> Result<Self, String> {
         if entities.iter().any(|entity| entity.object.id == 0) {
@@ -482,7 +548,7 @@ impl EcsWorld {
         )?;
         for entity in entities {
             let id = entity.object.id;
-            world.references.insert(id, entity.references);
+            *world.references_mut(id).unwrap() = entity.references;
             for (name, value) in entity.components {
                 world.insert_component(id, name, value)?;
             }
@@ -491,21 +557,21 @@ impl EcsWorld {
         Ok(world)
     }
     pub fn entity_ids(&self) -> impl Iterator<Item = u64> + '_ {
-        self.transforms.keys().copied()
+        self.index.keys().copied()
     }
     pub fn contains(&self, id: u64) -> bool {
-        self.transforms.contains_key(&id)
+        self.index.contains_key(&id)
     }
     /// Opaque process-local identity for module-owned transient state. Tokens
     /// survive checkpoints/ordinary edits but are fresh after spawn or reload.
     pub fn lifetime(&self, id: u64) -> Option<u64> {
-        self.lifetimes.get(&id).copied()
+        Some(self.world.get::<EntityLifetime>(*self.index.get(&id)?)?.0)
     }
     pub fn len(&self) -> usize {
-        self.transforms.len()
+        self.index.len()
     }
     pub fn is_empty(&self) -> bool {
-        self.transforms.is_empty()
+        self.index.is_empty()
     }
     /// Query the smallest requested component column, retaining stable ID order.
     pub fn entities_with(&self, required: &[&str]) -> Vec<u64> {
@@ -530,18 +596,22 @@ impl EcsWorld {
             .collect()
     }
     pub fn object(&self, id: u64) -> Option<WorldObject> {
+        let entity = self.world.get_entity(*self.index.get(&id)?).ok()?;
+        let data = entity.get::<ObjectData>()?;
+        let stable_id = entity.get::<StableId>()?.0;
+        debug_assert_eq!(stable_id, id);
         Some(WorldObject {
-            id,
-            parent: self.parents.get(&id).copied(),
-            transform: *self.transforms.get(&id)?,
-            color: self.colors[&id],
+            id: stable_id,
+            parent: data.parent,
+            transform: data.transform,
+            color: data.color,
         })
     }
     pub fn objects_snapshot(&self) -> Vec<WorldObject> {
         self.entity_ids().filter_map(|id| self.object(id)).collect()
     }
     pub fn transform_mut(&mut self, id: u64) -> Option<&mut Transform> {
-        self.transforms.get_mut(&id)
+        Some(&mut self.object_data_mut(id)?.transform)
     }
     pub fn component(&self, id: u64, name: &str) -> Option<&serde_json::Value> {
         self.components.get(name)?.get(&id)
@@ -573,10 +643,10 @@ impl EcsWorld {
         removed
     }
     pub fn references(&self, id: u64) -> Option<&BTreeMap<String, u64>> {
-        self.references.get(&id)
+        Some(&self.object_data(id)?.references)
     }
     pub fn references_mut(&mut self, id: u64) -> Option<&mut BTreeMap<String, u64>> {
-        self.references.get_mut(&id)
+        Some(&mut self.object_data_mut(id)?.references)
     }
     pub fn entity(&self, id: u64) -> Option<crate::GameEntity> {
         Some(crate::GameEntity {
@@ -588,7 +658,7 @@ impl EcsWorld {
                     column.get(&id).map(|value| (name.clone(), value.clone()))
                 })
                 .collect(),
-            references: self.references.get(&id).cloned().unwrap_or_default(),
+            references: self.references(id).unwrap().clone(),
         })
     }
     pub fn entities_snapshot(&self) -> Vec<crate::GameEntity> {
@@ -610,15 +680,13 @@ impl EcsWorld {
             .collect();
         objects.insert(id, entity.object.clone());
         crate::validate_world_commands(&objects.into_values().collect::<Vec<_>>(), &[])?;
-        self.transforms.insert(id, entity.object.transform);
-        self.colors.insert(id, entity.object.color);
-        if let Some(parent) = entity.object.parent {
-            self.parents.insert(id, parent);
+        if let Some(data) = self.object_data_mut(id) {
+            data.transform = entity.object.transform;
+            data.parent = entity.object.parent;
+            data.color = entity.object.color;
         } else {
-            self.parents.remove(&id);
+            self.spawn_object(entity.object);
         }
-        self.angular_velocities.entry(id).or_insert([0.; 3]);
-        self.lifetimes.entry(id).or_insert_with(new_entity_lifetime);
         for column in self.components.values_mut() {
             column.remove(&id);
         }
@@ -626,12 +694,12 @@ impl EcsWorld {
         for (name, value) in entity.components {
             self.components.entry(name).or_default().insert(id, value);
         }
-        self.references.insert(id, entity.references);
+        *self.references_mut(id).unwrap() = entity.references;
         Ok(())
     }
     pub fn validate_references(&self) -> Result<(), String> {
-        for (id, references) in &self.references {
-            for (name, target) in references {
+        for id in self.entity_ids() {
+            for (name, target) in self.references(id).unwrap() {
                 if !self.contains(*target) {
                     return Err(format!(
                         "Object {id} reference '{name}' points to missing {target}; clear references before removing their targets"
@@ -642,41 +710,49 @@ impl EcsWorld {
         Ok(())
     }
     pub fn clear(&mut self) {
-        self.transforms.clear();
-        self.parents.clear();
-        self.colors.clear();
-        self.angular_velocities.clear();
-        self.components.clear();
-        self.references.clear();
-        self.lifetimes.clear();
-    }
-    /// Build the demo independently as Transform/Parent/Color/Motion tables.
-    pub fn demo() -> Self {
-        Self {
-            transforms: BTreeMap::from([
-                (1, transform([-1.35, 0.0, 0.0], [0.8; 3])),
-                (2, transform([0.0, 2.0, 0.0], [0.32; 3])),
-                (3, transform([1.5, -0.15, 0.2], [0.65; 3])),
-                (4, transform([0.0, -1.0, 0.0], [4.0, 0.08, 3.0])),
-            ]),
-            parents: BTreeMap::from([(2, 1)]),
-            colors: BTreeMap::from([
-                (1, [80, 175, 245, 255]),
-                (2, [255, 182, 75, 255]),
-                (3, [189, 128, 240, 255]),
-                (4, [79, 103, 111, 255]),
-            ]),
-            angular_velocities: BTreeMap::from([
-                (1, [0.18, 0.65, 0.0]),
-                (2, [0.3, -0.7, 0.0]),
-                (3, [0.25, -0.45, 0.0]),
-                (4, [0.; 3]),
-            ]),
-            components: BTreeMap::new(),
-            references: (1..=4).map(|id| (id, BTreeMap::new())).collect(),
-            lifetimes: (1..=4).map(|id| (id, new_entity_lifetime())).collect(),
-            time: 0.0,
+        for (_, handle) in std::mem::take(&mut self.index) {
+            let removed = self.world.despawn(handle);
+            debug_assert!(removed);
         }
+        self.components.clear();
+    }
+    /// Build the built-in demo with its original motion.
+    pub fn demo() -> Self {
+        let mut world = Self::from_objects(vec![
+            WorldObject {
+                id: 1,
+                parent: None,
+                transform: transform([-1.35, 0.0, 0.0], [0.8; 3]),
+                color: [80, 175, 245, 255],
+            },
+            WorldObject {
+                id: 2,
+                parent: Some(1),
+                transform: transform([0.0, 2.0, 0.0], [0.32; 3]),
+                color: [255, 182, 75, 255],
+            },
+            WorldObject {
+                id: 3,
+                parent: None,
+                transform: transform([1.5, -0.15, 0.2], [0.65; 3]),
+                color: [189, 128, 240, 255],
+            },
+            WorldObject {
+                id: 4,
+                parent: None,
+                transform: transform([0.0, -1.0, 0.0], [4.0, 0.08, 3.0]),
+                color: [79, 103, 111, 255],
+            },
+        ])
+        .unwrap();
+        for (id, velocity) in [
+            (1, [0.18, 0.65, 0.0]),
+            (2, [0.3, -0.7, 0.0]),
+            (3, [0.25, -0.45, 0.0]),
+        ] {
+            world.object_data_mut(id).unwrap().angular_velocity = velocity;
+        }
+        world
     }
 }
 
@@ -694,37 +770,35 @@ impl WorldProvider for EcsWorld {
         }
         let mut objects = self.objects()?.into_iter().map(|o| (o.id, o)).collect();
         crate::control::apply_object_commands(&mut objects, commands)?;
-        // DTO validation completed before touching any component table.
-        self.transforms = objects.values().map(|o| (o.id, o.transform)).collect();
-        self.parents = objects
-            .values()
-            .filter_map(|o| o.parent.map(|p| (o.id, p)))
+        // DTO validation completed before touching the Bevy rows or JSON columns.
+        let spawned: BTreeSet<_> = commands
+            .iter()
+            .filter_map(|command| match command {
+                WorldCommand::Spawn { object } => Some(object.id),
+                _ => None,
+            })
             .collect();
-        self.colors = objects.values().map(|o| (o.id, o.color)).collect();
-        self.angular_velocities
-            .retain(|id, _| objects.contains_key(id));
-        for column in self.components.values_mut() {
-            column.retain(|id, _| objects.contains_key(id));
-        }
-        self.references.retain(|id, _| objects.contains_key(id));
-        self.lifetimes.retain(|id, _| objects.contains_key(id));
-        for command in commands {
-            if let WorldCommand::Spawn { object } = command {
-                self.angular_velocities.remove(&object.id);
-                for column in self.components.values_mut() {
-                    column.remove(&object.id);
-                }
-                self.references.remove(&object.id);
-                self.lifetimes.remove(&object.id);
+        let keep = |id: &u64| objects.contains_key(id) && !spawned.contains(id);
+        self.index.retain(|id, handle| {
+            if keep(id) {
+                return true;
             }
+            let removed = self.world.despawn(*handle);
+            debug_assert!(removed);
+            false
+        });
+        for column in self.components.values_mut() {
+            column.retain(|id, _| keep(id));
         }
         self.components.retain(|_, column| !column.is_empty());
-        for id in objects.keys() {
-            self.angular_velocities.entry(*id).or_insert([0.; 3]);
-            self.references.entry(*id).or_default();
-            self.lifetimes
-                .entry(*id)
-                .or_insert_with(new_entity_lifetime);
+        for object in objects.into_values() {
+            if let Some(data) = self.object_data_mut(object.id) {
+                data.transform = object.transform;
+                data.parent = object.parent;
+                data.color = object.color;
+            } else {
+                self.spawn_object(object);
+            }
         }
         Ok(())
     }
@@ -732,11 +806,19 @@ impl WorldProvider for EcsWorld {
     fn step(&mut self, dt: f32, speed: f32) {
         self.time += dt;
         let amount = dt * speed;
-        for (entity, velocity) in &self.angular_velocities {
-            if let Some(transform) = self.transforms.get_mut(entity) {
-                for (i, component) in velocity.iter().enumerate() {
-                    transform.rotation[i] += component * amount;
-                }
+        for &handle in self.index.values() {
+            let data = self
+                .world
+                .get_mut::<ObjectData>(handle)
+                .unwrap()
+                .into_inner();
+            for (rotation, velocity) in data
+                .transform
+                .rotation
+                .iter_mut()
+                .zip(data.angular_velocity)
+            {
+                *rotation += velocity * amount;
             }
         }
     }
@@ -744,29 +826,28 @@ impl WorldProvider for EcsWorld {
     fn snapshot(&self) -> SceneSnapshot {
         fn resolve(
             entity: u64,
-            transforms: &BTreeMap<u64, Transform>,
-            parents: &BTreeMap<u64, u64>,
+            world: &EcsWorld,
             cache: &mut BTreeMap<u64, [[f32; 4]; 4]>,
         ) -> [[f32; 4]; 4] {
             if let Some(model) = cache.get(&entity) {
                 return *model;
             }
-            let parent = parents
-                .get(&entity)
-                .map_or_else(identity_matrix, |p| resolve(*p, transforms, parents, cache));
-            let model = multiply_matrices(parent, transforms[&entity].matrix());
+            let data = world.object_data(entity).unwrap();
+            let parent = data
+                .parent
+                .map_or_else(identity_matrix, |id| resolve(id, world, cache));
+            let model = multiply_matrices(parent, data.transform.matrix());
             cache.insert(entity, model);
             model
         }
         let mut cache = BTreeMap::new();
         let items = self
-            .transforms
-            .keys()
+            .entity_ids()
             .map(|entity| RenderItem {
-                id: *entity,
+                id: entity,
                 mesh: Mesh::cube(),
-                model: resolve(*entity, &self.transforms, &self.parents, &mut cache),
-                color: self.colors[entity],
+                model: resolve(entity, self, &mut cache),
+                color: self.object_data(entity).unwrap().color,
                 material: Material::default(),
             })
             .collect();
@@ -901,6 +982,58 @@ mod tests {
                 .is_err()
         );
     }
+
+    #[test]
+    fn stable_index_rejects_a_stale_handle_when_bevy_reuses_its_slot() {
+        let target = 9_007_199_254_740_993;
+        let child = 9_007_199_254_740_994;
+        let mut observer = entity(1, None, &[]);
+        observer.references.insert("target".into(), target);
+        let mut world = EcsWorld::from_entities(vec![
+            observer,
+            entity(target, None, &[("marker", serde_json::Value::Null)]),
+            entity(child, Some(target), &[]),
+        ])
+        .unwrap();
+        let handle = world.index[&target];
+        let lifetime = world.lifetime(target);
+        let replacement = u64::MAX;
+        let spawn = WorldCommand::Spawn {
+            object: entity(replacement, None, &[]).object,
+        };
+        let remove = WorldCommand::Remove { id: target };
+        let duplicate = WorldCommand::Spawn {
+            object: entity(1, None, &[]).object,
+        };
+        assert!(world.apply_commands(&[remove.clone(), duplicate]).is_err());
+        assert_eq!(world.index[&target], handle);
+        assert_eq!(world.lifetime(target), lifetime);
+        assert_eq!(world.object(child).unwrap().parent, Some(target));
+        assert_eq!(world.references(1).unwrap()["target"], target);
+        assert_eq!(
+            world.component(target, "marker"),
+            Some(&serde_json::Value::Null)
+        );
+
+        // Keep the child by reparenting it, so there is exactly one slot to recycle.
+        let mut child_dto = world.entity(child).unwrap();
+        child_dto.object.parent = None;
+        world.upsert_entity(child_dto).unwrap();
+        world.apply_commands(&[remove, spawn]).unwrap();
+        let new_handle = world.index[&replacement];
+        assert_eq!(handle.index(), new_handle.index());
+        assert_ne!(handle.generation(), new_handle.generation());
+        assert!(world.world.get::<StableId>(handle).is_none());
+        assert!(!world.contains(target));
+        assert!(
+            world
+                .entity(world.references(1).unwrap()["target"])
+                .is_none()
+        );
+        assert!(world.validate_references().is_err());
+        assert_eq!(world.object(replacement).unwrap().id, replacement);
+        assert!(world.entities_with(&["marker"]).is_empty());
+    }
     #[test]
     fn subtree_reused_ids_clear_all_columns_references_and_motion_in_one_batch() {
         let mut parent = entity(1, None, &[("marker", serde_json::json!({"old":true}))]);
@@ -910,7 +1043,7 @@ mod tests {
             entity(2, Some(1), &[("marker", serde_json::json!({}))]),
         ])
         .unwrap();
-        world.angular_velocities.insert(1, [1., 0., 0.]);
+        world.object_data_mut(1).unwrap().angular_velocity = [1., 0., 0.];
         let old_lifetimes = [world.lifetime(1).unwrap(), world.lifetime(2).unwrap()];
         world
             .apply_commands(&[

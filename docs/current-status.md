@@ -4,11 +4,18 @@
 
 [English](current-status.md) | [Русский](ru/current-status.md) | [Documentation](README.md)
 
+**22 November 2026 — R1.2 integrated stable IDs into the gameplay ECS.** The
+Windows integration case preserved the object ID `9007199254740993`, its
+prefab instance and both links through scene files, repeated saves, Player
+export and compiled Rust IPC. The checked-in game passed the byte comparison
+on a migrated copy. See [R1.2 verification](ecs-world.md#r12-verification).
+R1.3 covers the native component codecs.
+
 **22 November 2026 — R1.1 selected hybrid Bevy storage for R1.2.** In
 matched Release runs on the CPU, the S3 tick averaged 0.5363 ms in Core,
 0.1168 ms in Bevy with dynamic JSON, and 0.0154 ms in hybrid Bevy. The
 hybrid achieves 34.82× speedup and passed the spike's stable-ID, JSON,
-deterministic save and rejected-candidate cases. R1.2 is the next task.
+deterministic save and rejected-candidate cases.
 See the [storage decision and reproduction](ecs-storage-decision.md#r11).
 
 **22 November 2026 — R0.6 baseline recorded.** Three scored native S1–S5

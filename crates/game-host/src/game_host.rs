@@ -391,7 +391,7 @@ impl ExecutableSystem for RustSystem {
             .clone();
         let entities = ctx.game.world.entities_snapshot();
         let objects: Vec<_> = entities.iter().map(|e| e.object.clone()).collect();
-        let mut input = ScriptContext::new(ctx.game.time, ctx.dt as f64, objects.clone());
+        let mut input = ScriptContext::new(ctx.game.time, ctx.dt as f64, objects);
         input.asset_paths =
             module_engine_project::AssetManifest::from_value(&document.asset_manifest)?
                 .asset_paths();
@@ -427,18 +427,19 @@ impl ExecutableSystem for RustSystem {
             .map(|e| serde_json::to_value(e).unwrap_or(Value::Null))
             .collect();
         input.parameters = module_engine_core::resolved_parameters(&document);
-        for entity in &entities {
-            for (name, value) in &entity.components {
-                if let Some(fields) = value.as_object() {
+        for entity in entities {
+            let id = entity.object.id;
+            if !entity.references.is_empty() {
+                input.references.insert(id, entity.references);
+            }
+            for (name, value) in entity.components {
+                if let Value::Object(fields) = value {
                     input
                         .properties
                         .components
-                        .entry(entity.object.id)
+                        .entry(id)
                         .or_default()
-                        .insert(
-                            name.clone(),
-                            fields.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-                        );
+                        .insert(name, fields.into_iter().collect());
                 }
             }
         }

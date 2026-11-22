@@ -87,13 +87,15 @@ the store. JSON encoding, I/O, and runtime checkpointing are separate.
   it kept the previous entity bytes, Bevy handles and all probed tick state.
   A subsequent valid candidate published successfully.
 
-The spike covers these fixture cases. Production scene/export/IPC integration,
-the complete GameSession checkpoint and consumer changes are part of later R1
-work. The CPU comparison does not establish native frame or game-step gains.
+These results cover the standalone spike fixtures. The production stable-ID
+contract and its integrated checks are described in [ECS world](ecs-world.md).
+The CPU comparison does not establish native frame or game-step gains.
 
 ### Reproduction and evidence
 
-From the repository root, with the native toolchain and Python 3.9+:
+From the repository root at the R1.1 merge
+`ae2b06b0194d21bc2c64e41af03f631bace3dbe2`, with the native toolchain and
+Python 3.9+. This revision supplies the original Core comparison store.
 
 ```sh
 cargo fetch --locked --manifest-path crates/ecs-spike/Cargo.toml
@@ -111,7 +113,7 @@ variant are 1,440 ticks and 180 samples per batch operation.
 Windows 11 Pro build `10.0.26300.10075`, Ryzen 9 3900X (24 logical CPUs),
 AMD Ryzen Balanced, default CPU affinity. Rust/Cargo 1.99.0,
 `x86_64-pc-windows-msvc`, Release `opt-level=2`, Python 3.9.13.
-`bevy_ecs` and `bevy_reflect` 0.20.1 are confined to the
+`bevy_ecs` and `bevy_reflect` 0.20.1 were confined to the
 [standalone crate](../crates/ecs-spike/Cargo.toml) and its lockfile.
 
 | Identity | Value |

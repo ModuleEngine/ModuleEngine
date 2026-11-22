@@ -550,6 +550,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 name = "module-engine-core"
 version = "0.4.0"
 dependencies = [
+ "bevy_ecs",
  "serde",
  "serde_json",
  "sha2",

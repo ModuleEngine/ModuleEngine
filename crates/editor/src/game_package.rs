@@ -1083,6 +1083,200 @@ mod tests {
         document
     }
 
+    #[test]
+    #[ignore = "explicitly migrates a copy of the checked-in v3 game and compiles its worker"]
+    fn existing_game_project_save_load_save_keeps_exact_bytes() {
+        let source = backend_root().join("game-project.json");
+        let before = fs::read(&source).unwrap();
+        let folder = fixture();
+        let path = folder.join("project.json");
+        crate::workspace_files::migrate_copy(
+            &source,
+            &path,
+            crate::engine_profiles::ProfileKind::Arpg,
+        )
+        .unwrap();
+        let loaded = crate::project::read_with_source_state(&path).unwrap();
+        let paths: Vec<_> = std::iter::once(path.clone())
+            .chain(
+                loaded
+                    .document
+                    .game
+                    .as_ref()
+                    .unwrap()
+                    .scene_assets
+                    .values()
+                    .map(|binding| folder.join(&binding.path)),
+            )
+            .collect();
+        assert!(paths.len() > 1);
+        let save = crate::project::save_with_source_state;
+        let accepted = save(&path, &loaded.document, &loaded.files).unwrap();
+        let first: Vec<_> = paths.iter().map(|file| fs::read(file).unwrap()).collect();
+        let reloaded = crate::project::read_with_source_state(&path).unwrap();
+        assert_eq!(reloaded.document, loaded.document);
+        save(&path, &reloaded.document, &accepted).unwrap();
+        for (file, expected) in paths.iter().zip(first) {
+            assert_eq!(fs::read(file).unwrap(), expected, "{}", file.display());
+        }
+        assert_eq!(fs::read(source).unwrap(), before);
+        println!("R1.2 existing project: {}", folder.display());
+    }
+
+    #[test]
+    #[ignore = "builds a native Player and Rust worker from the Full checkout"]
+    fn stable_ids_survive_authored_save_player_export_and_rust_ipc() {
+        use module_engine_core::{
+            AuthoredObject, ExecutionGraph, GameProject, GameState, Prefab, SystemNode,
+            SystemResource, SystemStage, Transform, WorldKind, WorldObject, demo_document,
+        };
+        use module_engine_project::{ProjectFileState, externalize_scenes};
+        use serde_json::json;
+
+        const TARGET: u64 = 9_007_199_254_740_993;
+        const CHILD: u64 = 9_007_199_254_740_994;
+        const PREFAB_COLOR: [u8; 4] = [17, 39, 61, 255];
+        let backend = backend_root();
+        let folder = fixture();
+        println!("R1.2 fixture: {}", folder.display());
+        let mut document = demo_document(WorldKind::Ecs);
+        document.name = "Stable ID boundaries".into();
+        let mut game = GameProject::empty();
+        game.prefabs.insert(
+            "target".into(),
+            Prefab {
+                color: PREFAB_COLOR,
+                components: BTreeMap::new(),
+            },
+        );
+        let mut target = AuthoredObject::new(WorldObject {
+            id: TARGET,
+            parent: None,
+            transform: Transform::default(),
+            color: [255; 4],
+        });
+        target.prefab = Some("target".into());
+        let mut child = AuthoredObject::new(WorldObject {
+            id: CHILD,
+            parent: Some(TARGET),
+            transform: Transform::default(),
+            color: [255; 4],
+        });
+        child.references.insert("owner".into(), TARGET);
+        game.scenes.get_mut("empty").unwrap().objects = vec![child, target];
+        game.execution = ExecutionGraph {
+            resources: [
+                ("world", "GameWorld"),
+                ("input", "GameInput"),
+                ("events", "GameEvents"),
+            ]
+            .into_iter()
+            .map(|(name, data_type)| SystemResource {
+                name: name.into(),
+                data_type: data_type.into(),
+                external: true,
+                initial: json!(null),
+            })
+            .collect(),
+            stages: vec![SystemStage {
+                name: "Update".into(),
+                nodes: vec![SystemNode {
+                    id: "stable-id-probe".into(),
+                    module: "custom.rust.update".into(),
+                    params: json!({"source_id":"stable-id-probe","components":[]}),
+                    bindings: ["world", "input", "events"]
+                        .into_iter()
+                        .map(|name| (name.into(), name.into()))
+                        .collect(),
+                    after: vec![],
+                }],
+            }],
+        };
+        document.game = Some(game);
+        document.custom_sources.insert(
+            "stable-id-probe".into(),
+            format!(
+                r#"fn update(ctx: &mut ScriptContext) {{
+    let child = ctx.object({CHILD}).unwrap();
+    let parent = child.parent.unwrap();
+    let owner = ctx.reference(child.id, "owner").unwrap();
+    assert_eq!(parent, {TARGET});
+    assert_eq!(owner, parent);
+    assert_eq!(ctx.object(owner).unwrap().color, {PREFAB_COLOR:?});
+    ctx.set_position(owner, [2.0, 0.0, 0.0]);
+}}"#
+            ),
+        );
+        crate::engine_profiles::finish_template(
+            &mut document,
+            crate::engine_profiles::ProfileKind::Neutral,
+            &backend,
+        )
+        .unwrap();
+        let document = externalize_scenes(&document, false).unwrap();
+        let game = document.game.as_ref().unwrap();
+        let scene_path = &game.scene_assets["empty"].path;
+        let first = folder.join("first");
+        let second = folder.join("second");
+        for root in [&first, &second] {
+            fs::create_dir(root).unwrap();
+        }
+        let source = first.join("project.json");
+        let initial = ProjectFileState::observe(&source, &document).unwrap();
+        crate::project::save_with_source_state(&source, &document, &initial).unwrap();
+        let loaded = crate::project::read_with_source_state(&source).unwrap();
+        assert_eq!(loaded.document, document);
+        let game = loaded.document.game.as_ref().unwrap();
+        let resolved = game.resolve_scene(&game.entry_scene).unwrap();
+        assert_eq!(resolved[0].object.parent, Some(TARGET));
+        assert_eq!(resolved[0].references["owner"], TARGET);
+        assert_eq!(resolved[1].object.id, TARGET);
+        assert_eq!(resolved[1].object.color, PREFAB_COLOR);
+        let saved = second.join("project.json");
+        let initial = ProjectFileState::observe(&saved, &loaded.document).unwrap();
+        crate::project::save_with_source_state(&saved, &loaded.document, &initial).unwrap();
+        let project_bytes = fs::read(&source).unwrap();
+        let scene_bytes = fs::read(first.join(scene_path)).unwrap();
+        assert_eq!(project_bytes, fs::read(saved).unwrap());
+        assert_eq!(scene_bytes, fs::read(second.join(scene_path)).unwrap());
+
+        let exported = export(
+            &loaded.document,
+            &first,
+            &backend,
+            &backend,
+            &folder.join("player"),
+        )
+        .unwrap();
+        let result = std::process::Command::new(exported.join(PLAYER_EXECUTABLE))
+            .arg("--headless-check")
+            .arg(&exported)
+            .current_dir(&exported)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        fs::write(folder.join("player-headless.json"), &result.stdout).unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(report["source_compilation"], false);
+        let state: GameState = serde_json::from_value(report["state"].clone()).unwrap();
+        assert_eq!(state.tick, 3);
+        assert_eq!(state.world.object(CHILD).unwrap().parent, Some(TARGET));
+        assert_eq!(state.world.references(CHILD).unwrap()["owner"], TARGET);
+        let target = state.world.object(TARGET).unwrap();
+        assert_eq!(target.id, TARGET);
+        assert_eq!(target.color, PREFAB_COLOR);
+        assert_eq!(target.transform.translation, [2., 0., 0.]);
+        let saved_state = serde_json::to_vec(&state).unwrap();
+        let loaded_state: GameState = serde_json::from_slice(&saved_state).unwrap();
+        assert_eq!(saved_state, serde_json::to_vec(&loaded_state).unwrap());
+        assert_eq!(fs::read(source).unwrap(), project_bytes);
+        assert_eq!(fs::read(first.join(scene_path)).unwrap(), scene_bytes);
+    }
+
     fn bind_include_source(document: &mut GraphDocument, source: &str) {
         let graph = document
             .root
