@@ -7,7 +7,8 @@ status: `Done`, `In progress`, or an effort estimate for work not started yet.
 The Russian counterpart uses `Сделано`/`Выполнено`/`Готово` and `В работе`.
 
 The script parses both language versions, checks that they agree, and injects
-the statuses into scripts/roadmap_map.html. See docs/roadmap-map.md.
+the statuses into scripts/roadmap_map.html and into the campaign map
+scripts/roadmap_world.html. See docs/roadmap-map.md.
 """
 
 from __future__ import annotations
@@ -26,7 +27,9 @@ ROOT = Path(__file__).resolve().parent.parent
 EN_PATH = "docs/product-roadmap.md"
 RU_PATH = "docs/ru/product-roadmap.md"
 TEMPLATE_PATH = "scripts/roadmap_map.html"
+WORLD_TEMPLATE_PATH = "scripts/roadmap_world.html"
 DEFAULT_OUT = "outputs/roadmap/index.html"
+WORLD_DIR = "world"  # the campaign map is written to <dir of --out>/world/index.html
 PLACEHOLDER = "/*@ROADMAP_DATA@*/null"
 
 HEADING = re.compile(r"^###\s+(?P<id>[A-Z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*)\s+—\s+(?P<title>.+?)\s*$")
@@ -46,6 +49,8 @@ class Task:
     effort: str
     text: str
     acceptance: str
+    detail: str = ""    # full task cell, for the campaign map card
+    criteria: str = ""  # full acceptance cell
 
 
 @dataclass
@@ -115,6 +120,8 @@ def parse(markdown: str, lang: str) -> list[Phase]:
             effort=plain(status),
             text=short(plain(cells[1])),
             acceptance=short(plain(cells[2])) if len(cells) > 3 else "",
+            detail=plain(cells[1]),
+            criteria=plain(cells[2]) if len(cells) > 3 else "",
         ))
     return [phase for phase in phases if phase.tasks]
 
@@ -153,6 +160,8 @@ def merge(en: list[Phase], ru: list[Phase]) -> list[Phase]:
                 effort=local.effort if local and local.state == "todo" else task.effort,
                 text=local.text if local else task.text,
                 acceptance=local.acceptance if local else task.acceptance,
+                detail=local.detail if local else task.detail,
+                criteria=local.criteria if local else task.criteria,
             ))
         merged.append(Phase(phase.id, ru_titles.get(phase.id, phase.title), tasks))
     return merged
@@ -200,6 +209,43 @@ def build(root: Path) -> tuple[str, list[str], list[str]]:
     return page, errors, warnings
 
 
+TASK_DEPS = re.compile(r"const TASK_DEPS = \{(?P<body>[^}]*)\};")
+TASK_DEP_ENTRY = re.compile(r"'(?P<task>[^']+)'\s*:\s*\[(?P<deps>[^\]]*)\]")
+
+
+def task_deps(template: str) -> dict[str, list[str]]:
+    """Cross-phase task dependencies declared in the campaign map template."""
+    found = TASK_DEPS.search(template)
+    if not found:
+        return {}
+    return {m["task"]: re.findall(r"'([^']+)'", m["deps"]) for m in TASK_DEP_ENTRY.finditer(found["body"])}
+
+
+def dependency_errors(template: str, en: list[Phase], ru: list[Phase]) -> list[str]:
+    """A declared dependency is an error when the task is in the roadmap but the task it waits for is not."""
+    errors = []
+    for path, phases in ((EN_PATH, en), (RU_PATH, ru)):
+        ids = {t.id for p in phases for t in p.tasks}
+        for task, deps in task_deps(template).items():
+            for dep in deps:
+                if task in ids and dep not in ids:
+                    errors.append(f"{task} waits for {dep} (TASK_DEPS in {WORLD_TEMPLATE_PATH}), "
+                                  f"but {dep} is missing from {path}; update TASK_DEPS together with the roadmap")
+    return errors
+
+
+def build_world(root: Path) -> tuple[str, list[str], list[str]]:
+    """The campaign map page, errors and warnings; statuses come from the same tables as the table page."""
+    en = parse((root / EN_PATH).read_text(encoding="utf-8"), "en")
+    ru = parse((root / RU_PATH).read_text(encoding="utf-8"), "ru")
+    template = (root / WORLD_TEMPLATE_PATH).read_text(encoding="utf-8")
+    warnings = [f"phase {pid} has no region on the campaign map in {WORLD_TEMPLATE_PATH}; its tasks are not shown"
+                for pid in unplaced(template, en)]
+    generated = dt.datetime.now(dt.timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
+    errors = dependency_errors(template, en, ru)
+    return render(template, merge(en, ru), source_commit(root), generated), errors, warnings
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", default=DEFAULT_OUT, help=f"output HTML (default {DEFAULT_OUT})")
@@ -207,6 +253,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     page, errors, warnings = build(ROOT)
+    world, world_errors, world_warnings = build_world(ROOT)
+    errors += world_errors
+    warnings += world_warnings
     for warning in warnings:
         print(f"warning: {warning}", file=sys.stderr)
     for error in errors:
@@ -219,6 +268,10 @@ def main(argv: list[str] | None = None) -> int:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(page, encoding="utf-8")
         print(f"wrote {out}")
+        world_out = out.parent / WORLD_DIR / "index.html"
+        world_out.parent.mkdir(parents=True, exist_ok=True)
+        world_out.write_text(world, encoding="utf-8")
+        print(f"wrote {world_out}")
     return 0
 
 

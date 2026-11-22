@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ModuleEngine — карта походов</title>
+<style>
+  :root{--wood:#24170d;--wood2:#3a2616;--parch:#ecdcb2;--parch2:#dcc88f;--ink:#3a2615;--ink2:#6b4a2b;--gold:#f2c14e;--red:#d9503f;--blue:#4a7be0;--fog:#8d8a94}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--wood);color:var(--parch);font-family:Georgia,"Times New Roman",serif;min-height:100vh}
+  button{font:inherit;color:inherit;cursor:pointer}
+  :focus-visible{outline:3px solid var(--gold);outline-offset:2px}
+  header{display:flex;flex-wrap:wrap;gap:12px 24px;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:4px solid #120a04;background:linear-gradient(#3a2616,#2b1c10)}
+  h1{margin:0;font-size:clamp(18px,2.4vw,26px);letter-spacing:.04em;color:var(--gold);text-shadow:2px 2px 0 #120a04}
+  .sub{font-size:13px;color:#cdb98a;margin-top:3px}
+  .hud{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center;font:600 13px ui-monospace,Consolas,monospace}
+  .hud b{color:var(--gold)}
+  .bar{display:inline-flex;gap:2px;vertical-align:middle;margin-left:6px}
+  .bar i{width:7px;height:12px;background:#120a04;border:1px solid #5a3d22}
+  .bar i.on{background:var(--gold);border-color:#a37a1f}
+  main{display:flex;padding:12px 16px;justify-content:center}
+  .stage{flex:0 0 auto;max-width:100%;overflow:auto;border:6px solid #120a04;outline:3px solid #7a5230;background:#1d4a73;position:relative}
+  .world{position:relative;line-height:0}
+  canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges;cursor:pointer}
+  .chip{position:absolute;transform:translate(-50%,0);line-height:1;padding:3px 5px;font:700 10px ui-monospace,Consolas,monospace;border:2px solid #120a04;background:#2b1c10;color:#f2e6c4;box-shadow:2px 2px 0 rgba(0,0,0,.45);white-space:nowrap}
+  .chip.done{background:#3d5fb8;border-color:#120a04;color:#fff3c4;box-shadow:2px 2px 0 rgba(0,0,0,.45),inset 0 0 0 1px var(--gold)}
+  .chip.cur{background:#a8321f;color:#fff;animation:blink 1s steps(2) infinite}
+  .chip.front{background:#8a6a1e;color:#fff3c4;box-shadow:2px 2px 0 rgba(0,0,0,.45),0 -3px 0 #ffd23a}
+  .chip.next{background:#4a4650;color:#c9c4d0;border-color:#26232c}
+  .chip.sel,.chip:hover{outline:2px solid #fff}
+  @keyframes blink{50%{background:#e0583f}}
+  .ribbon{position:absolute;transform:translate(-50%,-50%);line-height:1.15;text-align:center;padding:5px 12px 6px;background:#d6b25a;color:#2b1c10;border:3px solid #120a04;box-shadow:3px 3px 0 rgba(0,0,0,.5);font:700 12px Georgia,serif;letter-spacing:.03em;white-space:nowrap}
+  .ribbon small{display:block;font:600 10px ui-monospace,Consolas,monospace;letter-spacing:0;opacity:.85}
+  .ribbon.fogged{background:#9c9484;color:#3a3640}
+  .ribbon.sel{outline:2px solid #fff}
+  aside{position:fixed;z-index:20;top:84px;right:16px;bottom:16px;width:360px;max-width:calc(100vw - 32px);overflow:auto;display:none;background:var(--parch);color:var(--ink);border:5px solid #120a04;outline:3px solid #7a5230;padding:16px 18px;box-shadow:inset 0 0 0 3px var(--parch2)}
+  aside.open{display:block}.x{position:absolute;top:6px;right:8px;background:none;border:2px solid #7a5230;width:28px;height:28px;font-size:16px;line-height:1;color:var(--ink)}
+  .chip{font-size:var(--cf,10px)}
+  .legendbar{display:flex;flex-wrap:wrap;gap:6px 18px;justify-content:center;padding:10px 18px 0;font-size:13px;color:#cdb98a}.legendbar i{display:inline-block;width:12px;height:12px;border:2px solid #120a04;vertical-align:-2px;margin-right:6px}
+  aside h2{margin:0 0 4px;font-size:19px;line-height:1.2}
+  aside .kick{font:700 11px ui-monospace,Consolas,monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--ink2)}
+  aside p{margin:8px 0;font-size:14px;line-height:1.5}
+  .tag{display:inline-block;margin:8px 0 2px;padding:3px 9px;font:700 12px ui-monospace,Consolas,monospace;border:2px solid #120a04;color:#fff}
+  .tag.done{background:#3d5fb8}.tag.cur{background:#a8321f}.tag.next{background:#6b6776}.tag.front{background:#9a7414}
+  dl{margin:10px 0 0;font-size:13.5px;line-height:1.45}
+  dt{font:700 11px ui-monospace,Consolas,monospace;letter-spacing:.06em;text-transform:uppercase;color:var(--ink2);margin-top:10px}
+  dd{margin:2px 0 0}
+  ul.list{list-style:none;margin:12px 0 0;padding:0;display:grid;gap:5px}
+  ul.list button{width:100%;text-align:left;display:flex;gap:8px;align-items:baseline;background:rgba(255,255,255,.35);border:2px solid #7a5230;padding:5px 8px;font-size:13px;color:var(--ink)}
+  ul.list button:hover{background:#fff6d8}
+  ul.list .dot{flex:0 0 12px;height:12px;border:2px solid #120a04;align-self:center}
+  .dot.done{background:#3d5fb8}.dot.cur{background:#a8321f}.dot.next{background:#9c98a6}.dot.front{background:#ffd23a}
+  ul.list b{font:700 12px ui-monospace,Consolas,monospace;flex:0 0 34px}
+  .legend{display:grid;gap:7px;margin-top:14px;padding-top:12px;border-top:2px dashed #7a5230;font-size:13px}
+  .legend div{display:flex;gap:9px;align-items:center}
+  .back{margin-top:12px;background:none;border:2px solid #7a5230;padding:4px 10px;font-size:13px;color:var(--ink)}
+  .tip{position:fixed;z-index:10;pointer-events:none;max-width:300px;padding:8px 10px;background:#2b1c10;color:#f2e6c4;border:3px solid #120a04;outline:2px solid #7a5230;font-size:13px;line-height:1.35;display:none}
+  .tip b{color:var(--gold);font-family:ui-monospace,Consolas,monospace}
+  .tip em{display:block;margin-top:3px;font-style:normal;font:600 11px ui-monospace,Consolas,monospace;color:#cdb98a}
+  .note{max-width:1500px;margin:0 auto;padding:0 18px 22px;font-size:13px;color:#cdb98a}
+.ribbon.won{background:#f2c14e}
+  .ribbon.hot{background:#e2742a;color:#fff;animation:flame .5s steps(2) infinite}
+  .chip.cur{box-shadow:2px 2px 0 rgba(0,0,0,.45),0 -3px 0 #ff9a1f,0 0 8px #ff6a1f}
+  @keyframes flame{50%{box-shadow:3px 3px 0 rgba(0,0,0,.5),0 -5px 0 #ffd23a,0 0 12px #ff6a1f}}
+  .chron{display:flex;flex-wrap:wrap;gap:6px 8px;justify-content:center;align-items:center;padding:8px 18px 0;font-size:12.5px;color:#cdb98a}
+  .chron button{background:#3a2616;border:2px solid #7a5230;padding:3px 9px;color:#f2e6c4;font-size:12.5px}.chron button:hover{background:#523620}
+@media(max-width:760px){aside{top:auto;left:8px;right:8px;bottom:8px;width:auto;max-width:none;max-height:58vh;padding:14px 14px}aside h2{font-size:17px;padding-right:34px}header{padding:10px 12px}.hud{gap:6px 12px;font-size:12px}.bar{display:none}.chron b{flex-basis:100%;text-align:center}.tip{display:none!important}main{padding:8px}}
+  @media (prefers-reduced-motion: reduce){.chip.cur,.ribbon.hot{animation:none}}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>⚔ ModuleEngine — карта походов</h1>
+    <div class="sub">Этап роадмапы — область, подэтап — провинция, стрелки — порядок кампании. <a href="../index.html" style="color:#f2c14e">← Таблица роадмапы</a></div>
+  </div>
+  <div class="hud" id="hud"></div>
+</header>
+<div class="legendbar"><span><i style="background:#4a7be0"></i>Захвачена</span><span><i style="background:#d9503f"></i>Под осадой</span><span><i style="background:#9c98a6"></i>Туман войны</span><span><i style="background:#ffd23a"></i>Следующий ход по плану</span><span><i style="background:#f2c14e"></i>Стрелка — порядок кампании</span></div>
+<main>
+  <div class="stage" id="stage"><div class="world" id="world"><canvas id="map" aria-label="Карта королевства ModuleEngine"></canvas></div></div>
+  <aside id="panel" aria-live="polite"></aside>
+</main>
+<div class="note">Наведите курсор на провинцию, нажмите — откроются критерии приёмки. Ленты областей и маяки рубежей тоже кликабельны. <span id="meta"></span></div>
+<div class="tip" id="tip"></div>
+<script>
+(() => {
+// @model-begin (scripts/test_roadmap_map.py runs this part in Node)
+// Task statuses: scripts/roadmap_map.py replaces the placeholder with the tasks parsed from docs/product-roadmap.md.
+// Everything else (region names, layout, dependencies) is hand-written below.
+const SRC = /*@ROADMAP_DATA@*/null;
+// Phase metadata mirrors `phases` in scripts/roadmap_map.html (scripts/test_roadmap_map.py checks that they agree).
+const STATIC = {
+  v042: { id: '0.4.2', title: 'Чёткий кадр и перенос панелей', goal: 'Последний принятый рубеж. Его поставка final03 — рабочая основа, от которой стартует перестройка. Исправления ошибок 0.4.2 по-прежнему разрешены.', effort: '—', deps: [], unlocks: ['R0'], tag: 'ПРИНЯТА 17.11', cls: 'done', depNote: '' },
+  R0: { id: 'R0', title: 'Заморозка и исходные замеры', goal: 'Остановить побочную работу, собрать воспроизводимые бенчмарки и записать исходные цифры. Они станут эталоном «не хуже» для всех следующих фаз.', effort: '1–2 недели', deps: ['v042'], unlocks: ['R1', 'R2'], tag: 'СЕЙЧАС', cls: 'cur', depNote: '' },
+  R1: { id: 'R1', title: 'Хранение мира на bevy_ecs', goal: 'Заменить самописное хранение мира и полное клонирование состояния каждый тик на bevy_ecs. Авторские данные и стабильные ID сохраняются без изменений.', effort: '3–5 недель', deps: ['R0'], unlocks: ['R4', 'R6', 'R7', 'g05', 'aiA'], tag: 'СЛЕДОМ', cls: 'next', depNote: '' },
+  R2: { id: 'R2', title: 'Основа GPU-driven рендера', goal: 'Перестроить рендер под Vulkan: аллокатор, bindless-текстуры с mipmaps, сцена в памяти GPU, отсечение на GPU, render graph v2 и собственный swapchain игры.', effort: '8–12 недель', deps: ['R0'], unlocks: ['R3', 'R5', 'R7', 'R8'], tag: 'СЛЕДОМ', cls: 'next', depNote: 'R2.3 также ждёт R1.6 из R1' },
+  R3: { id: 'R3', title: 'Редактор на Vulkan без моста DX12', goal: 'Убрать eframe/WGPU и мост через DX12: редактор, окна сцены и игра работают на одном VkDevice. Панели egui не меняются.', effort: '3–5 недель', deps: ['R2'], unlocks: ['g05'], tag: 'ПОСЛЕ R2.1', cls: 'later', depNote: 'нужна только R2.1, дальше параллельно с R2' },
+  R4: { id: 'R4', title: 'Отвязать редактор от конкретных игр', goal: 'Игры подключаются к редактору через интерфейс расширения, а не прямыми зависимостями. Новая игра больше не требует правки редактора.', effort: '1–2 недели', deps: ['R1'], unlocks: ['g05', 'aiA'], tag: 'ПОСЛЕ R1', cls: 'later', depNote: '' },
+  R5: { id: 'R5', title: 'PBR-материалы, свет и тени', goal: 'Материалы glTF, кластерный свет, каскадные тени, освещение окружения, HDR и TAA. Техническая основа рубежа 1.3.', effort: '6–9 недель', deps: ['R2'], unlocks: ['useful', 'R9', 'R10'], tag: 'ПОСЛЕ R2', cls: 'later', depNote: '' },
+  R6: { id: 'R6', title: 'Физика rapier3d, звук kira, математика glam', goal: 'Готовые библиотеки вместо самописного: твёрдые тела и запросы к миру, звук OGG/MP3 на Windows и Linux, общая математика и нативные диалоги.', effort: '2–3 недели', deps: ['R1'], unlocks: ['g09', 'aiA'], tag: 'ПОСЛЕ R1', cls: 'later', depNote: 'может идти параллельно с R2–R5' },
+  R7: { id: 'R7', title: 'Скелетная анимация', goal: 'Скины и клипы glTF, GPU-скиннинг, смешивание и граф состояний. Первый потребитель — герой G2.', effort: '3–5 недель', deps: ['R1', 'R2'], unlocks: ['g09', 'R9'], tag: 'ПОСЛЕ R1 + R2.3', cls: 'later', depNote: 'из R2 нужна R2.3' },
+  R8: { id: 'R8', title: 'Mesh shaders и виртуальная геометрия', goal: 'Meshlets, task/mesh shaders и непрерывный LOD для плотной геометрии, с запасным путём для GPU без mesh shaders.', effort: '4–6 недель', deps: ['R2'], unlocks: [], tag: 'ПОСЛЕ R2.4', cls: 'later', depNote: 'из R2 нужна R2.4' },
+  R9: { id: 'R9', title: 'Гибридная трассировка лучей', goal: 'Трассированные тени, AO, отражения и динамическое GI поверх растеризатора. У каждого эффекта есть растровый запасной путь.', effort: '10–16 недель', deps: ['R5', 'R7'], unlocks: [], tag: 'ПОСЛЕ R5', cls: 'later', depNote: 'от R7 — только refit для скинов' },
+  R10: { id: 'R10', title: 'Другие современные функции', goal: 'Апскейлинг, HDR-вывод, частицы на GPU, VRS и потоковая подгрузка. Каждый пункт стартует только когда есть конкретный потребитель.', effort: '3–6 недель', deps: ['R5'], unlocks: [], tag: 'ПОСЛЕ R5', cls: 'later', depNote: '' },
+  aiA: { id: 'AI-A', title: 'Прототип: игра по запросам через внешнего агента', goal: 'Внешний агент правит JSON сцены и custom_sources и запускает --check, без изменений в движке и редакторе. Пять эталонных запросов, записанные метрики, затем решение: продолжать, менять или бросить.', effort: '≈1 неделя, не входит в оценки трека R', deps: ['R1', 'R4', 'R6'], unlocks: ['aiB'], tag: 'ПОСЛЕ R1+R4+R6', cls: 'ai', depNote: 'журнал изменений и StableId из R1, интерфейс расширений R4, физика R6' },
+  aiB: { id: 'AI-B', title: 'Панель запросов в редакторе', goal: 'Панель запросов как расширение редактора из R4, правка сцены вживую без Stop через журнал R1 и одна запись Undo на каждый набор изменений.', effort: '2–3 недели, не входит в оценки трека R', deps: ['aiA'], unlocks: [], tag: 'ЕСЛИ AI-A «GO»', cls: 'ai', depNote: 'только если AI-A дала решение «продолжать»' },
+  g05: { id: 'R1+R3+R4', title: 'Снять паузу с 0.5 и UI', goal: 'Когда приняты R1, R3 и R4, хранение мира, оболочка редактора и граница редактора с играми уже новые. Тогда бриф 0.5 и работа над UI возобновляются.', effort: '≈10–16 недель, если R0, R1, R2.1, R3 и R4 делать первыми', deps: ['R1', 'R3', 'R4'], unlocks: ['v05'], tag: 'ТОЧКА', cls: 'gate', depNote: 'на схеме R1 показана через R4' },
+  useful: { id: 'R2+R5', title: 'Первая полезная точка', goal: 'GPU-driven рендер с PBR и тенями: первый момент, когда новое изображение видно в играх. Примерно через 4,5–7 месяцев (R0, R1, R2 и R5).', effort: '≈4,5–7 месяцев', deps: ['R5'], unlocks: ['v13'], tag: 'ТОЧКА', cls: 'gate', depNote: '' },
+  v05: { id: '0.5', title: 'Нужный состав', goal: 'Добавить, убрать или заменить возможность, понимая последствия. Бриф сохранён, работа возобновится после контрольной точки R1 + R3 + R4.', effort: '—', deps: ['g05'], unlocks: [], tag: 'НА ПАУЗЕ', cls: 'paused', depNote: '' },
+  g09: { id: '0.9a', title: 'Первый бой G2', goal: 'Физика, звук и скелетная анимация из R6–R7 должны быть готовы до того, как они понадобятся бою G2 и его решениям.', effort: '—', deps: ['R6', 'R7'], unlocks: [], tag: 'ВЕРСИИ', cls: 'ver', depNote: '' },
+  v13: { id: '1.3', title: 'Реалистичный рендер', goal: 'R5 — техническая основа рубежа 1.3: материалы, свет и тени. Трассировка лучей остаётся необязательным уровнем железа.', effort: '—', deps: ['useful'], unlocks: [], tag: 'ВЕРСИИ', cls: 'ver', depNote: '' },
+};
+// Tasks that wait for a task of another phase (docs/product-roadmap.md, dependency list: "R2.3 (also needs R1.6)").
+const TASK_DEPS = { 'R2.3': ['R1.6'] };
+const ST_OF = { done: 'done', cur: 'cur', todo: 'next' };
+const DATA = {};
+for (const k of Object.keys(STATIC)) {
+  const src = SRC ? SRC.phases.find(p => p.id === STATIC[k].id) : null;
+  DATA[k] = { ...STATIC[k], key: k, tasks: src ? src.tasks.map(t => ({ id: t.id, title: t.text, crit: t.criteria || t.acceptance, detail: t.detail || t.text, eff: t.effort, st: ST_OF[t.state] })) : [] };
+}
+const isDone = k => { const d = DATA[k]; return d.cls === 'done' || (d.tasks.length ? d.tasks.every(t => t.st === 'done') : d.cls === 'gate' && d.deps.length > 0 && d.deps.every(isDone)); };
+const W = 480, H = 330;
+const BIO = {
+  plains: { pal: ['#86bf5c','#7cb455','#72a94e','#92c966'], coast: '#e2d19b', deco: ['gauge','tree','gauge','hut'], n: 6 },
+  forest: { pal: ['#3c7547','#356b40','#2e6038','#448049'], coast: '#c9bd8a', deco: ['pine','pine','tree','crate'], n: 16 },
+  volcanic: { pal: ['#6e5a5a','#5f4b4b','#4f3d3f','#7c6767'], coast: '#3f3438', deco: ['rock','forge','forge'], n: 7, lava: 1 },
+  snow: { pal: ['#dfe8f0','#d0dbe6','#c2cfdc','#eef4f9'], coast: '#f4f8fb', deco: ['spine','spine','crystal'], n: 10 },
+  hills: { pal: ['#8fb86a','#85ad60','#7aa257','#9cc274'], coast: '#e2d19b', deco: ['gate','mount','hut'], n: 6 },
+  desert: { pal: ['#e0c27a','#d5b56c','#caa95f','#e8cd88'], coast: '#f0e0a8', deco: ['cactus','obelisk','cactus'], n: 7 },
+  swamp: { pal: ['#5b7a4a','#52703f','#496636','#648554'], coast: '#9aa070', deco: ['bell','boulder','tree','boulder'], n: 9, pond: 1 },
+  autumn: { pal: ['#b8743a','#a96830','#9a5c29','#c4813f'], coast: '#d2b27a', deco: ['atree','atree','puppet'], n: 14 },
+  cliffs: { pal: ['#8f98a8','#818a9b','#737c8e','#a0a9b8'], coast: '#b3bac6', deco: ['crystal','mount'], n: 8 },
+  ash: { pal: ['#5a5566','#4d4859','#403c4c','#675f74'], coast: '#2f2b38', deco: ['rock','prism','crystal'], n: 7, lava: 1 },
+  clouds: { pal: ['#bfe0ee','#b0d5e6','#a3cadc','#cfe8f3'], coast: '#f4fbff', deco: ['cloud','cloud','hut'], n: 5 },
+  isle: { pal: ['#86bf5c','#7cb455','#72a94e','#92c966'], coast: '#e2d19b', deco: ['tree'], n: 2 }
+};
+const REGS = [
+  { key: 'R0', fant: 'Равнины Отсчёта', bio: 'plains', c: [74, 292] }, { key: 'R1', fant: 'Чащоба Мира', bio: 'forest', c: [186, 268] },
+  { key: 'R2', fant: 'Кузница Вулкан', bio: 'volcanic', c: [306, 292] }, { key: 'R3', fant: 'Ледяной Редактор', bio: 'snow', c: [424, 278] },
+  { key: 'R4', fant: 'Холмы Расширений', bio: 'hills', c: [62, 214] }, { key: 'R6', fant: 'Болота Библиотек', bio: 'swamp', c: [176, 190] },
+  { key: 'R7', fant: 'Багряная Роща', bio: 'autumn', c: [294, 202] }, { key: 'R5', fant: 'Пустыня Света', bio: 'desert', c: [410, 206] },
+  { key: 'R8', fant: 'Самоцветные Утёсы', bio: 'cliffs', c: [282, 122] }, { key: 'R9', fant: 'Цитадель Лучей', bio: 'ash', c: [412, 120] },
+  { key: 'R10', fant: 'Облачные Острова', bio: 'clouds', c: [418, 50] }
+];
+const THEME = { R0: 'Замеры и бенчмарки: вешки и мельница считают кадры', R1: 'Хранилище мира: Древо-мир и склады компонентов', R2: 'Кузница GPU: лава, горн и вулкан рендера', R3: 'Ледяные кристаллы интерфейса редактора', R4: 'Врата расширений: игры подключаются через порталы', R5: 'Пустыня света и теней: обелиски и солнечные блики', R6: 'Болота: колокола звука и валуны физики', R7: 'Рощи, где оживают куклы анимации', R8: 'Грани мешлетов: самоцветные утёсы', R9: 'Призмы и лучи трассировки', R10: 'Парящие острова частиц и апскейла' };
+const LAND = { v042: [20, 318], g05: [40, 150], useful: [166, 130], v05: [40, 92], g09: [166, 72], v13: [300, 56], aiA: [96, 34], aiB: [232, 36] };
+const ST = { done: { name: 'Захвачена', tip: 'Готово' }, cur: { name: 'Под осадой', tip: 'В работе' }, front: { name: 'Следующий ход', tip: 'По плану' }, next: { name: 'Туман войны', tip: 'Впереди' } };
+const hash = (x, y, s) => { let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263) + Math.imul(s, 1442695041)) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+function vn(x, y, s) { const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi, u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf); const a = hash(xi, yi, s), b = hash(xi + 1, yi, s), c = hash(xi, yi + 1, s), d = hash(xi + 1, yi + 1, s); return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v; }
+const fbm = (x, y, s) => vn(x, y, s) * .6 + vn(x * 2, y * 2, s + 7) * .3 + vn(x * 4, y * 4, s + 13) * .1;
+let rs = 777; const rnd = () => (rs = (Math.imul(rs, 1664525) + 1013904223) | 0, (rs >>> 0) / 4294967296);
+
+/* ---------- model ---------- */
+const provs = [], regs = [];
+for (const R of REGS) {
+  const d = DATA[R.key]; if (!d.tasks.length) continue;
+  const reg = { ...R, title: d.title, goal: d.goal, effort: d.effort, tag: d.tag, deps: d.deps, depNote: d.depNote, provs: [], landmark: false };
+  regs.push(reg); const n = d.tasks.length, cols = Math.ceil(n / 2);
+  d.tasks.forEach((t, j) => { const c = j >> 1, r = j & 1; const x = Math.round(R.c[0] + (c - (cols - 1) / 2) * 24 + (hash(j, 1, 5) - .5) * 4), y = Math.round(R.c[1] + (r ? 12 : -12) + (hash(j, 2, 5) - .5) * 4);
+    const p = { i: provs.length, reg, ...t, x, y, kind: 'task' }; provs.push(p); reg.provs.push(p); });
+}
+const vreg = { key: 'V', fant: 'Рубежи и маяки', bio: 'isle', title: 'Контрольные точки и рубежи версий', goal: '', provs: [], landmark: true, deps: [], c: [150, 150] };
+const areg = { key: 'AI', fant: 'Башни Магов', bio: 'cliffs', title: 'ИИ-авторинг (план, не скоро)', goal: '', provs: [], landmark: true, deps: [], c: [100, 60] };
+regs.push(vreg, areg);
+for (const k of Object.keys(LAND)) { const d = DATA[k], reg = k.startsWith('ai') ? areg : vreg; const st = isDone(k) ? 'done' : 'next';
+  const p = { i: provs.length, reg, id: d.id, key: k, title: d.title, crit: d.goal, eff: d.effort, st, x: LAND[k][0], y: LAND[k][1], kind: k.startsWith('ai') ? 'tower' : 'light', d }; provs.push(p); reg.provs.push(p); }
+/* the next move: in a region that is started but has nothing in progress, the first open task, unless it waits for a task of another phase */
+const taskById = Object.fromEntries(provs.filter(p => p.kind === 'task').map(p => [p.id, p]));
+const unblocked = p => (TASK_DEPS[p.id] || []).every(d => taskById[d] && taskById[d].st === 'done'); // scripts/roadmap_map.py fails the build when a required task is missing
+for (const r of regs) { if (r.landmark) continue; const done = r.provs.filter(p => p.st === 'done').length; if (done > 0 && done < r.provs.length && !r.provs.some(p => p.st === 'cur')) { const f = r.provs.find(p => p.st === 'next'); if (unblocked(f)) f.st = 'front'; } }
+if (!provs.some(p => p.st === 'cur' || p.st === 'front')) { const f = provs.find(p => p.kind === 'task' && p.st === 'next' && unblocked(p)); if (f) f.st = 'front'; }
+const N = provs.length, curIdx = provs.findIndex(p => p.st === 'cur'), focusIdx = curIdx >= 0 ? curIdx : provs.findIndex(p => p.st === 'front');
+const regOf = Object.fromEntries(regs.map(r => [r.key, r]));
+for (const r of regs) { if (r.landmark) continue; const xs = r.provs.map(p => p.x), ys = r.provs.map(p => p.y); r.cx = xs.reduce((a, b) => a + b) / xs.length; r.cy = ys.reduce((a, b) => a + b) / ys.length; }
+/* region graph with transitive reduction */
+const rk = regs.filter(r => !r.landmark).map(r => r.key); const anc = {};
+const ancOf = k => anc[k] || (anc[k] = new Set(regOf[k].deps.filter(d => rk.includes(d)).flatMap(d => [d, ...ancOf(d)])));
+const arrows = [];
+for (const k of rk) { const ds = regOf[k].deps.filter(d => rk.includes(d)); for (const d of ds) if (!ds.some(o => o !== d && ancOf(o).has(d))) arrows.push({ a: regOf[d], b: regOf[k] }); }
+const depth = {}; rk.forEach(k => depth[k] = regOf[k].provs.some(p => p.st !== 'next') ? 0 : 99); for (let it = 0; it < 12; it++) for (const a of arrows) depth[a.b.key] = Math.min(depth[a.b.key], depth[a.a.key] + 1);
+// @model-end
+
+/* ---------- colors ---------- */
+const P = h => { const n = parseInt(h.slice(1), 16); return 0xff000000 | ((n & 255) << 16) | (n & 0xff00) | (n >> 16); };
+const rr = c => c & 255, gg = c => (c >> 8) & 255, bb = c => (c >> 16) & 255;
+const mix = (a, b, t) => 0xff000000 | (Math.round(bb(a) + (bb(b) - bb(a)) * t) << 16) | (Math.round(gg(a) + (gg(b) - gg(a)) * t) << 8) | Math.round(rr(a) + (rr(b) - rr(a)) * t);
+const lighten = (c, k) => mix(c, P('#ffffff'), k);
+const PAL = { o: '#2b2433', w: '#d5d2dc', g: '#a7a3b4', d: '#7a768a', r: '#b8493c', k: '#3a2a1c', y: '#f2c14e', s: '#c9ced8', b: '#3d6fd8', p: '#4a4a5a',
+  l: '#2f7a3e', L: '#3f9650', t: '#5a3d22', n: '#1f5a36', N: '#2b7048', m: '#f1f4f9', e: '#8a8796', f: '#ffe27a', a: '#ff9a3c', c: '#d9482b', h: '#a56b3a', v: '#e9dcc0', u: '#7a5230',
+  q: '#c0662a', Q: '#e29a3e', z: '#e8f0f4', Z: '#9db8c6', C: '#4f8f4a', X: '#78b868', j: '#8fdcff', J: '#4fa0d8', K: '#6b3fa0', M: '#9a6bd8', G: '#555060', H: '#3a3642', W: '#ffffff', B: '#3a6fc4' };
+function spr(rows) { const c = document.createElement('canvas'); c.width = rows[0].length; c.height = rows.length; const x = c.getContext('2d'); rows.forEach((row, j) => [...row].forEach((ch, i) => { if (ch !== '.') { x.fillStyle = PAL[ch]; x.fillRect(i, j, 1, 1); } })); c.rows = rows; return c; }
+const S = {
+  castle: spr(['..r.......r..', '.rrr..r..rrr.', '.owo.rrr.owo.', '.wgw.wgw.wgw.', '.wgwwwgwwwgw.', '.wgwwygwwygw.', '.wgwwwkkkwgw.', '.wdwwwkkkwdw.', 'ooooooooooooo']),
+  light: spr(['...y...', '..yfy..', '..www..', '..rrr..', '..www..', '..rrr..', '.wwwww.', '.wwkww.', '.wwkww.', 'ooooooo']),
+  tower: spr(['...M...', '..MKM..', '.MKKKM.', '..KKK..', '..KyK..', '..KKK..', '.KKKKK.', '.KKkKK.', '.KKkKK.', 'ooooooo']),
+  tree: spr(['.lll.', 'lLlll', 'lLlll', '.lll.', '..t..', '..t..']), atree: spr(['.qqq.', 'qQqqq', 'qQqqq', '.qqq.', '..t..', '..t..']),
+  pine: spr(['..n..', '.nnn.', '..n..', '.nNn.', 'nnnNn', '..t..']), spine: spr(['..Z..', '.zZz.', '..Z..', '.zZz.', 'zzZzz', '..t..']),
+  mount: spr(['....m....', '...mmm...', '..mmgd...', '..mggggd.', '.eeeeeedd', 'eeeeeeddd', 'ddddddddd']),
+  rock: spr(['..GG..', '.GGHG.', 'GGHHGG', 'HHHHHH']), crystal: spr(['..j..', '.jJj.', '.jJj.', 'jjJJj', 'JJJJJ']),
+  cactus: spr(['..C..', 'C.C.C', 'CXCXC', '..C..', '..C..']), hut: spr(['..r..', '.rrr.', 'vvkvv', 'vvkvv']),
+  volcano: spr(['......aa......', '.....acca.....', '.....GccG.....', '....GGGGGG....', '...GGHGGGHG...', '..GGHGGGGGHG..', '.GGGGGHGGGGGG.', 'GGHGGGGGHGGGGG', 'HHHHHHHHHHHHHH']),
+  mill: spr(['..vvv..', '..vkv..', '.vvvvv.', '.vvvvv.', 'vvvkvvv', 'vvvkvvv']),
+  tent: spr(['...r...', '..rrr..', '.rrvrr.', 'rrvvvrr', 'rrvkvrr']),
+  knight: spr(['..sss..', '..sks..', '.bbbbb.', 'sbbybbs', 'sbbbbbs', '.bbbbb.', '..p.p..', '..p.p..', '.kk.kk.']),
+  fireA: spr(['.f.', 'faf', 'acc']), fireB: spr(['f..', 'aaf', 'cac']),
+  gauge: spr(['.r.', '.p.', 'rp.', '.p.', 'rp.', '.p.', 'ppp']), crate: spr(['hhhhh', 'hukuh', 'hkuuh', 'hhhhh']), forge: spr(['..G..', '..G..', '.GGG.', 'GGaGG', 'GGGGG']),
+  gate: spr(['.www.', 'wwwww', 'wMMMw', 'wMMMw', 'wMMMw']), obelisk: spr(['..y..', '.www.', '.wgw.', '.wgw.', '.wgw.', '.wgw.', 'wwwww']), bell: spr(['..y..', '.yyy.', 'yyyyy', 'yyyyy', '..k..']),
+  boulder: spr(['.eee.', 'eeeed', 'ddddd']), puppet: spr(['.hhh.', '..h..', 'hhhhh', '..h..', '.h.h.', '.h.h.']), prism: spr(['..W..', '.WJW.', 'WJjJW', '.JjJ.', '..J..']), cloud: spr(['..WW.', '.WWWW', 'WWWWW']),
+  wtree: spr(['....lllll....', '..lllLLLlll..', '.lllLLLLLlll.', 'lllLLllLLLlll', 'lLLlllllLLLLl', '.lllLLLLLlll.', '..llllllllll.', '.....ttt.....', '.....ttt.....', '....ttttt....', '....ttttt....']),
+  serp: spr(['.GG.....GG.', 'GGGG...GGGG', 'GGGGGGGGGGG']),
+  bladeA: spr(['W.....W', '.W...W.', '.......', '.......', '.W...W.', 'W.....W']), bladeB: spr(['...W...', '...W...', '.......', 'W.....W', '.......', '...W...', '...W...'])
+};
+const NP = W * H;
+const ids = new Int16Array(NP).fill(-1), kind = new Uint8Array(NP);
+for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+  const wx = x + (fbm(x / 14, y / 14, 1) - .5) * 12, wy = y + (fbm(x / 14, y / 14, 2) - .5) * 12;
+  let best = -1, bd = 1e9;
+  for (let i = 0; i < N; i++) { const dx = wx - provs[i].x; if (dx > 30 || dx < -30) continue; const d = Math.hypot(dx, wy - provs[i].y); if (d < bd) { bd = d; best = i; } }
+  const R = 19.5 + (fbm(x / 9, y / 9, 3) - .5) * 10;
+  if (best >= 0 && bd < (provs[best].kind === 'task' ? R : R - 5)) ids[y * W + x] = best;
+}
+const at = (x, y) => (x < 0 || y < 0 || x >= W || y >= H) ? -1 : ids[y * W + x];
+for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+  const i = y * W + x;
+  if (ids[i] >= 0) kind[i] = (at(x - 1, y) < 0 || at(x + 1, y) < 0 || at(x, y - 1) < 0 || at(x, y + 1) < 0) ? 3 : 2;
+  else { let near = false; for (let dy = -2; dy <= 2 && !near; dy++) for (let dx = -2; dx <= 2; dx++) if (at(x + dx, y + dy) >= 0) { near = true; break; } kind[i] = near ? 1 : 0; }
+}
+const bflag = new Uint8Array(NP);
+for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+  const i = y * W + x, a = ids[i]; if (a < 0) continue; let f = 0;
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const b = at(x + dx, y + dy); if (b >= 0 && b !== a) f = Math.max(f, provs[a].reg !== provs[b].reg ? 2 : 1); }
+  bflag[i] = f;
+}
+const base = new Uint32Array(NP), WATER = ['#25588a', '#2a5f93', '#2d669c'].map(P), SHAL = ['#4b92bd', '#559ec8'].map(P);
+for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+  const i = y * W + x, k = kind[i], n = fbm(x / 4, y / 4, 10);
+  if (k === 0) base[i] = WATER[Math.min(2, Math.floor(n * 3))]; else if (k === 1) base[i] = SHAL[Math.min(1, Math.floor(n * 2))];
+  else {
+    const B = BIO[provs[ids[i]].reg.bio]; let c = P(B.pal[Math.min(3, Math.floor(n * 4))]);
+    if (provs[ids[i]].reg.bio === 'plains' && fbm(x / 12, y / 12, 20) > .6 && k === 2) c = P(y % 3 === 0 ? '#c8ad52' : '#d6bd62');
+    if (B.lava && fbm(x / 6, y / 6, 50) > .74 && k === 2) c = P(fbm(x / 3, y / 3, 51) > .5 ? '#ff7a2a' : '#d9482b');
+    if (B.pond && fbm(x / 8, y / 8, 52) > .68 && k === 2) c = P('#3f6f6a');
+    if (provs[ids[i]].reg.bio === 'clouds' && k === 2 && (x + y) % 5 === 0) c = P('#ffffff');
+    if (k === 3) c = P(B.coast);
+    base[i] = c;
+  }
+}
+/* roads inside regions */
+const roadPix = [], roadSet = new Set();
+for (const r of regs) for (let j = 0; j < r.provs.length - 1; j++) {
+  const a = r.provs[j], b = r.provs[j + 1], len = Math.hypot(b.x - a.x, b.y - a.y), steps = Math.ceil(len * 1.2), nx = -(b.y - a.y) / len, ny = (b.x - a.x) / len, amp = (j % 2 ? 2 : -2);
+  for (let s = 0; s <= steps; s++) { const t = s / steps, off = Math.sin(t * Math.PI) * amp; const x = Math.round(a.x + (b.x - a.x) * t + nx * off), y = Math.round(a.y + (b.y - a.y) * t + ny * off);
+    if (Math.hypot(x - a.x, y - a.y) < 7 || Math.hypot(x - b.x, y - b.y) < 7) continue; const i = y * W + x; if (x < 0 || y < 0 || x >= W || y >= H || ids[i] < 0 || roadSet.has(i)) continue; roadSet.add(i); roadPix.push({ i, a, b, s }); }
+}
+function stamp(sp, ox, oy) { const r = sp.rows; for (let j = 0; j < r.length; j++) for (let i = 0; i < r[j].length; i++) { const ch = r[j][i]; if (ch === '.') continue; const x = ox + i, y = oy + j; if (x < 0 || y < 0 || x >= W || y >= H) continue; base[y * W + x] = P(PAL[ch]); } }
+const okSpot = (pid, x, y, w, h) => { for (const [dx, dy] of [[0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1], [w >> 1, h - 1]]) { const xx = x + dx, yy = y + dy; if (xx < 0 || yy < 0 || xx >= W || yy >= H) return false; const i = yy * W + xx; if (ids[i] !== pid || kind[i] !== 2 || bflag[i] || roadSet.has(i)) return false; } return true; };
+const deco = [];
+for (const p of provs) { if (p.kind !== 'task') continue; const B = BIO[p.reg.bio]; let got = 0, tries = 0;
+  while (got < B.n && tries++ < 200) { const x = Math.round(p.x + (rnd() - .5) * 40), y = Math.round(p.y + (rnd() - .5) * 40); if (Math.hypot(x - p.x, y - p.y) < 10 || Math.hypot(x - p.x - 8, y - p.y - 4) < 9) continue;
+    const sp = S[B.deco[Math.floor(rnd() * B.deco.length)]]; if (!okSpot(p.i, x, y, sp.width, sp.height)) continue; deco.push({ sp, x, y }); got++; } }
+deco.sort((a, b) => a.y - b.y).forEach(d => stamp(d.sp, d.x, d.y));
+const findSpot = (reg, sp) => {
+  if (!reg?.provs.length) return null;
+  for (let k = 0; k < 600; k++) { const p = reg.provs[Math.floor(rnd() * reg.provs.length)], x = Math.round(p.x + (rnd() - .5) * 30), y = Math.round(p.y + (rnd() - .5) * 30); if (okSpot(p.i, x, y, sp.width, sp.height) && Math.hypot(x - p.x, y - p.y) > 11) return [x, y]; }
+  return null;
+};
+const volSpot = findSpot(regOf.R2, S.volcano); if (volSpot) stamp(S.volcano, ...volSpot);
+const millSpot = findSpot(regOf.R0, S.mill);
+const treeSpot = findSpot(regOf.R1, S.wtree); if (treeSpot) stamp(S.wtree, ...treeSpot);
+for (const p of provs) { const sp = S[p.kind === 'task' ? 'castle' : p.kind]; stamp(sp, p.x - (sp.width >> 1), p.y - sp.height + 2); }
+const waterSpot = (x0, y0, w, h) => { for (let r = 0; r < 60; r++) for (let dy = -r; dy <= r; dy += 3) for (let dx = -r; dx <= r; dx += 3) { const x = x0 + dx, y = y0 + dy; let ok = x > 2 && y > 2 && x + w < W - 2 && y + h < H - 2; for (let j = 0; j < h && ok; j++) for (let i = 0; i < w; i++) if (kind[(y + j) * W + x + i] !== 0) { ok = false; break; } if (ok) return [x, y]; } return [x0, y0]; };
+const waves = []; for (let i = 0; i < NP; i++) if (kind[i] === 0 && rnd() < .012) waves.push({ i, ph: rnd() * 6.28 });
+const fogLvl = provs.map(p => { if (p.st !== 'next') return 0; if (p.reg.landmark) return .6; const r = p.reg, fi = r.provs.findIndex(q => q.st === 'front' || q.st === 'cur');
+  if (fi >= 0) return Math.abs(r.provs.indexOf(p) - fi) <= 1 ? .3 : .38; const d = depth[r.key]; return d <= 1 ? .42 : d === 2 ? .5 : d === 3 ? .57 : .62; });
+const CW = W * 2, cloud = new Float32Array(CW * H);
+for (let y = 0; y < H; y++) for (let x = 0; x < CW; x++) { const a = fbm(x / 9, y / 9, 40), b = fbm((x - CW) / 9, y / 9, 40), w = x / CW; cloud[y * CW + x] = a * (1 - w) + b * w; }
+const bayer = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+const FOG = P('#dcd2b6'), GOLD = P('#f2c14e'), RB = P('#3a2a1a'), ROADC = P('#7b5230'), ROADL = P('#b98d57');
+
+/* campaign arrows: curved Bezier between regions */
+const regDone = r => r.provs.every(p => p.st === 'done'), regAct = r => r.provs.some(p => p.st !== 'next');
+function bez(a, b, bend) { const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2, dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy); const c = [mx - dy / L * L * bend, my + dx / L * L * bend]; const pts = []; const n = Math.ceil(L * 1.3); for (let s = 0; s <= n; s++) { const t = s / n, u = 1 - t; pts.push([u * u * a[0] + 2 * u * t * c[0] + t * t * b[0], u * u * a[1] + 2 * u * t * c[1] + t * t * b[1]]); } return pts; }
+const aw = arrows.map((e, k) => { const A = [e.a.cx, e.a.cy], B = [e.b.cx, e.b.cy]; let pts = bez(A, B, k % 2 ? .22 : -.22); const trim = (arr, d, fromEnd) => { let i = fromEnd ? arr.length - 1 : 0; const o = fromEnd ? arr[arr.length - 1] : arr[0]; while (i > 0 && i < arr.length - 1 && Math.hypot(arr[i][0] - o[0], arr[i][1] - o[1]) < d) i += fromEnd ? -1 : 1; return fromEnd ? arr.slice(0, i + 1) : arr.slice(i); };
+  pts = trim(trim(pts, 17, false), 20, true); return { ...e, pts, st: regDone(e.a) ? 'done' : regAct(e.a) ? 'act' : 'fut' }; });
+const start = regOf.R0?.provs[0];
+const v042 = provs.find(p => p.key === 'v042');
+if (start && v042) {
+  aw.push({ a: { key: 'V' }, b: regOf.R0, st: 'done', pts: bez([v042.x + 3, v042.y - 4], [start.x - 8, start.y + 2], .2) });
+}
+let hovReg = null;
+function drawArrow(ctx, e, t) {
+  const hot = hovReg && (e.a.key === hovReg || e.b.key === hovReg) || (selReg && (e.a.key === selReg || e.b.key === selReg)), pts = e.pts, n = pts.length; if (n < 4) return;
+  const act = e.st !== 'fut', col = hot ? '#ffffff' : e.st === 'done' ? '#ffd86b' : e.st === 'act' ? '#ffb070' : '#f3ead0', ph = Math.floor(t / 90);
+  const A = hot ? .95 : act ? .6 : .38;
+  ctx.globalAlpha = A * .45; ctx.fillStyle = '#1b1008'; for (let s = 0; s < n; s++) { const [x, y] = pts[s]; ctx.fillRect(Math.round(x) - 1, Math.round(y), 3, 1); ctx.fillRect(Math.round(x), Math.round(y) - 1, 1, 3); }
+  ctx.globalAlpha = A; for (let s = 0; s < n; s++) { if (!hot && ((s + ph) % 10) > 5) continue; const [x, y] = pts[s]; ctx.fillStyle = col; ctx.fillRect(Math.round(x), Math.round(y), 1, 1); }
+  const [x1, y1] = pts[n - 1], [x0, y0] = pts[Math.max(0, n - 6)], ang = Math.atan2(y1 - y0, x1 - x0), ux = Math.cos(ang), uy = Math.sin(ang), vx = -uy, vy = ux;
+  ctx.fillStyle = col; for (let a = 0; a <= 4; a++) for (let b = -(4 - a) * .6; b <= (4 - a) * .6; b += .5) ctx.fillRect(Math.round(x1 + ux * (a - 1) + vx * b), Math.round(y1 + uy * (a - 1) + vy * b), 1, 1);
+  ctx.globalAlpha = 1;
+}
+const fireBorder = []; for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const i = y * W + x, q = ids[i]; if (q >= 0 && (bflag[i] || kind[i] === 3)) { const st = provs[q].st; if (st === 'cur' || st === 'front') fireBorder.push([x, y, st === 'cur']); } }
+const FIRE = ['#ffe066', '#ff9a1f', '#e0411a', '#a8220f'].map(P);
+function ambient(ctx, t) {
+  const r7 = regOf.R7;
+  if (r7) for (let k = 0; k < 16; k++) { const y = r7.cy - 34 + ((t / 70 + k * 37) % 70), x = r7.cx - 46 + (k * 53) % 92 + Math.sin(t / 500 + k) * 3; ctx.fillStyle = k & 1 ? '#e29a3e' : '#c0662a'; ctx.fillRect(Math.round(x), Math.round(y), 1, 1); }
+  const r9 = regOf.R9;
+  if (r9) {
+    ctx.globalAlpha = .45 + .2 * Math.sin(t / 400); ctx.fillStyle = '#fff2a0';
+    for (let k = 0; k < 3; k++) { const a = -2.6 + k * .5 + Math.sin(t / 1500 + k) * .15; for (let d = 6; d < 46; d += 2) ctx.fillRect(Math.round(r9.cx + Math.cos(a) * d), Math.round(r9.cy - 14 + Math.sin(a) * d), 1, 1); }
+    ctx.globalAlpha = 1;
+  }
+  const r10 = regOf.R10;
+  if (r10) for (let k = 0; k < 14; k++) { const u = (t / 60 + k * 17) % 46; ctx.fillStyle = k % 3 ? '#ffffff' : '#9fdcff'; ctx.fillRect(Math.round(r10.cx - 40 + (k * 29) % 80), Math.round(r10.cy + 14 - u), 1, 1); }
+  const r5 = regOf.R5;
+  if (r5) for (let k = 0; k < 6; k++) { const x = Math.round(r5.cx - 42 + hash(k, Math.floor(t / 600), 3) * 84), y = Math.round(r5.cy - 18 + hash(k, Math.floor(t / 600), 4) * 36); const q = at(x, y); if (q >= 0 && provs[q].reg === r5) { ctx.fillStyle = '#fff6c8'; ctx.fillRect(x, y, 1, 1); ctx.fillRect(x - 1, y, 3, 1 * 0 + 1); } }
+}
+/* ---------- canvas ---------- */
+const cv = document.getElementById('map'); cv.width = W; cv.height = H;
+const ctx = cv.getContext('2d'), img = ctx.createImageData(W, H), px = new Uint32Array(img.data.buffer);
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+let hov = -1, sel = -1, selReg = null, T = 0;
+function frame(t) {
+  T = t; const off = Math.floor(t / 90) % CW, ph = Math.floor(t / 110);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * W + x, pid = ids[i]; let c = base[i];
+    if (pid >= 0) {
+      const p = provs[pid], bf = bflag[i];
+      if (bf === 2) c = RB;
+      else if (bf === 1) c = p.st === 'done' ? GOLD : p.st === 'cur' ? (((x + y + ph) & 3) < 2 ? P('#e04b3a') : P('#5a1a14')) : mix(c, RB, .55);
+      const f = fogLvl[pid];
+      if (f > 0 && bf !== 2) { const cl = cloud[y * CW + ((x + off) % CW)]; let a = f + (cl - .5) * .5; a += ((bayer[(y & 3) * 4 + (x & 3)] / 16) - .5) * .18; a = Math.max(.15, Math.min(.95, Math.round(a * 6) / 6)); c = mix(c, FOG, a); }
+      if (p.st === 'cur') { if (bf || kind[i] === 3) c = FIRE[Math.floor(hash(x, y, Math.floor(t / 90)) * 4)]; else c = mix(c, P('#ff8a2a'), .06 + .05 * Math.sin(t / 250)); }
+      else if (p.st === 'front') { if (bf || kind[i] === 3) c = ((x + y + ph) & 3) < 2 ? P('#ffd23a') : P('#8a5a10'); else c = mix(c, P('#ffd23a'), .04 + .04 * Math.sin(t / 300)); }
+      if (pid === hov || (hovReg && p.reg.key === hovReg)) c = lighten(c, .2);
+      if (pid === sel && (bf || kind[i] === 3)) c = (ph & 2) ? P('#ffffff') : P('#ffe9a0');
+    } else if (kind[i] === 1 && (((x >> 1) + (y >> 1) + (ph >> 2)) & 7) === 0) c = lighten(c, .3);
+    px[i] = c;
+  }
+  for (const w of waves) if (Math.sin(t / 700 + w.ph) > .75) px[w.i] = P('#8fc3e6');
+  for (const r of roadPix) { if (r.a.st === 'done' && r.b.st === 'done') px[r.i] = (r.s & 3) ? ROADC : ROADL; else if (r.a.st === 'done') px[r.i] = (((r.s + ph) & 3) < 2) ? GOLD : ROADC; else if ((r.s & 3) === 0) px[r.i] = mix(px[r.i], ROADC, .6); }
+  ctx.putImageData(img, 0, 0);
+  const wv = Math.floor(t / 260) & 1, bob = Math.round(Math.sin(t / 350));
+  for (const p of provs) { if (p.st === 'next' && p.kind === 'task') continue; if (p.st === 'next') continue; const fx = p.x, fy = p.y - (p.kind === 'task' ? 7 : 10); ctx.fillStyle = '#3a2a1c'; ctx.fillRect(fx, fy - 5, 1, 7); ctx.fillStyle = p.st === 'done' ? '#3d6fd8' : p.st === 'front' ? '#ffd23a' : '#e04b3a'; ctx.fillRect(fx + 1, fy - 5 + wv, 4, 2); ctx.fillRect(fx + 1, fy - 3, 3 - wv, 1); if (p.st === 'done') { ctx.fillStyle = '#f2c14e'; ctx.fillRect(fx + 2, fy - 5 + wv, 1, 1); } }
+  for (const p of provs) if (p.st === 'next' && p.kind !== 'task') { ctx.fillStyle = (Math.floor(t / 400) & 1) ? '#ffe27a' : '#ff9a3c'; ctx.fillRect(p.x, p.y - (p.kind === 'light' ? 9 : 8), 1, 1); }
+  for (const p of provs) { if (p.st === 'cur') { ctx.drawImage(S.tent, p.x + 8, p.y - 1); ctx.drawImage(S.tent, p.x - 16, p.y + 1); ctx.drawImage((Math.floor(t / 180) & 1) ? S.fireA : S.fireB, p.x - 1, p.y + 9);
+    for (let k = 0; k < 6; k++) { const u = ((t / 140 + k * 5) % 24), yy = p.y + 8 - u, xx = p.x + Math.round(Math.sin(u / 3 + k) * 2); ctx.fillStyle = u < 12 ? '#9a96a6' : '#c8c5d0'; ctx.fillRect(xx, Math.round(yy), 1, 1); } }
+    else if (p.st === 'front') ctx.drawImage(S.tent, p.x + 8, p.y - 1); }
+  if (focusIdx >= 0) { const p = provs[focusIdx]; ctx.drawImage(S.knight, p.x - 12, p.y + 5 + bob); }
+  if (volSpot) for (let k = 0; k < 7; k++) { const u = ((t / 160 + k * 4) % 26), xx = volSpot[0] + 7 + Math.round(Math.sin(u / 4 + k) * 2.5); ctx.fillStyle = u < 8 ? '#ffb347' : u < 16 ? '#7a6a6a' : '#a59fa8'; ctx.fillRect(xx, Math.round(volSpot[1] - u), 1 + (u > 14 ? 1 : 0), 1 + (u > 14 ? 1 : 0)); }
+  if (millSpot) { ctx.drawImage(S.mill, millSpot[0], millSpot[1]); ctx.drawImage((Math.floor(t / 500) & 1) ? S.bladeA : S.bladeB, millSpot[0] + 0, millSpot[1] - 3); }
+  for (const e of aw) drawArrow(ctx, e, t);
+  ambient(ctx, t);
+  for (const [x, y, full] of fireBorder) { const h = hash(x, y, Math.floor(t / 100) + 7); if (h > (full ? .55 : .86) && ((x + y) & 1) === 0) { const hh = (full ? 1 : 0) + 1 + Math.floor(h * (full ? 4 : 2)); for (let k = 0; k < hh; k++) { ctx.fillStyle = k === 0 ? '#ffe066' : k < 3 ? '#ff9a1f' : '#e0411a'; ctx.fillRect(x, y - k - 1, 1, 1); } } }
+  if (!reduced) requestAnimationFrame(frame);
+}
+const redraw = () => { if (reduced) frame(T); };
+
+/* ---------- overlays ---------- */
+const world = document.getElementById('world'), stage = document.getElementById('stage');
+const pct = (x, y) => `left:${x / W * 100}%;top:${y / H * 100}%`;
+const chipEls = provs.map(p => { const b = document.createElement('button'); b.className = 'chip ' + p.st; b.textContent = p.id; b.style.cssText = pct(p.x, p.y + (p.kind === 'task' ? 5 : 3));
+  b.setAttribute('aria-label', `${p.id}: ${p.title}. ${ST[p.st].name}`); b.onclick = () => selectProv(p.i); b.onmouseenter = e => { hov = p.i; showTip(p, e); redraw(); }; b.onmouseleave = () => { hov = -1; hideTip(); redraw(); }; world.appendChild(b); return b; });
+const ribEls = regs.filter(r => !r.landmark).map(r => { const b = document.createElement('button'); const done = r.provs.filter(p => p.st === 'done').length;
+  b.className = 'ribbon' + (!regAct(r) ? ' fogged' : '') + (r.provs.some(p => p.st === 'cur') ? ' hot' : '') + (r.provs.every(p => p.st === 'done') ? ' won' : ''); b.style.cssText = pct(r.cx, Math.min(...r.provs.map(p => p.y)) - 21); b.style.fontSize = 'var(--rf,11px)';
+  b.innerHTML = `${r.provs.every(p => p.st === 'done') ? '♛ ' : ''}${r.fant}<small>${r.key} · ${done}/${r.provs.length}</small>`; b.onclick = () => selectReg(r.key); b.onmouseenter = () => { hovReg = r.key; redraw(); }; b.onmouseleave = () => { hovReg = null; redraw(); }; b.dataset.k = r.key; world.appendChild(b); return b; });
+function fit() { const avail = Math.max(320, Math.min(innerWidth - 32, 1700) - 12); const sc = Math.max(2, Math.floor(Math.min(avail / W, (innerHeight - 200) / H) * 2) / 2); cv.style.width = W * sc + 'px'; cv.style.height = H * sc + 'px'; world.style.width = W * sc + 'px'; world.style.height = H * sc + 'px'; stage.style.width = Math.min(W * sc + 12, avail + 12) + 'px'; world.style.setProperty('--cf', Math.max(8, Math.round(sc * 3.2)) + 'px'); world.style.setProperty('--rf', Math.max(9, Math.round(sc * 3.6)) + 'px'); }
+addEventListener('resize', fit); fit();
+const tip = document.getElementById('tip');
+function showTip(p, e) { tip.innerHTML = `<b>${esc(p.id)}</b> ${esc(p.title)}<em>${esc(ST[p.st].name)} · ${esc((p.st === 'done' ? 'Готово' : p.eff) || p.reg.fant)}</em>`; tip.style.display = 'block'; moveTip(e); }
+function moveTip(e) { tip.style.left = Math.min(e.clientX + 16, innerWidth - 320) + 'px'; tip.style.top = Math.min(e.clientY + 16, innerHeight - 90) + 'px'; }
+const hideTip = () => tip.style.display = 'none';
+const pidAt = e => { const r = cv.getBoundingClientRect(); return at(Math.floor((e.clientX - r.left) / r.width * W), Math.floor((e.clientY - r.top) / r.height * H)); };
+cv.addEventListener('mousemove', e => { const p = pidAt(e); if (p !== hov) { hov = p; redraw(); } if (p >= 0) showTip(provs[p], e); else hideTip(); });
+cv.addEventListener('mouseleave', () => { hov = -1; hideTip(); redraw(); });
+cv.addEventListener('click', e => { const p = pidAt(e); if (p >= 0) selectProv(p); else closePanel(); });
+addEventListener('keydown', e => { if (e.key === 'Escape') closePanel(); });
+const panel = document.getElementById('panel'), esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const names = list => list.map(k => DATA[k] ? DATA[k].id : k).join(', ') || '—';
+function renderPanel() {
+  chipEls.forEach((c, i) => c.classList.toggle('sel', i === sel)); ribEls.forEach(c => c.classList.toggle('sel', c.dataset.k === selReg));
+  panel.classList.toggle('open', sel >= 0 || !!selReg); if (sel < 0 && !selReg) return;
+  const close = '<button class="x" id="cl" aria-label="Закрыть">✕</button>'; let h = '';
+  if (sel >= 0) { const p = provs[sel];
+    h = `${close}<div class="kick">${esc(p.reg.fant)} · ${p.reg.key}</div><h2>${esc(p.id)} — ${esc(p.title)}</h2><span class="tag ${p.st}">${ST[p.st].name} · ${ST[p.st].tip}</span>`;
+    if (p.kind === 'task') h += `<dl>${p.detail && p.detail !== p.title ? `<dt>Что сделать</dt><dd>${esc(p.detail)}</dd>` : ''}<dt>Готово, когда</dt><dd>${esc(p.crit)}</dd><dt>Оценка</dt><dd>${p.st === 'done' ? 'Готово' : esc(p.eff)}</dd><dt>Область</dt><dd>${esc(p.reg.title)}</dd></dl><button class="back" id="toReg">← К области ${p.reg.key}</button>`;
+    else { const d = p.d; h += `<dl><dt>Суть</dt><dd>${esc(d.goal)}</dd><dt>Метка</dt><dd>${esc(d.tag)}</dd><dt>Ждёт</dt><dd>${esc(names(d.deps))}${d.depNote ? ' — ' + esc(d.depNote) : ''}</dd><dt>Открывает</dt><dd>${esc(names(d.unlocks))}</dd><dt>Срок</dt><dd>${esc(d.effort)}</dd></dl>`; } }
+  else { const r = regOf[selReg], d = DATA[r.key], done = r.provs.filter(p => p.st === 'done').length;
+    h = `${close}<div class="kick">Область · ${r.key}</div><h2>${esc(r.fant)}</h2><p><b>${esc(r.title)}</b></p><p>${esc(r.goal)}</p><p><i>Тема карты: ${esc(THEME[r.key])}.</i></p><p><b>Захвачено ${done} из ${r.provs.length}</b> · оценка: ${esc(r.effort)}</p>
+      <dl><dt>Ждёт</dt><dd>${esc(names(d.deps))}${d.depNote ? ' — ' + esc(d.depNote) : ''}</dd><dt>Открывает</dt><dd>${esc(names(d.unlocks))}</dd></dl>
+      <ul class="list">${r.provs.map(p => `<li><button data-i="${p.i}"><span class="dot ${p.st}"></span><b>${p.id}</b><span>${esc(p.title)}</span></button></li>`).join('')}</ul>`; }
+  panel.innerHTML = h; document.getElementById('cl').onclick = closePanel; const tr = document.getElementById('toReg'); if (tr) tr.onclick = () => selectReg(provs[sel].reg.key);
+  panel.querySelectorAll('button[data-i]').forEach(b => b.onclick = () => selectProv(+b.dataset.i));
+}
+function closePanel() { sel = -1; selReg = null; renderPanel(); redraw(); }
+function selectProv(i) { if (provs[i].reg.landmark || true) { sel = i; selReg = null; renderPanel(); redraw(); } }
+function selectReg(k) { sel = -1; selReg = k; renderPanel(); redraw(); }
+const taskProvs = provs.filter(p => p.kind === 'task'), total = taskProvs.filter(p => p.st === 'done').length;
+const curIds = provs.filter(p => p.st === 'cur').map(p => p.id), frontIds = provs.filter(p => p.st === 'front' && p.kind === 'task').map(p => p.id), wonRegs = regs.filter(r => !r.landmark && r.provs.every(p => p.st === 'done')).length;
+document.getElementById('hud').innerHTML = `<span>Захвачено <b>${total}/${taskProvs.length}</b><span class="bar">${taskProvs.map(p => `<i class="${p.st === 'done' ? 'on' : ''}"></i>`).join('')}</span></span><span>${curIds.length ? 'Осада' : 'Следующий ход'}: <b>${esc((curIds.length ? curIds : frontIds).join(', ') || '—')}</b></span><span>Областей: <b>${wonRegs}/${rk.length}</b></span>`;
+if (SRC) document.getElementById('meta').textContent = `Статусы из ${SRC.source}${SRC.commit ? ' · коммит ' + SRC.commit : ''} · собрано ${SRC.generated}`;
+renderPanel(); requestAnimationFrame(frame);
+
+})();
+</script>
+</body>
+</html>
