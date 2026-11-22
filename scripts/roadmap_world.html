@@ -66,13 +66,14 @@
   .chron{display:flex;flex-wrap:wrap;gap:6px 8px;justify-content:center;align-items:center;padding:8px 18px 0;font-size:12.5px;color:#cdb98a}
   .chron button{background:#3a2616;border:2px solid #7a5230;padding:3px 9px;color:#f2e6c4;font-size:12.5px}.chron button:hover{background:#523620}
 @media(max-width:760px){aside{top:auto;left:8px;right:8px;bottom:8px;width:auto;max-width:none;max-height:58vh;padding:14px 14px}aside h2{font-size:17px;padding-right:34px}header{padding:10px 12px}.hud{gap:6px 12px;font-size:12px}.bar{display:none}.chron b{flex-basis:100%;text-align:center}.tip{display:none!important}main{padding:8px}}
+  @media (prefers-reduced-motion: reduce){.chip.cur,.ribbon.hot{animation:none}}
 </style>
 </head>
 <body>
 <header>
   <div>
     <h1>⚔ ModuleEngine — карта походов</h1>
-    <div class="sub">Этап роадмапы — область, подэтап — провинция, стрелки — порядок кампании. <a href="../" style="color:#f2c14e">← Таблица роадмапы</a></div>
+    <div class="sub">Этап роадмапы — область, подэтап — провинция, стрелки — порядок кампании. <a href="../index.html" style="color:#f2c14e">← Таблица роадмапы</a></div>
   </div>
   <div class="hud" id="hud"></div>
 </header>
@@ -111,11 +112,13 @@ const STATIC = {
   g09: { id: '0.9a', title: 'Первый бой G2', goal: 'Физика, звук и скелетная анимация из R6–R7 должны быть готовы до того, как они понадобятся бою G2 и его решениям.', effort: '—', deps: ['R6', 'R7'], unlocks: [], tag: 'ВЕРСИИ', cls: 'ver', depNote: '' },
   v13: { id: '1.3', title: 'Реалистичный рендер', goal: 'R5 — техническая основа рубежа 1.3: материалы, свет и тени. Трассировка лучей остаётся необязательным уровнем железа.', effort: '—', deps: ['useful'], unlocks: [], tag: 'ВЕРСИИ', cls: 'ver', depNote: '' },
 };
+// Tasks that wait for a task of another phase (docs/product-roadmap.md, dependency list: "R2.3 (also needs R1.6)").
+const TASK_DEPS = { 'R2.3': ['R1.6'] };
 const ST_OF = { done: 'done', cur: 'cur', todo: 'next' };
 const DATA = {};
 for (const k of Object.keys(STATIC)) {
   const src = SRC ? SRC.phases.find(p => p.id === STATIC[k].id) : null;
-  DATA[k] = { ...STATIC[k], key: k, tasks: src ? src.tasks.map(t => ({ id: t.id, title: t.text, crit: t.acceptance, eff: t.effort, st: ST_OF[t.state] })) : [] };
+  DATA[k] = { ...STATIC[k], key: k, tasks: src ? src.tasks.map(t => ({ id: t.id, title: t.text, crit: t.criteria || t.acceptance, detail: t.detail || t.text, eff: t.effort, st: ST_OF[t.state] })) : [] };
 }
 const isDone = k => { const d = DATA[k]; return d.cls === 'done' || (d.tasks.length ? d.tasks.every(t => t.st === 'done') : d.cls === 'gate' && d.deps.length > 0 && d.deps.every(isDone)); };
 const W = 480, H = 330;
@@ -163,9 +166,11 @@ const areg = { key: 'AI', fant: 'Башни Магов', bio: 'cliffs', title: '
 regs.push(vreg, areg);
 for (const k of Object.keys(LAND)) { const d = DATA[k], reg = k.startsWith('ai') ? areg : vreg; const st = isDone(k) ? 'done' : 'next';
   const p = { i: provs.length, reg, id: d.id, key: k, title: d.title, crit: d.goal, eff: d.effort, st, x: LAND[k][0], y: LAND[k][1], kind: k.startsWith('ai') ? 'tower' : 'light', d }; provs.push(p); reg.provs.push(p); }
-/* the next move: in a region that is started but has nothing in progress, the first open task */
-for (const r of regs) { if (r.landmark) continue; const done = r.provs.filter(p => p.st === 'done').length; if (done > 0 && done < r.provs.length && !r.provs.some(p => p.st === 'cur')) r.provs.find(p => p.st === 'next').st = 'front'; }
-if (!provs.some(p => p.st === 'cur' || p.st === 'front')) { const f = provs.find(p => p.kind === 'task' && p.st === 'next'); if (f) f.st = 'front'; }
+/* the next move: in a region that is started but has nothing in progress, the first open task, unless it waits for a task of another phase */
+const taskById = Object.fromEntries(provs.filter(p => p.kind === 'task').map(p => [p.id, p]));
+const unblocked = p => (TASK_DEPS[p.id] || []).every(d => !taskById[d] || taskById[d].st === 'done');
+for (const r of regs) { if (r.landmark) continue; const done = r.provs.filter(p => p.st === 'done').length; if (done > 0 && done < r.provs.length && !r.provs.some(p => p.st === 'cur')) { const f = r.provs.find(p => p.st === 'next'); if (unblocked(f)) f.st = 'front'; } }
+if (!provs.some(p => p.st === 'cur' || p.st === 'front')) { const f = provs.find(p => p.kind === 'task' && p.st === 'next' && unblocked(p)); if (f) f.st = 'front'; }
 const N = provs.length, curIdx = provs.findIndex(p => p.st === 'cur'), focusIdx = curIdx >= 0 ? curIdx : provs.findIndex(p => p.st === 'front');
 const regOf = Object.fromEntries(regs.map(r => [r.key, r]));
 for (const r of regs) { if (r.landmark) continue; const xs = r.provs.map(p => p.x), ys = r.provs.map(p => p.y); r.cx = xs.reduce((a, b) => a + b) / xs.length; r.cy = ys.reduce((a, b) => a + b) / ys.length; }
@@ -345,10 +350,10 @@ const chipEls = provs.map(p => { const b = document.createElement('button'); b.c
 const ribEls = regs.filter(r => !r.landmark).map(r => { const b = document.createElement('button'); const done = r.provs.filter(p => p.st === 'done').length;
   b.className = 'ribbon' + (!regAct(r) ? ' fogged' : '') + (r.provs.some(p => p.st === 'cur') ? ' hot' : '') + (r.provs.every(p => p.st === 'done') ? ' won' : ''); b.style.cssText = pct(r.cx, Math.min(...r.provs.map(p => p.y)) - 21); b.style.fontSize = 'var(--rf,11px)';
   b.innerHTML = `${r.provs.every(p => p.st === 'done') ? '♛ ' : ''}${r.fant}<small>${r.key} · ${done}/${r.provs.length}</small>`; b.onclick = () => selectReg(r.key); b.onmouseenter = () => { hovReg = r.key; redraw(); }; b.onmouseleave = () => { hovReg = null; redraw(); }; b.dataset.k = r.key; world.appendChild(b); return b; });
-function fit() { const avail = Math.max(320, Math.min(innerWidth - 32, 1700) - 12); const sc = Math.max(2, Math.floor(Math.min(avail / W, (innerHeight - 200) / H) * 2) / 2); cv.style.width = W * sc + 'px'; cv.style.height = H * sc + 'px'; stage.style.width = Math.min(W * sc + 12, avail + 12) + 'px'; world.style.setProperty('--cf', Math.max(8, Math.round(sc * 3.2)) + 'px'); world.style.setProperty('--rf', Math.max(9, Math.round(sc * 3.6)) + 'px'); }
+function fit() { const avail = Math.max(320, Math.min(innerWidth - 32, 1700) - 12); const sc = Math.max(2, Math.floor(Math.min(avail / W, (innerHeight - 200) / H) * 2) / 2); cv.style.width = W * sc + 'px'; cv.style.height = H * sc + 'px'; world.style.width = W * sc + 'px'; world.style.height = H * sc + 'px'; stage.style.width = Math.min(W * sc + 12, avail + 12) + 'px'; world.style.setProperty('--cf', Math.max(8, Math.round(sc * 3.2)) + 'px'); world.style.setProperty('--rf', Math.max(9, Math.round(sc * 3.6)) + 'px'); }
 addEventListener('resize', fit); fit();
 const tip = document.getElementById('tip');
-function showTip(p, e) { tip.innerHTML = `<b>${p.id}</b> ${p.title}<em>${ST[p.st].name} · ${(p.st === 'done' ? 'Готово' : p.eff) || p.reg.fant}</em>`; tip.style.display = 'block'; moveTip(e); }
+function showTip(p, e) { tip.innerHTML = `<b>${esc(p.id)}</b> ${esc(p.title)}<em>${esc(ST[p.st].name)} · ${esc((p.st === 'done' ? 'Готово' : p.eff) || p.reg.fant)}</em>`; tip.style.display = 'block'; moveTip(e); }
 function moveTip(e) { tip.style.left = Math.min(e.clientX + 16, innerWidth - 320) + 'px'; tip.style.top = Math.min(e.clientY + 16, innerHeight - 90) + 'px'; }
 const hideTip = () => tip.style.display = 'none';
 const pidAt = e => { const r = cv.getBoundingClientRect(); return at(Math.floor((e.clientX - r.left) / r.width * W), Math.floor((e.clientY - r.top) / r.height * H)); };
@@ -364,7 +369,7 @@ function renderPanel() {
   const close = '<button class="x" id="cl" aria-label="Закрыть">✕</button>'; let h = '';
   if (sel >= 0) { const p = provs[sel];
     h = `${close}<div class="kick">${esc(p.reg.fant)} · ${p.reg.key}</div><h2>${esc(p.id)} — ${esc(p.title)}</h2><span class="tag ${p.st}">${ST[p.st].name} · ${ST[p.st].tip}</span>`;
-    if (p.kind === 'task') h += `<dl><dt>Готово, когда</dt><dd>${esc(p.crit)}</dd><dt>Оценка</dt><dd>${p.st === 'done' ? 'Готово' : esc(p.eff)}</dd><dt>Область</dt><dd>${esc(p.reg.title)}</dd></dl><button class="back" id="toReg">← К области ${p.reg.key}</button>`;
+    if (p.kind === 'task') h += `<dl>${p.detail && p.detail !== p.title ? `<dt>Что сделать</dt><dd>${esc(p.detail)}</dd>` : ''}<dt>Готово, когда</dt><dd>${esc(p.crit)}</dd><dt>Оценка</dt><dd>${p.st === 'done' ? 'Готово' : esc(p.eff)}</dd><dt>Область</dt><dd>${esc(p.reg.title)}</dd></dl><button class="back" id="toReg">← К области ${p.reg.key}</button>`;
     else { const d = p.d; h += `<dl><dt>Суть</dt><dd>${esc(d.goal)}</dd><dt>Метка</dt><dd>${esc(d.tag)}</dd><dt>Ждёт</dt><dd>${esc(names(d.deps))}${d.depNote ? ' — ' + esc(d.depNote) : ''}</dd><dt>Открывает</dt><dd>${esc(names(d.unlocks))}</dd><dt>Срок</dt><dd>${esc(d.effort)}</dd></dl>`; } }
   else { const r = regOf[selReg], d = DATA[r.key], done = r.provs.filter(p => p.st === 'done').length;
     h = `${close}<div class="kick">Область · ${r.key}</div><h2>${esc(r.fant)}</h2><p><b>${esc(r.title)}</b></p><p>${esc(r.goal)}</p><p><i>Тема карты: ${esc(THEME[r.key])}.</i></p><p><b>Захвачено ${done} из ${r.provs.length}</b> · оценка: ${esc(r.effort)}</p>
@@ -378,7 +383,7 @@ function selectProv(i) { if (provs[i].reg.landmark || true) { sel = i; selReg = 
 function selectReg(k) { sel = -1; selReg = k; renderPanel(); redraw(); }
 const taskProvs = provs.filter(p => p.kind === 'task'), total = taskProvs.filter(p => p.st === 'done').length;
 const curIds = provs.filter(p => p.st === 'cur').map(p => p.id), frontIds = provs.filter(p => p.st === 'front' && p.kind === 'task').map(p => p.id), wonRegs = regs.filter(r => !r.landmark && r.provs.every(p => p.st === 'done')).length;
-document.getElementById('hud').innerHTML = `<span>Захвачено <b>${total}/${taskProvs.length}</b><span class="bar">${taskProvs.map(p => `<i class="${p.st === 'done' ? 'on' : ''}"></i>`).join('')}</span></span><span>${curIds.length ? 'Осада' : 'Следующий ход'}: <b>${(curIds.length ? curIds : frontIds).join(', ') || '—'}</b></span><span>Областей: <b>${wonRegs}/${rk.length}</b></span>`;
+document.getElementById('hud').innerHTML = `<span>Захвачено <b>${total}/${taskProvs.length}</b><span class="bar">${taskProvs.map(p => `<i class="${p.st === 'done' ? 'on' : ''}"></i>`).join('')}</span></span><span>${curIds.length ? 'Осада' : 'Следующий ход'}: <b>${esc((curIds.length ? curIds : frontIds).join(', ') || '—')}</b></span><span>Областей: <b>${wonRegs}/${rk.length}</b></span>`;
 if (SRC) document.getElementById('meta').textContent = `Статусы из ${SRC.source}${SRC.commit ? ' · коммит ' + SRC.commit : ''} · собрано ${SRC.generated}`;
 renderPanel(); requestAnimationFrame(frame);
 

@@ -228,6 +228,30 @@ WORLD_TEMPLATE = ROOT / roadmap_map.WORLD_TEMPLATE_PATH
 
 
 class WorldBuildTest(unittest.TestCase):
+    def test_pages_link_to_each_other_by_file_name(self):
+        """A link to a directory does not open its index.html from file://."""
+        table = (ROOT / roadmap_map.TEMPLATE_PATH).read_text(encoding="utf-8")
+        world = WORLD_TEMPLATE.read_text(encoding="utf-8")
+        self.assertIn('href="world/index.html"', table)
+        self.assertIn('href="../index.html"', world)
+
+    def test_reduced_motion_stops_css_animation(self):
+        world = WORLD_TEMPLATE.read_text(encoding="utf-8")
+        block = re.search(r"@media \(prefers-reduced-motion: reduce\)\{([^}]*)\}", world)
+        self.assertIsNotNone(block)
+        self.assertIn(".chip.cur", block.group(1))
+        self.assertIn(".ribbon.hot", block.group(1))
+        self.assertIn("animation:none", block.group(1))
+        # an equal-specificity rule written later would override it
+        self.assertGreater(block.start(), world.rindex(".ribbon.hot{"))
+        self.assertGreater(block.start(), world.rindex(".chip.cur{"))
+
+    def test_tooltip_escapes_markdown_text(self):
+        world = WORLD_TEMPLATE.read_text(encoding="utf-8")
+        line = next(l for l in world.splitlines() if "function showTip" in l)
+        self.assertIn("esc(p.title)", line)
+        self.assertNotIn("${p.title}", line)
+
     def test_live_roadmap_builds_the_campaign_map(self):
         page, warnings = roadmap_map.build_world(ROOT)
         self.assertEqual(warnings, [])
@@ -254,7 +278,7 @@ class WorldModelTest(unittest.TestCase):
         code = page[page.index("// @model-begin"):page.index("// @model-end")]
         script = code + """
 process.stdout.write(JSON.stringify({
-  provs: provs.map(p => [p.id, p.st]), regions: regs.filter(r => !r.landmark).map(r => r.key),
+  provs: provs.map(p => [p.id, p.st]), crit: Object.fromEntries(provs.map(p => [p.id, [p.crit, p.detail || '']])), taskDeps: TASK_DEPS, regions: regs.filter(r => !r.landmark).map(r => r.key),
   focus: focusIdx >= 0 ? provs[focusIdx].id : null, arrows: arrows.map(a => a.a.key + '>' + a.b.key),
   landmarks: Object.fromEntries(provs.filter(p => p.kind !== 'task').map(p => [p.id, p.st]))
 }));
@@ -281,6 +305,34 @@ process.stdout.write(JSON.stringify({
     def test_first_open_task_is_the_next_move_at_the_very_start(self):
         m = self.fixture({"R0": ["todo", "todo"]})
         self.assertEqual(dict(m["provs"])["R0.1"], "front")
+
+    def test_task_waiting_for_another_phase_is_not_the_next_move(self):
+        """R2.3 also needs R1.6: the mark moves to R2.3 only after R1.6 is done."""
+        before = self.fixture({"R0": ["done"], "R1": ["done"] * 5 + ["todo", "todo"], "R2": ["done", "done", "todo", "todo"]})
+        states = dict(before["provs"])
+        self.assertEqual((states["R1.6"], states["R2.3"]), ("front", "next"))
+        after = self.fixture({"R0": ["done"], "R1": ["done"] * 6 + ["todo"], "R2": ["done", "done", "todo", "todo"]})
+        states = dict(after["provs"])
+        self.assertEqual((states["R1.7"], states["R2.3"]), ("front", "front"))
+
+    def test_task_dependencies_come_from_the_roadmap(self):
+        en, _ru = live()
+        model = self.fixture({"R0": ["todo"]})
+        self.assertTrue(model["taskDeps"])
+        for task, deps in model["taskDeps"].items():
+            phase = task.split(".")[0]
+            for dep in deps:
+                self.assertTrue(re.search(rf"^### {phase} — .*{re.escape(task)} also on {re.escape(dep)}", en, re.M), f"{task} needs {dep}")
+
+    def test_card_gets_the_full_acceptance_text(self):
+        criteria = "Textures: 1 000 unique ones; no floor flicker on S4. Custom passes keep working."
+        md = {"en": "### R0 — Phase · 1 week\n\n| # | Task | Acceptance | Effort |\n| --- | --- | --- | --- |\n"
+                    f"| R0.1 | Path `outputs/bench/<date>/` first. Then more. | {criteria} | 1 d |\n",
+              "ru": "### R0 — Фаза · 1 неделя\n\n| # | Задача | Критерий | Трудоёмкость |\n| --- | --- | --- | --- |\n"
+                    f"| R0.1 | Путь `outputs/bench/<date>/` сначала. Затем ещё. | {criteria} | 1 д |\n"}
+        m = self.model(md["en"], md["ru"])
+        self.assertEqual(m["crit"]["R0.1"][0], criteria)
+        self.assertEqual(m["crit"]["R0.1"][1], "Путь outputs/bench/<date>/ сначала. Затем ещё.")
 
     def test_removed_phase_leaves_the_map(self):
         spec = {"R0": ["done"], "R1": ["todo"], "R4": ["todo"]}

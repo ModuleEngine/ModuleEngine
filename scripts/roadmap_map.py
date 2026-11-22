@@ -49,6 +49,8 @@ class Task:
     effort: str
     text: str
     acceptance: str
+    detail: str = ""    # full task cell, for the campaign map card
+    criteria: str = ""  # full acceptance cell
 
 
 @dataclass
@@ -118,6 +120,8 @@ def parse(markdown: str, lang: str) -> list[Phase]:
             effort=plain(status),
             text=short(plain(cells[1])),
             acceptance=short(plain(cells[2])) if len(cells) > 3 else "",
+            detail=plain(cells[1]),
+            criteria=plain(cells[2]) if len(cells) > 3 else "",
         ))
     return [phase for phase in phases if phase.tasks]
 
@@ -156,6 +160,8 @@ def merge(en: list[Phase], ru: list[Phase]) -> list[Phase]:
                 effort=local.effort if local and local.state == "todo" else task.effort,
                 text=local.text if local else task.text,
                 acceptance=local.acceptance if local else task.acceptance,
+                detail=local.detail if local else task.detail,
+                criteria=local.criteria if local else task.criteria,
             ))
         merged.append(Phase(phase.id, ru_titles.get(phase.id, phase.title), tasks))
     return merged
