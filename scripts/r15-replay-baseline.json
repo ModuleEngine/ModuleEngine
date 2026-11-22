@@ -1,0 +1,7 @@
+{
+  "revision": "99884e6794737a3e40f3128fe14d3a919388dc23",
+  "target": "x86_64-pc-windows-msvc",
+  "game_project_sha256": "bf2d5d86ffb51241cff34e9247c51890145fc0efd6418a6eb5ded2bde2b2dc6b",
+  "input_sha256": "a2eab2141ff7ae86cf8ac345486303fa9bd0744f3b12c66001872de6d6e07f7f",
+  "events_sha256": "477f97444fb527111af12d350fb2be3d1cc4752ffb26e17a7a3f9a8df4746614"
+}

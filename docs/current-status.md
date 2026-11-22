@@ -4,6 +4,14 @@
 
 [English](current-status.md) | [Русский](ru/current-status.md) | [Documentation](README.md)
 
+**22 November 2026 — R1.5 completed. Saved game nodes run in a Bevy schedule at 60 Hz.**
+Core and ARPG use the same single-threaded schedule in saved stage and node
+order. Two Windows runs match the pre-change event log for all ten Crate Garden
+levels and the Small monsters encounter from the checked-in ARPG project.
+The Crate Garden run uses a composition without ARPG, and the `GameHost`
+late-rejection test confirms whole-tick rollback and retry.
+See [R1.5 verification](module-execution.md#r15-verification).
+
 **22 November 2026 — R2.1 adds a Vulkan device layer.** Tier A adapters
 with timeline support get two frame slots, gpu-allocator, a staging ring
 and the dedicated transfer route when available. Existing compatible devices
