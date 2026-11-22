@@ -997,10 +997,6 @@ mod tests {
         .unwrap();
         let handle = world.index[&target];
         let lifetime = world.lifetime(target);
-        let replacement = u64::MAX;
-        let spawn = WorldCommand::Spawn {
-            object: entity(replacement, None, &[]).object,
-        };
         let remove = WorldCommand::Remove { id: target };
         let duplicate = WorldCommand::Spawn {
             object: entity(1, None, &[]).object,
@@ -1015,13 +1011,36 @@ mod tests {
             Some(&serde_json::Value::Null)
         );
 
-        // Keep the child by reparenting it, so there is exactly one slot to recycle.
+        // Keep the child so that the target is the first slot released.
         let mut child_dto = world.entity(child).unwrap();
         child_dto.object.parent = None;
         world.upsert_entity(child_dto).unwrap();
-        world.apply_commands(&[remove, spawn]).unwrap();
+
+        // Bevy 0.20 publishes freed slots in groups of 128. Fill the group
+        // through ordinary spawns and removals, then spawn enough to reuse it.
+        const RECYCLE_BATCH: u64 = 128;
+        let fillers = 2..=1 + RECYCLE_BATCH;
+        let spawns = |ids: std::ops::RangeInclusive<u64>| {
+            ids.map(|id| WorldCommand::Spawn {
+                object: entity(id, None, &[]).object,
+            })
+            .collect::<Vec<_>>()
+        };
+        world.apply_commands(&spawns(fillers.clone())).unwrap();
+        world.apply_commands(&[remove]).unwrap();
+        world
+            .apply_commands(
+                &fillers
+                    .map(|id| WorldCommand::Remove { id })
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        let mut replacements = (u64::MAX - (RECYCLE_BATCH - 1))..=u64::MAX;
+        world.apply_commands(&spawns(replacements.clone())).unwrap();
+        let replacement = replacements
+            .find(|id| world.index[id].index() == handle.index())
+            .expect("A new stable ID should reuse the deleted target's Bevy slot");
         let new_handle = world.index[&replacement];
-        assert_eq!(handle.index(), new_handle.index());
         assert_ne!(handle.generation(), new_handle.generation());
         assert!(world.world.get::<StableId>(handle).is_none());
         assert!(!world.contains(target));
