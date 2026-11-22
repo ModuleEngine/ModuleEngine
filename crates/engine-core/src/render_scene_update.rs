@@ -62,6 +62,16 @@ impl RenderScene {
     }
 
     pub fn apply(&mut self, update: SceneUpdate<'_>) -> Result<(), String> {
+        self.apply_with_edits(update, |_| {})
+    }
+
+    /// Reports in-place model-only edits in draw order. The caller handles
+    /// resets and edits that can change geometry, materials or draw order.
+    pub fn apply_with_edits(
+        &mut self,
+        update: SceneUpdate<'_>,
+        mut report_moved: impl FnMut(std::ops::Range<usize>),
+    ) -> Result<(), String> {
         match update {
             SceneUpdate::Reset { revision, snapshot } => {
                 self.scene = snapshot;
@@ -76,10 +86,23 @@ impl RenderScene {
                 if self.revision != Some(base) {
                     return Err("Retained render scene has a different base revision".into());
                 }
+                let mut next_group = 0;
                 for change in changes {
-                    let start = self.scene.items.partition_point(|item| item.id < change.id);
+                    let items = &self.scene.items;
+                    let start = if items
+                        .get(next_group)
+                        .is_some_and(|item| item.id == change.id)
+                    {
+                        next_group
+                    } else {
+                        items.partition_point(|item| item.id < change.id)
+                    };
                     let end = start
-                        + self.scene.items[start..].partition_point(|item| item.id == change.id);
+                        + items[start..]
+                            .iter()
+                            .take_while(|item| item.id == change.id)
+                            .count();
+                    next_group = end;
                     match change.kind {
                         SceneChangeKind::Edited {
                             moved,
@@ -87,6 +110,9 @@ impl RenderScene {
                             mesh_changed,
                         } => {
                             debug_assert_eq!(end - start, change.items.len());
+                            if moved && !material_changed && !mesh_changed {
+                                report_moved(start..end);
+                            }
                             for (item, next) in
                                 self.scene.items[start..end].iter_mut().zip(change.items)
                             {
@@ -106,6 +132,7 @@ impl RenderScene {
                             self.scene
                                 .items
                                 .splice(start..end, change.items.iter().cloned());
+                            next_group = start + change.items.len();
                         }
                     }
                 }

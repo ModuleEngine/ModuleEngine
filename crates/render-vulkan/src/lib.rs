@@ -33,8 +33,8 @@ pub use module_engine_core::RendererPerformance;
 use presentation::instance;
 pub use retirement::{ProducerRetirementReport, finish_producer_retirements};
 pub use vulkan::{
-    FrameWork, RenderGraphValidator, VertexAllocation, VulkanRenderer, validate_overrides,
-    validate_overrides_at,
+    FrameWork, RenderGraphValidator, ResidentScene, SceneInput, VertexAllocation, VulkanRenderer,
+    validate_overrides, validate_overrides_at,
 };
 
 mod error {
@@ -191,6 +191,8 @@ mod error {
         Overrides(String),
         #[error("{0}")]
         Resource(String),
+        #[error("GPU scene mesh pool exceeds the device storage buffer range")]
+        SceneBufferLimit,
         #[error("{0}")]
         Presentation(String),
         #[error("GPU viewport must be nonzero, <=8192 per axis and <=16M pixels")]

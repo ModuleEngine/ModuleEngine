@@ -4,6 +4,13 @@
 
 [English](current-status.md) | [Русский](ru/current-status.md) | [Documentation](README.md)
 
+**22 November 2026 — R2.3 keeps the accepted ECS scene in Vulkan buffers.**
+On eligible devices stock geometry shares a GPU mesh pool and updates the
+instance and material rows from GameHost's retained scene. The internal
+vertex shader applies transforms. Custom scene shaders retain their
+published vertex interface. See the [device and lifetime contract](hardware-tiers.md#r23-scene)
+and [S3 measurements and boundaries](bench.md#r23-scene-checks).
+
 **22 November 2026 — R1.7 routes live gameplay reads through Core ECS.**
 Crate Garden, Puzzle and ARPG read selected values by stable ID. GameHost
 projects the current tick's world into the existing Rust IPC packet. The

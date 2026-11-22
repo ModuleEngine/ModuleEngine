@@ -1,8 +1,7 @@
 //! S3 render-extraction acceptance through GameSession and GameHost.
 use super::*;
 
-#[path = "../../../examples/bench/s3_ecs.rs"]
-mod s3;
+use crate::s3;
 
 const W: usize = 192;
 const H: usize = 108;
@@ -15,7 +14,7 @@ struct Motion;
 impl ExecutableSystem for Motion {
     fn step(&mut self, ctx: &mut SystemContext<'_>, _: &mut Value) -> Result<(), String> {
         if ctx.input.pressed("motion") {
-            s3::tick(&mut ctx.game.world, ctx.game.tick as usize);
+            s3::tick(&mut ctx.game.world, ctx.game.tick as usize, None);
         }
         if ctx.input.pressed("schema") {
             ctx.game
@@ -62,6 +61,10 @@ struct Receiver {
 impl FrameRenderer for Receiver {
     fn backend_name(&self) -> &str {
         self.inner.backend_name()
+    }
+
+    fn performance(&self) -> RendererPerformance {
+        self.inner.performance()
     }
 
     fn scene_sync(&self) -> SceneSync {
@@ -351,8 +354,30 @@ fn s3_retained_scene(native: bool) {
     let initial = host.try_render_interpolated(W, H, 1.).unwrap().unwrap();
     assert_eq!(packet(&trace), Packet::Reset(11_000));
     assert!(initial.frame.is_valid());
+    let initial_uploads = host.renderer_performance();
+    if native {
+        // One shared cube (8 vertices with position/UV and 36 indices).
+        assert_eq!(initial_uploads.mesh_upload_bytes, 8 * 20 + 36 * 4);
+        assert_eq!(initial_uploads.instance_upload_bytes, 11_000 * 64);
+        assert_eq!(initial_uploads.material_row_upload_bytes, 11_000 * 20 + 4);
+    }
     assert_eq!(step(&mut host, &["motion"]).unwrap(), 1);
     let moved = host.try_render_interpolated(W, H, 1.).unwrap().unwrap();
+    let moved_uploads = host.renderer_performance();
+    if native {
+        assert_eq!(
+            moved_uploads.mesh_upload_bytes,
+            initial_uploads.mesh_upload_bytes
+        );
+        assert_eq!(
+            moved_uploads.instance_upload_bytes - initial_uploads.instance_upload_bytes,
+            1_000 * 64
+        );
+        assert_eq!(
+            moved_uploads.material_row_upload_bytes,
+            initial_uploads.material_row_upload_bytes
+        );
+    }
     let expected = (1..=s3::MOVING as u64)
         .map(|id| (id, edit(true, false)))
         .collect();
@@ -366,6 +391,25 @@ fn s3_retained_scene(native: bool) {
     assert!(trace.lock().unwrap().packets.is_empty());
     let repeated = host.render(W, H).unwrap();
     assert_eq!(packet(&trace), Packet::Delta(vec![]));
+    if native {
+        let repeat = host.renderer_performance();
+        assert_eq!(repeat.mesh_upload_bytes, moved_uploads.mesh_upload_bytes);
+        assert_eq!(
+            repeat.instance_upload_bytes,
+            moved_uploads.instance_upload_bytes
+        );
+        assert_eq!(
+            repeat.material_row_upload_bytes,
+            moved_uploads.material_row_upload_bytes
+        );
+        println!(
+            "Host Vulkan S3 GPU scene bytes: initial mesh={} instance={} material={}; moved mesh=0 instance={} material=0; repeat all=0",
+            initial_uploads.mesh_upload_bytes,
+            initial_uploads.instance_upload_bytes,
+            initial_uploads.material_row_upload_bytes,
+            moved_uploads.instance_upload_bytes - initial_uploads.instance_upload_bytes,
+        );
+    }
     assert_eq!(repeated.rgba, moved.frame.rgba);
     println!(
         "S3 {}: initialized=11000, moved=1000 (exact IDs 1..=1000), stationary=10000, repeat_delta=0, rgba_sha256={}, extract_ms={:?}",
@@ -396,6 +440,19 @@ fn s3_retained_scene(native: bool) {
         material.frame.rgba,
         reference_frame(&mut host, native, &trace).rgba
     );
+
+    if native {
+        let uploads = host.renderer_performance();
+        assert_eq!(uploads.mesh_upload_bytes, moved_uploads.mesh_upload_bytes);
+        assert_eq!(
+            uploads.instance_upload_bytes,
+            moved_uploads.instance_upload_bytes
+        );
+        assert_eq!(
+            uploads.material_row_upload_bytes - moved_uploads.material_row_upload_bytes,
+            16
+        );
+    }
 
     let spawned = WorldObject {
         id: NEW_ID,
@@ -456,6 +513,17 @@ fn retained_s3_vulkan() {
 
 #[test]
 fn retained_hierarchy_rollback_interpolation_and_scene_switch() {
+    hierarchy_rollback_interpolation_and_scene_switch(false);
+}
+
+#[test]
+#[ignore = "requires native Vulkan and DXC"]
+fn retained_vulkan_hierarchy_rollback_interpolation_and_scene_switch() {
+    module_engine_vulkan::requires_capabilities!(Vulkan, Dxc);
+    hierarchy_rollback_interpolation_and_scene_switch(true);
+}
+
+fn hierarchy_rollback_interpolation_and_scene_switch(native: bool) {
     let objects = [None, Some(1), None]
         .into_iter()
         .enumerate()
@@ -470,7 +538,7 @@ fn retained_hierarchy_rollback_interpolation_and_scene_switch() {
             })
         })
         .collect();
-    let (mut host, trace, _temp) = fixture(false, objects);
+    let (mut host, trace, _temp) = fixture(native, objects);
     host.render_presented_for(7, W, H).unwrap().unwrap();
     assert_eq!(packet(&trace), Packet::Reset(3));
     host.render_presented_for(8, W, H).unwrap().unwrap();
@@ -483,18 +551,36 @@ fn retained_hierarchy_rollback_interpolation_and_scene_switch() {
             packet(&trace),
             Packet::Delta(vec![(1, edit(true, false)), (2, edit(true, false))])
         );
-        let trace = trace.lock().unwrap();
-        let items = &trace.snapshot.as_ref().unwrap().items;
-        assert_eq!(items[0].model[0][3], (2. * alpha) as f32);
-        assert_eq!(items[1].model[0][3], (1. + 2. * alpha) as f32);
-        assert_eq!(items[2].model[0][3], 2.);
+        if !native {
+            let trace = trace.lock().unwrap();
+            let items = &trace.snapshot.as_ref().unwrap().items;
+            assert_eq!(items[0].model[0][3], (2. * alpha) as f32);
+            assert_eq!(items[1].model[0][3], (1. + 2. * alpha) as f32);
+            assert_eq!(items[2].model[0][3], 2.);
+        }
     }
     let accepted = host.session.state().clone();
+    let uploads_before_rejection = host.renderer_performance();
     assert!(step(&mut host, &["parent", "reject"]).is_err());
     assert_eq!(host.session.state(), &accepted);
     assert!(host.try_render_interpolated(W, H, 1.).unwrap().is_none());
     host.render(W, H).unwrap();
     assert_eq!(packet(&trace), Packet::Delta(vec![]));
+    if native {
+        let uploads = host.renderer_performance();
+        assert_eq!(
+            uploads.mesh_upload_bytes,
+            uploads_before_rejection.mesh_upload_bytes
+        );
+        assert_eq!(
+            uploads.instance_upload_bytes,
+            uploads_before_rejection.instance_upload_bytes
+        );
+        assert_eq!(
+            uploads.material_row_upload_bytes,
+            uploads_before_rejection.material_row_upload_bytes
+        );
+    }
     host.session.transition("successor").unwrap();
     let successor = host.try_render_interpolated(W, H, 0.5).unwrap().unwrap();
     assert_eq!(
@@ -512,6 +598,6 @@ fn retained_hierarchy_rollback_interpolation_and_scene_switch() {
     );
     assert_eq!(
         successor.frame.rgba,
-        reference_frame(&mut host, false, &trace).rgba
+        reference_frame(&mut host, native, &trace).rgba
     );
 }

@@ -15,6 +15,7 @@ pub struct DeviceCapabilities {
     pub timeline_semaphore: bool,
     pub synchronization2: bool,
     pub bindless_materials: bool,
+    pub resident_scene: bool,
     pub max_material_anisotropy: f32,
     pub graphics_family: u32,
     pub dedicated_transfer_family: Option<u32>,
@@ -59,7 +60,8 @@ impl DeviceCapabilities {
             features = features.push_next(&mut ray_pipeline);
         }
         unsafe { instance.get_physical_device_features2(physical, &mut features) };
-        let sampler_anisotropy = features.features.sampler_anisotropy != 0;
+        let core = features.features;
+        let sampler_anisotropy = core.sampler_anisotropy != 0;
         if core13.dynamic_rendering == 0 {
             return None;
         }
@@ -103,6 +105,11 @@ impl DeviceCapabilities {
             timeline_semaphore: core12.timeline_semaphore != 0,
             synchronization2,
             bindless_materials,
+            resident_scene: bindless_materials
+                && core.multi_draw_indirect != 0
+                && core.draw_indirect_first_instance != 0
+                && limits.max_per_stage_descriptor_storage_buffers >= 4
+                && limits.max_descriptor_set_storage_buffers >= 5,
             max_material_anisotropy: if bindless_materials {
                 limits.max_sampler_anisotropy.min(16.0)
             } else {
