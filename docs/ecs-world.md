@@ -25,11 +25,11 @@ for id in world.entities_with(&["example.spin"]) {
 
 `entities_with` intersects component columns, starting with the smallest column,
 and returns stable ID order. An empty requirement selects every entity. Dynamic
-values remain JSON described by registered component schemas. R1.4 covers
-transactions, and R1.5 covers the scheduler.
+values remain JSON described by registered component schemas. R1.5 covers
+the scheduler.
 
 `component_mut`, `insert_component`, `remove_component`, `transform_mut` and
-`references_mut` edit the canonical world. A native system may stage intermediate
+`references_mut` edit the tick's view of the canonical world. A native system may stage intermediate
 values, but the whole tick must pass structural, reference and active schema
 validation before publication. `upsert_entity` replaces a complete boundary DTO
 without beginning a new object lifetime; its references are checked at the
@@ -50,10 +50,10 @@ a different generation, and a reference to the deleted ID stays unresolved.
 Ordinary updates retain the existing row and lifetime. A rejected structural
 change leaves the rows and index in their previous state.
 
-After each successful batch that despawns rows, Core advances Bevy's removed
-component message buffers once. The private world keeps the latest batch of
-messages and reuses the buffers across batches. Both portable commands and
-`clear()` use this boundary.
+When a publication despawns rows, Core advances Bevy's removed component
+message buffers once. The private world keeps the latest publication's messages
+and reuses the buffers. This applies to a fixed tick and to portable commands
+and `clear()` issued outside a tick.
 
 `lifetime(id)` identifies the current runtime incarnation separately from the
 saved ID. Cloning a checkpoint preserves it; spawning, rebuilding from a DTO or
@@ -69,10 +69,31 @@ transient records cannot safely use its saved ID alone. Captured combat visuals
 retain their original role/style, and target queries or hit flashes do not bind
 an earlier action to a replacement entity.
 
-The executor checkpoints the complete world together with portable system state,
-resources and events. Custom Rust receives an IPC DTO and returns commands; those
-commands apply to an ECS candidate before the renderer controls and worker state
-are committed. Failed candidates retain the previously accepted state.
+The executor holds the last accepted Bevy rows and JSON columns read-only
+during a fixed tick. The first mutable access to an entity stages its row in
+a journal. Queries see the staged rows, new lifetimes and removals immediately
+in authored system order. A portable command buffer validates as a batch
+before its writes join the journal. Custom Rust still receives a world IPC DTO.
+Its world buffer joins the journal only after its other outputs pass staging.
+
+On success, the executor validates the candidate, publishes any compatibility
+provider commands, runs system commit hooks, and applies the journal to the
+canonical ECS. On error, it discards the journal and restores the portable
+system state, resources, events and session metadata. Existing rollback hooks
+restore external targets, including published Rust worker state and renderer
+controls. A retry starts from the last accepted tick.
+
+An unchanged ECS world with no populated active semantic validators needs no
+world traversal for the transaction.
+Ordinary writes validate only touched objects and named references. Topology
+changes or wholesale world replacement can still require a full structural and
+reference check. A dirty world with active schema components still runs full
+schema validation when those components are present, including cross-object
+references. Source semantic validators for populated active components also
+run on unchanged worlds because they can consult external state.
+The compatibility provider projection, Custom Rust IPC snapshot and rendered
+`GameHost::step` presentation snapshots can still traverse the world. Explicit
+clones for lifecycle scratch state and scene operations retain their semantics.
 
 The default ECS session has no secondary provider. Object and explicitly
 registered third-party worlds remain compatibility projections of portable object
@@ -89,6 +110,46 @@ targets before returning a world. Authored scene files, prefab instances and
 sealed Player data keep their existing formats. GameHost sends IDs, parents
 and, where present, [named references](custom-rust.md#named-object-references)
 through Rust IPC as exact `u64` values. The portable data omits Bevy handles.
+
+<a id="r14-verification"></a>
+
+## R1.4 verification
+
+```sh
+cargo test --offline --locked --release -p module-engine-host --lib r14_tick_rejection -- --test-threads=1
+cargo test --offline --locked --release -p module-engine-host --lib r14_s3_tick_cost -- --ignored --nocapture --test-threads=1
+```
+
+The rejection test runs an accepted tick, then a failing tick in which a later
+system reads earlier writes, replaces a subtree root, and returns an error.
+It checks the accepted world and lifetime tokens, state, resources and events,
+then retries the tick without adding time. The Host's compiled Rust tests cover
+rollback of worker state and render controls and publication of committed events.
+
+The timing probe runs the authored schedule in `GameHost` with the neutral CPU
+renderer and canonical `world.ecs`. It reuses S3's IDs, transforms and eight ECS
+payloads at 200, 2,000 and 10,000 entities. After 30 warmup ticks, it measures
+240 ticks with either zero writes or one transform and one component write to
+the same ID per tick. Each cell is the median of three sequential Release runs
+on an AMD Ryzen 9 3900X, Windows x86-64, Rust 1.99.0. The baseline is
+`d7389ca2d75835a50d3831effa2c99d7808ec074` with the same probe.
+
+| Entities | Writes | Fixed tick before, mean / p95 (µs) | Fixed tick after (µs) | `GameHost::step` before (µs) | `GameHost::step` after (µs) |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 200 | 0 | 1532.570 / 1662.100 | 0.725 / 1.100 | 1935.508 / 2128.100 | 185.601 / 227.700 |
+| 200 | 2 | 1066.685 / 1499.800 | 4.718 / 6.700 | 1378.088 / 1883.100 | 205.183 / 270.900 |
+| 2,000 | 0 | 17251.587 / 20035.200 | 2.444 / 4.700 | 22155.184 / 25306.400 | 2532.485 / 2857.100 |
+| 2,000 | 2 | 16784.722 / 19349.800 | 10.377 / 18.400 | 21450.796 / 24151.400 | 2507.962 / 2933.800 |
+| 10,000 | 0 | 103857.167 / 111397.400 | 7.211 / 8.700 | 130191.694 / 139514.300 | 14924.768 / 15766.500 |
+| 10,000 | 2 | 104344.325 / 110555.400 | 23.097 / 25.500 | 130599.360 / 138174.800 | 14862.513 / 15799.200 |
+
+The inner timer includes the transaction, schedule, and the probe's single
+system. The empty case leaves the world journal empty, uses a shared checkpoint,
+and skips unchanged world validation. The two-write case stages one row and
+validates and installs that row, with stable-ID lookups. The outer timer also
+includes before/after presentation extraction and identity capture, which still
+scale with world size. This is CPU simulation evidence. Native Vulkan frame
+timing and the R1.8 S3 budget have separate acceptance routes.
 
 <a id="r13-verification"></a>
 

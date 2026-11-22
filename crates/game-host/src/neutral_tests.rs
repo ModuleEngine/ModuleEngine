@@ -23,6 +23,92 @@ use std::{
 const WAIT: Duration = Duration::from_secs(10);
 const DT: f64 = 1. / 60.;
 
+#[allow(dead_code)]
+#[cfg(not(debug_assertions))]
+#[path = "../../../examples/bench/s3_ecs.rs"]
+mod s3;
+
+#[test]
+#[cfg(not(debug_assertions))]
+#[ignore = "Release timing probe, run without competing tests or builds"]
+fn r14_s3_tick_cost() {
+    struct Probe(bool);
+    impl ExecutableSystem for Probe {
+        fn initialize(&mut self, ctx: &mut SystemContext<'_>, _: &mut Value) -> Result<(), String> {
+            let world = &mut ctx.game.world;
+            for id in world.entity_ids().collect::<Vec<_>>() {
+                for (name, value) in s3::entity(world.object(id).unwrap()).components {
+                    world.insert_component(id, name, value)?;
+                }
+            }
+            Ok(())
+        }
+
+        fn step(&mut self, ctx: &mut SystemContext<'_>, _: &mut Value) -> Result<(), String> {
+            if self.0 {
+                ctx.game.world.transform_mut(1).unwrap().translation[1] += 1.;
+                ctx.game.world.component_mut(1, s3::COMPONENTS[0]).unwrap()["offset"] =
+                    json!(ctx.game.tick);
+            }
+            Ok(())
+        }
+    }
+
+    for count in [s3::ENTITIES / 10, s3::ENTITIES, s3::ENTITIES * 5] {
+        for writes in [false, true] {
+            let mut fixture = Fixture::new(false);
+            fixture
+                .composition
+                .systems
+                .bind_factory("fixture.step", move |_| Ok(Box::new(Probe(writes))))
+                .unwrap();
+            fixture
+                .document
+                .game
+                .as_mut()
+                .unwrap()
+                .scenes
+                .get_mut("empty")
+                .unwrap()
+                .objects = (0..count)
+                .map(|index| AuthoredObject::new(s3::object(index)))
+                .collect();
+            let mut host = fixture.host();
+            host.set_frame_profiling(true);
+            let input = GameInput::default();
+            for _ in 0..30 {
+                assert_eq!(host.step(DT, &input).unwrap(), 1);
+                host.session.take_profiled_ticks_ms().unwrap();
+            }
+            let world = &host.session.state().world;
+            assert_eq!(world.len(), count);
+            assert_eq!(world.entities_with(&s3::COMPONENTS).len(), count);
+            let mut host_us = Vec::new();
+            let mut session_us = Vec::new();
+            for _ in 0..240 {
+                let started = Instant::now();
+                assert_eq!(host.step(DT, &input).unwrap(), 1);
+                host_us.push(started.elapsed().as_secs_f64() * 1e6);
+                session_us.push(host.session.take_profiled_ticks_ms().unwrap() * 1000.);
+            }
+            let summarize = |mut samples: Vec<f64>| {
+                samples.sort_by(f64::total_cmp);
+                format!(
+                    "{:.3}/{:.3}",
+                    samples.iter().sum::<f64>() / samples.len() as f64,
+                    samples[227]
+                )
+            };
+            println!(
+                "{count:>5} entities, {} writes: fixed tick {} us, GameHost::step {} us (mean/p95)",
+                if writes { 2 } else { 0 },
+                summarize(session_us),
+                summarize(host_us),
+            );
+        }
+    }
+}
+
 /// A source-installed consumer whose factory cannot run on authored params.
 /// Its derived data must be rebuilt from the current scene by the normal Host.
 fn runtime_preparation_fixture(custom_world: bool) -> Fixture {
@@ -2001,6 +2087,161 @@ fn partial_fixed_step_failure_delivers_only_committed_events_once_to_services() 
     );
     assert_eq!(*seen.lock().unwrap(), expected);
 }
+
+#[test]
+fn r14_tick_rejection_discards_visible_writes_and_retry_starts_at_last_commit() {
+    struct Write;
+    impl ExecutableSystem for Write {
+        fn step(&mut self, ctx: &mut SystemContext<'_>, state: &mut Value) -> Result<(), String> {
+            let next = state.as_u64().unwrap_or(0) + 1;
+            ctx.apply_commands(&[WorldCommand::Translate {
+                id: 1,
+                delta: [1., 0., 0.],
+            }])?;
+            ctx.game.world.insert_component(
+                1,
+                "fixture.payload",
+                json!({"literal.key": next, "null": null}),
+            )?;
+            ctx.game.world.transform_mut(2).unwrap().translation[1] += 1.;
+            ctx.game
+                .world
+                .references_mut(1)
+                .unwrap()
+                .insert("child".into(), 2);
+            ctx.game
+                .module_data
+                .insert("fixture.tick".into(), json!(next));
+            ctx.set_resource("counter", json!(next))?;
+            ctx.events
+                .push(GameEvent::new("fixture.write", json!(next)));
+            *state = json!(next);
+            Ok(())
+        }
+    }
+
+    struct Observe(Arc<AtomicBool>);
+    impl ExecutableSystem for Observe {
+        fn step(&mut self, ctx: &mut SystemContext<'_>, _: &mut Value) -> Result<(), String> {
+            let next = ctx.game.tick + 1;
+            assert_eq!(ctx.resource("counter")?, &json!(next));
+            assert_eq!(
+                ctx.events.as_slice(),
+                [GameEvent::new("fixture.write", json!(next))]
+            );
+            assert_eq!(
+                ctx.game.world.object(1).unwrap().transform.translation[0],
+                next as f32
+            );
+            assert_eq!(
+                ctx.game.world.object(2).unwrap().transform.translation[1],
+                next as f32
+            );
+            assert_eq!(ctx.game.world.entities_with(&["fixture.payload"]), [1]);
+            assert_eq!(
+                ctx.game.world.component(1, "fixture.payload").unwrap()["literal.key"],
+                json!(next)
+            );
+            assert_eq!(ctx.game.world.references(1).unwrap()["child"], 2);
+            if self.0.load(Ordering::SeqCst) {
+                let replacement = ctx.game.world.object(1).unwrap();
+                ctx.apply_commands(&[
+                    WorldCommand::Remove { id: 1 },
+                    WorldCommand::Spawn {
+                        object: replacement,
+                    },
+                ])?;
+                assert_eq!(ctx.game.world.entity_ids().collect::<Vec<_>>(), [1]);
+                assert!(ctx.game.world.component(1, "fixture.payload").is_none());
+                return Err("late rejection".into());
+            }
+            Ok(())
+        }
+    }
+
+    let mut fixture = Fixture::new(false);
+    let reject = Arc::new(AtomicBool::new(false));
+    let descriptor = |id: &str, access| SystemDescriptor {
+        id: id.into(),
+        state_schema: format!("{id}/1"),
+        components: vec![],
+        ports: vec![SystemPort {
+            name: "counter".into(),
+            data_type: "Number".into(),
+            access,
+        }],
+        requires: vec![],
+    };
+    fixture
+        .composition
+        .systems
+        .register(descriptor("fixture.write", ResourceAccess::Write), |_| {
+            Ok(Box::new(Write))
+        })
+        .unwrap();
+    let captured = reject.clone();
+    fixture
+        .composition
+        .systems
+        .register(
+            descriptor("fixture.observe", ResourceAccess::Read),
+            move |_| Ok(Box::new(Observe(captured.clone()))),
+        )
+        .unwrap();
+    let graph = &mut fixture.document.game.as_mut().unwrap().execution;
+    graph.resources.push(SystemResource {
+        name: "counter".into(),
+        data_type: "Number".into(),
+        external: true,
+        initial: json!(0),
+    });
+    let first = &mut graph.stages[0].nodes[0];
+    first.module = "fixture.write".into();
+    first.bindings.insert("counter".into(), "counter".into());
+    let mut second = first.clone();
+    second.id = "observe".into();
+    second.module = "fixture.observe".into();
+    second.after = vec![first.id.clone()];
+    graph.stages[0].nodes.push(second);
+    fixture.composition = CompositionContext::new(
+        fixture.composition.modules.clone(),
+        fixture.composition.systems.clone(),
+    )
+    .unwrap();
+    approve_fixture(&fixture.composition, &mut fixture.document);
+
+    let mut host = fixture.host();
+    let input = GameInput::default();
+    assert_eq!(host.step(DT, &input).unwrap(), 1);
+    let accepted = host.session.state().clone();
+    let lifetimes = [1, 2].map(|id| accepted.world.lifetime(id));
+    assert_eq!(
+        host.session.events(),
+        [GameEvent::new("fixture.write", json!(1))]
+    );
+    reject.store(true, Ordering::SeqCst);
+    assert!(
+        host.step(DT, &input)
+            .unwrap_err()
+            .contains("late rejection")
+    );
+    assert_eq!(host.session.state(), &accepted);
+    assert_eq!(
+        [1, 2].map(|id| host.session.state().world.lifetime(id)),
+        lifetimes
+    );
+    assert_eq!(host.session.system_states()["step"], json!(1));
+    assert!(host.session.events().is_empty());
+    reject.store(false, Ordering::SeqCst);
+    assert_eq!(host.step(0., &input).unwrap(), 1);
+    assert_eq!(host.session.state().tick, 2);
+    assert_eq!(host.session.state().module_data["fixture.tick"], json!(2));
+    assert_eq!(
+        host.session.events(),
+        [GameEvent::new("fixture.write", json!(2))]
+    );
+}
+
 struct BootstrapService;
 
 #[test]

@@ -188,6 +188,12 @@ impl ComponentRegistry {
         }
         packet
     }
+    pub(crate) fn has_semantic_validator(&self, id: &str) -> bool {
+        self.entries
+            .get(id)
+            .is_some_and(|(_, validator)| validator.is_some())
+    }
+
     pub fn validate_entities(
         &self,
         entities: &[GameEntity],
