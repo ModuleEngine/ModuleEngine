@@ -6,14 +6,19 @@ from pathlib import PurePosixPath
 import re
 import subprocess
 
+import roadmap_map
 
-def select(paths):
+ROADMAPS = {roadmap_map.EN_PATH: "en", roadmap_map.RU_PATH: "ru"}
+ROUTES = ("native", "package", "roadmap_only")
+
+
+def select(paths, roadmap_only=False):
     # Only documentation-only changes omit the additional native/package routes.
     # Unknown/new source paths fail toward more coverage, not a missed subsystem.
-    relevant = any(not (path.startswith("docs/") or
-                        PurePosixPath(path).suffix.lower() == ".md" or
-                        path in {"LICENSE-MIT", "LICENSE-APACHE", ".gitignore"}) for path in paths)
-    return {"native": relevant, "package": relevant, "paths": paths}
+    relevant = not paths or any(not (path.startswith("docs/") or
+                                     PurePosixPath(path).suffix.lower() == ".md" or
+                                     path in {"LICENSE-MIT", "LICENSE-APACHE", ".gitignore"}) for path in paths)
+    return {"native": relevant, "package": relevant, "roadmap_only": roadmap_only, "paths": paths}
 
 
 def changed_paths(base, head="HEAD"):
@@ -27,11 +32,74 @@ def changed_paths(base, head="HEAD"):
                   for path in result.stdout.split(b"\0") if path)
 
 
-def check_gate(plan_result, checks_result, selected):
-    if plan_result != "success" or checks_result != "success":
-        raise ValueError("CI requires successful planning and both OS jobs; failure, skip or cancellation is not acceptance")
-    if set(selected) != {"native", "package"} or any(value not in {"true", "false"} for value in selected.values()):
+def status_edits(before, after):
+    """Return task IDs for a nonempty status-cell-only edit, or None."""
+    old_lines = before.splitlines(keepends=True)
+    new_lines = after.splitlines(keepends=True)
+    if len(old_lines) != len(new_lines):
+        return None
+    rows = {i: cells for i, _, cells in roadmap_map.task_rows(before)}
+    ids = [roadmap_map.plain(cells[0]) for cells in rows.values()]
+    if len(set(ids)) != len(ids):
+        return None
+    changed = set()
+    for i, (old, new) in enumerate(zip(old_lines, new_lines)):
+        if old == new:
+            continue
+        if i not in rows or len(rows[i]) != 4:
+            return None
+        # Keep every character outside the last cell, including line endings.
+        old_pipes = [m.start() for m in re.finditer(r"(?<!\\)\|", old)]
+        new_pipes = [m.start() for m in re.finditer(r"(?<!\\)\|", new)]
+        if len(old_pipes) != 5 or len(new_pipes) != 5:
+            return None
+        start, end = old_pipes[-2:]
+        new_start, new_end = new_pipes[-2:]
+        if (old[:start + 1] != new[:new_start + 1] or old[end:] != new[new_end:]
+                or roadmap_map.plain(old[start + 1:end]) == roadmap_map.plain(new[new_start + 1:new_end])):
+            return None
+        changed.add(roadmap_map.plain(rows[i][0]))
+    return changed or None
+
+
+def roadmap_status_only(before, after):
+    edits = [status_edits(before[path], after[path]) for path in ROADMAPS]
+    if not edits[0] or edits[0] != edits[1]:
+        return False
+    en, ru = [roadmap_map.parse(after[path], lang) for path, lang in ROADMAPS.items()]
+    return not roadmap_map.compare(en, ru)
+
+
+def read_roadmaps(commit):
+    result = subprocess.run(["git", "ls-tree", "-z", commit, "--", *ROADMAPS], check=True, capture_output=True)
+    marked = [entry.split(b"\t", 1) for entry in result.stdout.split(b"\0") if entry]
+    if len(marked) != len(ROADMAPS) or any(not meta.startswith(b"100644 blob ") for meta, _ in marked):
+        return None
+    return {path.decode("utf-8"): subprocess.run(["git", "cat-file", "blob", meta.split()[-1].decode("ascii")],
+                                               check=True, capture_output=True).stdout.decode("utf-8")
+            for meta, path in marked}
+
+
+def plan(base, head="HEAD"):
+    paths = changed_paths(base, head)
+    if set(paths) != ROADMAPS.keys():
+        return select(paths)
+    before, after = read_roadmaps(base), read_roadmaps(head)
+    if not before or not after:
+        return select(paths)
+    return select(paths, roadmap_only=roadmap_status_only(before, after))
+
+
+def check_gate(plan_result, checks_result, roadmap_result, selected):
+    if plan_result != "success":
+        raise ValueError("CI requires successful route selection")
+    if set(selected) != set(ROUTES) or any(value not in {"true", "false"} for value in selected.values()):
         raise ValueError("Missing or invalid route selection")
+    if selected["roadmap_only"] == "true":
+        if (selected["native"], selected["package"], checks_result, roadmap_result) != ("false", "false", "skipped", "success"):
+            raise ValueError("Status-only CI requires successful roadmap checks and a skipped OS matrix")
+    elif (checks_result, roadmap_result) != ("success", "skipped"):
+        raise ValueError("Ordinary CI requires success from both OS jobs and skips the status-only job")
 
 
 def main():
@@ -40,16 +108,17 @@ def main():
     parser.add_argument("--gate", action="store_true")
     args = parser.parse_args()
     if args.gate:
-        selected = {key: os.environ.get("CI_" + key.upper(), "") for key in ("native", "package")}
-        check_gate(os.environ.get("CI_PLAN_RESULT"), os.environ.get("CI_CHECKS_RESULT"), selected)
+        selected = {key: os.environ.get("CI_" + key.upper(), "") for key in ROUTES}
+        check_gate(os.environ.get("CI_PLAN_RESULT"), os.environ.get("CI_CHECKS_RESULT"),
+                   os.environ.get("CI_ROADMAP_RESULT"), selected)
         print("CI required passed; route selection: " + json.dumps(selected))
         return
-    selected = select(changed_paths(args.base))
+    selected = plan(args.base)
     print(json.dumps(selected, ensure_ascii=True, indent=2))
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
         with open(output, "a", encoding="utf-8") as stream:
-            for key in ("native", "package"):
+            for key in ROUTES:
                 stream.write(key + "=" + str(selected[key]).lower() + "\n")
 
 
