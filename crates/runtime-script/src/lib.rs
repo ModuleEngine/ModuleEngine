@@ -1079,7 +1079,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {{
         {invoke}
         if context.commands.len() > 4096 || context.emitted_events.len() > 4096 || context.setting_requests.len() > 128 {{ return Err("too many commands/events/settings".into()); }}
         module_engine_core::validate_script_ui(&context.script_ui)?;
-        let packet = serde_json::json!({{"request_id":request_id,"sdk":SdkIdentity::current(),"commands":context.commands,"setting_requests":context.setting_requests,"script_ui":context.script_ui,"speed":speed,"state":context.state,"events":context.emitted_events}});
+        let packet = match serde_json::to_value(context.commands) {{
+            Ok(commands) => {{
+                let mut packet = serde_json::json!({{"request_id":request_id,"sdk":SdkIdentity::current(),"setting_requests":context.setting_requests,"script_ui":context.script_ui,"speed":speed,"state":context.state,"events":context.emitted_events}});
+                packet["commands"] = commands;
+                packet
+            }}
+            Err(error) => serde_json::json!({{"request_id":request_id,"sdk":SdkIdentity::current(),"error":error.to_string()}}),
+        }};
         let output = serde_json::to_string(&packet)?;
         if output.len() > 1048576 {{ return Err("output too large".into()); }}
         println!("\n{PACKET_MARKER}{{}}", output);
@@ -2116,6 +2123,11 @@ fn update(ctx: &mut ScriptContext) {
     ctx.state["asset"] = serde_json::json!(std::fs::read_to_string("assets/marker.txt").unwrap_or_default());
     let id = if ctx.input["reject"].as_bool().unwrap_or(false) { 999999 } else { 1 };
     ctx.set_position(id, [count as f32, 0.0, 0.0]);
+    if ctx.input["bad_transform"].as_bool().unwrap_or(false) {
+        let mut transform = ctx.object(1).unwrap().transform;
+        transform.scale[0] = f32::INFINITY;
+        ctx.set_transform(1, transform);
+    }
     ctx.emit_event(serde_json::json!({"Custom":{"name":"counter","payload":count}}));
 }
 "#;
@@ -2239,6 +2251,32 @@ fn update(ctx: &mut ScriptContext) {
         ));
         assert_eq!(active.state().unwrap()["count"], 2);
         assert!(active.worker_process_id().unwrap().is_none());
+
+        let mut invalid_context = context.clone();
+        invalid_context.input["bad_transform"] = serde_json::json!(true);
+        let error = active
+            .tick(&invalid_context, Duration::from_secs(2))
+            .unwrap_err();
+        assert!(
+            matches!(&error, ScriptError::Packet(message) if message == "Transform must be finite"),
+            "{error}"
+        );
+        assert!(active.worker_process_id().unwrap().is_none());
+        assert_eq!(active.state().unwrap()["count"], 2);
+
+        invalid_context = context.clone();
+        invalid_context.objects[0].transform.translation[0] = f32::NAN;
+        let error = active
+            .tick(&invalid_context, Duration::from_secs(2))
+            .unwrap_err();
+        assert!(
+            matches!(&error, ScriptError::Packet(message) if message == "Transform must be finite"),
+            "{error}"
+        );
+        assert!(active.worker_process_id().unwrap().is_none());
+        assert_eq!(active.state().unwrap()["count"], 2);
+        let retry = active.tick(&context, Duration::from_secs(2)).unwrap();
+        assert_eq!(retry.state["count"], 3);
 
         let export = work.join("export/scripts/counter");
         let manifest = candidate.export_precompiled(&export).unwrap();

@@ -363,6 +363,8 @@ struct RustSystem {
     pending: Option<ScriptTick>,
     checkpoint: Option<(Value, RenderOverrides, PlayerSettingsState)>,
     input_contributions: Vec<GameContribution>,
+    components: ComponentRegistry,
+    active_components: BTreeSet<String>,
 }
 impl ExecutableSystem for RustSystem {
     fn initialize(
@@ -389,9 +391,12 @@ impl ExecutableSystem for RustSystem {
             .lock()
             .map_err(|_| "Game configuration poisoned")?
             .clone();
-        let entities = ctx.game.world.entities_snapshot();
-        let objects: Vec<_> = entities.iter().map(|e| e.object.clone()).collect();
-        let mut input = ScriptContext::new(ctx.game.time, ctx.dt as f64, objects);
+        let mut input = self.components.script_context(
+            ctx.game.time,
+            ctx.dt as f64,
+            ctx.game.world.entities_snapshot(),
+            &self.active_components,
+        );
         input.asset_paths =
             module_engine_project::AssetManifest::from_value(&document.asset_manifest)?
                 .asset_paths();
@@ -427,22 +432,6 @@ impl ExecutableSystem for RustSystem {
             .map(|e| serde_json::to_value(e).unwrap_or(Value::Null))
             .collect();
         input.parameters = module_engine_core::resolved_parameters(&document);
-        for entity in entities {
-            let id = entity.object.id;
-            if !entity.references.is_empty() {
-                input.references.insert(id, entity.references);
-            }
-            for (name, value) in entity.components {
-                if let Value::Object(fields) = value {
-                    input
-                        .properties
-                        .components
-                        .entry(id)
-                        .or_default()
-                        .insert(name, fields.into_iter().collect());
-                }
-            }
-        }
         let script = self
             .slot
             .lock()
@@ -602,6 +591,10 @@ pub fn bind_game_registry(
     slots: &BTreeMap<String, ScriptSlot>,
     overrides: Arc<Mutex<RenderOverrides>>,
 ) -> Result<SystemRegistry, String> {
+    let activity = {
+        let document = document.lock().map_err(|_| "Game configuration poisoned")?;
+        composition.activity(&document)?
+    };
     bind_game_registry_with_settings(
         document,
         root,
@@ -609,6 +602,7 @@ pub fn bind_game_registry(
         slots,
         overrides,
         Arc::default(),
+        &activity.components,
     )
 }
 fn bind_game_registry_with_settings(
@@ -618,6 +612,7 @@ fn bind_game_registry_with_settings(
     slots: &BTreeMap<String, ScriptSlot>,
     overrides: Arc<Mutex<RenderOverrides>>,
     settings: Arc<Mutex<PlayerSettingsState>>,
+    active_components: &BTreeSet<String>,
 ) -> Result<SystemRegistry, String> {
     let mut registry = composition.systems.clone();
     if registry.descriptor("custom.rust.update").is_none() {
@@ -628,6 +623,8 @@ fn bind_game_registry_with_settings(
     }
     let modules = composition.modules.clone();
     let input_contributions = registry.game_contributions().cloned().collect::<Vec<_>>();
+    let components = registry.components().clone();
+    let active_components = active_components.clone();
     let slots = slots.clone();
     let root = root.to_path_buf();
 
@@ -655,6 +652,8 @@ fn bind_game_registry_with_settings(
             pending: None,
             checkpoint: None,
             input_contributions: input_contributions.clone(),
+            components: components.clone(),
+            active_components: active_components.clone(),
         }))
     })?;
     Ok(registry)
@@ -1120,6 +1119,7 @@ impl GameHost {
         let overrides = Arc::new(Mutex::new(RenderOverrides::default()));
         let player_settings = Arc::new(Mutex::new(PlayerSettingsState::default()));
         let live_document = Arc::new(Mutex::new(document.clone()));
+        let activity = composition.activity(&document)?;
         let registry = bind_game_registry_with_settings(
             live_document.clone(),
             &root,
@@ -1127,8 +1127,8 @@ impl GameHost {
             &slots,
             overrides.clone(),
             player_settings.clone(),
+            &activity.components,
         )?;
-        let activity = composition.activity(&document)?;
         let asset_paths =
             module_engine_project::AssetManifest::from_value(&document.asset_manifest)?
                 .asset_paths();
@@ -1397,6 +1397,7 @@ impl GameHost {
             &self.slots,
             self.overrides.clone(),
             self.player_settings.clone(),
+            &activity.components,
         )?;
         // System construction does not initialize or execute Custom. Existing
         // accepted code/state remain in the retained slots until explicit Play.

@@ -315,6 +315,9 @@ impl CompiledScript {
             .exchange(&context, &self.sdk_identity, timeout)
             .and_then(|value| {
                 validate_packet_sdk(&value, &self.sdk_identity)?;
+                if let Some(error) = value.get("error").and_then(Value::as_str) {
+                    return Err(ScriptError::Packet(error.to_owned()));
+                }
                 let commands = serde_json::from_value(
                     value
                         .get("commands")
@@ -635,10 +638,11 @@ impl Worker {
         timeout: Duration,
     ) -> Result<Value, ScriptError> {
         self.sequence = self.sequence.wrapping_add(1);
-        let mut bytes = serde_json::to_vec(
-            &serde_json::json!({"request_id":self.sequence,"sdk":sdk,"context":context}),
-        )
-        .map_err(|e| ScriptError::Packet(e.to_string()))?;
+        let mut packet = serde_json::json!({"request_id":self.sequence,"sdk":sdk});
+        packet["context"] = serde_json::to_value(context)
+            .map_err(|error| ScriptError::Packet(error.to_string()))?;
+        let mut bytes =
+            serde_json::to_vec(&packet).map_err(|error| ScriptError::Packet(error.to_string()))?;
         if bytes.len() > MAX_PACKET {
             return Err(ScriptError::Packet("input exceeds 1 MiB".into()));
         }

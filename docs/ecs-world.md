@@ -5,8 +5,10 @@
 `GameState.world: EcsWorld` owns mutable gameplay data. In R1.2 each native row
 has an immutable Bevy `StableId(u64)` component. A private ordered index maps
 the stable ID to a generation-checked `Entity`. Transform, parent, color,
-named references and demo motion live on that row. Schema component values
-remain in their existing JSON columns keyed by stable ID.
+named references and demo motion live on that row. `Transform` is a typed,
+reflected Bevy component with a portable codec in Core's
+[`ComponentRegistry`](component-schemas.md). Schema component values remain
+in their JSON columns keyed by stable ID.
 
 ## Module access
 
@@ -23,8 +25,8 @@ for id in world.entities_with(&["example.spin"]) {
 
 `entities_with` intersects component columns, starting with the smallest column,
 and returns stable ID order. An empty requirement selects every entity. Dynamic
-values remain JSON described by registered component schemas. R1.3 covers
-native codecs, and R1.5 covers the scheduler.
+values remain JSON described by registered component schemas. R1.4 covers
+transactions, and R1.5 covers the scheduler.
 
 `component_mut`, `insert_component`, `remove_component`, `transform_mut` and
 `references_mut` edit the canonical world. A native system may stage intermediate
@@ -87,6 +89,52 @@ targets before returning a world. Authored scene files, prefab instances and
 sealed Player data keep their existing formats. GameHost sends IDs, parents
 and, where present, [named references](custom-rust.md#named-object-references)
 through Rust IPC as exact `u64` values. The portable data omits Bevy handles.
+
+<a id="r13-verification"></a>
+
+## R1.3 verification
+
+Run these checks from a Full source checkout with the pinned toolchain and
+offline dependencies restored. Run the commands sequentially.
+
+```sh
+python scripts/verify.py --profile contracts --plan
+python scripts/verify.py --profile contracts
+cargo test --offline --locked -p module-engine-editor component_codec_corpus_roundtrips_through_editor_source_files -- --nocapture
+cargo test --offline --locked -p module-engine-editor inspector_noop_apply_respects_sparse_local_values_without_a_prefab
+cargo test --offline --locked -p module-engine-editor stable_ids_survive_authored_save_player_export_and_rust_ipc -- --ignored --nocapture
+```
+
+The corpus performs two fresh Editor source writes in separate temporary
+folders. It compares the parsed JSON, preserving numeric type, signed zero,
+object keys, member presence and array order. It also validates each game
+scene with the installed composition and checks the native ECS reconstruction
+against the resolved DTO. The mini-project with the compiled Rust probe checks
+values against independent literals, including a `u64::MAX` member, a literal
+dotted key, explicit null, absence, signed zero and the schema's effective axis.
+It also exercises rejection of null for an active numeric field during Save.
+A repeat Save tests a change solely from negative to positive zero in both
+the native Transform scene file and the schema JSON in the project file.
+
+The checked-in example JSONs are legacy graphs without authored scenes. The
+corpus compares their format-4 copies after the explicit migration decoder.
+The source files keep their bytes. JSON equality is checked between the two
+fresh writes of the accepted format-4 document. This leaves equality against the
+raw legacy input outside the comparison. The game cases cover Crate Garden
+`level01` through `level10`, the Two Arenas template and `game-project.json`
+after migration, both with `arena` and `boss`. The old SDK pin in
+`game-project-v4.json` retains its existing rejection. Two Arenas is the
+available technical baseline for G2. The completed G2 campaign is pending.
+
+For a manual Editor check on Windows, choose **File → New Project → Empty
+scene** in a separate folder. Add an object, set its **Position** X to
+`1.25`, then install the [Rotation example](component-schemas.md) in
+**Gameplay Systems**, bind its `world` port and choose **Apply graph draft**. Attach **Rotation** in
+Inspector and apply a speed of `4`. Choose **Create template from selected**.
+Click **Apply fields** on the instance with no edits, then change the
+template speed to `6` and use **Apply template defaults to instances**.
+The instance should inherit `6` and its **Advanced** JSON should keep
+an empty `overrides` map. Save and reopen, then Play to see the rotation.
 
 <a id="r12-verification"></a>
 

@@ -2280,7 +2280,7 @@ impl GameWorkbench {
                 let parents=game.scenes[&self.scene].objects.iter().filter(|object|object.object.id!=id).map(|object|object.object.id).collect::<Vec<_>>();
                 let object=game.scenes.get_mut(&self.scene).unwrap().objects.iter_mut().find(|object|object.object.id==id).unwrap();
                 let prefab=object.prefab.as_ref().and_then(|name|templates.get(name));
-                let draft_base=entity.components.iter().map(|(name,value)|(name.clone(),schemas.resolve_component(name,value))).collect();
+                let draft_base=entity.components.clone();
                 let draft_schemas=active.iter().filter_map(|name|schemas.schema(name).map(|schema|(name.clone(),serde_json::to_value(schema).unwrap()))).collect();
                 let raw=serde_json::to_string_pretty(&json!({"components":object.components,"overrides":object.overrides,"references":object.references})).unwrap_or_default();
                 self.inspector_drafts.activate((self.scene.clone(),id),draft_base,draft_schemas,raw,&mut self.component_drafts,&mut self.advanced);
@@ -2289,7 +2289,7 @@ impl GameWorkbench {
                     ui.small(object.prefab.as_deref().map_or("Local object".into(),|name|format!("Linked template: {name}")));
                     crate::app::editor_ui::section(ui,"Transform");
                     ui.scope(|ui|{ui.set_max_width(ui.available_width().min(720.));
-                        for(name,values)in[("Position",&mut object.object.transform.translation),("Rotation (radians)",&mut object.object.transform.rotation),("Scale",&mut object.object.transform.scale)]{
+                        for(name,values)in ComponentRegistry::TRANSFORM.fields_mut(&mut object.object.transform){
                             let narrow=ui.available_width()<360.;
                             if narrow {ui.label(name);}
                             ui.horizontal(|ui|{
@@ -2317,8 +2317,14 @@ impl GameWorkbench {
                         ui.horizontal_wrapped(|ui|{
                             let conflict=self.inspector_drafts.conflict(&name);
                             if conflict{ui.colored_label(Color32::LIGHT_RED,"Source changed. Discard this draft before editing the new version.");}
-                            if ui.add_enabled(!conflict,egui::Button::new("Apply fields")).clicked(){apply_component_with_defaults(object,prefab,&name,value,Some(&schema.defaults));let accepted=schemas.resolve_component(&name,&component_value(object,prefab,&name));self.inspector_drafts.accept(&name,Some(accepted),&mut self.component_drafts);}
-                            if ui.button("Discard fields").clicked(){let current=entity.components.get(&name).map(|v|schemas.resolve_component(&name,v));self.inspector_drafts.accept(&name,current,&mut self.component_drafts);}
+                            if ui.add_enabled(!conflict,egui::Button::new("Apply fields")).clicked()
+                                && self.inspector_drafts.changed(&name,&self.component_drafts)
+                            {
+                                apply_component_with_defaults(object,prefab,&name,value,Some(&schema.defaults));
+                                let accepted=schemas.resolve_component(&name,&component_value(object,prefab,&name));
+                                self.inspector_drafts.accept(&name,Some(accepted),&mut self.component_drafts);
+                            }
+                            if ui.button("Discard fields").clicked(){let current=entity.components.get(&name).cloned();self.inspector_drafts.accept(&name,current,&mut self.component_drafts);}
                             if prefab.is_some_and(|prefab|prefab.components.contains_key(&name)){
                                 if ui.button("Inherit defaults").clicked(){reset_component(object,prefab,&name);let accepted=schemas.resolve_component(&name,&component_value(object,prefab,&name));self.inspector_drafts.accept(&name,Some(accepted),&mut self.component_drafts);}
                             }else if ui.button("Remove component").clicked(){reset_component(object,prefab,&name);self.inspector_drafts.accept(&name,None,&mut self.component_drafts);}
@@ -2342,7 +2348,22 @@ impl GameWorkbench {
                 if let Some(name)=template_name&&let Some(template)=game.prefabs.get(&name){
                     if self.template_key.as_deref()!=Some(&name){self.template_draft=Some(template.clone());self.template_key=Some(name.clone());}
                     ui.collapsing(format!("Linked template source: {name}"),|ui|{ui.add_enabled_ui(!self.play_session,|ui|{
-                        if let Some(draft)=&mut self.template_draft{ui.color_edit_button_srgba_unmultiplied(&mut draft.color);let attached=draft.components.keys().cloned().collect::<BTreeSet<_>>();for(component,value)in&mut draft.components{if active.contains(component)&&let Some(schema)=schemas.schema(component){ui.push_id(format!("template-{component}"),|ui|{ui.collapsing(&schema.label,|ui|{*value=schemas.resolve_component(component,value);component_editor(ui,schema,value,&attached,&fields);});});}}}
+                        if let Some(draft)=&mut self.template_draft {
+                            ui.color_edit_button_srgba_unmultiplied(&mut draft.color);
+                            let attached=draft.components.keys().cloned().collect::<BTreeSet<_>>();
+                            for (component,value) in &mut draft.components {
+                                if active.contains(component) && let Some(schema)=schemas.schema(component) {
+                                    ui.push_id(format!("template-{component}"),|ui|{
+                                        ui.collapsing(&schema.label,|ui|{
+                                            let mut edited=schemas.resolve_component(component,value);
+                                            if component_editor(ui,schema,&mut edited,&attached,&fields) {
+                                                schemas.apply_component_edits(component,value,&edited);
+                                            }
+                                        });
+                                    });
+                                }
+                            }
+                        }
                         if ui.button("Apply template defaults to instances").clicked()&&let Some(draft)=&self.template_draft{game.prefabs.insert(name.clone(),draft.clone());}
                     });});
                 }
@@ -3133,7 +3154,8 @@ fn component_editor(
     component: &mut Value,
     attached: &BTreeSet<String>,
     context: &ComponentEditorContext<'_>,
-) {
+) -> bool {
+    let mut edited = false;
     if schema.fields.is_empty() {
         ui.label("Marker component (no fields)");
     }
@@ -3164,13 +3186,19 @@ fn component_editor(
                 &mut value,
             )
         });
-        if changed && let Err(error) = set_component_field(component, path, value.clone()) {
-            ui.colored_label(Color32::LIGHT_RED, error);
+        if changed {
+            match set_component_field(component, path, value.clone()) {
+                Ok(()) => edited = true,
+                Err(error) => {
+                    ui.colored_label(Color32::LIGHT_RED, error);
+                }
+            }
         }
         if let Err(error) = field.value_type.validate(&value) {
             ui.colored_label(Color32::LIGHT_RED, error);
         }
     }
+    edited
 }
 
 fn object_reference_choices(
@@ -3676,7 +3704,7 @@ fn apply_component_with_defaults(
     for (segments, edited_value) in edited {
         // Equality precedes ownership: unchanged inherited opaque data must not
         // become local merely because a longer component owns its dot namespace.
-        if defaults.get(&segments) == Some(&edited_value) {
+        if same_component_json(defaults.get(&segments), Some(&edited_value)) {
             continue;
         }
         if defaults.contains_key(&segments)
@@ -6085,14 +6113,20 @@ pub fn update(ctx: &mut ScriptContext) {
         );
         let archive = object.components["archive.unavailable"].clone();
         validate_inspector_fixture(&document, &composition, &profile);
-        let before = document
+        let mut before = document
             .game
             .as_ref()
             .unwrap()
             .resolve_scene_with_registry("empty", &composition.systems)
             .unwrap()
             .remove(0);
+        let authored = document.clone();
         click_inspector_apply(&mut document, &composition, "foo", |_| {});
+        assert_eq!(document, authored);
+        click_inspector_apply(&mut document, &composition, "foo", |draft| {
+            draft["value"] = json!(5.);
+        });
+        before.components.get_mut("foo").unwrap()["value"] = json!(5.);
         validate_inspector_fixture(&document, &composition, &profile);
         let artifacts = module_engine_script::TestArtifactGuard::new(
             &crate::project::source_root().join(".work/test-temp"),
@@ -6269,6 +6303,33 @@ pub fn update(ctx: &mut ScriptContext) {
         assert_eq!(&reopened, document, "{}", path.display());
         validate_inspector_fixture(&reopened, composition, profile);
         reopened
+    }
+
+    #[test]
+    fn inspector_noop_apply_respects_sparse_local_values_without_a_prefab() {
+        let (composition, mut document, profile) =
+            inspector_json_property_fixture("Exact.Key", &json!({"0":null,"big":u64::MAX}));
+        let game = document.game.as_mut().unwrap();
+        let object = &mut game.scenes.get_mut("empty").unwrap().objects[0];
+        object.prefab = None;
+        let raw = json!({"Exact.Key":{"0":null,"big":u64::MAX},"negative_zero":-0.0});
+        object.components.insert("foo".into(), raw.clone());
+        validate_inspector_fixture(&document, &composition, &profile);
+
+        click_inspector_apply(&mut document, &composition, "foo", |_| {});
+        let game = document.game.as_ref().unwrap();
+        let object = &game.scenes["empty"].objects[0];
+        assert!(same_component_json(
+            object.components.get("foo"),
+            Some(&raw)
+        ));
+        assert!(object.overrides.is_empty());
+        let entity = game
+            .resolve_scene_with_registry("empty", &composition.systems)
+            .unwrap()
+            .remove(0);
+        assert!(entity.components["foo"].get("value").is_some());
+        assert!(object.components["foo"].get("value").is_none());
     }
 
     #[test]
@@ -7107,7 +7168,9 @@ pub fn update(ctx: &mut ScriptContext) {
                 )),
                 ..Default::default()
             },
-            |ui| component_editor(ui, &schema, &mut value, &attached, &fields),
+            |ui| {
+                component_editor(ui, &schema, &mut value, &attached, &fields);
+            },
         );
         for label in [
             "Travel speed",
