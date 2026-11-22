@@ -243,8 +243,9 @@ class WorldBuildTest(unittest.TestCase):
         self.assertIn(".ribbon.hot", block.group(1))
         self.assertIn("animation:none", block.group(1))
         # an equal-specificity rule written later would override it
-        self.assertGreater(block.start(), world.rindex(".ribbon.hot{"))
-        self.assertGreater(block.start(), world.rindex(".chip.cur{"))
+        for selector in (r"\.ribbon\.hot", r"\.chip\.cur"):
+            for rule in re.finditer(rf"^\s*{selector}\{{", world, re.M):
+                self.assertLess(rule.start(), block.start(), selector)
 
     def test_tooltip_escapes_markdown_text(self):
         world = WORLD_TEMPLATE.read_text(encoding="utf-8")
