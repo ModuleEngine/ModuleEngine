@@ -138,7 +138,7 @@ fn decompose(m: Matrix) -> Option<([f32; 3], Quaternion, [f32; 3])> {
     };
     Some(([m[0][3], m[1][3], m[2][3]], q, scale))
 }
-fn interpolate_model(a: Matrix, b: Matrix, alpha: f32) -> Option<Matrix> {
+pub fn interpolate_model(a: Matrix, b: Matrix, alpha: f32) -> Option<Matrix> {
     if a == b {
         return Some(b);
     }

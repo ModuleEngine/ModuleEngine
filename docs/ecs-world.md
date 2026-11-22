@@ -105,8 +105,8 @@ descendants and validate the final hierarchy. An edited world with active
 schema components still runs full schema validation, including cross-object
 references. Source semantic validators for populated active components also
 run on unchanged worlds because they can consult external state.
-The compatibility provider projection, Custom Rust IPC snapshot and rendered
-`GameHost::step` presentation snapshots can still traverse the world. Explicit
+The compatibility provider projection, Custom Rust IPC snapshot and snapshot-only
+presentation paths can still traverse the world. Explicit
 clones for lifecycle scratch state and scene operations retain their semantics.
 
 The default ECS session has no secondary provider. Object and explicitly
@@ -114,6 +114,29 @@ registered third-party worlds remain compatibility projections of portable objec
 data. Their validation/commit/rollback still participates in publication, and
 their private caches survive ordinary ticks. New gameplay capabilities belong in
 the canonical ECS.
+
+<a id="r16-render-extraction"></a>
+
+## R1.6 render extraction
+
+`GameSession::read_render_changes` reads committed rows using an independent
+`RenderChangeCursor`. With writes since the last read, Bevy filters for
+`Changed<Transform>`, `Changed<ObjectData>` and `Changed<RenderBindings>`.
+The render binding marker tracks the lossless `mesh` and `material` columns.
+Other schema writes leave these filters unchanged. A write counter skips the
+query on a write-free read. Bevy's change filter can still inspect every live row
+when there are writes. The retained projection resolves matrices and enriches
+drawables for affected owners. The binding and transform checks compare final
+committed values, so a staged write undone within the tick produces no movement.
+
+A bounded history retains the most recent 4,096 stable-ID removals across
+publications. An expired cursor or replacement Bevy world reinitializes the
+projection from the current rows. The Host expands changes to transforms,
+parents and lifetimes through the affected hierarchy. Final drawable comparison
+filters out changes to unrelated data, unchanged world matrices and unchanged
+materials, including multiple writes before a render.
+
+See the [renderer synchronization contract and S3 verification](shared-game-host.md#r16-scene-updates).
 
 ## Saved compatibility
 

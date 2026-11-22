@@ -8,6 +8,11 @@ mod player_settings;
 #[path = "presentation_tests.rs"]
 pub(crate) mod presentation_tests;
 #[cfg(test)]
+#[path = "render_extraction_tests.rs"]
+mod render_extraction_tests;
+#[path = "retained_presentation.rs"]
+mod retained_presentation;
+#[cfg(test)]
 #[path = "test_support.rs"]
 mod test_support;
 use crate::activity::{ActivitySnapshot, BuildProgress};
@@ -18,6 +23,7 @@ use module_engine_script::{
     CompiledProgramStore, CompiledScript, JobLease, ScriptCompiler, ScriptKind, ScriptTick,
 };
 use player_settings::PlayerSettingsState;
+use retained_presentation::RetainedPresentation;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -746,15 +752,61 @@ struct PresentationEvaluation {
     controls: RenderOverrides,
 }
 
+struct InterpolatedScene {
+    current: (u64, f64),
+    previous: (u64, f64),
+    camera: Camera,
+    alpha: f64,
+    snapped: bool,
+    input: InterpolatedInput,
+}
+
+enum InterpolatedInput {
+    Snapshot(SceneSnapshot),
+    Retained(BTreeMap<u64, [[f32; 4]; 4]>),
+}
+
+fn adjacent_alpha(current: u64, previous: u64, alpha: f64) -> f64 {
+    if current == previous {
+        1.
+    } else {
+        alpha.clamp(0., 1.)
+    }
+}
+
+fn presentation_camera(
+    mut camera: Camera,
+    previous: Option<[f32; 3]>,
+    current: Option<[f32; 3]>,
+    same_hierarchy: bool,
+    alpha: f64,
+) -> Camera {
+    // Follow contributions return a point without the followed object's ID.
+    // Snap the camera on a hierarchy or lifetime change.
+    if same_hierarchy
+        && let (Some(a), Some(b)) = (previous, current)
+        && camera.target == b
+    {
+        camera.target = std::array::from_fn(|i| a[i] + alpha as f32 * (b[i] - a[i]));
+    }
+    camera
+}
+
 #[derive(Clone, PartialEq)]
 struct AuthoredPresentationRequest {
     generation: u64,
     revision: u64,
     size: [usize; 2],
     camera: Camera,
-    snapshot: SceneSnapshot,
+    scene: AuthoredSceneKey,
     controls: RenderOverrides,
     settings: ScriptSettingsSnapshot,
+}
+
+#[derive(Clone, PartialEq)]
+enum AuthoredSceneKey {
+    Snapshot(SceneSnapshot),
+    Retained { revision: u64, time: f32 },
 }
 
 enum PendingPresentationKind {
@@ -843,6 +895,7 @@ pub struct GameHost {
     contributions: Vec<GameContribution>,
     presentation_previous: Option<PresentationSample>,
     presentation_current: Option<PresentationSample>,
+    retained: RetainedPresentation,
     presentation_generation: u64,
     presentation_evaluation: Option<PresentationEvaluation>,
     pending_presentation: Option<PendingPresentation>,
@@ -1286,6 +1339,7 @@ impl GameHost {
             presentation_revision: next_presentation_revision(),
             presentation_previous: None,
             presentation_current: None,
+            retained: RetainedPresentation::default(),
             presentation_generation: next_presentation_revision(),
             presentation_evaluation: None,
             pending_presentation: None,
@@ -1565,7 +1619,18 @@ impl GameHost {
         }
         self.simulation_started = true;
         let started = Instant::now();
-        let before = PresentationSample::capture(self);
+        let scopes = self.retained_scopes();
+        let mut before = None;
+        if let Some(scopes) = &scopes {
+            if self
+                .observe_retained(scopes, false)
+                .is_ok_and(|changed| changed)
+            {
+                self.reset_presentation_frames();
+            }
+        } else if self.renderer.is_some() {
+            before = PresentationSample::capture(self).ok();
+        }
         let before_tick = self.session.state().tick;
         let before_scene = self.session.state().scene.clone();
         // Rendered hosts retain ordered resource operations until a request is
@@ -1590,7 +1655,7 @@ impl GameHost {
             if self.session.state().tick != before_tick
                 || self.session.state().scene != before_scene
             {
-                self.reset_presentation_history();
+                self.reset_presentation_frames();
                 // A catchup call can commit earlier ticks before a later tick
                 // rejects. Those accepted events still own their effects. A
                 // no-commit error must not replay events retained by an earlier
@@ -1603,18 +1668,26 @@ impl GameHost {
         let ticks = result?;
         self.follow_camera();
         if ticks > 0 {
-            let current = PresentationSample::capture(self);
             let reset = self.session.events().iter().any(|event| {
                 event.name == "SceneChanged" || event.name == PRESENTATION_RESET_EVENT
             });
-            if let (Ok(before), Ok(current)) = (before, current)
+            if let Some(scopes) = &scopes {
+                if self
+                    .observe_retained(scopes, ticks == 1 && !reset)
+                    .unwrap_or(true)
+                    || reset
+                {
+                    self.reset_presentation_frames();
+                }
+            } else if let Some(before) = before
                 && ticks == 1
-                && current.scene == before.scene
                 && !reset
+                && let Ok(current) = PresentationSample::capture(self)
+                && current.scene == before.scene
             {
                 self.presentation_previous = Some(before);
                 self.presentation_current = Some(current);
-            } else {
+            } else if self.renderer.is_some() {
                 self.reset_presentation_history();
             }
             self.presentation_revision = next_presentation_revision();
@@ -1665,6 +1738,11 @@ impl GameHost {
     /// a committed tick; Custom uses its existing emit_event("PresentationReset")
     /// envelope. No velocity/distance heuristic guesses whether motion teleports.
     pub fn reset_presentation_history(&mut self) {
+        self.retained = RetainedPresentation::default();
+        self.reset_presentation_frames();
+    }
+
+    fn reset_presentation_frames(&mut self) {
         self.discard_pending_presentation();
         self.authored_presentation_requests.clear();
         self.authored_presentation_waiters.clear();
@@ -1672,6 +1750,53 @@ impl GameHost {
         self.presentation_previous = None;
         self.presentation_current = None;
         self.presentation_generation = next_presentation_revision();
+    }
+
+    fn retained_scopes(&self) -> Option<Vec<GamePresentationScope>> {
+        if !self.session.has_render_changes()
+            || self.renderer.as_ref()?.scene_sync() == SceneSync::SnapshotOnly
+        {
+            return None;
+        }
+        self.contributions
+            .iter()
+            .map(|contribution| {
+                self.composition
+                    .systems
+                    .presentation_scope(&contribution.id)
+            })
+            .collect()
+    }
+
+    fn observe_retained(
+        &mut self,
+        scopes: &[GamePresentationScope],
+        adjacent: bool,
+    ) -> Result<bool, String> {
+        let target = self.frame_target();
+        match self
+            .retained
+            .observe(&mut self.session, target, scopes, adjacent)
+        {
+            Ok(changed) => Ok(changed),
+            Err(error) => {
+                self.reset_presentation_history();
+                Err(error)
+            }
+        }
+    }
+
+    fn project_retained(
+        &mut self,
+        models: &BTreeMap<u64, [[f32; 4]; 4]>,
+        time: f32,
+    ) -> Result<(), String> {
+        let content = &mut self.content;
+        let state = self.session.state();
+        let contributions = &self.contributions;
+        self.retained.project(models, time, |snapshot| {
+            Self::enrich_items(content, state, contributions, snapshot)
+        })
     }
     /// The exact renderer-neutral geometry/materials displayed by Scene and Game.
     /// Imported primitives retain their authored object IDs for picking.
@@ -1685,25 +1810,37 @@ impl GameHost {
         };
         self.enrich_presentation(snapshot)
     }
-    fn enrich_presentation(
-        &mut self,
+    fn enrich_presentation(&mut self, snapshot: SceneSnapshot) -> Result<SceneSnapshot, String> {
+        Self::enrich_items(
+            &mut self.content,
+            self.session.state(),
+            &self.contributions,
+            snapshot,
+        )
+    }
+
+    fn enrich_items(
+        content: &mut ContentLibrary,
+        state: &GameState,
+        contributions: &[GameContribution],
         mut snapshot: SceneSnapshot,
     ) -> Result<SceneSnapshot, String> {
-        self.content
-            .enrich_snapshot(&mut snapshot, &self.session.asset_bindings())?;
+        content.enrich_items(&mut snapshot, |id| {
+            state.world.component(id, "mesh")?.get("path")?.as_str()
+        })?;
         for item in &mut snapshot.items {
-            if let Some(material) = self.session.state().world.component(item.id, "material") {
+            if let Some(material) = state.world.component(item.id, "material") {
                 if let Some(color) = material.get("base_color") {
                     item.material.base_color = serde_json::from_value(color.clone())
                         .map_err(|error| format!("Material color: {error}"))?;
                 }
                 if let Some(path) = material.get("base_color_texture").and_then(Value::as_str) {
-                    item.material.base_color_texture = Some(self.content.load_texture(path)?);
+                    item.material.base_color_texture = Some(content.load_texture(path)?);
                 }
             }
         }
-        for contribution in &self.contributions {
-            (contribution.decorate_snapshot)(&mut snapshot, self.session.state());
+        for contribution in contributions {
+            (contribution.decorate_snapshot)(&mut snapshot, state);
         }
         Ok(snapshot)
     }
@@ -1712,7 +1849,7 @@ impl GameHost {
             return Err("Headless host has no renderer".into());
         }
         let started = Instant::now();
-        let snapshot = self.author_snapshot()?;
+        let scene = self.prepare_authored_scene()?;
         let extraction_ms = self.extraction_ms(started);
         let controls = self
             .overrides
@@ -1725,13 +1862,37 @@ impl GameHost {
             .as_mut()
             .ok_or("Headless host has no renderer")?;
         renderer.set_frame_profiling(self.frame_profiling);
-        let mut frame = renderer.render(&snapshot, self.camera, width, height, &overrides)?;
+        let mut frame = match scene {
+            AuthoredSceneKey::Snapshot(snapshot) => {
+                renderer.render(&snapshot, self.camera, width, height, &overrides)
+            }
+            AuthoredSceneKey::Retained { time, .. } => {
+                self.retained.sync(renderer.as_mut(), time)?;
+                renderer.render_retained(self.camera, width, height, &overrides)
+            }
+        }?;
         if let Some(timings) = self.accept_frame_timings(extraction_ms) {
             timings.attach(&mut frame);
         }
         self.consume_render_batch(controls.resource_commands.len())?;
         self.last_render_ms = started.elapsed().as_secs_f64() * 1000.;
         Ok(frame)
+    }
+
+    fn prepare_authored_scene(&mut self) -> Result<AuthoredSceneKey, String> {
+        if let Some(scopes) = self.retained_scopes() {
+            if self.observe_retained(&scopes, false)? {
+                self.reset_presentation_frames();
+            }
+            let time = self.session.state().time as f32;
+            self.project_retained(&BTreeMap::new(), time)?;
+            Ok(AuthoredSceneKey::Retained {
+                revision: self.retained.revision(),
+                time,
+            })
+        } else {
+            self.author_snapshot().map(AuthoredSceneKey::Snapshot)
+        }
     }
 
     pub fn set_frame_profiling(&mut self, enabled: bool) {
@@ -2031,7 +2192,7 @@ impl GameHost {
             return Ok(None);
         }
         let started = Instant::now();
-        let snapshot = self.author_snapshot()?;
+        let scene = self.prepare_authored_scene()?;
         let extraction_ms = self.extraction_ms(started);
         let controls = self
             .overrides
@@ -2046,7 +2207,7 @@ impl GameHost {
             revision: self.presentation_revision,
             size: [width, height],
             camera: self.camera,
-            snapshot: snapshot.clone(),
+            scene,
             controls: persistent,
             settings: self.player_settings_snapshot()?,
         };
@@ -2075,8 +2236,15 @@ impl GameHost {
             .as_mut()
             .ok_or("Headless host has no renderer")?;
         renderer.set_frame_profiling(self.frame_profiling);
-        let submission =
-            renderer.render_presented(&snapshot, self.camera, width, height, &overrides)?;
+        let submission = match &request.scene {
+            AuthoredSceneKey::Snapshot(snapshot) => {
+                renderer.render_presented(snapshot, self.camera, width, height, &overrides)
+            }
+            AuthoredSceneKey::Retained { time, .. } => {
+                self.retained.sync(renderer.as_mut(), *time)?;
+                renderer.render_retained_presented(self.camera, width, height, &overrides)
+            }
+        }?;
         match submission {
             RenderSubmission::Busy => Ok(None),
             RenderSubmission::Pending(ticket) => {
@@ -2137,18 +2305,23 @@ impl GameHost {
             return Err("Headless host has no renderer".into());
         }
         let extraction_started = self.frame_profiling.then(Instant::now);
-        let observed = match PresentationSample::capture(self) {
-            Ok(observed) => observed,
-            Err(error) => {
-                self.reset_presentation_history();
-                return Err(error);
+        let scopes = self.retained_scopes();
+        if let Some(scopes) = &scopes {
+            if self.observe_retained(scopes, false)? {
+                self.reset_presentation_frames();
             }
-        };
-        if self.presentation_current.as_ref() != Some(&observed) {
-            // Also catches direct same-tick session.apply_commands, public session
-            // restart/transition, and external authoring not routed through Host.
-            self.reset_presentation_history();
-            self.presentation_current = Some(observed);
+        } else {
+            let observed = match PresentationSample::capture(self) {
+                Ok(observed) => observed,
+                Err(error) => {
+                    self.reset_presentation_history();
+                    return Err(error);
+                }
+            };
+            if self.presentation_current.as_ref() != Some(&observed) {
+                self.reset_presentation_history();
+                self.presentation_current = Some(observed);
+            }
         }
         if matches!(
             self.pending_presentation
@@ -2164,67 +2337,30 @@ impl GameHost {
         if self.pending_presentation.is_some() {
             return Ok(None);
         }
-        let current = self.presentation_current.as_ref().unwrap();
-        let previous = self
-            .presentation_previous
-            .as_ref()
-            .filter(|_| !current.identities.is_empty())
-            .unwrap_or(current);
-        let mut alpha = if previous.tick == current.tick {
-            1.
-        } else {
-            alpha.clamp(0., 1.)
-        };
-        let mut raw = interpolate_scene_models(
-            &previous.snapshot,
-            &current.snapshot,
-            &previous.identities,
-            &current.identities,
+        let InterpolatedScene {
+            current,
+            previous,
+            camera,
             alpha,
-        );
-        let mut camera = self.camera;
-        // The neutral follow callback supplies a point, not the followed entity's
-        // identity. Any birth/death/reparent/lifetime change therefore snaps the
-        // camera conservatively; per-object geometry can still interpolate safely.
-        if let (Some(a), Some(b)) = (previous.target, current.target)
-            && self.camera.target == b
-            && !current.identities.is_empty()
-            && previous.identities == current.identities
-        {
-            camera.target = std::array::from_fn(|i| a[i] + alpha as f32 * (b[i] - a[i]));
-        }
-        let current_models = current
-            .snapshot
-            .items
-            .iter()
-            .map(|item| (item.id, item.model));
-        let snapped = alpha < 1.
-            && camera == self.camera
-            && raw
+            snapped,
+            input,
+        } = if scopes.is_some() {
+            self.interpolate_retained(alpha)
+        } else {
+            self.interpolate_snapshot(alpha)
+        };
+        let models: Vec<_> = match &input {
+            InterpolatedInput::Snapshot(snapshot) => snapshot
                 .items
                 .iter()
                 .map(|item| (item.id, item.model))
-                .eq(current_models)
-            && previous
-                .snapshot
-                .items
-                .iter()
-                .map(|item| (item.id, item.model))
-                .ne(current
-                    .snapshot
-                    .items
-                    .iter()
-                    .map(|item| (item.id, item.model)));
-        if snapped {
-            alpha = 1.;
-        }
-        let visual_time = previous.time + alpha * (current.time - previous.time);
-        raw.time = visual_time as f32;
-        let models = raw
-            .items
-            .iter()
-            .map(|item| (item.id, item.model))
-            .collect::<Vec<_>>();
+                .collect(),
+            InterpolatedInput::Retained(models) => {
+                models.iter().map(|(&id, &model)| (id, model)).collect()
+            }
+        };
+        let alpha = if snapped { 1. } else { alpha };
+        let visual_time = previous.1 + alpha * (current.1 - previous.1);
         let controls = self
             .overrides
             .lock()
@@ -2240,14 +2376,14 @@ impl GameHost {
             None => PresentationOrigin::Invalidated,
             Some(old)
                 if old.generation != self.presentation_generation
-                    || (old.revision != self.presentation_revision && old.tick == current.tick)
+                    || (old.revision != self.presentation_revision && old.tick == current.0)
                     || old.size != [width, height]
                     || old.source_camera != self.camera
                     || old.controls != persistent =>
             {
                 PresentationOrigin::Invalidated
             }
-            Some(old) if old.tick != current.tick => PresentationOrigin::CommittedState,
+            Some(old) if old.tick != current.0 => PresentationOrigin::CommittedState,
             Some(_) if batch_len > 0 => PresentationOrigin::Invalidated,
             Some(old) if old.models != models || old.camera != camera => {
                 PresentationOrigin::InterpolatedPose
@@ -2256,17 +2392,17 @@ impl GameHost {
         };
         let provenance = PresentationProvenance {
             generation: self.presentation_generation,
-            previous_tick: if snapped { current.tick } else { previous.tick },
-            current_tick: current.tick,
-            previous_time: if snapped { current.time } else { previous.time },
-            current_time: current.time,
+            previous_tick: if snapped { current.0 } else { previous.0 },
+            current_tick: current.0,
+            previous_time: if snapped { current.1 } else { previous.1 },
+            current_time: current.1,
             alpha,
             visual_time,
             origin,
         };
         let evaluation = PresentationEvaluation {
             generation: self.presentation_generation,
-            tick: current.tick,
+            tick: current.0,
             revision: self.presentation_revision,
             size: [width, height],
             source_camera: self.camera,
@@ -2275,12 +2411,25 @@ impl GameHost {
             controls: persistent,
         };
         let started = Instant::now();
-        let snapshot = self.enrich_presentation(raw)?;
+        let snapshot = match input {
+            InterpolatedInput::Snapshot(mut raw) => {
+                raw.time = visual_time as f32;
+                Some(self.enrich_presentation(raw)?)
+            }
+            InterpolatedInput::Retained(models) => {
+                self.project_retained(&models, visual_time as f32)?;
+                None
+            }
+        };
         let extraction_ms = extraction_started.and_then(|started| self.extraction_ms(started));
         let renderer = self.renderer.as_mut().unwrap();
         renderer.set_frame_profiling(self.frame_profiling);
-        let submission =
-            renderer.render_presented(&snapshot, camera, width, height, &actual_controls)?;
+        let submission = if let Some(snapshot) = snapshot {
+            renderer.render_presented(&snapshot, camera, width, height, &actual_controls)
+        } else {
+            self.retained.sync(renderer.as_mut(), visual_time as f32)?;
+            renderer.render_retained_presented(camera, width, height, &actual_controls)
+        }?;
         match submission {
             RenderSubmission::Busy => Ok(None),
             RenderSubmission::Pending(ticket) => {
@@ -2311,6 +2460,91 @@ impl GameHost {
                     provenance,
                 }))
             }
+        }
+    }
+
+    fn interpolate_retained(&self, alpha: f64) -> InterpolatedScene {
+        let current = self.retained.current.as_ref().unwrap();
+        let previous = self
+            .retained
+            .previous
+            .as_ref()
+            .filter(|_| self.retained.has_objects())
+            .unwrap_or(current);
+        let alpha = adjacent_alpha(current.tick, previous.tick, alpha);
+        let models = self.retained.interpolate(alpha);
+        let camera = presentation_camera(
+            self.camera,
+            previous.target,
+            current.target,
+            !self.retained.hierarchy_changed,
+            alpha,
+        );
+        let snapped = alpha < 1.
+            && camera == self.camera
+            && models.is_empty()
+            && self.retained.models_changed;
+        InterpolatedScene {
+            current: (current.tick, current.time),
+            previous: (previous.tick, previous.time),
+            camera,
+            alpha,
+            snapped,
+            input: InterpolatedInput::Retained(models),
+        }
+    }
+
+    fn interpolate_snapshot(&self, alpha: f64) -> InterpolatedScene {
+        let current = self.presentation_current.as_ref().unwrap();
+        let previous = self
+            .presentation_previous
+            .as_ref()
+            .filter(|_| !current.identities.is_empty())
+            .unwrap_or(current);
+        let alpha = adjacent_alpha(current.tick, previous.tick, alpha);
+        let raw = interpolate_scene_models(
+            &previous.snapshot,
+            &current.snapshot,
+            &previous.identities,
+            &current.identities,
+            alpha,
+        );
+        let camera = presentation_camera(
+            self.camera,
+            previous.target,
+            current.target,
+            !current.identities.is_empty() && previous.identities == current.identities,
+            alpha,
+        );
+        let current_models = current
+            .snapshot
+            .items
+            .iter()
+            .map(|item| (item.id, item.model));
+        let snapped = alpha < 1.
+            && camera == self.camera
+            && raw
+                .items
+                .iter()
+                .map(|item| (item.id, item.model))
+                .eq(current_models)
+            && previous
+                .snapshot
+                .items
+                .iter()
+                .map(|item| (item.id, item.model))
+                .ne(current
+                    .snapshot
+                    .items
+                    .iter()
+                    .map(|item| (item.id, item.model)));
+        InterpolatedScene {
+            current: (current.tick, current.time),
+            previous: (previous.tick, previous.time),
+            camera,
+            alpha,
+            snapped,
+            input: InterpolatedInput::Snapshot(raw),
         }
     }
     pub fn apply_candidate(

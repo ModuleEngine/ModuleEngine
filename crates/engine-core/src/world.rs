@@ -1,9 +1,13 @@
 use crate::{WorldCommand, WorldObject};
-use bevy_ecs::prelude::{Component, Entity, World};
 use bevy_ecs::reflect::ReflectComponent;
+use bevy_ecs::{
+    change_detection::{DetectChangesMut, MAX_CHANGE_AGE, Tick},
+    prelude::{Changed, Component, Entity, Or, World},
+    world::WorldId,
+};
 use bevy_reflect::Reflect;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
 /// Identifies built-in world storage or a separately registered source provider.
@@ -440,6 +444,32 @@ impl ObjectData {
 #[component(immutable)]
 struct EntityLifetime(u64);
 
+// The values still live in the lossless JSON columns. Only the two columns
+// that feed the stock drawable mark this native component.
+#[derive(Component)]
+struct RenderBindings;
+
+#[derive(Default)]
+pub struct RenderChangeCursor {
+    position: Option<RenderChangePosition>,
+}
+
+#[derive(Clone, Copy)]
+struct RenderChangePosition {
+    world: WorldId,
+    tick: Tick,
+    epoch: u64,
+    writes: u64,
+}
+
+/// Candidate object IDs from committed Bevy storage. An individual candidate
+/// can still have an unchanged render projection (for example, a reference edit).
+pub struct WorldRenderChanges {
+    pub reset: bool,
+    pub changed: Vec<u64>,
+    pub removed: Vec<u64>,
+}
+
 /// Canonical gameplay storage. Native object rows live in Bevy, and schema
 /// component columns keep their existing stable-ID keys and lossless JSON.
 #[derive(Debug)]
@@ -454,6 +484,10 @@ struct EcsRows {
     world: World,
     index: BTreeMap<u64, Entity>,
     components: BTreeMap<String, BTreeMap<u64, serde_json::Value>>,
+    change_epoch: u64,
+    render_writes: u64,
+    render_removals: VecDeque<(u64, u64)>,
+    dropped_removal_epoch: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -574,6 +608,7 @@ impl Clone for EcsRows {
                     *self.world.get::<Transform>(handle).unwrap(),
                     self.world.get::<ObjectData>(handle).unwrap().clone(),
                     EntityLifetime(self.world.get::<EntityLifetime>(handle).unwrap().0),
+                    RenderBindings,
                 )
             }))
             .zip(self.index.keys().copied())
@@ -583,11 +618,41 @@ impl Clone for EcsRows {
             world,
             index,
             components: self.components.clone(),
+            change_epoch: 0,
+            render_writes: 0,
+            render_removals: VecDeque::new(),
+            dropped_removal_epoch: 0,
         }
     }
 }
 
 impl EcsRows {
+    fn mark_binding_changed(&mut self, id: u64, name: &str) {
+        if matches!(name, "mesh" | "material") {
+            self.render_writes += 1;
+            self.world
+                .get_mut::<RenderBindings>(self.index[&id])
+                .unwrap()
+                .set_changed();
+        }
+    }
+
+    fn advance_removals(&mut self) {
+        self.world.clear_trackers();
+        self.change_epoch += 1;
+        self.world.check_change_ticks();
+    }
+
+    fn record_removal(&mut self, id: u64) {
+        // Bevy's removal messages age on each structural publication. Keep
+        // stable IDs available to slower readers across several publications.
+        const MAX_RENDER_REMOVALS: usize = 4096;
+        if self.render_removals.len() == MAX_RENDER_REMOVALS {
+            self.dropped_removal_epoch = self.render_removals.pop_front().unwrap().0;
+        }
+        self.render_removals.push_back((self.change_epoch + 1, id));
+    }
+
     fn native<T: Component>(&self, id: u64) -> Option<&T> {
         let handle = *self.index.get(&id)?;
         debug_assert_eq!(self.world.get::<StableId>(handle).map(|id| id.0), Some(id));
@@ -598,9 +663,12 @@ impl EcsRows {
         &mut self,
         id: u64,
     ) -> Option<&mut T> {
-        self.world
+        let value = self
+            .world
             .get_mut::<T>(*self.index.get(&id)?)
-            .map(|value| value.into_inner())
+            .map(|value| value.into_inner())?;
+        self.render_writes += 1;
+        Some(value)
     }
 
     fn components_for(&self, id: u64) -> BTreeMap<String, serde_json::Value> {
@@ -625,6 +693,7 @@ impl EcsRows {
         };
         let removed = self.world.despawn(handle);
         debug_assert!(removed);
+        self.record_removal(id);
         self.replace_components(id, BTreeMap::new());
         true
     }
@@ -644,6 +713,13 @@ impl EcsRows {
             {
                 *self.native_mut(id).unwrap() = row.transform;
             }
+            for name in ["mesh", "material"] {
+                if self.components.get(name).and_then(|column| column.get(&id))
+                    != row.components.get(name)
+                {
+                    self.mark_binding_changed(id, name);
+                }
+            }
             self.replace_components(id, row.components);
             return;
         }
@@ -654,8 +730,10 @@ impl EcsRows {
                 row.transform,
                 row.data,
                 EntityLifetime(row.lifetime),
+                RenderBindings,
             ))
             .id();
+        self.render_writes += 1;
         self.index.insert(id, handle);
         for (name, value) in row.components {
             self.components.entry(name).or_default().insert(id, value);
@@ -766,7 +844,7 @@ impl EcsWorld {
         if despawned {
             // Age removal messages before writes so the tracker update keeps
             // this publication's new and changed components visible.
-            rows.world.clear_trackers();
+            rows.advance_removals();
         }
         for (id, row) in staged
             .edits
@@ -957,6 +1035,74 @@ impl EcsWorld {
         self.entity_ids().filter_map(|id| self.object(id)).collect()
     }
 
+    /// Resolve accepted local transforms in hierarchy order. Callers gathering
+    /// several models can share a scratch cache within the same world view.
+    pub fn render_model(&self, id: u64, cache: &mut BTreeMap<u64, [[f32; 4]; 4]>) -> [[f32; 4]; 4] {
+        if let Some(model) = cache.get(&id) {
+            return *model;
+        }
+        let parent = self
+            .object_data(id)
+            .unwrap()
+            .parent
+            .map_or_else(identity_matrix, |parent| self.render_model(parent, cache));
+        let model = multiply_matrices(parent, self.transform(id).unwrap().matrix());
+        cache.insert(id, model);
+        model
+    }
+
+    pub(crate) fn read_render_changes(
+        &mut self,
+        cursor: &mut RenderChangeCursor,
+    ) -> WorldRenderChanges {
+        assert!(
+            self.staged.is_none(),
+            "render extraction requires committed ECS rows"
+        );
+        let rows = Arc::get_mut(&mut self.rows).expect("committed ECS has no open checkpoint");
+        let world_id = rows.world.id();
+        let previous = cursor.position.filter(|position| {
+            position.world == world_id
+                && position.epoch >= rows.dropped_removal_epoch
+                && rows.change_epoch - position.epoch < u64::from(MAX_CHANGE_AGE)
+        });
+        // A reader with no intervening writes skips even Bevy's Changed scan.
+        let changed = match previous {
+            None => rows.index.keys().copied().collect(),
+            Some(position) if position.writes == rows.render_writes => Vec::new(),
+            Some(position) => rows.world.last_change_tick_scope(position.tick, |world| {
+                let mut query = world.query_filtered::<&StableId, Or<(
+                    Changed<Transform>,
+                    Changed<ObjectData>,
+                    Changed<RenderBindings>,
+                )>>();
+                query.iter(world).map(|id| id.0).collect()
+            }),
+        };
+        let tick = rows.world.increment_change_tick();
+        rows.change_epoch += 1;
+        rows.world.check_change_ticks();
+        cursor.position = Some(RenderChangePosition {
+            world: world_id,
+            tick,
+            epoch: rows.change_epoch,
+            writes: rows.render_writes,
+        });
+        let removed = previous.map_or_else(Vec::new, |position| {
+            rows.render_removals
+                .iter()
+                .rev()
+                .take_while(|(epoch, _)| *epoch > position.epoch)
+                .map(|(_, id)| *id)
+                .collect()
+        });
+        WorldRenderChanges {
+            reset: previous.is_none(),
+            changed,
+            removed,
+        }
+    }
+
     fn transform(&self, id: u64) -> Option<&Transform> {
         match self.edit(id) {
             Some(edit) => edit.as_ref().map(|row| &row.transform),
@@ -1000,10 +1146,9 @@ impl EcsWorld {
         if self.staged.is_some() {
             self.stage_row(id)?.components.get_mut(name)
         } else {
-            Arc::make_mut(&mut self.rows)
-                .components
-                .get_mut(name)?
-                .get_mut(&id)
+            let rows = Arc::make_mut(&mut self.rows);
+            rows.mark_binding_changed(id, name);
+            rows.components.get_mut(name)?.get_mut(&id)
         }
     }
 
@@ -1023,11 +1168,9 @@ impl EcsWorld {
         if self.staged.is_some() {
             Ok(self.stage_row(id).unwrap().components.insert(name, value))
         } else {
-            Ok(Arc::make_mut(&mut self.rows)
-                .components
-                .entry(name)
-                .or_default()
-                .insert(id, value))
+            let rows = Arc::make_mut(&mut self.rows);
+            rows.mark_binding_changed(id, &name);
+            Ok(rows.components.entry(name).or_default().insert(id, value))
         }
     }
 
@@ -1036,7 +1179,9 @@ impl EcsWorld {
         if self.staged.is_some() {
             return self.stage_row(id)?.components.remove(name);
         }
-        let components = &mut Arc::make_mut(&mut self.rows).components;
+        let rows = Arc::make_mut(&mut self.rows);
+        rows.mark_binding_changed(id, name);
+        let components = &mut rows.components;
         let column = components.get_mut(name)?;
         let removed = column.remove(&id);
         if column.is_empty() {
@@ -1176,7 +1321,7 @@ impl EcsWorld {
                 removed |= rows.remove_row(id);
             }
             if removed {
-                rows.world.clear_trackers();
+                rows.advance_removals();
             }
         }
     }
@@ -1187,11 +1332,12 @@ impl EcsWorld {
             self.remove_rows(ids);
         } else if !self.rows.index.is_empty() {
             let rows = Arc::make_mut(&mut self.rows);
-            for handle in std::mem::take(&mut rows.index).into_values() {
+            for (id, handle) in std::mem::take(&mut rows.index) {
                 let removed = rows.world.despawn(handle);
                 debug_assert!(removed);
+                rows.record_removal(id);
             }
-            rows.world.clear_trackers();
+            rows.advance_removals();
             rows.components.clear();
         }
     }
@@ -1373,29 +1519,13 @@ impl WorldProvider for EcsWorld {
     }
 
     fn snapshot(&self) -> SceneSnapshot {
-        fn resolve(
-            entity: u64,
-            world: &EcsWorld,
-            cache: &mut BTreeMap<u64, [[f32; 4]; 4]>,
-        ) -> [[f32; 4]; 4] {
-            if let Some(model) = cache.get(&entity) {
-                return *model;
-            }
-            let data = world.object_data(entity).unwrap();
-            let parent = data
-                .parent
-                .map_or_else(identity_matrix, |id| resolve(id, world, cache));
-            let model = multiply_matrices(parent, world.transform(entity).unwrap().matrix());
-            cache.insert(entity, model);
-            model
-        }
         let mut cache = BTreeMap::new();
         let items = self
             .entity_ids()
             .map(|entity| RenderItem {
                 id: entity,
                 mesh: Mesh::cube(),
-                model: resolve(entity, self, &mut cache),
+                model: self.render_model(entity, &mut cache),
                 color: self.object_data(entity).unwrap().color,
                 material: Material::default(),
             })

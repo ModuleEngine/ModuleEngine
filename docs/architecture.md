@@ -4,7 +4,7 @@
 
 [English](architecture.md) | [Русский](ru/architecture.md) | [Documentation](README.md)
 
-The project stores its architecture, authored scenes, and source code in editable JSON. `ModuleRegistry` describes root world/render modules; `SystemRegistry` installs executable gameplay subsystems. A neutral snapshot separates world storage from rendering, while owned commands and state separate Rust Custom from specific storage implementations and Vulkan.
+The project stores its architecture, authored scenes, and source code in editable JSON. `ModuleRegistry` describes root world/render modules; `SystemRegistry` installs executable gameplay subsystems. Neutral snapshots and scene updates separate world storage from rendering. Owned commands and state separate Rust Custom from specific storage implementations and Vulkan.
 
 Technical engine capability, reusable gameplay and concrete game rules have
 different owners. Combat, health, equipment and victory remain gameplay even
@@ -52,8 +52,10 @@ Game order lives in `game.execution`; it is not inferred from node positions or 
 
 Interactive `GameWorker` now has separate simulation and presentation schedules:
 fixed 60 Hz gameplay and a 120 Hz render target using genuine interpolated poses
-between completed states. Core provides safe renderer-neutral pose interpolation;
-Host owns two bounded raw snapshots and applies content afterwards. This leaves
+between completed states. Core provides safe renderer-neutral pose interpolation.
+For the retained ECS path Host keeps current object poses and the changed
+endpoints from the preceding tick. Compatibility paths use two raw snapshots.
+Both attach content after interpolation. This leaves
 authored/state data discrete, requires explicit lifetime/discontinuity boundaries,
 and adds about one tick of visual delay. Extra renders never execute gameplay or
 Custom. Static sub-tick samples are suppressed. Frame provenance and the actual

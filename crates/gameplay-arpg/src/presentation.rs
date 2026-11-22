@@ -73,6 +73,18 @@ pub fn diagnostics(state: &GameState) -> serde_json::Value {
     })
 }
 
+pub(crate) fn hit_flash_objects(state: &GameState) -> Vec<u64> {
+    let frame = state.arpg();
+    if frame.status != GameStatus::Playing {
+        return Vec::new();
+    }
+    frame
+        .hit_visuals
+        .into_iter()
+        .map(|hit| hit.target)
+        .collect()
+}
+
 pub fn apply_hit_flashes(snapshot: &mut module_engine_core::SceneSnapshot, state: &GameState) {
     let frame = state.arpg();
     if frame.status != GameStatus::Playing || frame.hit_visuals.is_empty() {
