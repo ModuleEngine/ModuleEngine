@@ -32,7 +32,9 @@ Inactive data are absent from runtime entities without deleting authored values.
 A node's `params.components` can explicitly declare additional component
 types consumed by Custom Rust. Each saved `SystemNode` has a stable
 instance ID, module ID, parameters, pin-to-resource bindings and explicit `after`
-constraints. A stage contains its ordered nodes. Validation rejects:
+constraints. Before building the schedule, Core checks `after` against the saved
+stage and node order without reordering the graph. Each referenced node must
+already appear earlier. Validation rejects:
 
 - Missing factories, duplicate stages/instances/resources and unknown bindings.
 - Resource types that do not match the declared port type.
@@ -119,11 +121,14 @@ is stopped once; shutdown tries all hooks even if one fails. Drop performs
 best-effort cleanup because destructor errors cannot be returned to the caller.
 During panic unwinding, Core takes back the live instances from the schedule
 before propagating the panic, so session `Drop` can still attempt `stop`.
+If the caller catches a panic from a scheduled node, drop the affected session
+and start a new one before running more ticks. The interrupted tick may have
+left the in-memory session partially updated.
 Put persistent state in the supplied state value instead of an unobservable
 process-global variable. The built-in combat module stores cooldowns, windup,
 attack direction and already-hit targets in that state.
 
-A failed tick discards the [ECS journal](ecs-world.md#lifetime-and-transactions)
+A tick rejected with an error discards the [ECS journal](ecs-world.md#lifetime-and-transactions)
 and restores session metadata, owned system states, resource values and events
 to their pre-tick values. Systems stage external outputs during `step`.
 `SystemExecutor::step_with_transaction` runs every system step, every
