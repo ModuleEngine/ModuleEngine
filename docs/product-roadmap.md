@@ -354,6 +354,7 @@ Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
 - The old path stays behind a switch until the new one passes parity; it is removed in the same phase after acceptance, not left as a second production implementation.
 - Every hardware-dependent feature declares its tier and a fallback. The [R0.4 hardware contract](hardware-tiers.md) lists the Vulkan 1.3 base tier A and the independent mesh shader (B) and ray tracing (C) additions, with their individual features and requirements for native Player presentation.
 - Measurements follow [release decisions](#decision): sequential GPU runs, recorded driver and load, mean and p95, the real game window rather than offscreen alone.
+- "Not worse than R0.6" (or than another baseline) is decided by the [not-worse rule](bench.md#not-worse), approved on 21 November 2026: the baseline commit and the candidate run interleaved in one session, five runs each; medians are compared with a per-metric tolerance of max(5 %, 2 × measured spread); a borderline result is repeated once; peak memory is compared with a 1 % floor; p99 is tracked but does not block. `python scripts/bench.py --compare <baseline>` returns the verdict for the S1–S5 metrics; R3.5 open-to-first-frame has no automated check yet.
 
 ### Benchmark scenes used by all phases
 
@@ -391,7 +392,7 @@ Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
 | R1.5 | Scheduling: port `engine-core/src/systems.rs` and ARPG systems to a `bevy_ecs` `Schedule` with explicit, deterministic ordering at fixed 60 Hz. | Recorded-input replay of G1 levels and the ARPG encounter produces identical event logs before and after. | 4–5 d |
 | R1.6 | Change-driven extraction: render extraction reads `Changed<…>` and produces deltas (spawned, moved, removed, material changed) instead of a full `SceneSnapshot`. The full snapshot remains for the software renderer and diagnostics. | On S3 with 1,000 moving objects the delta contains only those objects. | 2–3 d |
 | R1.7 | Migrate consumers: `game-host`/`game_worker`, `runtime-script` typed commands, `project-g1`, `project-puzzle`, `gameplay-arpg`, `example-two-arenas`. The Object provider stays a compatibility adapter. | All crate test suites pass; no consumer touches the old column maps. | 4–6 d |
-| R1.8 | Acceptance and removal of the old storage. | S2 tick p95 not worse than R0.6; S3 tick ≤2 ms; S1/S2 gates pass; independent review. | 2 d |
+| R1.8 | Acceptance and removal of the old storage. | S2 tick p95 [not worse](bench.md#not-worse) than R0.6; S3 tick ≤2 ms; S1/S2 gates pass; independent review. | 2 d |
 
 <a id="rebuild-r2"></a>
 
@@ -404,7 +405,7 @@ Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
 | R2.3 | GPU-resident scene: one mesh pool (shared vertex/index buffers) uploaded once per mesh; instance buffer with transforms and material indices updated from R1.6 deltas; material buffer. Remove the CPU vertex transform in `geometry.rs`. | Upload bytes per frame proportional to changed objects; S3 CPU frame ≤1 ms. | 1.5–2 w |
 | R2.4 | GPU culling and indirect drawing: compute frustum culling, `vkCmdDrawIndexedIndirectCount`, then two-phase Hi-Z occlusion culling. | Draw calls per pass do not grow with object count; S3 scaled to 100,000 instances keeps 60 FPS at 1080p on the [R0.4 reference GPU](hardware-tiers.md#reference-gpu). | 1.5–2 w |
 | R2.5 | Render graph v2: automatic barriers with synchronization2, transient resource aliasing, async compute queue. Existing graph documents load unchanged; built-in passes (forward, gbuffer, deferred, SSAO, FXAA, tonemap, color encode) are migrated. | Existing graph and custom-pass tests pass; built-ins match the old images within the `image_quality_check` tolerance; transient memory on S4 is at least 30 % lower. | 2–3 w |
-| R2.6 | Game swapchain for Player: present modes, frame pacing, resize, prepared for HDR output. | Player S1/S2 run directly on the swapchain; frame-time p95 not worse than R0.6. | 1 w |
+| R2.6 | Game swapchain for Player: present modes, frame pacing, resize, prepared for HDR output. | Player S1/S2 run directly on the swapchain; frame-time p95 [not worse](bench.md#not-worse) than R0.6. | 1 w |
 | R2.7 | Parity and switch: the old renderer behind a feature flag until S1/S2 pass, then removal. | S1/S2 gates pass on the new renderer; old code deleted; independent review. | 0.5–1 w |
 
 <a id="rebuild-r3"></a>
@@ -417,7 +418,7 @@ Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
 | R3.2 | Replace the `eframe` shell in Editor and Player UI: window, input, clipboard, IME, DPI, cursor, and the detached native windows from `native_windows.rs`. egui widgets and panes stay unchanged. | Every existing pane opens; detached windows, docking and resize work; native window checks pass. | 1–1.5 w |
 | R3.3 | Scene and Game views sample render-graph output images on the same device. Remove the D3D12/OPAQUE_FD interop path after acceptance. | One frame less latency than today; `gpu_presentation.rs` interop removed; Linux uses the same path. | 4–5 d |
 | R3.4 | Port verification hooks that depend on `eframe` (`__screenshot`, `ui_capture.rs`, editor benchmark). | UI capture and editor benchmark run as before. | 2–3 d |
-| R3.5 | Acceptance. | Open-to-first-frame not worse than R0.6; owner opens the editor, moves panes and plays G1 without visible change; independent review. | 1–2 d |
+| R3.5 | Acceptance. | Open-to-first-frame [not worse](bench.md#not-worse) than R0.6 (the paired open-to-first-frame check is still to be built: neither `--compare` nor the R0.6 report measures it); owner opens the editor, moves panes and plays G1 without visible change; independent review. | 1–2 d |
 
 <a id="rebuild-r4"></a>
 
