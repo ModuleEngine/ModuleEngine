@@ -93,7 +93,8 @@ restore external targets, including published Rust worker state and renderer
 controls. A retry starts from the last accepted tick.
 The checkpoint still copies the session's scene ID, `module_data`, and
 control data. The cost depends on the size of those values, which source
-systems can edit directly through `&mut GameState`.
+systems can edit directly through `&mut GameState`. [R1.8 tracks and measures
+this cost](product-roadmap.md#r18-session-checkpoint).
 
 An unchanged ECS world with no populated active semantic validators needs no
 world traversal for the transaction.

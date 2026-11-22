@@ -392,7 +392,21 @@ Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
 | R1.5 | Scheduling: port `engine-core/src/systems.rs` and ARPG systems to a `bevy_ecs` `Schedule` with explicit, deterministic ordering at fixed 60 Hz. | Recorded-input replay of G1 levels and the ARPG encounter produces identical event logs before and after. | 4–5 d |
 | R1.6 | Change-driven extraction: render extraction reads `Changed<…>` and produces deltas (spawned, moved, removed, material changed) instead of a full `SceneSnapshot`. The full snapshot remains for the software renderer and diagnostics. | On S3 with 1,000 moving objects the delta contains only those objects. Schema-only edits must not produce a transform delta. | 2–3 d |
 | R1.7 | Migrate consumers: `game-host`/`game_worker`, `runtime-script` typed commands, `project-g1`, `project-puzzle`, `gameplay-arpg`, `example-two-arenas`. The Object provider stays a compatibility adapter. | All crate test suites pass; no consumer touches the old column maps. | 4–6 d |
-| R1.8 | Acceptance and removal of the old storage. | S2 tick p95 [not worse](bench.md#not-worse) than R0.6; S3 tick ≤2 ms; S1/S2 gates pass; independent review. | 2 d |
+| R1.8 | Acceptance and removal of the old storage. Measure the [session checkpoint copy cost](#r18-session-checkpoint). | S2 tick p95 [not worse](bench.md#not-worse) than R0.6. S3 tick ≤2 ms. Compare S3 with session metadata against the R1.4 baseline and report the copy cost separately. S1/S2 gates pass. Independent review. | 2 d |
+
+<a id="r18-session-checkpoint"></a>
+
+**R1.8 debt — session checkpoint copies.** `GameState::checkpoint_tick` copies
+`scene`, `module_data`, and `control` so a failed tick can restore what systems
+write directly through `&mut GameState`. Use a `GameHost` S3 variant with a
+representative, non-empty `module_data` payload. Record its entry count and
+serialized size. Time the metadata copies separately from the full fixed tick.
+Build the accepted R1.4 revision and the R1.8 candidate with the same payload
+and timing probe. Compare fixed-tick mean and p95 using the paired Release
+procedure and tolerance in the [not-worse rule](bench.md#not-worse). If the
+copy cost materially contributes to a regression or threatens the S3 tick
+budget, address it in R1.8 and recheck late rejection and retry through
+`GameHost`.
 
 <a id="rebuild-r2"></a>
 
