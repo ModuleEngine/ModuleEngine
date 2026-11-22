@@ -4,6 +4,13 @@
 
 [English](current-status.md) | [Русский](ru/current-status.md) | [Documentation](README.md)
 
+**22 November 2026 — R2.2 adds indexed Vulkan materials.** Forward and G-buffer
+sample separate sRGB images with mipmaps and anisotropy on qualifying hardware.
+S4 loads its original base-color images on that path. Older `scene_materials`
+passes retain the atlas ABI, and new Built-in → Custom conversions carry
+both variants. See the [device contract](hardware-tiers.md#r22-materials) and
+[1,000-texture and S4 checks](bench.md#r22-material-checks).
+
 **22 November 2026 — R2.1 adds a Vulkan device layer.** Tier A adapters
 with timeline support get two frame slots, gpu-allocator, a staging ring
 and the dedicated transfer route when available. Existing compatible devices

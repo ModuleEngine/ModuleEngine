@@ -536,7 +536,12 @@ fn shader_root_text(source: &str) -> std::borrow::Cow<'_, str> {
         std::borrow::Cow::Borrowed(source)
     }
 }
-fn shader_key(root: &Path, source: &str, entry: &str, profile: &str) -> Result<u64, ShaderError> {
+pub(crate) fn shader_key(
+    root: &Path,
+    source: &str,
+    entry: &str,
+    profile: &str,
+) -> Result<u64, ShaderError> {
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     shader_root_text(source).as_ref().hash(&mut hash);
     dependency_fingerprint_at(root, source)?.hash(&mut hash);
@@ -581,6 +586,15 @@ pub fn precompile_graph_at(
             shader_key(root, &pass.source, &pass.manifest.entry, profile)?,
             shader.words,
         );
+        if pass.has_bindless_variant() {
+            let source = bindless_source(pass);
+            let shader = compile_hlsl_at(root, &source, &pass.manifest.entry, profile)?;
+            verify_bindless_shader(pass, &shader.words)?;
+            jobs.insert(
+                shader_key(root, &source, &pass.manifest.entry, profile)?,
+                shader.words,
+            );
+        }
         if pass.manifest.stage != "compute" {
             let source = if pass.manifest.vertex_entry.is_some() {
                 pass.source.as_str()
@@ -609,6 +623,98 @@ pub fn precompile_graph_at(
     }
     Ok(jobs.len())
 }
+
+pub(crate) fn bindless_source(pass: &Pass) -> String {
+    format!(
+        "#define MODULE_ENGINE_BINDLESS_MATERIALS 1\n{}",
+        pass.source
+    )
+}
+
+pub(crate) fn verify_bindless_shader(pass: &Pass, words: &[u32]) -> Result<(), ShaderError> {
+    // The indexed variant has no pass-local descriptors. Its resources are
+    // sampled images, a sampler, and a read-only index buffer.
+    let mut bindings = BTreeMap::new();
+    let mut sets = BTreeMap::new();
+    let mut types = BTreeMap::new();
+    let mut variables = BTreeMap::new();
+    let mut strides = BTreeMap::new();
+    let mut read_only_rows = std::collections::BTreeSet::new();
+    let mut index = 5;
+    while index < words.len() {
+        let instruction = words[index];
+        let count = (instruction >> 16) as usize;
+        if count == 0 || index + count > words.len() {
+            return Err(ShaderError::InvalidSpirv("Malformed SPIR-V instruction"));
+        }
+        let opcode = instruction & 0xffff;
+        let a = &words[index + 1..index + count];
+        match opcode {
+            71 if a.len() >= 3 && a[1] == 33 => {
+                bindings.insert(a[0], a[2]);
+            }
+            71 if a.len() >= 3 && a[1] == 34 => {
+                sets.insert(a[0], a[2]);
+            }
+            71 if a.len() >= 3 && a[1] == 6 => {
+                strides.insert(a[0], a[2]);
+            }
+            72 if a.len() >= 3 && a[1] == 0 && a[2] == 24 => {
+                read_only_rows.insert(a[0]);
+            }
+            21 | 22 | 25 | 26 | 29 | 30 | 32 if !a.is_empty() => {
+                types.insert(a[0], (opcode, &a[1..]));
+            }
+            59 if a.len() >= 3 => {
+                variables.insert(a[1], (a[0], a[2]));
+            }
+            _ => {}
+        }
+        index += count;
+    }
+    let matches = |id: &u32, binding| {
+        let (pointer, storage) = *variables.get(id)?;
+        let (32, [_, element]) = types.get(&pointer).copied()? else {
+            return None;
+        };
+        let (opcode, operands) = types.get(element).copied()?;
+        match (binding, storage, opcode, operands) {
+            (0, 0, 29, [image]) => {
+                let (25, [component, 1, _, 0, 0, 1, ..]) = types.get(image).copied()? else {
+                    return None;
+                };
+                (types.get(component).copied() == Some((22, &[32]))).then_some(())
+            }
+            (1, 0, 26, []) => Some(()),
+            (2, 12, 30, [rows])
+                if read_only_rows.contains(element) && strides.get(rows) == Some(&4) =>
+            {
+                let (29, [component]) = types.get(rows).copied()? else {
+                    return None;
+                };
+                (types.get(component).copied() == Some((21, &[32, 0]))).then_some(())
+            }
+            _ => None,
+        }
+    };
+    let actual = bindings
+        .values()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
+    if bindings.len() != 3
+        || actual != [0, 1, 2].into_iter().collect()
+        || bindings
+            .iter()
+            .any(|(id, binding)| sets.get(id) != Some(&1) || matches(id, *binding).is_none())
+    {
+        return Err(ShaderError::ShaderInterface(format!(
+            "Built-in {} has an invalid bindless material descriptor interface",
+            pass.id
+        )));
+    }
+    Ok(())
+}
+
 pub(crate) fn verify_shader(pass: &Pass, words: &[u32], vertex: bool) -> Result<(), ShaderError> {
     let mut bindings = BTreeMap::new();
     let mut sets = BTreeMap::new();

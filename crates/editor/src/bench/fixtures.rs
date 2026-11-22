@@ -28,6 +28,32 @@ impl Fixture {
         }
     }
 
+    pub fn use_legacy_s4_textures(&mut self) -> Result<(), String> {
+        // Keep the same geometry and alpha adaptation on compatibility devices.
+        let mut reduced: BTreeMap<usize, Arc<TextureImage>> = BTreeMap::new();
+        for item in &mut self.scene.items {
+            if let Some(texture) = &item.material.base_color_texture {
+                let key = Arc::as_ptr(texture) as usize;
+                let small = match reduced.entry(key) {
+                    std::collections::btree_map::Entry::Occupied(entry) => entry.get().clone(),
+                    std::collections::btree_map::Entry::Vacant(entry) => entry
+                        .insert(Arc::new(downscale(texture, SPONZA_TEXTURE_SIDE)?))
+                        .clone(),
+                };
+                item.material.base_color_texture = Some(small);
+            }
+        }
+        let atlas_height = 1 + reduced.values().map(|texture| texture.height).sum::<u32>();
+        if atlas_height > 8192 {
+            return Err("Reduced S4 textures still exceed the compatibility atlas".into());
+        }
+        self.inventory["legacy_atlas_height"] = json!(atlas_height);
+        self.inventory["base_color_texture_max_edge"] = json!(SPONZA_TEXTURE_SIDE);
+        self.inventory["base_color_texture_reason"] =
+            json!("Texture reduction for the compatibility atlas");
+        Ok(())
+    }
+
     /// Workload for the present Core storage: query eight columns, update the
     /// motion payload and Transform for 1,000 matches, then extract transforms.
     pub fn tick(&mut self, frame: usize) -> Option<(f64, f64)> {
@@ -306,23 +332,24 @@ fn sponza(root: &Path) -> Result<Fixture, String> {
         }
         models.insert(file, items.len() - objects_before);
     }
-    // Reduce every base-color texture once, preserving shared images.
-    let mut reduced: BTreeMap<usize, Arc<TextureImage>> = BTreeMap::new();
-    for item in &mut items {
+    let mut images = BTreeMap::new();
+    for item in &items {
         if let Some(texture) = &item.material.base_color_texture {
-            let key = Arc::as_ptr(texture) as usize;
-            let small = match reduced.get(&key) {
-                Some(small) => small.clone(),
-                None => {
-                    let small = Arc::new(downscale(texture, SPONZA_TEXTURE_SIDE)?);
-                    reduced.insert(key, small.clone());
-                    small
-                }
-            };
-            item.material.base_color_texture = Some(small);
+            images.insert(
+                Arc::as_ptr(texture) as usize,
+                [texture.width, texture.height],
+            );
         }
     }
-    let atlas_height = 1 + reduced.values().map(|t| t.height).sum::<u32>();
+    let mut image_dimensions: Vec<_> = images.values().copied().collect();
+    image_dimensions.sort_unstable();
+    let original_atlas_height = 1 + image_dimensions.iter().map(|dims| dims[1]).sum::<u32>();
+    let max_edge = image_dimensions
+        .iter()
+        .flatten()
+        .copied()
+        .max()
+        .unwrap_or(0);
     // 16 × 8 grid on two storeys of the nave and side galleries.
     let points: Vec<_> = (0..256)
         .map(|i| {
@@ -340,8 +367,7 @@ fn sponza(root: &Path) -> Result<Fixture, String> {
     if sponza_triangles != SPONZA_TRIANGLES
         || sponza_primitives != SPONZA_PRIMITIVES
         || masked != 3
-        || reduced.len() != 26
-        || atlas_height > 8192
+        || image_dimensions.len() != 26
         || points.len() != 256
         || models.len() != 2
         || models.values().any(|&count| count == 0)
@@ -352,9 +378,9 @@ fn sponza(root: &Path) -> Result<Fixture, String> {
         inventory: json!({
             "interior":"Khronos glTF Sample Assets Sponza at e124e8d (pinned download)",
             "sponza_triangles":sponza_triangles,"sponza_primitives":sponza_primitives,
-            "base_color_textures":reduced.len(),"legacy_atlas_height":atlas_height,
-            "base_color_texture_max_edge":SPONZA_TEXTURE_SIDE,
-            "base_color_texture_reason":"legacy 8192 px vertical atlas; R2.2 removes it",
+            "base_color_textures":image_dimensions.len(),"legacy_atlas_height":null,
+            "base_color_texture_max_edge":max_edge,"base_color_texture_reason":"imported dimensions",
+            "original_base_color_dimensions":image_dimensions,"original_vertical_atlas_height":original_atlas_height,
             "alpha_mask_materials_drawn_opaque":masked,
             "imported_glb_primitives":models,
             "point_lights_defined":points.len(),"point_lights_rendered":null,"point_lights":points,
