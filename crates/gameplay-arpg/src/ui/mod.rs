@@ -1,3 +1,4 @@
+use crate::queries::player_id;
 use crate::{ArpgInput, AttackTelegraph, GameInputExt, GameStateExt, GameStatus};
 use egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
 use module_engine_core::{Camera, GameInput, GameState};
@@ -8,10 +9,10 @@ pub fn has_input(input: &GameInput) -> bool {
 }
 
 pub fn capture_input(state: &GameState) -> GameInput {
-    let Some(player) = state.player() else {
+    let Some(player) = player_id(&state.world).and_then(|id| state.world.object(id)) else {
         return GameInput::default();
     };
-    let position = player.object.transform.translation;
+    let position = player.transform.translation;
     let distance =
         |target: [f32; 3]| (target[0] - position[0]).powi(2) + (target[2] - position[2]).powi(2);
     let target = state
@@ -133,9 +134,8 @@ pub fn draw_hud(
         }
     }
     combat_visuals::draw(ui, rect, camera, state, aim);
-    let player = state.player();
-    if let Some(player) = player {
-        let health = player.components.get("health");
+    if let Some(player) = player_id(&state.world) {
+        let health = state.world.component(player, "health");
         let current = health
             .and_then(|h| h.get("current"))
             .and_then(|v| v.as_f64())
@@ -188,13 +188,8 @@ pub fn draw_hud(
         egui::FontId::proportional(15.),
         Color32::WHITE,
     );
-    for entity in state
-        .world
-        .entities_with(&["boss"])
-        .into_iter()
-        .filter_map(|id| state.world.entity(id))
-    {
-        let health = entity.components.get("health");
+    for id in state.world.entities_with(&["boss"]) {
+        let health = state.world.component(id, "health");
         let current = health
             .and_then(|h| h.get("current"))
             .and_then(serde_json::Value::as_f64)

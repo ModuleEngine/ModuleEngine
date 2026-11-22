@@ -4,6 +4,12 @@
 
 [English](current-status.md) | [Русский](ru/current-status.md) | [Documentation](README.md)
 
+**22 November 2026 — R1.7 routes live gameplay reads through Core ECS.**
+Crate Garden, Puzzle and ARPG read selected values by stable ID. GameHost
+projects the current tick's world into the existing Rust IPC packet. The
+Object provider remains a compatibility adapter.
+See the [consumer contract and verification routes](ecs-world.md#r17-consumers).
+
 **22 November 2026 — R1.6 streams changes in the accepted ECS scene to Vulkan.**
 Game, Scene and the Player use the retained CPU scene through GameHost.
 Bevy change tracking supplies candidates, and Host sends drawable edits after

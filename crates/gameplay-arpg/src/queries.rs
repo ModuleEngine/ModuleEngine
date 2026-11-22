@@ -22,10 +22,7 @@ impl GameStateExt for GameState {
         Ok(())
     }
     fn player(&self) -> Option<GameEntity> {
-        self.world
-            .entities_with(&["player"])
-            .first()
-            .and_then(|id| self.world.entity(*id))
+        self.world.entity(player_id(&self.world)?)
     }
     fn living_enemies(&self) -> usize {
         self.world
@@ -77,12 +74,16 @@ impl GameStateExt for GameState {
     }
 }
 
-fn world_component<T: for<'de> Deserialize<'de>>(
+pub(crate) fn player_id(world: &EcsWorld) -> Option<u64> {
+    world.entities_with(&["player"]).into_iter().next()
+}
+
+pub(crate) fn world_component<T: for<'de> Deserialize<'de>>(
     world: &EcsWorld,
     id: u64,
     name: &str,
 ) -> Option<T> {
-    serde_json::from_value(world.component(id, name)?.clone()).ok()
+    T::deserialize(world.component(id, name)?).ok()
 }
 pub(crate) fn normalized(v: [f32; 2]) -> [f32; 2] {
     let length = (v[0] * v[0] + v[1] * v[1]).sqrt();

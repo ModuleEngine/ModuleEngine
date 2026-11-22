@@ -1,6 +1,7 @@
 //! Shared world-projected combat feedback for editor Play and standalone Player.
 //! Damage and candidate targets come from the package's melee rules, not painted shapes.
 use super::screen_point;
+use crate::queries::player_id;
 use crate::{GameStateExt, GameStatus, MeleeArea};
 use egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
 use module_engine_core::{Camera, GameState};
@@ -15,18 +16,15 @@ pub fn draw(ui: &egui::Ui, rect: Rect, camera: Camera, state: &GameState, aim: O
         return;
     }
     let painter = ui.painter_at(rect);
-    let player = state.player();
-    if let Some(player) = player
+    if let Some(player) = player_id(&state.world)
         && !frame.attack_visuals.iter().any(|a| {
-            a.attacker == player.object.id
-                && current_incarnation(state, a.attacker, a.attacker_lifetime)
+            a.attacker == player && current_incarnation(state, a.attacker, a.attacker_lifetime)
         })
         && !frame.telegraphs.iter().any(|a| {
-            a.attacker == player.object.id
-                && current_incarnation(state, a.attacker, a.attacker_lifetime)
+            a.attacker == player && current_incarnation(state, a.attacker, a.attacker_lifetime)
         })
         && let Some(aim) = aim
-        && let Some(area) = state.melee_aim(player.object.id, aim)
+        && let Some(area) = state.melee_aim(player, aim)
     {
         paint_area(
             &painter,
@@ -37,7 +35,7 @@ pub fn draw(ui: &egui::Ui, rect: Rect, camera: Camera, state: &GameState, aim: O
             Stroke::new(1.5, Color32::from_rgba_unmultiplied(125, 225, 255, 180)),
         );
         direction_arrow(&painter, camera, rect, &area);
-        paint_targets(&painter, camera, rect, state, player.object.id, &area);
+        paint_targets(&painter, camera, rect, state, player, &area);
     }
     for attack in &frame.attack_visuals {
         let friendly = attack
@@ -130,10 +128,10 @@ fn paint_targets(
     area: &MeleeArea,
 ) {
     for id in state.melee_targets(attacker, area) {
-        if let Some(target) = state.world.entity(id) {
-            let radius = target
-                .components
-                .get("actor")
+        if let Some(target) = state.world.object(id) {
+            let radius = state
+                .world
+                .component(id, "actor")
                 .and_then(|a| a.get("radius"))
                 .and_then(serde_json::Value::as_f64)
                 .unwrap_or(0.35) as f32;
@@ -141,7 +139,7 @@ fn paint_targets(
                 painter,
                 camera,
                 rect,
-                target.object.transform.translation,
+                target.transform.translation,
                 radius.max(0.2),
                 Stroke::new(2.5, Color32::from_rgb(255, 195, 85)),
             );

@@ -1,6 +1,6 @@
 //! Source-owned component contracts, shared by authoring, runtime and export.
 use crate::{
-    AuthoredScene, GameEntity, PropertySchema, PropertyScope, PropertyType, ScriptContext,
+    AuthoredScene, EcsWorld, GameEntity, PropertySchema, PropertyScope, PropertyType, ScriptContext,
 };
 pub use native_transform::TransformCodec;
 use serde::{Deserialize, Serialize};
@@ -155,9 +155,7 @@ impl ComponentRegistry {
         }
     }
 
-    /// Package the current ECS values for the gameplay Rust worker. Scene
-    /// resolution has already applied defaults. Preserve the values verbatim
-    /// in the existing script property envelope and omit inactive attachments.
+    /// Package resolved entity DTOs in the gameplay Rust worker's wire format.
     pub fn script_context(
         &self,
         time: f64,
@@ -183,6 +181,38 @@ impl ComponentRegistry {
                         .entry(id)
                         .or_default()
                         .insert(name, fields.into_iter().collect());
+                }
+            }
+        }
+        packet
+    }
+
+    /// Project the current tick's ECS view into the gameplay Rust IPC packet.
+    /// Scene resolution has already applied defaults. Only copy payloads for
+    /// active registered attachments, preserving their exact property values.
+    pub fn script_context_from_world(
+        &self,
+        time: f64,
+        dt: f64,
+        world: &EcsWorld,
+        active: &BTreeSet<String>,
+    ) -> ScriptContext {
+        let mut packet = ScriptContext::new(time, dt, world.objects_snapshot());
+        packet
+            .references
+            .extend(packet.objects.iter().filter_map(|object| {
+                let references = world.references(object.id)?;
+                (!references.is_empty()).then(|| (object.id, references.clone()))
+            }));
+        for name in active.iter().filter(|name| self.schema(name).is_some()) {
+            for id in world.entities_with(&[name]) {
+                if let Some(Value::Object(fields)) = world.component(id, name) {
+                    packet
+                        .properties
+                        .components
+                        .entry(id)
+                        .or_default()
+                        .insert(name.clone(), fields.clone().into_iter().collect());
                 }
             }
         }
@@ -907,7 +937,7 @@ mod tests {
         );
 
         let id = u64::MAX;
-        let mut entity = entity(
+        let mut source_entity = entity(
             id,
             json!({
                 "external.settings": authored,
@@ -915,11 +945,38 @@ mod tests {
                 "external.settings.Unknown": {"kept": null},
             }),
         );
-        registry.resolve_defaults(&mut entity, &active());
-        let packet = registry.script_context(0., 0., vec![entity], &active());
+        registry.resolve_defaults(&mut source_entity, &active());
+        let mut target = entity(2, json!({}));
+        target.object.parent = Some(id);
+        target.references.insert("target".into(), id);
+        let removed = entity(4, json!({"external.settings": {"speed": 1.}}));
+        let mut world = EcsWorld::from_entities(vec![source_entity, target, removed]).unwrap();
+        let _accepted = world.checkpoint_tick(true);
+        world
+            .apply_commands(&[crate::WorldCommand::Remove { id: 4 }])
+            .unwrap();
+        world.component_mut(id, "external.settings").unwrap()["speed"] = json!(3.);
+
+        let active = BTreeSet::from([
+            "external.settings".into(),
+            "external.settings.Unknown".into(),
+        ]);
+        let packet = registry.script_context_from_world(0., 0., &world, &active);
+        let reference = registry.script_context(0., 0., world.entities_snapshot(), &active);
+        assert_eq!(
+            serde_json::to_vec(&packet).unwrap(),
+            serde_json::to_vec(&reference).unwrap()
+        );
         let packet: ScriptContext =
             serde_json::from_slice(&serde_json::to_vec(&packet).unwrap()).unwrap();
+        assert_eq!(
+            packet.objects.iter().map(|o| o.id).collect::<Vec<_>>(),
+            [2, id]
+        );
+        assert_eq!(packet.objects[0].parent, Some(id));
+        assert_eq!(packet.references[&2]["target"], id);
         let value = |key| packet.component_property(id, "external.settings", key);
+        assert_eq!(value("speed"), Some(&json!(3.)));
         let exact = value("Exact.Key").unwrap();
         assert_eq!(exact.get("0"), Some(&Value::Null));
         assert_eq!(exact["id"].as_u64(), Some(u64::MAX));
