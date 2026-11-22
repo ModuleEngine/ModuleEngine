@@ -107,6 +107,31 @@ class CollectTest(unittest.TestCase):
         self.assertEqual(by_type["comment"]["task"], "R2.3")  # the PR title tells which task it is about
         self.assertEqual([e["at"] for e in events], sorted((e["at"] for e in events), reverse=True))
 
+    def test_comments_fall_back_to_the_task_their_pr_resolves_to_from_its_branch(self):
+        """PR "Graphics work" on branch TechArt/R2.3-gpu-scene: "Looks good" on it belongs to R2.3, both comment kinds."""
+        pull = {"number": 9, "title": "Graphics work", "created_at": stamp(40), "html_url": f"https://github.com/{REPO}/pull/9",
+                "head": {"ref": "TechArt/R2.3-gpu-scene"}}
+        events, _ = self.collect(
+            pulls=[pull],
+            issues_comments=[{"issue_url": f"https://api.github.com/repos/{REPO}/issues/9", "created_at": stamp(2),
+                              "html_url": f"https://github.com/{REPO}/pull/9#c", "body": "Looks good"}],
+            pulls_comments=[{"pull_request_url": f"https://api.github.com/repos/{REPO}/pulls/9", "created_at": stamp(3),
+                             "html_url": f"https://github.com/{REPO}/pull/9#r", "body": "Looks good"}])
+        by_type = {e["type"]: e for e in events}
+        self.assertEqual({k: (v["task"], v["phase"]) for k, v in by_type.items()},
+                         {"pr": ("R2.3", "R2"), "comment": ("R2.3", "R2"), "review": ("R2.3", "R2")})
+
+    def test_a_comment_that_names_its_own_task_keeps_it(self):
+        pull = {"number": 9, "title": "Graphics work", "created_at": stamp(40), "head": {"ref": "TechArt/R2.3-gpu-scene"}}
+        events, _ = self.collect(pulls=[pull], issues_comments=[
+            {"issue_url": f"https://api.github.com/repos/{REPO}/issues/9", "created_at": stamp(2), "body": "this is really R1.6"}])
+        self.assertEqual([e["task"] for e in events if e["type"] == "comment"], ["R1.6"])
+
+    def test_a_comment_on_an_unknown_pr_has_no_task(self):
+        events, _ = self.collect(issues_comments=[
+            {"issue_url": f"https://api.github.com/repos/{REPO}/issues/99", "created_at": stamp(2), "body": "Looks good"}])
+        self.assertEqual([(e["task"], e["phase"]) for e in events], [(None, None)])
+
     def test_old_events_are_dropped(self):
         events, _ = self.collect(commits=[{"html_url": f"https://github.com/{REPO}/commit/a",
                                            "commit": {"message": "old", "committer": {"date": stamp(24 * 30)}}}])

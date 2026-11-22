@@ -88,10 +88,15 @@ def collect(repo: str, tasks: set[str], phases: set[str], now: dt.datetime, get:
 
     pulls = [p for p in fetch("pulls?state=all&sort=updated&direction=desc&per_page=30") if isinstance(p, dict)]
     pr_title = {p.get("number"): p.get("title") or "" for p in pulls}
+    # what each PR itself resolves to (title, then branch): a comment on it falls back to this
+    pr_ref = {p.get("number"): find_ref(p.get("title") or "", ((p.get("head") or {}).get("ref")) or "", tasks, phases)
+              for p in pulls}
     raw: list[dict] = []
 
     def add(kind: str, at: object, title: str, num: object, url: object, extra: str = "") -> None:
         task, phase = find_ref(title, extra, tasks, phases)
+        if task is None and phase is None and kind in ("comment", "review"):
+            task, phase = pr_ref.get(num, (None, None))  # nothing in the comment or the PR title: use the PR's own task
         raw.append({"type": kind, "at": at, "title": clip(title), "num": num if isinstance(num, int) else None,
                     "task": task, "phase": phase, "url": url})
 
