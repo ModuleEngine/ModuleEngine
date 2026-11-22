@@ -1028,8 +1028,10 @@ impl EcsWorld {
                     .is_some_and(|(edit, original)| edit.data.parent == original.parent)
             })
         {
-            for (&id, edit) in &staged.edits {
+            for &id in staged.edits.keys() {
                 self.validate_entity_references(id)?;
+            }
+            for (&id, edit) in &staged.edits {
                 crate::control::validate_object_transform(id, &edit.as_ref().unwrap().transform)?;
             }
             return Ok(());

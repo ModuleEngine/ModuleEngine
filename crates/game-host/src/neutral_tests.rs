@@ -2094,6 +2094,7 @@ fn r14_tick_rejection_discards_visible_writes_and_retry_starts_at_last_commit() 
     impl ExecutableSystem for Write {
         fn step(&mut self, ctx: &mut SystemContext<'_>, state: &mut Value) -> Result<(), String> {
             let next = state.as_u64().unwrap_or(0) + 1;
+            assert_eq!(ctx.resource("counter")?, &json!(next - 1));
             ctx.apply_commands(&[WorldCommand::Translate {
                 id: 1,
                 delta: [1., 0., 0.],
@@ -2175,9 +2176,10 @@ fn r14_tick_rejection_discards_visible_writes_and_retry_starts_at_last_commit() 
     fixture
         .composition
         .systems
-        .register(descriptor("fixture.write", ResourceAccess::Write), |_| {
-            Ok(Box::new(Write))
-        })
+        .register(
+            descriptor("fixture.write", ResourceAccess::ReadWrite),
+            |_| Ok(Box::new(Write)),
+        )
         .unwrap();
     let captured = reject.clone();
     fixture
