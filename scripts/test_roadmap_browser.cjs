@@ -31,7 +31,7 @@ function buildFixture(fixture, phases) {
     fs.writeFileSync(path.join(fixture, relative), withoutPhases(text, phases));
   }
   fs.mkdirSync(path.join(fixture, 'scripts'));
-  for (const name of ['roadmap_map.py', 'roadmap_map.html', 'roadmap_world.html']) {
+  for (const name of ['roadmap_map.py', 'roadmap_events.py', 'roadmap_map.html', 'roadmap_world.html']) {
     fs.copyFileSync(path.join(__dirname, name), path.join(fixture, 'scripts', name));
   }
   execFileSync(process.env.PYTHON || 'python', ['-B', 'scripts/roadmap_map.py', '--out', 'site/index.html'], {
