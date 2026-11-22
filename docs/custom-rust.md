@@ -51,6 +51,16 @@ The current editor call limit is 150 ms; the API accepts an explicit timeout. Co
 
 ScriptContext contains time, dt, base, objects, world_queries_available, permitted parameters, active resolved properties, and accumulated commands. Version 0.4 adds state/state_schema, input, and events. ctx.parameter/ctx.property/ctx.component_property read settings; global/module data is available through ctx.properties.global/modules. The inactive archive is not passed in. With an initialized Engine policy, render commands are restricted to exposed ranges and ready variants, including for compiled Rust. For legacy render-only Update, a provider without WorldObject reading can supply a context with objects=[] and world_queries_available=false; the script distinguishes an unavailable query capability from an empty world. World commands require corresponding provider support. In an old JSON context without world_queries_available, the value is false: query capability is not considered declared.
 
+<a id="named-object-references"></a>
+
+For scheduled GameHost Update, `ctx.object(id)` reads an object and its parent ID,
+and `ctx.reference(id, name)` reads a named reference target in the same snapshot.
+All IDs are exact `u64` values. The optional `references` field is a map from
+source object IDs to named target IDs. Older v3 workers ignore the additional
+JSON field. Updated workers read an absent field as empty, including for legacy
+Update and Speed. A script using `ctx.reference` needs the updated SDK sources.
+The existing v3 SDK pin and world command set still apply.
+
 | World | Renderer |
 | --- | --- |
 | object(id) — read local state. | set_render_parameter(pass, name, value) — a finite numeric scalar. |

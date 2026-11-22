@@ -156,6 +156,10 @@ pub struct ScriptContext {
     #[serde(default)]
     pub world_queries_available: bool,
     pub objects: Vec<WorldObject>,
+    /// Named references supplied by GameHost, keyed by the source object's stable ID.
+    /// Legacy Update, Speed and older packets supply no named references.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub references: BTreeMap<u64, BTreeMap<String, u64>>,
     /// Project asset IDs resolve to portable paths beneath the worker's project
     /// working directory. Older hosts and packets supply an empty map.
     #[serde(default)]
@@ -207,6 +211,7 @@ impl ScriptContext {
             base: 1.0,
             world_queries_available: true,
             objects,
+            references: BTreeMap::new(),
             asset_paths: BTreeMap::new(),
             parameters: BTreeMap::new(),
             properties: crate::PropertyData::default(),
@@ -235,6 +240,10 @@ impl ScriptContext {
     /// missing object; both otherwise produce None.
     pub fn object(&self, id: u64) -> Option<&WorldObject> {
         self.objects.iter().find(|o| o.id == id)
+    }
+    /// Read a named reference as the target's stable ID in the input snapshot.
+    pub fn reference(&self, object: u64, name: &str) -> Option<u64> {
+        self.references.get(&object)?.get(name).copied()
     }
     /// Resolve a stable asset ID (or asset://ID) for filesystem/content access.
     pub fn asset_path(&self, id: &str) -> Option<&str> {
@@ -513,6 +522,39 @@ mod tests {
         assert_eq!(legacy.base, 1.0);
         assert!(legacy.commands.is_empty());
         assert!(legacy.asset_paths.is_empty());
+        assert!(legacy.references.is_empty());
+        assert!(!json.contains("\"references\""));
+    }
+
+    #[test]
+    fn named_reference_wire_extension_preserves_old_object_input() {
+        #[derive(Deserialize)]
+        struct PreviousObjectInput {
+            objects: Vec<WorldObject>,
+        }
+
+        let target = 9_007_199_254_740_993;
+        let child = u64::MAX;
+        let mut packet = ScriptContext::new(
+            0.,
+            0.,
+            vec![WorldObject {
+                id: child,
+                parent: Some(target),
+                transform: Transform::default(),
+                color: [255; 4],
+            }],
+        );
+        packet
+            .references
+            .insert(child, BTreeMap::from([("owner".into(), target)]));
+
+        let wire = serde_json::to_value(&packet).unwrap();
+        let older: PreviousObjectInput = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(older.objects, packet.objects);
+        let current: ScriptContext = serde_json::from_value(wire).unwrap();
+        assert_eq!(current.reference(child, "owner"), Some(target));
+        assert_eq!(current, packet);
     }
     #[test]
     fn stable_asset_paths_resolve_in_script_context_and_survive_wire_roundtrip() {

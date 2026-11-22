@@ -47,6 +47,17 @@ Workbench использует один ограниченный store для Ga
 
 ScriptContext содержит time, dt, base, objects, world_queries_available, разрешённые parameters, активные resolved properties и накапливаемые commands. В 0.4 добавлены state/state_schema, input и events. ctx.parameter/ctx.property/ctx.component_property читают настройки; global/module данные доступны через ctx.properties.global/modules. Inactive archive не передаётся. При initialized Engine policy render команды ограничены exposed ranges и ready variants, в том числе для compiled Rust. Для legacy render-only Update провайдер без чтения WorldObject может выдать контекст с objects=[] и world_queries_available=false; скрипт отличает отсутствие возможности запроса от пустого мира. Команды мира требуют соответствующей поддержки провайдера. У старого JSON-контекста без world_queries_available значение false: возможность запроса не считается заявленной.
 
+<a id="named-object-references"></a>
+
+В запланированной системе Update хоста `ctx.object(id)` читает объект и ID
+родителя, а `ctx.reference(id, name)` читает цель именованной ссылки из того же
+снимка. Все ID передаются точно как `u64`. Необязательное поле `references`
+содержит карту от ID исходных объектов к именованным ID целей. Старые воркеры v3
+пропускают дополнительное поле JSON. Обновлённые воркеры читают отсутствующее
+поле как пустое, в том числе для legacy Update и Speed. Скрипту с
+`ctx.reference` нужны обновлённые исходники SDK. Действуют прежние требования
+к закреплённой версии SDK v3 и прежний набор команд мира.
+
 | Мир | Рендерер |
 | --- | --- |
 | object(id) — чтение локального состояния. | set_render_parameter(pass, name, value) — конечный числовой scalar. |
