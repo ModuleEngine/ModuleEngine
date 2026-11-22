@@ -41,14 +41,28 @@ def clip(text: object, limit: int = TITLE_LIMIT) -> str:
     return line if len(line) <= limit else line[: limit - 1].rstrip() + "…"
 
 
-def find_ref(text: str, tasks: set[str], phases: set[str]) -> tuple[str | None, str | None]:
-    """The roadmap task (and its phase) a text mentions, only ids that exist in the roadmap."""
-    text = text or ""
-    for task in sorted(tasks, key=len, reverse=True):
-        if re.search(rf"(?<![\w.-]){re.escape(task)}(?![\w-])(?!\.\d)", text):
+def _first_mention(text: str, ids: set[str]) -> str | None:
+    """The id that appears first in the text; ids are tried longest first so R10.1 is not read as R1."""
+    if not ids:
+        return None
+    alternatives = "|".join(re.escape(i) for i in sorted(ids, key=lambda i: (-len(i), i)))
+    tail = r"(?!\w)(?!\.\d)(?!-\d)"
+    found = re.search(rf"(?<![\w.])({alternatives}){tail}", text or "")
+    return found.group(1) if found else None
+
+
+def find_ref(title: str, extra: str, tasks: set[str], phases: set[str]) -> tuple[str | None, str | None]:
+    """The roadmap task (and its phase) an event belongs to, from known ids only and in a fixed order:
+    the first task in the title, else the first task in `extra` (branch name, comment body, rest of a commit
+    message), else the first phase named in the title, else in `extra`. The same text always gives the same
+    answer, whatever the iteration order of the sets."""
+    for text in (title, extra):
+        task = _first_mention(text, tasks)
+        if task:
             return task, task.rsplit(".", 1)[0]
-    for phase in sorted(phases, key=len, reverse=True):
-        if re.search(rf"(?<![\w.-]){re.escape(phase)}(?![\w-])(?!\.\d)", text):
+    for text in (title, extra):
+        phase = _first_mention(text, phases)
+        if phase:
             return None, phase
     return None, None
 
@@ -77,7 +91,7 @@ def collect(repo: str, tasks: set[str], phases: set[str], now: dt.datetime, get:
     raw: list[dict] = []
 
     def add(kind: str, at: object, title: str, num: object, url: object, extra: str = "") -> None:
-        task, phase = find_ref(f"{title} {extra}", tasks, phases)
+        task, phase = find_ref(title, extra, tasks, phases)
         raw.append({"type": kind, "at": at, "title": clip(title), "num": num if isinstance(num, int) else None,
                     "task": task, "phase": phase, "url": url})
 
@@ -89,8 +103,9 @@ def collect(repo: str, tasks: set[str], phases: set[str], now: dt.datetime, get:
     for c in fetch("commits?per_page=30"):
         if isinstance(c, dict):
             message = ((c.get("commit") or {}).get("message")) or ""
+            head, _, rest = message.partition("\n")
             when = (((c.get("commit") or {}).get("committer")) or {}).get("date")
-            add("commit", when, message, None, c.get("html_url"))
+            add("commit", when, head, None, c.get("html_url"), rest)
     for c in fetch("issues/comments?sort=created&direction=desc&per_page=30"):
         if isinstance(c, dict):
             num = int(str(c.get("issue_url") or "0").rsplit("/", 1)[-1] or 0) or None

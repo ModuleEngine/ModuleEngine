@@ -3,6 +3,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 import urllib.error
@@ -35,18 +36,48 @@ def fake_api(**routes):
 
 
 class FindRefTest(unittest.TestCase):
+    def ref(self, title, extra="", tasks=TASKS, phases=PHASES):
+        return roadmap_events.find_ref(title, extra, tasks, phases)
+
     def test_finds_only_known_task_ids(self):
-        self.assertEqual(roadmap_events.find_ref("Finish R2.3 (draft)", TASKS, PHASES), ("R2.3", "R2"))
-        self.assertEqual(roadmap_events.find_ref("v1.6 and R9.9 are not tasks", TASKS, PHASES), (None, None))
+        self.assertEqual(self.ref("Finish R2.3 (draft)"), ("R2.3", "R2"))
+        self.assertEqual(self.ref("v1.6 and R9.9 are not tasks"), (None, None))
 
     def test_task_id_is_not_a_prefix_match(self):
-        self.assertEqual(roadmap_events.find_ref("R10.1 landed", TASKS, PHASES), ("R10.1", "R10"))
-        self.assertEqual(roadmap_events.find_ref("R1.65 is something else", TASKS, PHASES), (None, None))
-        self.assertEqual(roadmap_events.find_ref("see R1.6.", TASKS, PHASES), ("R1.6", "R1"))
+        self.assertEqual(self.ref("R10.1 landed"), ("R10.1", "R10"))
+        self.assertEqual(self.ref("R1.65 is something else"), (None, None))
+        self.assertEqual(self.ref("see R1.6."), ("R1.6", "R1"))
 
     def test_phase_mention_falls_back_to_the_phase(self):
-        self.assertEqual(roadmap_events.find_ref("R2: render groundwork", TASKS, PHASES), (None, "R2"))
-        self.assertEqual(roadmap_events.find_ref("R20 is unrelated", TASKS, PHASES), (None, None))
+        self.assertEqual(self.ref("R2: render groundwork"), (None, "R2"))
+        self.assertEqual(self.ref("R20 is unrelated"), (None, None))
+
+    def test_the_first_task_in_the_title_wins(self):
+        self.assertEqual(self.ref("Record R2.3 and then R1.6"), ("R2.3", "R2"))
+        self.assertEqual(self.ref("Record R1.6 and then R2.3"), ("R1.6", "R1"))
+
+    def test_the_title_beats_the_branch_and_the_branch_is_the_fallback(self):
+        self.assertEqual(self.ref("Finish R1.6", "claude/r2.3-work R2.3"), ("R1.6", "R1"))
+        self.assertEqual(self.ref("Finish things", "claude/R2.3-work"), ("R2.3", "R2"))
+        self.assertEqual(self.ref("Work on R2", "R1.6"), ("R1.6", "R1"))
+
+    def test_pr_35_title_is_stable_whatever_the_set_order(self):
+        """Same-length ids once came out in set order: R1.6, R1.7 or R2.3 depending on PYTHONHASHSEED."""
+        title = "Record R1.6 completion and the starts of R1.7 and R2.3"
+        roadmap = {f"R{p}.{n}" for p in range(0, 11) for n in range(1, 9)}
+        for seed in range(25):
+            ids = set(sorted(roadmap, key=lambda i: hash((seed, i))))
+            self.assertEqual(self.ref(title, "TechArt/roadmap-r16-r17-r23", ids, {i.split(".")[0] for i in ids}), ("R1.6", "R1"))
+
+    def test_same_answer_under_different_hash_seeds(self):
+        code = ("import sys; sys.path.insert(0, %r); import roadmap_events, roadmap_map; "
+                "en = roadmap_map.parse(open(%r, encoding='utf-8').read(), 'en'); "
+                "t = {x.id for p in en for x in p.tasks}; print(roadmap_events.find_ref("
+                "'Record R1.6 completion and the starts of R1.7 and R2.3', '', t, {p.id for p in en}))"
+                % (str(Path(__file__).resolve().parent), str(roadmap_map.ROOT / roadmap_map.EN_PATH)))
+        answers = {subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True,
+                                  env={"PYTHONHASHSEED": str(seed), "PATH": ""}).stdout for seed in range(6)}
+        self.assertEqual(answers, {"('R1.6', 'R1')\n"})
 
 
 class CollectTest(unittest.TestCase):
