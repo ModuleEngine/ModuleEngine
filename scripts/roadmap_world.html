@@ -261,7 +261,11 @@ for (const p of provs) { if (p.kind !== 'task') continue; const B = BIO[p.reg.bi
   while (got < B.n && tries++ < 200) { const x = Math.round(p.x + (rnd() - .5) * 40), y = Math.round(p.y + (rnd() - .5) * 40); if (Math.hypot(x - p.x, y - p.y) < 10 || Math.hypot(x - p.x - 8, y - p.y - 4) < 9) continue;
     const sp = S[B.deco[Math.floor(rnd() * B.deco.length)]]; if (!okSpot(p.i, x, y, sp.width, sp.height)) continue; deco.push({ sp, x, y }); got++; } }
 deco.sort((a, b) => a.y - b.y).forEach(d => stamp(d.sp, d.x, d.y));
-const findSpot = (reg, sp) => { for (let k = 0; k < 600; k++) { const p = reg.provs[Math.floor(rnd() * reg.provs.length)], x = Math.round(p.x + (rnd() - .5) * 30), y = Math.round(p.y + (rnd() - .5) * 30); if (okSpot(p.i, x, y, sp.width, sp.height) && Math.hypot(x - p.x, y - p.y) > 11) return [x, y]; } return null; };
+const findSpot = (reg, sp) => {
+  if (!reg?.provs.length) return null;
+  for (let k = 0; k < 600; k++) { const p = reg.provs[Math.floor(rnd() * reg.provs.length)], x = Math.round(p.x + (rnd() - .5) * 30), y = Math.round(p.y + (rnd() - .5) * 30); if (okSpot(p.i, x, y, sp.width, sp.height) && Math.hypot(x - p.x, y - p.y) > 11) return [x, y]; }
+  return null;
+};
 const volSpot = findSpot(regOf.R2, S.volcano); if (volSpot) stamp(S.volcano, ...volSpot);
 const millSpot = findSpot(regOf.R0, S.mill);
 const treeSpot = findSpot(regOf.R1, S.wtree); if (treeSpot) stamp(S.wtree, ...treeSpot);
@@ -280,8 +284,11 @@ const regDone = r => r.provs.every(p => p.st === 'done'), regAct = r => r.provs.
 function bez(a, b, bend) { const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2, dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy); const c = [mx - dy / L * L * bend, my + dx / L * L * bend]; const pts = []; const n = Math.ceil(L * 1.3); for (let s = 0; s <= n; s++) { const t = s / n, u = 1 - t; pts.push([u * u * a[0] + 2 * u * t * c[0] + t * t * b[0], u * u * a[1] + 2 * u * t * c[1] + t * t * b[1]]); } return pts; }
 const aw = arrows.map((e, k) => { const A = [e.a.cx, e.a.cy], B = [e.b.cx, e.b.cy]; let pts = bez(A, B, k % 2 ? .22 : -.22); const trim = (arr, d, fromEnd) => { let i = fromEnd ? arr.length - 1 : 0; const o = fromEnd ? arr[arr.length - 1] : arr[0]; while (i > 0 && i < arr.length - 1 && Math.hypot(arr[i][0] - o[0], arr[i][1] - o[1]) < d) i += fromEnd ? -1 : 1; return fromEnd ? arr.slice(0, i + 1) : arr.slice(i); };
   pts = trim(trim(pts, 17, false), 20, true); return { ...e, pts, st: regDone(e.a) ? 'done' : regAct(e.a) ? 'act' : 'fut' }; });
-if (true) { const s = regOf.R0.provs[0]; aw.push({ a: { key: 'V' }, b: regOf.R0, st: 'done', pts: trim2(bez([provs.find(p => p.key === 'v042').x + 3, provs.find(p => p.key === 'v042').y - 4], [s.x - 8, s.y + 2], .2)) }); }
-function trim2(p) { return p; }
+const start = regOf.R0?.provs[0];
+const v042 = provs.find(p => p.key === 'v042');
+if (start && v042) {
+  aw.push({ a: { key: 'V' }, b: regOf.R0, st: 'done', pts: bez([v042.x + 3, v042.y - 4], [start.x - 8, start.y + 2], .2) });
+}
 let hovReg = null;
 function drawArrow(ctx, e, t) {
   const hot = hovReg && (e.a.key === hovReg || e.b.key === hovReg) || (selReg && (e.a.key === selReg || e.b.key === selReg)), pts = e.pts, n = pts.length; if (n < 4) return;
@@ -296,10 +303,18 @@ function drawArrow(ctx, e, t) {
 const fireBorder = []; for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const i = y * W + x, q = ids[i]; if (q >= 0 && (bflag[i] || kind[i] === 3)) { const st = provs[q].st; if (st === 'cur' || st === 'front') fireBorder.push([x, y, st === 'cur']); } }
 const FIRE = ['#ffe066', '#ff9a1f', '#e0411a', '#a8220f'].map(P);
 function ambient(ctx, t) {
-  const r7 = regOf.R7; for (let k = 0; k < 16; k++) { const y = r7.cy - 34 + ((t / 70 + k * 37) % 70), x = r7.cx - 46 + (k * 53) % 92 + Math.sin(t / 500 + k) * 3; ctx.fillStyle = k & 1 ? '#e29a3e' : '#c0662a'; ctx.fillRect(Math.round(x), Math.round(y), 1, 1); }
-  const r9 = regOf.R9; ctx.globalAlpha = .45 + .2 * Math.sin(t / 400); ctx.fillStyle = '#fff2a0'; for (let k = 0; k < 3; k++) { const a = -2.6 + k * .5 + Math.sin(t / 1500 + k) * .15; for (let d = 6; d < 46; d += 2) ctx.fillRect(Math.round(r9.cx + Math.cos(a) * d), Math.round(r9.cy - 14 + Math.sin(a) * d), 1, 1); } ctx.globalAlpha = 1;
-  const r10 = regOf.R10; for (let k = 0; k < 14; k++) { const u = (t / 60 + k * 17) % 46; ctx.fillStyle = k % 3 ? '#ffffff' : '#9fdcff'; ctx.fillRect(Math.round(r10.cx - 40 + (k * 29) % 80), Math.round(r10.cy + 14 - u), 1, 1); }
-  const r5 = regOf.R5; for (let k = 0; k < 6; k++) { const x = Math.round(r5.cx - 42 + hash(k, Math.floor(t / 600), 3) * 84), y = Math.round(r5.cy - 18 + hash(k, Math.floor(t / 600), 4) * 36); const q = at(x, y); if (q >= 0 && provs[q].reg === r5) { ctx.fillStyle = '#fff6c8'; ctx.fillRect(x, y, 1, 1); ctx.fillRect(x - 1, y, 3, 1 * 0 + 1); } }
+  const r7 = regOf.R7;
+  if (r7) for (let k = 0; k < 16; k++) { const y = r7.cy - 34 + ((t / 70 + k * 37) % 70), x = r7.cx - 46 + (k * 53) % 92 + Math.sin(t / 500 + k) * 3; ctx.fillStyle = k & 1 ? '#e29a3e' : '#c0662a'; ctx.fillRect(Math.round(x), Math.round(y), 1, 1); }
+  const r9 = regOf.R9;
+  if (r9) {
+    ctx.globalAlpha = .45 + .2 * Math.sin(t / 400); ctx.fillStyle = '#fff2a0';
+    for (let k = 0; k < 3; k++) { const a = -2.6 + k * .5 + Math.sin(t / 1500 + k) * .15; for (let d = 6; d < 46; d += 2) ctx.fillRect(Math.round(r9.cx + Math.cos(a) * d), Math.round(r9.cy - 14 + Math.sin(a) * d), 1, 1); }
+    ctx.globalAlpha = 1;
+  }
+  const r10 = regOf.R10;
+  if (r10) for (let k = 0; k < 14; k++) { const u = (t / 60 + k * 17) % 46; ctx.fillStyle = k % 3 ? '#ffffff' : '#9fdcff'; ctx.fillRect(Math.round(r10.cx - 40 + (k * 29) % 80), Math.round(r10.cy + 14 - u), 1, 1); }
+  const r5 = regOf.R5;
+  if (r5) for (let k = 0; k < 6; k++) { const x = Math.round(r5.cx - 42 + hash(k, Math.floor(t / 600), 3) * 84), y = Math.round(r5.cy - 18 + hash(k, Math.floor(t / 600), 4) * 36); const q = at(x, y); if (q >= 0 && provs[q].reg === r5) { ctx.fillStyle = '#fff6c8'; ctx.fillRect(x, y, 1, 1); ctx.fillRect(x - 1, y, 3, 1 * 0 + 1); } }
 }
 /* ---------- canvas ---------- */
 const cv = document.getElementById('map'); cv.width = W; cv.height = H;
