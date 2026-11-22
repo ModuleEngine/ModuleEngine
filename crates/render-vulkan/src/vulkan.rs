@@ -994,7 +994,7 @@ impl VulkanRenderer {
         }
         let memory = unsafe { self.device.allocate_memory(&info, None) }
             .map_err(VulkanError::api("allocate resource memory"))?;
-        Ok(ResourceMemory::Standalone(self.device.clone(), memory))
+        Ok(ResourceMemory::Standalone(self.context.clone(), memory))
     }
     fn buffer(&self, size: u64, usage: vk::BufferUsageFlags) -> Result<Buffer, VulkanError> {
         unsafe {
@@ -3164,34 +3164,39 @@ mod tests {
         let mut renderer = VulkanRenderer::new().unwrap();
         let counts = renderer.allocations.clone();
         let initial = counts.snapshot();
-        for fault in [
-            AllocationFault::BufferHandle,
-            AllocationFault::BufferMemory,
-            AllocationFault::ImageHandle,
-            AllocationFault::ImageMemory,
-            AllocationFault::ImageView,
-        ] {
-            renderer.allocation_fault = Some(fault);
-            let error = match fault {
-                AllocationFault::BufferHandle | AllocationFault::BufferMemory => renderer
-                    .buffer(4096, vk::BufferUsageFlags::VERTEX_BUFFER)
-                    .err(),
-                _ => renderer
-                    .image(32, 32, vk::Format::R8G8B8A8_UNORM, false)
-                    .err(),
+        // Exercise standalone allocations even on a device that offers the allocator.
+        let allocator = renderer.allocator.take();
+        for allocator in allocator.into_iter().map(Some).chain([None]) {
+            renderer.allocator = allocator;
+            for fault in [
+                AllocationFault::BufferHandle,
+                AllocationFault::BufferMemory,
+                AllocationFault::ImageHandle,
+                AllocationFault::ImageMemory,
+                AllocationFault::ImageView,
+            ] {
+                renderer.allocation_fault = Some(fault);
+                let error = match fault {
+                    AllocationFault::BufferHandle | AllocationFault::BufferMemory => renderer
+                        .buffer(4096, vk::BufferUsageFlags::VERTEX_BUFFER)
+                        .err(),
+                    _ => renderer
+                        .image(32, 32, vk::Format::R8G8B8A8_UNORM, false)
+                        .err(),
+                }
+                .expect("injected allocation point must reject the partial object");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("Injected Vulkan allocation failure"),
+                    "{error}"
+                );
+                assert_eq!(
+                    counts.snapshot(),
+                    initial,
+                    "no handle or device-memory allocation may survive {fault:?}"
+                );
             }
-            .expect("injected allocation point must reject the partial object");
-            assert!(
-                error
-                    .to_string()
-                    .contains("Injected Vulkan allocation failure"),
-                "{error}"
-            );
-            assert_eq!(
-                counts.snapshot(),
-                initial,
-                "no handle or device-memory allocation may survive {fault:?}"
-            );
         }
         renderer.allocation_fault = None;
         let frame = renderer

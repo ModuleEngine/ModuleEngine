@@ -72,7 +72,7 @@ impl DeviceAllocator {
 }
 
 pub(crate) enum ResourceMemory {
-    Standalone(ash::Device, vk::DeviceMemory),
+    Standalone(Arc<DeviceLifetime>, vk::DeviceMemory),
     Suballocated {
         allocation: Option<Allocation>,
         owner: Arc<DeviceAllocator>,
@@ -99,7 +99,8 @@ impl ResourceMemory {
         copy: impl FnOnce(*mut u8),
     ) -> Result<(), VulkanError> {
         match self {
-            Self::Standalone(device, memory) => unsafe {
+            Self::Standalone(context, memory) => unsafe {
+                let device = &context.device;
                 let mapped = device
                     .map_memory(*memory, 0, size, vk::MemoryMapFlags::empty())
                     .map_err(VulkanError::api("map buffer"))?;
@@ -122,7 +123,9 @@ impl ResourceMemory {
 impl Drop for ResourceMemory {
     fn drop(&mut self) {
         match self {
-            Self::Standalone(device, memory) => unsafe { device.free_memory(*memory, None) },
+            Self::Standalone(context, memory) => unsafe {
+                context.device.free_memory(*memory, None);
+            },
             Self::Suballocated { allocation, owner } => {
                 if let Err(error) = owner
                     .allocator
