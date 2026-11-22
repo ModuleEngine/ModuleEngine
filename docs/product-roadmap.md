@@ -556,12 +556,12 @@ Stages AI-A and AI-B are planning labels, not versions. By the owner's decision 
 
 ### What already exists and what is missing
 
-Checked against `main` at `279b036`; R1, R4 and R6 change several rows, so AI-A starts by re-checking this table:
+Checked against `main` at `bae6047` (R1.2, R1.4 and R1.6 done; R1.8, R4 and R6 not yet); AI-A starts by re-checking this table:
 
 | Area | Current state | Consequence |
 | --- | --- | --- |
 | New logic during Play | [Custom Rust](custom-rust.md) compiles in the background; a compatible hot apply keeps declared state ([custom-state.md](custom-state.md)); a failed tick is rolled back and the previous version keeps running. | Generated mechanics can already be applied without stopping the game. |
-| Scene and system graph during Play | Authored changes and a new graph require **Stop** ([editor-game.md](editor-game.md)); **Restart** is cheap (no recompilation, no GPU recreation). | Until R1, applying a scene change means Stop → Apply → Play. |
+| Scene and system graph during Play | Authored changes and a new graph require **Stop** ([editor-game.md](editor-game.md)); **Restart** is cheap (no recompilation, no GPU recreation). | Applying a scene change still means Stop → Apply → Play. R1.2 (`StableId` index) and R1.4 (change journal) are done and are the base for live patching in AI-B. |
 | Ready-made modules | ARPG systems give X/Z movement, collision, combat and health ([gameplay.md](gameplay.md)); there is no gravity, jump or rigid-body physics. | A platformer needs [R6](#rebuild-r6) physics; without it jump would be hand-written Rust. |
 | Vocabulary for the AI | Component schemas and the [capability inventory](engine-capabilities.md) describe installed modules and fields; `--check` validates a saved project. | The AI can be given a typed catalogue and a validator instead of guessing. |
 | Delivery | Save, `--check` and `--export-game` produce a Player with prebuilt workers. | Accepted changes become a standalone game through the existing route. |
@@ -586,7 +586,7 @@ Checked against `main` at `279b036`; R1, R4 and R6 change several rows, so AI-A 
 | AI-A.0 | Re-check the table above on the then-current `main`; confirm that WASD reaches game input in an empty project without the ARPG package; measure Custom Rust compile time per request. | Results recorded with numbers; a missing input source is added as the smallest generic module or the prototype uses an existing game package. | 0.5–1 d |
 | AI-A.1 | A command-line agent works on a project folder with tools: read the module/schema inventory (including `rapier3d` bodies, colliders and character controller from R6.1), read and write scene JSON and `custom_sources`, run `--check`. No engine or editor code changes. | The agent produces a changeset that passes `--check` for each request. | 2 d |
 | AI-A.2 | Run the five reference requests on an empty scene (character with WASD; platforms and jump; double jump; moving platforms; slower movement and a new environment). The author keeps the editor open and applies each answer with Apply Rust or Stop/Play. | Recorded: share of requests playable within ≤2 iterations, time from request to playable result, number of manual edits, share of requests met by modules without new Rust. | 1–2 d |
-| AI-A.3 | Decision. | Owner decides go / change / drop on the recorded metrics; the result is recorded in [decisions](decisions.md). | — |
+| AI-A.3 | Decision. | Owner decides go / change / drop on the recorded metrics; the result is recorded in [decisions](decisions.md). | 0.5 d |
 
 <a id="ai-b"></a>
 
