@@ -51,6 +51,16 @@ RU = """
 
 
 class ParseTest(unittest.TestCase):
+    def test_optional_prefix_is_parsed_and_must_match_between_languages(self):
+        en = "### R1 — P · 1 week\n\n| R1.1 | T | C | Optional · 2–3 d |\n"
+        ru = "### R1 — Ф · 1 неделя\n\n| R1.1 | З | К | Необязательно · 2–3 д |\n"
+        task = roadmap_map.parse(en, "en")[0].tasks[0]
+        self.assertEqual((task.state, task.optional), ("todo", True))
+        self.assertEqual(roadmap_map.compare(roadmap_map.parse(en, "en"), roadmap_map.parse(ru, "ru")), [])
+        plain_ru = ru.replace("Необязательно · ", "")
+        errors = roadmap_map.compare(roadmap_map.parse(en, "en"), roadmap_map.parse(plain_ru, "ru"))
+        self.assertTrue(any("optional" in e for e in errors), errors)
+
     def test_reads_statuses_from_last_column(self):
         phases = roadmap_map.parse(EN, "en")
         self.assertEqual([p.id for p in phases], ["R0", "AI-A"])
@@ -82,8 +92,8 @@ class ParseTest(unittest.TestCase):
 
 
 ROOT = Path(roadmap_map.__file__).resolve().parent.parent
-WORDS = {"en": {"done": "Done", "cur": "In progress", "todo": "1 d"},
-         "ru": {"done": "Сделано", "cur": "В работе", "todo": "1 д"}}
+WORDS = {"en": {"done": "Done", "cur": "In progress", "todo": "1 d", "opt": "Optional · 1 d"},
+         "ru": {"done": "Сделано", "cur": "В работе", "todo": "1 д", "opt": "Необязательно · 1 д"}}
 STATE_NAMES = {"done": "Готово", "cur": "В работе", "todo": "Впереди"}
 
 
@@ -181,6 +191,13 @@ process.stdout.write(JSON.stringify({
                 self.assertEqual(self.fixture(spec)["phases"]["g05"]["cls"], "gate")
         passed = self.fixture(dict(base, R1=["done", "done"], R3=["done"], R4=["done"]))
         self.assertEqual(passed["phases"]["g05"]["cls"], "done")
+
+    def test_open_optional_task_does_not_block_phase_or_checkpoint(self):
+        spec = {"R0": ["done"], "R2": ["done"], "R1": ["done", "done", "opt"], "R3": ["done"], "R4": ["done"]}
+        m = self.fixture(spec)
+        self.assertEqual(m["phases"]["R1"]["cls"], "done")
+        self.assertEqual(m["phases"]["g05"]["cls"], "done")
+        self.assertIn(["R1.3", "Впереди"], [list(t) for t in m["phases"]["R1"]["tasks"]])
 
     def test_every_listed_dependency_has_an_arrow(self):
         m = self.fixture({"R0": ["cur"]})["phases"]

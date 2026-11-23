@@ -393,7 +393,7 @@ Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
 | R1.6 | Change-driven extraction: render extraction reads `Changed<…>` and produces deltas (spawned, moved, removed, material changed) instead of a full `SceneSnapshot`. The full snapshot remains for the software renderer and diagnostics. | On S3 with 1,000 moving objects the delta contains only those objects. Schema-only edits must not produce a transform delta. | Done |
 | R1.7 | Migrate consumers: `game-host`/`game_worker`, `runtime-script` typed commands, `project-g1`, `project-puzzle`, `gameplay-arpg`, `example-two-arenas`. The Object provider stays a compatibility adapter. | All crate test suites pass; no consumer touches the old column maps. | In progress (4–6 d) |
 | R1.8 | Acceptance and removal of the old storage. Measure the [session checkpoint copy cost](#r18-session-checkpoint). | S2 tick p95 [not worse](bench.md#not-worse) than R0.6. S3 ECS tick p99 ≤2 ms in the standalone fixture, taken over all samples of the five paired runs combined (each run's own p99 is reported alongside). The paired comparison with R0.6 is reported in full; its memory and S3 ECS differences are the [accepted cost](#r18-accepted-cost) of R1.1/R1.2 and do not block. Compare S3 with session metadata against the R1.4 baseline and report the copy cost separately. S1/S2 absolute gates pass (60 FPS, S1 peak working set ≤1 GiB). Independent review. | 2 d |
-| R1.9 | S3 ECS tick optimisation ([accepted regression](#r18-accepted-cost) from R1.8). First add a per-operation microbenchmark for the 1,000 motion updates: Bevy lookup, `Arc`/binding bookkeeping, JSON access. Then batch transform updates and move the per-write bookkeeping to once per batch. | Paired Release comparison against the R1.8 candidate on `main` after #38 (`133f98f`) or later: S3 ECS mean and p95 lower, no S3 sample above 2 ms in a strict per-sample run, S2 tick p95 [not worse](bench.md#not-worse) than R0.6. Late rejection and retry through `GameHost` still pass. Independent review. | 2–3 d |
+| R1.9 | S3 ECS tick optimisation ([accepted regression](#r18-accepted-cost) from R1.8). First add a per-operation microbenchmark for the 1,000 motion updates: Bevy lookup, `Arc`/binding bookkeeping, JSON access. Then batch transform updates and move the per-write bookkeeping to once per batch. | Paired Release comparison against the R1.8 candidate on `main` after #38 (`133f98f`) or later: S3 ECS mean and p95 lower, no S3 sample above 2 ms in a strict per-sample run, S2 tick p95 [not worse](bench.md#not-worse) than R0.6. Late rejection and retry through `GameHost` still pass. Independent review. | Optional · 2–3 d |
 
 <a id="r18-accepted-cost"></a>
 
@@ -404,16 +404,17 @@ Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
 Bevy rows, JSON columns, the stable-ID index and the rollback copies add
 resident data and per-write bookkeeping that the R0.6 plain maps did not have.
 The product owner accepted this on 23 November 2026 in return for the
-R1.6 change-driven extraction and the transactional tick. R1.8 is therefore
-closed on absolute budgets (S3 ECS tick p99 ≤2 ms over the combined samples,
-S1/S2 60 FPS, S1 ≤1 GiB) and the S2 tick comparison, with the differences
-above recorded. The criterion is confirmed on the tested candidate, not
-assumed: for `8e3b5bd` the combined p99 of 1,200 samples is 1.688 ms, while
+R1.6 change-driven extraction and the transactional tick.
+
+R1.8 closes on absolute budgets (S3 ECS tick p99 ≤2 ms over the combined
+samples, S1/S2 60 FPS, S1 ≤1 GiB) and the S2 tick comparison, with the
+differences above recorded, once that check is recorded on the head that is
+merged. That head now also contains the R2.3 S3 changes (#38). Evidence so far
+is for `8e3b5bd` only: the combined p99 of 1,200 samples is 1.688 ms, while
 per-run p99 is 2.071, 1.510, 1.584, 1.515 and 1.635 ms (all four samples
-above 2 ms fall in the first run, maximum 2.322 ms). R1.8 closes once the same
-check is recorded on the head that is merged, which now also contains
-the R2.3 S3 changes (#38). R1.9 reduces the S3 tick cost and does not block
-closing R1.8, R1 or R2.3; peak memory is not targeted further here.
+above 2 ms fall in the first run, maximum 2.322 ms). R1.9 is optional: it
+reduces the S3 tick cost and does not block closing R1.8, R1 or R2.3. Peak
+memory is not targeted further here.
 
 <a id="r18-session-checkpoint"></a>
 

@@ -304,7 +304,7 @@
         ['R1.6', 'Извлечение для рендера по изменениям', 'Дельта содержит только движущиеся объекты', '2–3 д', N],
         ['R1.7', 'Перевести все игры и хосты на новое хранение', 'Никто не обращается к старым картам столбцов', '4–6 д', N],
         ['R1.8', 'Приёмка и удаление старого хранения', 'p99 тика ECS на S3 ≤2 мс; пороги S1/S2; ревью', '2 д', N],
-        ['R1.9', 'Оптимизация тика ECS на S3', 'Среднее и p95 ниже кандидата R1.8; без сэмплов выше 2 мс', '2–3 д', N]] },
+        ['R1.9', 'Оптимизация тика ECS на S3', 'Среднее и p95 ниже кандидата R1.8; без сэмплов выше 2 мс', 'необязательно · 2–3 д', N, true]] },
     R2: { id: 'R2', kicker: 'Фаза · следующая', title: 'Основа GPU-driven рендера', cls: 'next', tag: 'СЛЕДОМ',
       ttl: 'GPU-driven рендер', meta: '8–12 нед · самая длинная', goal: 'Перестроить рендер под Vulkan: аллокатор, bindless-текстуры с mipmaps, сцена в памяти GPU, отсечение на GPU, render graph v2 и собственный swapchain игры.',
       effort: '8–12 недель', deps: ['R0'], depNote: 'R2.3 также ждёт R1.6 из R1', unlocks: ['R3', 'R5', 'R7', 'R8'], tasks: [
@@ -428,7 +428,7 @@
       p.tasks = ph.tasks.map(t => {
         const o = old[t.id];
         const note = t.state === 'done' ? (o && o[4] === D ? o[3] : 'выполнено') : (o && o[4] !== D ? o[3] : t.effort);
-        return [t.id, o ? o[1] : t.text, o ? o[2] : t.acceptance, note, ST[t.state]];
+        return [t.id, o ? o[1] : t.text, o ? o[2] : t.acceptance, note, ST[t.state], !!t.optional];
       });
     });
   }
@@ -448,7 +448,7 @@
     if (!p.tasks.length) {
       s = p.cls === 'done' ? 'done' : (p.cls === 'gate' && p.deps.length && p.deps.every(x => stateOf(x) === 'done')) ? 'done' : null;
     } else {
-      const n = p.tasks.length, d = p.tasks.filter(t => t[4] === D).length;
+      const req = p.tasks.filter(t => !t[5]), n = req.length, d = req.filter(t => t[4] === D).length; // optional tasks (t[5]) do not gate the phase
       if (d === n) s = 'done';
       else if (d || p.tasks.some(t => t[4] === C)) s = 'cur';
       else s = p.deps.every(x => ['done', 'cur'].includes(stateOf(x))) ? 'next' : 'later';
