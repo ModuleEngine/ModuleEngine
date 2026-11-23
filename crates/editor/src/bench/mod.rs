@@ -200,7 +200,9 @@ fn scene(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
             Ok("frustum") => SceneCulling::Frustum,
             Ok("off") => SceneCulling::Off,
             _ => {
-                return Err("MODULE_ENGINE_BENCHMARK_S3_CULLING must be off, frustum or hiz".into());
+                return Err(
+                    "MODULE_ENGINE_BENCHMARK_S3_CULLING must be off, frustum or hiz".into(),
+                );
             }
         }
     } else {
