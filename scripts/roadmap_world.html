@@ -191,10 +191,13 @@ const ancOf = k => anc[k] || (anc[k] = new Set(regOf[k].deps.filter(d => rk.incl
 const arrows = [];
 for (const k of rk) { const ds = regOf[k].deps.filter(d => rk.includes(d)); for (const d of ds) if (!ds.some(o => o !== d && ancOf(o).has(d))) arrows.push({ a: regOf[d], b: regOf[k] }); }
 const depth = {}; rk.forEach(k => depth[k] = regOf[k].provs.some(p => p.st !== 'next') ? 0 : 99); for (let it = 0; it < 12; it++) for (const a of arrows) depth[a.b.key] = Math.min(depth[a.b.key], depth[a.a.key] + 1);
-/* GitHub activity (scripts/roadmap_events.py, build time): each event belongs to the province of the task it mentions,
-   else to a province of the phase it mentions, else to the current front. A merged PR replaces its "opened" event. */
+/* GitHub activity (scripts/roadmap_events.py, build time): place each event at its task's province or tower,
+   else in its phase's region, else at the current front. A merged PR replaces its "opened" event. */
 const EVD = /*@EVENTS_DATA@*/null;
-const evHome = e => (e.task && taskById[e.task]) || (e.phase && regOf[e.phase] && (regOf[e.phase].provs.find(q => q.st === 'cur' || q.st === 'front') || regOf[e.phase].provs[0])) || (focusIdx >= 0 ? provs[focusIdx] : null);
+const towerByTask = Object.fromEntries(areg.provs.flatMap(tower => tower.d.tasks.map(t => [t.id, tower])));
+const evHome = e => (e.task && (taskById[e.task] || towerByTask[e.task]))
+  || (e.phase && regOf[e.phase] && (regOf[e.phase].provs.find(q => q.st === 'cur' || q.st === 'front') || regOf[e.phase].provs[0]))
+  || (focusIdx >= 0 ? provs[focusIdx] : null);
 const mergedNums = new Set(((EVD && EVD.events) || []).filter(e => e.type === 'merge' && e.num).map(e => e.num));
 const EVENTS = ((EVD && EVD.events) || []).filter(e => !(e.type === 'pr' && e.num && mergedNums.has(e.num))).map(e => ({ ...e, p: evHome(e) })).filter(e => e.p).slice(0, 30);
 // @model-end

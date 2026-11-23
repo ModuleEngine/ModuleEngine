@@ -284,7 +284,13 @@ class WorldEventsModelTest(unittest.TestCase):
         return {"type": kind, "at": stamp(1), "title": "t", "num": None, "task": None, "phase": None, "url": None, **over}
 
     def test_an_event_lands_on_the_province_of_its_task(self):
-        self.assertEqual(self.model([self.ev("commit", task="R1.6", phase="R1")])[0][2:], ["R1.6", "R1"])
+        out = self.model([self.ev("commit", task=task, phase="R1") for task in ("R1.6", "R1.9")])
+        self.assertEqual([event[2:] for event in out], [["R1.6", "R1"], ["R1.9", "R1"]])
+
+    def test_ai_task_events_land_on_their_phase_towers(self):
+        out = self.model([self.ev("commit", task="AI-A.2", phase="AI-A"),
+                          self.ev("commit", task="AI-B.3", phase="AI-B")])
+        self.assertEqual([event[2:] for event in out], [["AI-A", "AI"], ["AI-B", "AI"]])
 
     def test_a_phase_only_event_lands_in_that_region(self):
         self.assertEqual(self.model([self.ev("comment", phase="R2")])[0][3], "R2")
