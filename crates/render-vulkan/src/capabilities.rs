@@ -16,6 +16,8 @@ pub struct DeviceCapabilities {
     pub synchronization2: bool,
     pub bindless_materials: bool,
     pub resident_scene: bool,
+    pub gpu_frustum_culling: bool,
+    pub hiz_occlusion_culling: bool,
     pub max_material_anisotropy: f32,
     pub graphics_family: u32,
     pub dedicated_transfer_family: Option<u32>,
@@ -95,6 +97,28 @@ impl DeviceCapabilities {
             && texture_format
                 .optimal_tiling_features
                 .contains(texture_features);
+        let resident_scene = bindless_materials
+            && core.multi_draw_indirect != 0
+            && core.draw_indirect_first_instance != 0
+            && limits.max_per_stage_descriptor_storage_buffers >= 4
+            && limits.max_descriptor_set_storage_buffers >= 5;
+        let gpu_frustum_culling = resident_scene
+            && core12.draw_indirect_count != 0
+            && limits.max_draw_indirect_count != 0
+            && limits.max_per_stage_descriptor_storage_buffers >= 6
+            && limits.max_descriptor_set_storage_buffers >= 6;
+        let hiz_occlusion_culling = gpu_frustum_culling
+            && unsafe {
+                instance.get_physical_device_image_format_properties(
+                    physical,
+                    vk::Format::D32_SFLOAT,
+                    vk::ImageType::TYPE_2D,
+                    vk::ImageTiling::OPTIMAL,
+                    vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+                    vk::ImageCreateFlags::empty(),
+                )
+            }
+            .is_ok();
         Some(Self {
             tier_a,
             tier_b: tier_a && mesh.task_shader != 0 && mesh.mesh_shader != 0,
@@ -105,11 +129,9 @@ impl DeviceCapabilities {
             timeline_semaphore: core12.timeline_semaphore != 0,
             synchronization2,
             bindless_materials,
-            resident_scene: bindless_materials
-                && core.multi_draw_indirect != 0
-                && core.draw_indirect_first_instance != 0
-                && limits.max_per_stage_descriptor_storage_buffers >= 4
-                && limits.max_descriptor_set_storage_buffers >= 5,
+            resident_scene,
+            gpu_frustum_culling,
+            hiz_occlusion_culling,
             max_material_anisotropy: if bindless_materials {
                 limits.max_sampler_anisotropy.min(16.0)
             } else {

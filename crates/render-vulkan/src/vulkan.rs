@@ -13,8 +13,8 @@ use crate::{VulkanError, instance::InstanceLifetime};
 use crate::{compiler::compile_hlsl, graph::build_plan};
 use crate::{
     compiler::{
-        bindless_source, compile_hlsl_at, verify_bindless_shader, verify_resident_vertex,
-        verify_shader,
+        bindless_source, compile_hlsl_at, culled_fragment_source, verify_bindless_shader,
+        verify_resident_vertex, verify_shader,
     },
     geometry,
     graph::{Pass, Plan, build_metadata_plan, build_plan_at},
@@ -46,6 +46,10 @@ use materials::{MaterialLayout, MaterialSet};
 #[path = "resident.rs"]
 pub(crate) mod resident;
 pub use resident::ResidentScene;
+
+#[path = "culling.rs"]
+pub(crate) mod culling;
+pub use culling::{CullingStats, SceneCulling};
 
 pub enum SceneInput<'a> {
     Snapshot(&'a SceneSnapshot),
@@ -179,13 +183,22 @@ struct Pipeline {
     set_layout: vk::DescriptorSetLayout,
     compute: bool,
     bindless_materials: bool,
-    resident_scene: bool,
+    geometry: Geometry,
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Geometry {
+    Expanded,
+    Resident,
+    Culled,
+}
+
 struct FrameResources {
     key: FrameResourceKey,
     images: BTreeMap<String, Image>,
     vertex: Option<Buffer>,
     staging: Option<Buffer>,
+    culling: Option<culling::Frame>,
 }
 /// Allocation identity is independent from shader/pipeline identity. Reusing a
 /// pipeline under a new pass ID must still allocate its newly named resources.
@@ -193,15 +206,37 @@ struct FrameResources {
 struct FrameResourceKey {
     size: [usize; 2],
     images: Vec<(String, String, bool)>,
-    readback: Vec<(String, usize, usize)>,
+    readback: Vec<ReadbackImage>,
 }
-fn frame_readback(
-    plan: &Plan,
-    width: usize,
-    height: usize,
-    detailed: bool,
-) -> Vec<(String, usize, usize)> {
-    let mut readback = vec![(plan.output.clone(), 0, width * height * 4)];
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ReadbackImage {
+    resource: String,
+    kind: usize,
+    offset: usize,
+    size: usize,
+}
+
+impl ReadbackImage {
+    fn end(&self) -> usize {
+        self.offset + self.size
+    }
+}
+
+fn frame_readback(plan: &Plan, width: usize, height: usize, detailed: bool) -> Vec<ReadbackImage> {
+    let mut readback: Vec<ReadbackImage> = Vec::new();
+    let mut push = |resource, kind, texel_bytes| {
+        let end = readback.last().map_or(0, ReadbackImage::end);
+        readback.push(ReadbackImage {
+            resource,
+            kind,
+            // vkCmdCopyImageToBuffer requires the texel block alignment
+            // of the next image, even when prior planes have odd dimensions.
+            offset: end.next_multiple_of(texel_bytes),
+            size: width * height * texel_bytes,
+        });
+    };
+    push(plan.output.clone(), 0, 4);
     if !detailed {
         return readback;
     }
@@ -212,7 +247,7 @@ fn frame_readback(
     {
         for (name, kind, bytes) in [("depth", 1, 4), ("normals", 2, 16)] {
             if let Some(spec) = pass.manifest.outputs.iter().find(|spec| spec.name == name) {
-                readback.push((pass.resource(&spec.name), kind, width * height * bytes));
+                push(pass.resource(&spec.name), kind, bytes);
             }
         }
         if let Some(spec) = pass
@@ -221,14 +256,10 @@ fn frame_readback(
             .iter()
             .find(|spec| spec.name == "color" || spec.name == "albedo")
         {
-            readback.push((pass.resource(&spec.name), 3, width * height * 16));
+            push(pass.resource(&spec.name), 3, 16);
         }
     } else if let Some(pass) = plan.passes.iter().find(|pass| pass.geometry()) {
-        readback.push((
-            format!("{}.__hardware_depth", pass.id),
-            4,
-            width * height * 4,
-        ));
+        push(format!("{}.__hardware_depth", pass.id), 4, 4);
     }
     readback
 }
@@ -236,7 +267,7 @@ fn frame_resource_key(
     plan: &Plan,
     width: usize,
     height: usize,
-    readback: &[(String, usize, usize)],
+    readback: &[ReadbackImage],
 ) -> FrameResourceKey {
     let mut images = Vec::new();
     for pass in &plan.passes {
@@ -263,7 +294,7 @@ fn frame_resource_key(
 fn validate_frame_images(
     plan: &Plan,
     available: &BTreeSet<&str>,
-    readback: &[(String, usize, usize)],
+    readback: &[ReadbackImage],
 ) -> Result<(), VulkanError> {
     let mut declared = BTreeSet::new();
     for pass in &plan.passes {
@@ -308,7 +339,7 @@ fn validate_frame_images(
             }
         }
     }
-    for (resource, _, _) in readback {
+    for ReadbackImage { resource, .. } in readback {
         if !available.contains(resource.as_str()) {
             return Err(VulkanError::Resource(format!(
                 "GPU readback resource {resource} has no allocated image"
@@ -338,6 +369,7 @@ struct ProducerFlight {
     _scene_buffers: Option<(resident::Buffers, Option<resident::Buffers>)>,
     _transfer_timeline: Option<Arc<Timeline>>,
     _pipelines: Vec<Arc<Pipeline>>,
+    _culling_pipelines: Option<Arc<culling::Pipelines>>,
     _context: Arc<DeviceLifetime>,
     size: [usize; 2],
     stats: RenderStats,
@@ -394,12 +426,19 @@ impl Drop for Pipeline {
 #[derive(Clone, Copy, Debug, Default, serde::Serialize)]
 pub struct FrameWork {
     pub draw_calls: usize,
+    /// Recorded color/G-buffer/normal-depth scene draw commands, excluding the Hi-Z seed.
+    pub scene_draw_calls: usize,
+    pub occluder_draw_calls: usize,
+    pub culling_mode: Option<SceneCulling>,
+    /// A small diagnostic readback, populated only after submission completion.
+    pub culling_stats: Option<CullingStats>,
     pub vertex_write_bytes: usize,
     /// CPU-to-GPU writes to persistent mesh indices, excluding GPU-local growth copies.
     pub mesh_index_write_bytes: usize,
     pub instance_write_bytes: usize,
     pub material_row_write_bytes: usize,
     pub draw_write_bytes: usize,
+    pub culling_input_write_bytes: usize,
     pub resident_scene: bool,
     pub cpu_prepare_ms: f64,
     pub cpu_record_ms: f64,
@@ -451,6 +490,9 @@ pub struct VulkanRenderer {
     material_layout: Option<Arc<MaterialLayout>>,
     materials: Option<Arc<MaterialSet>>,
     gpu_scene: resident::GpuScene,
+    culling_pipelines: Option<Arc<culling::Pipelines>>,
+    culling_mode: SceneCulling,
+    culling_stats: bool,
     storage_buffer_limit: u64,
     max_indirect_draws: u32,
     trace: Option<u64>,
@@ -583,6 +625,7 @@ impl VulkanRenderer {
             let bindless = capabilities.bindless_materials;
             let mut vulkan12 = vk::PhysicalDeviceVulkan12Features::default()
                 .timeline_semaphore(modern)
+                .draw_indirect_count(capabilities.gpu_frustum_culling)
                 .descriptor_indexing(bindless)
                 .shader_sampled_image_array_non_uniform_indexing(bindless)
                 .runtime_descriptor_array(bindless);
@@ -693,6 +736,9 @@ impl VulkanRenderer {
                 material_layout,
                 materials: None,
                 gpu_scene: resident::GpuScene::default(),
+                culling_pipelines: None,
+                culling_mode: SceneCulling::default(),
+                culling_stats: false,
                 storage_buffer_limit: u64::from(properties.limits.max_storage_buffer_range),
                 max_indirect_draws: properties.limits.max_draw_indirect_count,
                 trace,
@@ -782,6 +828,14 @@ impl VulkanRenderer {
     }
     pub fn last_frame_work(&self) -> Option<FrameWork> {
         self.last_frame_work
+    }
+
+    pub fn set_scene_culling(&mut self, mode: SceneCulling) {
+        self.culling_mode = mode;
+    }
+
+    pub fn set_culling_stats(&mut self, enabled: bool) {
+        self.culling_stats = enabled;
     }
 
     /// Test the actual buffer size and memory type used by the current path,
@@ -966,6 +1020,9 @@ impl VulkanRenderer {
                 }
                 if pass.resident_geometry() && self.capabilities.resident_scene {
                     keep.insert(resident_pipeline_key(&key));
+                    if self.capabilities.gpu_frustum_culling {
+                        keep.insert(culled_pipeline_key(&key));
+                    }
                 }
                 keep.insert(key);
             }
@@ -973,10 +1030,19 @@ impl VulkanRenderer {
         }
         for pass in &plan.passes {
             let key = pipeline_key(pass);
-            self.prepare_pipeline(pass, key.clone(), true, false)?;
+            self.prepare_pipeline(pass, key.clone(), true, Geometry::Expanded)?;
             if pass.resident_geometry() && self.capabilities.resident_scene {
-                self.prepare_pipeline(pass, resident_pipeline_key(&key), true, true)?;
+                self.prepare_pipeline(pass, resident_pipeline_key(&key), true, Geometry::Resident)?;
+                if self.capabilities.gpu_frustum_culling {
+                    self.prepare_pipeline(pass, culled_pipeline_key(&key), true, Geometry::Culled)?;
+                }
             }
+        }
+        if self.capabilities.gpu_frustum_culling
+            && self.culling_pipelines.is_none()
+            && plan.passes.iter().any(Pass::resident_geometry)
+        {
+            self.culling_pipelines = Some(Arc::new(culling::Pipelines::new(self)?));
         }
         self.prepared = Some(plan);
         Ok(())
@@ -986,14 +1052,14 @@ impl VulkanRenderer {
         pass: &Pass,
         key: String,
         allow_indexed: bool,
-        resident_scene: bool,
+        geometry: Geometry,
     ) -> Result<(), VulkanError> {
         if self.pipelines.contains_key(&key) {
             return Ok(());
         }
         self.performance.pipeline_build_attempts += 1;
         let pipeline = self
-            .create_pipeline(pass, allow_indexed, resident_scene)
+            .create_pipeline(pass, allow_indexed, geometry)
             .map_err(|error| VulkanError::Pass {
                 pass: pass.id.clone(),
                 source: Arc::new(error),
@@ -1391,7 +1457,7 @@ impl VulkanRenderer {
         &self,
         pass: &Pass,
         allow_indexed: bool,
-        resident_scene: bool,
+        geometry: Geometry,
     ) -> Result<Pipeline, VulkanError> {
         unsafe {
             let compute = pass.manifest.stage == "compute";
@@ -1400,7 +1466,13 @@ impl VulkanRenderer {
                 .material_layout
                 .as_ref()
                 .filter(|_| allow_indexed && pass.has_bindless_variant());
-            let variant = bindless.map(|_| bindless_source(pass));
+            let variant = bindless.map(|_| {
+                if geometry == Geometry::Culled {
+                    culled_fragment_source(pass)
+                } else {
+                    bindless_source(pass)
+                }
+            });
             let shader = compile_hlsl_at(
                 &self.resource_root,
                 variant.as_deref().unwrap_or(&pass.source),
@@ -1436,7 +1508,11 @@ impl VulkanRenderer {
             let vertex_artifact = if compute {
                 None
             } else {
-                let vertex_source = if resident_scene {
+                let culled_source;
+                let vertex_source = if geometry == Geometry::Culled {
+                    culled_source = resident::culled_vertex_source();
+                    &culled_source
+                } else if geometry == Geometry::Resident {
                     resident::VERTEX_SHADER
                 } else if pass.manifest.vertex_entry.is_some() {
                     pass.source.as_str()
@@ -1448,8 +1524,8 @@ impl VulkanRenderer {
                 let entry = pass.manifest.vertex_entry.as_deref().unwrap_or("mainVS");
                 let artifact =
                     compile_hlsl_at(&self.resource_root, vertex_source, entry, "vs_6_0")?;
-                if resident_scene {
-                    verify_resident_vertex(&artifact.words)?;
+                if geometry != Geometry::Expanded {
+                    verify_resident_vertex(&artifact.words, geometry == Geometry::Culled)?;
                 } else {
                     verify_shader(pass, &artifact.words, true)?;
                 }
@@ -1485,8 +1561,9 @@ impl VulkanRenderer {
                         })
                 })
                 .collect();
-            if resident_scene {
-                bindings.extend((1..=4).map(|binding| {
+            if geometry != Geometry::Expanded {
+                let last_binding = if geometry == Geometry::Culled { 5 } else { 4 };
+                bindings.extend((1..=last_binding).map(|binding| {
                     vk::DescriptorSetLayoutBinding::default()
                         .binding(binding)
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
@@ -1508,7 +1585,7 @@ impl VulkanRenderer {
                 set_layout,
                 compute,
                 bindless_materials: bindless.is_some(),
-                resident_scene,
+                geometry,
             };
             self.context
                 .name(set_layout, || format!("{} descriptor layout", pass.id));
@@ -1642,7 +1719,7 @@ impl VulkanRenderer {
                         offset: 56,
                     },
                 ];
-                let vertex_input = if pass.geometry() && !resident_scene {
+                let vertex_input = if pass.geometry() && geometry == Geometry::Expanded {
                     vk::PipelineVertexInputStateCreateInfo::default()
                         .vertex_binding_descriptions(&vertex_bindings)
                         .vertex_attribute_descriptions(&attributes)
@@ -1894,7 +1971,7 @@ impl VulkanRenderer {
             }
             Ok(true) => {}
         }
-        let flight = slot.pending.take().unwrap();
+        let mut flight = slot.pending.take().unwrap();
         if let Some(trace) = self.trace {
             eprintln!(
                 "Vulkan frame complete renderer={trace} serial={} ticket={ticket}",
@@ -1906,6 +1983,9 @@ impl VulkanRenderer {
             .as_ref()
             .expect("native producer shared image");
         shared.completed();
+        if let Some(culling) = &flight.resources.culling {
+            flight.work.culling_stats = culling.completed()?;
+        }
         let frame = if flight.cancelled.load(Ordering::Acquire) {
             None
         } else {
@@ -2053,7 +2133,12 @@ impl VulkanRenderer {
         }
         if atlas_overflow_fallback {
             for pass in active_passes().filter(|pass| pass.has_bindless_variant()) {
-                self.prepare_pipeline(pass, atlas_pipeline_key(&pipeline_key(pass)), false, false)?;
+                self.prepare_pipeline(
+                    pass,
+                    atlas_pipeline_key(&pipeline_key(pass)),
+                    false,
+                    Geometry::Expanded,
+                )?;
             }
         }
         let no_rects = BTreeMap::new();
@@ -2075,6 +2160,21 @@ impl VulkanRenderer {
         let mut vertex = reused
             .as_mut()
             .and_then(|resources| resources.vertex.take());
+        let mut scene_culling = if resident
+            .as_ref()
+            .is_some_and(|r| r.buffers.culling.is_some())
+        {
+            culling::Frame::prepare(
+                self,
+                reused
+                    .as_mut()
+                    .and_then(|resources| resources.culling.take()),
+                [width as u32, height as u32],
+                objects,
+            )?
+        } else {
+            None
+        };
         if resident.is_none() {
             if vertex
                 .as_ref()
@@ -2133,10 +2233,8 @@ impl VulkanRenderer {
             &readback,
         )?;
         let new_staging = if reused.is_none() && presentation.is_none() {
-            Some(self.buffer(
-                readback.iter().map(|(_, _, size)| *size as u64).sum(),
-                vk::BufferUsageFlags::TRANSFER_DST,
-            )?)
+            let last = readback.last().expect("final color readback");
+            Some(self.buffer(last.end() as u64, vk::BufferUsageFlags::TRANSFER_DST)?)
         } else {
             None
         };
@@ -2148,6 +2246,7 @@ impl VulkanRenderer {
         let mut frame_work = FrameWork {
             vertex_write_bytes: vertex_bytes.len(),
             resident_scene: resident.is_some(),
+            culling_mode: scene_culling.as_ref().map(culling::Frame::mode),
             atlas_upload_bytes: if atlas_needs_upload {
                 atlas.as_ref().unwrap().atlas.rgba.len()
             } else {
@@ -2169,15 +2268,22 @@ impl VulkanRenderer {
         frame_work.material_uploaded_images = uploads.image_count();
         frame_work.material_upload_bytes = uploads.bytes;
         let material_upload = uploads.stage(self)?;
+        let culling_scope = u32::from(scene_culling.is_some());
         let capture = self.frame_profiling.then(|| {
             TimestampCapture::new(
                 &mut self.slots[index].timestamp_pool,
                 &self.context,
                 self.timestamp_valid_bits,
                 self.timestamp_period_ns,
-                plan.passes
-                    .iter()
-                    .map(|pass| (pass.id.clone(), !pass_enabled(pass, overrides)))
+                scene_culling
+                    .as_ref()
+                    .map(|_| ("Scene culling".into(), false))
+                    .into_iter()
+                    .chain(
+                        plan.passes
+                            .iter()
+                            .map(|pass| (pass.id.clone(), !pass_enabled(pass, overrides))),
+                    )
                     .collect(),
             )
         });
@@ -2263,14 +2369,40 @@ impl VulkanRenderer {
         if let Some(timestamps) = timestamps {
             timestamps.begin(command, 0);
         }
+        if let Some(culling) = &mut scene_culling {
+            if let Some(timestamps) = timestamps {
+                timestamps.begin(command, 1);
+            }
+            culling.record(
+                &self.device,
+                command,
+                descriptor_pool,
+                self.culling_pipelines.as_ref().unwrap(),
+                resident.as_ref().unwrap(),
+                geometry::camera_constants(camera, width, height),
+                [width as u32, height as u32],
+                objects as u32,
+            )?;
+            if culling.mode() == SceneCulling::HiZ {
+                frame_work.occluder_draw_calls = 1;
+                frame_work.draw_calls += 1;
+            }
+            if let Some(timestamps) = timestamps {
+                timestamps.end(command, 1);
+            }
+        }
         for (index, pass) in plan.passes.iter().enumerate() {
             if let Some(timestamps) = timestamps {
-                timestamps.begin(command, index as u32 + 1);
+                timestamps.begin(command, index as u32 + 1 + culling_scope);
             }
             let enabled = pass_enabled(pass, overrides);
             let key = pipeline_key(pass);
             let key = if resident.is_some() && enabled && pass.resident_geometry() {
-                resident_pipeline_key(&key)
+                if scene_culling.is_some() {
+                    culled_pipeline_key(&key)
+                } else {
+                    resident_pipeline_key(&key)
+                }
             } else if atlas_overflow_fallback && enabled && pass.has_bindless_variant() {
                 atlas_pipeline_key(&key)
             } else {
@@ -2399,7 +2531,7 @@ impl VulkanRenderer {
                     .collect();
                 let buffer_infos = resident
                     .as_ref()
-                    .filter(|_| pipeline.resident_scene)
+                    .filter(|_| pipeline.geometry != Geometry::Expanded)
                     .map(|r| {
                         r.buffers.bind().map(|buffer| {
                             vk::DescriptorBufferInfo::default()
@@ -2415,6 +2547,21 @@ impl VulkanRenderer {
                             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                             .buffer_info(std::slice::from_ref(info))
                     }));
+                }
+                let visible_info;
+                if pipeline.geometry == Geometry::Culled {
+                    let culling = scene_culling.as_ref().unwrap();
+                    let buffer = culling.visible_buffer();
+                    visible_info = vk::DescriptorBufferInfo::default()
+                        .buffer(buffer.buffer)
+                        .range(buffer.size);
+                    writes.push(
+                        vk::WriteDescriptorSet::default()
+                            .dst_set(set)
+                            .dst_binding(5)
+                            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                            .buffer_info(std::slice::from_ref(&visible_info)),
+                    );
                 }
                 let mut constants = geometry::camera_constants(camera, width, height);
                 for (i, name) in pass.manifest.parameters.iter().enumerate() {
@@ -2443,6 +2590,10 @@ impl VulkanRenderer {
                 }
                 if pipeline.bindless_materials {
                     constants[31] = f32::from_bits(materials::FIRST_MATERIAL_ROW);
+                }
+                if pipeline.geometry == Geometry::Culled {
+                    constants[29] =
+                        f32::from_bits(scene_culling.as_ref().unwrap().visible_offset());
                 }
                 let mut push_bytes = Vec::with_capacity(128);
                 for value in constants {
@@ -2577,30 +2728,46 @@ impl VulkanRenderer {
                                 },
                             }],
                         );
-                        frame_work.draw_calls += if pipeline.resident_scene {
-                            let resident = resident.as_ref().unwrap();
-                            resident.buffers.draw(
-                                &self.device,
-                                command,
-                                pipeline.layout,
-                                &resident.runs,
-                                self.max_indirect_draws,
-                            )
-                        } else {
-                            if pass.geometry() {
-                                self.device.cmd_bind_vertex_buffers(
+                        let draws = match pipeline.geometry {
+                            Geometry::Culled => {
+                                scene_culling.as_ref().unwrap().draw(
+                                    &self.device,
                                     command,
-                                    0,
-                                    &[vertex.as_ref().unwrap().buffer],
-                                    &[0],
+                                    &resident.as_ref().unwrap().buffers,
+                                    objects as u32,
                                 );
-                                self.device
-                                    .cmd_draw(command, (submitted * 3) as u32, 1, 0, 0);
-                            } else {
-                                self.device.cmd_draw(command, 3, 1, 0, 0);
+                                1
                             }
-                            1
+                            Geometry::Resident => {
+                                let resident = resident.as_ref().unwrap();
+                                resident.buffers.draw(
+                                    &self.device,
+                                    command,
+                                    pipeline.layout,
+                                    &resident.runs,
+                                    self.max_indirect_draws,
+                                )
+                            }
+                            Geometry::Expanded => {
+                                if pass.geometry() {
+                                    self.device.cmd_bind_vertex_buffers(
+                                        command,
+                                        0,
+                                        &[vertex.as_ref().unwrap().buffer],
+                                        &[0],
+                                    );
+                                    self.device
+                                        .cmd_draw(command, (submitted * 3) as u32, 1, 0, 0);
+                                } else {
+                                    self.device.cmd_draw(command, 3, 1, 0, 0);
+                                }
+                                1
+                            }
                         };
+                        frame_work.draw_calls += draws;
+                        if pass.geometry() {
+                            frame_work.scene_draw_calls += draws;
+                        }
                         self.device.cmd_end_rendering(command);
                     }
                 }
@@ -2641,13 +2808,12 @@ impl VulkanRenderer {
                 }
             }
             if let Some(timestamps) = timestamps {
-                timestamps.end(command, index as u32 + 1);
+                timestamps.end(command, index as u32 + 1 + culling_scope);
             }
         }
         if let Some(timestamps) = timestamps {
             timestamps.end(command, 0);
         }
-        let mut offset = 0u64;
         if let Some(shared) = presentation {
             let output = images
                 .get_mut(&plan.output)
@@ -2669,8 +2835,8 @@ impl VulkanRenderer {
             );
             shared.record_copy(command, output.image, self.family);
         }
-        for (name, _, size) in &readback {
-            let image = images.get_mut(name).unwrap();
+        for plane in &readback {
+            let image = images.get_mut(&plane.resource).unwrap();
             transition(
                 &self.device,
                 command,
@@ -2680,7 +2846,7 @@ impl VulkanRenderer {
                 vk::AccessFlags::TRANSFER_READ,
             );
             let region = vk::BufferImageCopy::default()
-                .buffer_offset(offset)
+                .buffer_offset(plane.offset as u64)
                 .image_subresource(vk::ImageSubresourceLayers {
                     aspect_mask: image.aspect,
                     mip_level: 0,
@@ -2701,7 +2867,6 @@ impl VulkanRenderer {
                     &[region],
                 );
             }
-            offset += *size as u64;
         }
         unsafe {
             // Make transfer writes available and visible to host reads. Waiting
@@ -2739,6 +2904,7 @@ impl VulkanRenderer {
         let resources = if let Some(mut resources) = reused {
             resources.images = images;
             resources.vertex = vertex;
+            resources.culling = scene_culling;
             resources
         } else {
             FrameResources {
@@ -2746,6 +2912,7 @@ impl VulkanRenderer {
                 images,
                 vertex,
                 staging: new_staging,
+                culling: scene_culling,
             }
         };
         let ticket = if presentation.is_some() {
@@ -2780,6 +2947,7 @@ impl VulkanRenderer {
                 .map(|r| (r.buffers.clone(), self.gpu_scene.prior_buffers())),
             _transfer_timeline: transfer.map(|queue| queue.timeline.clone()),
             _pipelines: self.pipelines.values().cloned().collect(),
+            _culling_pipelines: self.culling_pipelines.clone(),
             _context: self.context.clone(),
             size: [width, height],
             stats: RenderStats {
@@ -2887,9 +3055,12 @@ impl VulkanRenderer {
             return Err(error);
         }
         frame_work.cpu_wait_ms = wait_started.elapsed().as_secs_f64() * 1000.;
-        self.last_frame_work = Some(frame_work);
         let slot = &mut self.slots[index];
         let flight = slot.pending.take().unwrap();
+        if let Some(culling) = &flight.resources.culling {
+            frame_work.culling_stats = culling.completed()?;
+        }
+        self.last_frame_work = Some(frame_work);
         let staging = flight
             .resources
             .staging
@@ -2913,10 +3084,9 @@ impl VulkanRenderer {
         };
         let mut triangles = BTreeSet::new();
         let mut objects = BTreeSet::new();
-        let mut offset = 0;
-        for (_, kind, size) in &readback {
-            let bytes = &data[offset..offset + size];
-            match kind {
+        for plane in &readback {
+            let bytes = &data[plane.offset..plane.end()];
+            match plane.kind {
                 1 => {
                     stats.shaded_pixels = bytes
                         .as_chunks::<4>()
@@ -2937,7 +3107,7 @@ impl VulkanRenderer {
                     for pixel in bytes.as_chunks::<16>().0 {
                         let id = f32::from_ne_bytes(pixel[12..16].try_into().unwrap()) as u32;
                         if id > 0 {
-                            if *kind == 2 {
+                            if plane.kind == 2 {
                                 objects.insert(id);
                             } else {
                                 triangles.insert(id);
@@ -2947,7 +3117,6 @@ impl VulkanRenderer {
                 }
                 _ => {}
             }
-            offset += size;
         }
         stats.triangles = triangles.len();
         stats.rasterized_triangles = triangles.len();
@@ -3372,6 +3541,7 @@ mod content_player_tests {
         let count = precompile_graph_at(&graph, &sources, &root, &package).unwrap();
         assert!(count > 3);
         assert!(!package.join("tools/dxc/dxc.exe").exists());
+        let sealed_invocations = crate::shader_performance().dxc_invocations;
         let mut renderer = VulkanRenderer::new_at(package.clone()).unwrap();
         renderer.set_detailed_stats(false);
         let frame = renderer
@@ -3386,6 +3556,32 @@ mod content_player_tests {
             )
             .unwrap();
         assert_eq!(frame.rgba.len(), 96 * 72 * 4);
+        if renderer.capabilities().gpu_frustum_culling {
+            let mut retained = ResidentScene::default();
+            retained
+                .apply(module_engine_core::SceneUpdate::Reset {
+                    revision: 0,
+                    snapshot: scene.clone(),
+                })
+                .unwrap();
+            let culled = renderer
+                .render_scene(
+                    SceneInput::Retained(&mut retained),
+                    Camera::default(),
+                    96,
+                    72,
+                    &graph,
+                    &sources,
+                    &RenderOverrides::default(),
+                )
+                .unwrap();
+            assert!(renderer.last_frame_work().unwrap().culling_mode.is_some());
+            assert_eq!(culled.rgba, frame.rgba);
+        }
+        assert_eq!(
+            crate::shader_performance().dxc_invocations,
+            sealed_invocations
+        );
         let indexed = renderer.capabilities().bindless_materials;
         if indexed {
             use crate::capabilities::MATERIAL_IMAGE_COUNT;
@@ -3463,6 +3659,10 @@ fn pipeline_key(pass: &Pass) -> String {
 }
 fn resident_pipeline_key(default: &str) -> String {
     format!("{default}:resident")
+}
+
+fn culled_pipeline_key(default: &str) -> String {
+    format!("{default}:culled")
 }
 fn atlas_pipeline_key(default: &str) -> String {
     format!("atlas/{default}")
@@ -3807,6 +4007,19 @@ mod tests {
         }
     }
     #[test]
+    fn detailed_readback_aligns_float4_planes_on_odd_viewports() {
+        let plan = build_metadata_plan(&default_graph(RenderPath::Forward)).unwrap();
+        let planes = frame_readback(&plan, 7, 5, true);
+        assert_eq!(
+            planes
+                .iter()
+                .map(|plane| (plane.offset, plane.size))
+                .collect::<Vec<_>>(),
+            [(0, 140), (140, 140), (288, 560), (848, 560)],
+        );
+    }
+
+    #[test]
     fn frame_allocation_identity_includes_resource_ids_readback_and_viewport() {
         let graph = default_graph(RenderPath::Forward);
         let plan = build_metadata_plan(&graph).unwrap();
@@ -3909,12 +4122,7 @@ mod tests {
                 );
                 assert_eq!(
                     resources.staging.as_ref().unwrap().size,
-                    resources
-                        .key
-                        .readback
-                        .iter()
-                        .map(|(_, _, bytes)| *bytes as u64)
-                        .sum::<u64>()
+                    resources.key.readback.last().unwrap().end() as u64
                 );
             }
             renderer.set_detailed_stats(false);

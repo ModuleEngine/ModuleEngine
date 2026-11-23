@@ -175,7 +175,7 @@ fn run() -> Result<(), String> {
         Some("--bench-scene") => {
             if requested_profile.is_some() || args.len() != 3 {
                 return Err(
-                    "Usage: --bench-scene S1|S2|S3|S4|S4-floor|S4-floor-atlas|S5|R2-textures|R23-structure <new output folder>"
+                    "Usage: --bench-scene S1|S2|S3|S3-100k|S4|S4-floor|S4-floor-atlas|S5|R2-textures|R23-structure|R24-visibility <new output folder>"
                         .into(),
                 );
             }

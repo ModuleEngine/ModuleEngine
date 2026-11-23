@@ -4,6 +4,14 @@
 
 [English](current-status.md) | [Русский](ru/current-status.md) | [Documentation](README.md)
 
+**23 November 2026 — R2.4 compacts stock scene draws on the GPU.**
+On qualifying Vulkan devices the retained renderer performs frustum
+culling and submits one indexed indirect count command per scene raster pass.
+With a sampled D32 attachment it also uses a current-frame Hi-Z depth seed
+to reject occluded candidates. See the
+[device and compatibility contract](hardware-tiers.md#r24-culling) and the
+[reference and native S3-100k checks](bench.md#r24-culling-checks).
+
 **22 November 2026 — R2.3 keeps the accepted ECS scene in Vulkan buffers.**
 On eligible devices stock geometry shares a GPU mesh pool and updates the
 instance and material rows from GameHost's retained scene. The internal

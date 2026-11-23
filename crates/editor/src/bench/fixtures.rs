@@ -10,6 +10,7 @@ use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 const S3_MESHES: usize = 200;
 const S3_TEXTURES: usize = 500;
+const S3_SCALED: usize = 100_000;
 
 #[derive(Clone, Copy)]
 pub(super) struct EcsWork {
@@ -28,7 +29,8 @@ pub struct Fixture {
 impl Fixture {
     pub fn load(id: &str, root: &Path) -> Result<Self, String> {
         match id {
-            "S3" => stress(),
+            "S3" => stress(false),
+            "S3-100k" => stress(true),
             "S4" => sponza(root),
             "S5" => dense(),
             _ => Err(format!("Unknown benchmark scene {id}")),
@@ -92,7 +94,7 @@ fn item(id: usize, mesh: Mesh, transform: Transform, material: Material) -> Rend
     }
 }
 
-fn stress() -> Result<Fixture, String> {
+fn stress(scaled: bool) -> Result<Fixture, String> {
     let meshes: Vec<_> = (0..S3_MESHES)
         .map(|i| {
             let mut mesh = Mesh::cube();
@@ -130,13 +132,28 @@ fn stress() -> Result<Fixture, String> {
             })
         })
         .collect();
+    let count = if scaled {
+        S3_SCALED
+    } else {
+        S3_STATIC + S3_MOVING
+    };
+    // Extend the same field to 400 × 250 at the original 1.6-unit spacing.
+    // Preserve the original positions and the ECS entities that move in them.
+    let mut extra = (-75..175).flat_map(|row| {
+        (-145..255)
+            .filter(move |column| !(0..100).contains(&row) || !(0..110).contains(column))
+            .map(move |column| [column as f32 * 1.6 - 87.2, 0., row as f32 * 1.6 - 79.2])
+    });
     let mut entities = Vec::new();
-    let items: Vec<_> = (0..S3_STATIC + S3_MOVING)
+    let items: Vec<_> = (0..count)
         .map(|i| {
             let object = s3_ecs::object(i);
-            let transform = object.transform;
+            let mut transform = object.transform;
             if i < S3_ENTITIES {
                 entities.push(s3_ecs::entity(object));
+            }
+            if i >= S3_STATIC + S3_MOVING {
+                transform.translation = extra.next().expect("expanded S3 grid cell");
             }
             item(
                 i + 1,
@@ -175,7 +192,7 @@ fn stress() -> Result<Fixture, String> {
             .ok_or("Missing S3 texture")?;
         texture_payloads.insert((image.width, image.height, image.rgba8.as_slice()));
     }
-    if items.len() != S3_STATIC + S3_MOVING
+    if items.len() != count
         || moving != S3_MOVING
         || mesh_payloads.len() != S3_MESHES
         || texture_payloads.len() != S3_TEXTURES
@@ -185,13 +202,17 @@ fn stress() -> Result<Fixture, String> {
     {
         return Err("Loaded S3 workload differs from its fixture contract".into());
     }
+    let mut inventory = json!({
+        "static_objects":items.len() - moving,"moving_objects":moving,
+        "unique_meshes":mesh_payloads.len(),"unique_textures":texture_payloads.len(),
+        "ecs_entities":world.len(),"custom_components_per_entity":components_per_entity,
+        "texture_shape":[8,8],"atlas_layout":"legacy vertical atlas",
+    });
+    if scaled {
+        inventory["grid"] = json!({"columns":400,"rows":250,"spacing":1.6});
+    }
     Ok(Fixture {
-        inventory: json!({
-            "static_objects":items.len() - moving,"moving_objects":moving,
-            "unique_meshes":mesh_payloads.len(),"unique_textures":texture_payloads.len(),
-            "ecs_entities":world.len(),"custom_components_per_entity":components_per_entity,
-            "texture_shape":[8,8],"atlas_layout":"legacy vertical atlas",
-        }),
+        inventory,
         scene: SceneSnapshot {
             items,
             ..Default::default()
@@ -199,7 +220,7 @@ fn stress() -> Result<Fixture, String> {
         camera: Camera {
             yaw: 0.25,
             pitch: 1.17,
-            distance: 196.,
+            distance: 196. * (count as f32 / (S3_STATIC + S3_MOVING) as f32).sqrt(),
             target: [0.; 3],
         },
         ecs: Some(world),
@@ -502,6 +523,32 @@ mod tests {
             let again = Fixture::load("S3", &root()).unwrap();
             again.scene.items[S3_MOVING].model
         });
+    }
+
+    #[test]
+    fn scaled_s3_preserves_base_instances_and_uses_distinct_positions() {
+        let base = Fixture::load("S3", &root()).unwrap();
+        let scaled = Fixture::load("S3-100k", &root()).unwrap();
+        assert_eq!(scaled.scene.items.len(), 100_000);
+        assert_eq!(
+            scaled.scene.items[..base.scene.items.len()],
+            base.scene.items
+        );
+        let positions: std::collections::HashSet<_> = scaled
+            .scene
+            .items
+            .iter()
+            .map(|item| [item.model[0][3].to_bits(), item.model[2][3].to_bits()])
+            .collect();
+        assert_eq!(positions.len(), 100_000);
+        for key in [
+            "moving_objects",
+            "unique_meshes",
+            "unique_textures",
+            "ecs_entities",
+        ] {
+            assert_eq!(scaled.inventory[key], base.inventory[key], "{key}");
+        }
     }
 
     #[test]

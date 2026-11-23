@@ -594,6 +594,15 @@ pub fn precompile_graph_at(
                 shader_key(root, &source, &pass.manifest.entry, profile)?,
                 shader.words,
             );
+            if pass.resident_geometry() {
+                let source = culled_fragment_source(pass);
+                let shader = compile_hlsl_at(root, &source, &pass.manifest.entry, profile)?;
+                verify_bindless_shader(pass, &shader.words)?;
+                jobs.insert(
+                    shader_key(root, &source, &pass.manifest.entry, profile)?,
+                    shader.words,
+                );
+            }
         }
         if pass.manifest.stage != "compute" {
             let source = if pass.manifest.vertex_entry.is_some() {
@@ -610,10 +619,17 @@ pub fn precompile_graph_at(
         }
     }
     if plan.passes.iter().any(Pass::resident_geometry) {
-        let source = crate::vulkan::resident::VERTEX_SHADER;
-        let shader = compile_hlsl_at(root, source, "mainVS", "vs_6_0")?;
-        verify_resident_vertex(&shader.words)?;
-        jobs.insert(shader_key(root, source, "mainVS", "vs_6_0")?, shader.words);
+        let resident = crate::vulkan::resident::VERTEX_SHADER;
+        let culled = crate::vulkan::resident::culled_vertex_source();
+        for (source, culling) in [(resident, false), (culled.as_str(), true)] {
+            let shader = compile_hlsl_at(root, source, "mainVS", "vs_6_0")?;
+            verify_resident_vertex(&shader.words, culling)?;
+            jobs.insert(shader_key(root, source, "mainVS", "vs_6_0")?, shader.words);
+        }
+        for (source, entry, profile) in crate::vulkan::culling::SHADERS {
+            let shader = compile_hlsl_at(root, source, entry, profile)?;
+            jobs.insert(shader_key(root, source, entry, profile)?, shader.words);
+        }
     }
     let output = destination.join(".spirv");
     std::fs::create_dir_all(&output)
@@ -637,15 +653,37 @@ pub(crate) fn bindless_source(pass: &Pass) -> String {
     )
 }
 
+pub(crate) fn culled_fragment_source(pass: &Pass) -> String {
+    format!(
+        "#define MODULE_ENGINE_GPU_CULLING 1\n{}",
+        bindless_source(pass)
+    )
+}
+
+enum SceneDescriptors {
+    Bindless,
+    Resident,
+    Culled,
+}
+
 pub(crate) fn verify_bindless_shader(pass: &Pass, words: &[u32]) -> Result<(), ShaderError> {
-    verify_scene_descriptors(&pass.id, words, false)
+    verify_scene_descriptors(&pass.id, words, SceneDescriptors::Bindless)
 }
 
-pub(crate) fn verify_resident_vertex(words: &[u32]) -> Result<(), ShaderError> {
-    verify_scene_descriptors("resident vertex", words, true)
+pub(crate) fn verify_resident_vertex(words: &[u32], culling: bool) -> Result<(), ShaderError> {
+    let descriptors = if culling {
+        SceneDescriptors::Culled
+    } else {
+        SceneDescriptors::Resident
+    };
+    verify_scene_descriptors("resident vertex", words, descriptors)
 }
 
-fn verify_scene_descriptors(name: &str, words: &[u32], resident: bool) -> Result<(), ShaderError> {
+fn verify_scene_descriptors(
+    name: &str,
+    words: &[u32],
+    descriptors: SceneDescriptors,
+) -> Result<(), ShaderError> {
     let mut bindings = BTreeMap::new();
     let mut sets = BTreeMap::new();
     let mut types = BTreeMap::new();
@@ -696,10 +734,10 @@ fn verify_scene_descriptors(name: &str, words: &[u32], resident: bool) -> Result
             };
             read_only_rows.contains(element).then_some(*rows)
         };
-        if resident {
+        if !matches!(descriptors, SceneDescriptors::Bindless) {
             let rows = storage_array()?;
             let stride = match binding {
-                1 | 2 => 4,
+                1 | 2 | 5 => 4,
                 3 => 64,
                 4 => 16,
                 _ => return None,
@@ -730,10 +768,10 @@ fn verify_scene_descriptors(name: &str, words: &[u32], resident: bool) -> Result
         .values()
         .copied()
         .collect::<std::collections::BTreeSet<_>>();
-    let (set, expected): (u32, &[u32]) = if resident {
-        (0, &[1, 2, 3, 4])
-    } else {
-        (1, &[0, 1, 2])
+    let (set, expected): (u32, &[u32]) = match descriptors {
+        SceneDescriptors::Bindless => (1, &[0, 1, 2]),
+        SceneDescriptors::Resident => (0, &[1, 2, 3, 4]),
+        SceneDescriptors::Culled => (0, &[1, 2, 3, 4, 5]),
     };
     if bindings.len() != expected.len()
         || !actual.iter().copied().eq(expected.iter().copied())

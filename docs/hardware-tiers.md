@@ -191,7 +191,7 @@ physical slots that share the same differences between physical and
 published object and triangle IDs. Three stock-pass constants restore the
 published IDs and map material reads back to physical slots. A structural
 edit still traverses the ordered scene on the CPU to assemble runs. Churn
-can fragment runs and increase the number of indirect commands. The
+can fragment runs and increase the number of indirect commands on the R2.3 path. The
 [structural benchmark](bench.md#r23-scene-checks) measures those boundaries.
 
 Both frame slots use the same resident buffers. Queue barriers order
@@ -200,6 +200,46 @@ make those writes visible to subsequent draws. A frame retains the buffers
 and descriptor generation it references through graphics completion.
 Cancellation suppresses publication and the submitted scene edits remain
 valid for the next frame. See the [S3 reproduction](bench.md#r23-scene-checks).
+
+<a id="r24-culling"></a>
+
+## R2.4 GPU culling
+
+Vulkan reports `gpu_frustum_culling` when the R2.3 resident path can
+also enable `drawIndirectCount` and the device supports six storage buffer
+descriptors in the compute stage and descriptor set. The scene must fit the
+device's `maxDrawIndirectCount`, a 65,535 × 128 invocation dispatch and the
+storage buffer limit. A larger scene uses R2.3 draw runs. Direct snapshots,
+Custom scene raster passes, and devices outside the resident requirements
+use the existing expanded stream and material compatibility paths.
+
+The compute stage reads pooled mesh bounds, accepted instance transforms and
+draw runs. It rejects bounds outside the current camera, then compacts the
+remaining commands in published order. Every stock scene raster pass issues
+one `vkCmdDrawIndexedIndirectCount`. The color pass uses an ascending index
+stream shared by all meshes to address triangle corners in the existing mesh
+pool. This preserves flat face normals, published object and triangle IDs,
+and the first surface at equal depth. Custom pass bindings stay compatible.
+
+`hiz_occlusion_culling` also requires a sampled D32 depth attachment.
+The first phase renders a depth-only seed of opaque candidates whose
+padded screen bounds are at least 32 pixels wide and tall. The second phase
+compares the remaining candidates with a max-depth pyramid of this seed.
+Uncovered samples contribute far depth, odd image edges are included, and
+bounds intersecting the near plane stay candidates. Occlusion requires a
+strict depth separation across the entire projected bound. The pyramid uses
+the current camera and transforms on every frame, so a moved or removed
+occluder cannot leave stale depth behind. When the sampled image or the
+pyramid exceeds the frame's limits, the renderer uses frustum culling alone.
+
+The graphics queue orders both phases with the resident uploads and graph
+draws. Scratch commands and depth belong to each completed producer slot,
+and pending or retired flights keep their pipeline generation alive.
+The count and commands stay on the GPU. The optional diagnostic reads three
+32-bit counters after completion without waiting on the render thread.
+Source-free Player exports include the internal SPIR-V variants.
+See the [reference and native S3 checks](bench.md#r24-culling-checks)
+and Khronos [indexed indirect count requirements](https://docs.vulkan.org/refpages/latest/refpages/source/vkCmdDrawIndexedIndirectCount.html).
 
 <a id="reference-gpu"></a>
 

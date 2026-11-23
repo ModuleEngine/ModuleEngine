@@ -83,7 +83,9 @@ impl FramePools {
         let sizes = [
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::STORAGE_BUFFER,
-                descriptor_count: 256,
+                // Up to 64 graph passes with five resident bindings each,
+                // plus the classification, reduction and depth seed sets.
+                descriptor_count: 336,
             },
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::SAMPLED_IMAGE,
