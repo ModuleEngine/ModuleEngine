@@ -23,8 +23,11 @@ for id in world.entities_with(&["example.spin"]) {
 }
 ```
 
-`entities_with` intersects component columns, starting with the smallest column,
-and returns stable ID order. An empty requirement selects every entity. Dynamic
+`entities_with` resolves component columns once and starts with the smallest
+column. It intersects nearby-sized columns in stable ID order and uses keyed
+lookups for larger columns when few candidates remain. The query incorporates
+the current staged edits and removals even when a requested column is absent
+from the committed world. An empty requirement selects every entity. Dynamic
 values remain JSON described by registered component schemas. The
 [authored schedule](module-execution.md) runs nodes on the staged view of this world.
 
@@ -38,7 +41,8 @@ publication boundary, allowing a packet to create mutually referring objects.
 `entities_snapshot` and `entity` return owned `GameEntity` DTOs for Inspector,
 serialization and boundaries that need complete entities. Apply edits to an
 owned DTO explicitly or issue commands. Gameplay and presentation read the live
-world through Core's membership and value accessors. The column maps and staged
+world through Core's membership and value accessors. `transform(id)` reads the
+local transform directly from the current view. The column maps and staged
 rows are private to Core.
 
 <a id="r17-consumers"></a>
