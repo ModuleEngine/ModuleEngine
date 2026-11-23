@@ -206,15 +206,37 @@ struct FrameResources {
 struct FrameResourceKey {
     size: [usize; 2],
     images: Vec<(String, String, bool)>,
-    readback: Vec<(String, usize, usize)>,
+    readback: Vec<ReadbackImage>,
 }
-fn frame_readback(
-    plan: &Plan,
-    width: usize,
-    height: usize,
-    detailed: bool,
-) -> Vec<(String, usize, usize)> {
-    let mut readback = vec![(plan.output.clone(), 0, width * height * 4)];
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ReadbackImage {
+    resource: String,
+    kind: usize,
+    offset: usize,
+    size: usize,
+}
+
+impl ReadbackImage {
+    fn end(&self) -> usize {
+        self.offset + self.size
+    }
+}
+
+fn frame_readback(plan: &Plan, width: usize, height: usize, detailed: bool) -> Vec<ReadbackImage> {
+    let mut readback: Vec<ReadbackImage> = Vec::new();
+    let mut push = |resource, kind, texel_bytes| {
+        let end = readback.last().map_or(0, ReadbackImage::end);
+        readback.push(ReadbackImage {
+            resource,
+            kind,
+            // vkCmdCopyImageToBuffer requires the texel block alignment
+            // of the next image, even when prior planes have odd dimensions.
+            offset: end.next_multiple_of(texel_bytes),
+            size: width * height * texel_bytes,
+        });
+    };
+    push(plan.output.clone(), 0, 4);
     if !detailed {
         return readback;
     }
@@ -225,7 +247,7 @@ fn frame_readback(
     {
         for (name, kind, bytes) in [("depth", 1, 4), ("normals", 2, 16)] {
             if let Some(spec) = pass.manifest.outputs.iter().find(|spec| spec.name == name) {
-                readback.push((pass.resource(&spec.name), kind, width * height * bytes));
+                push(pass.resource(&spec.name), kind, bytes);
             }
         }
         if let Some(spec) = pass
@@ -234,14 +256,10 @@ fn frame_readback(
             .iter()
             .find(|spec| spec.name == "color" || spec.name == "albedo")
         {
-            readback.push((pass.resource(&spec.name), 3, width * height * 16));
+            push(pass.resource(&spec.name), 3, 16);
         }
     } else if let Some(pass) = plan.passes.iter().find(|pass| pass.geometry()) {
-        readback.push((
-            format!("{}.__hardware_depth", pass.id),
-            4,
-            width * height * 4,
-        ));
+        push(format!("{}.__hardware_depth", pass.id), 4, 4);
     }
     readback
 }
@@ -249,7 +267,7 @@ fn frame_resource_key(
     plan: &Plan,
     width: usize,
     height: usize,
-    readback: &[(String, usize, usize)],
+    readback: &[ReadbackImage],
 ) -> FrameResourceKey {
     let mut images = Vec::new();
     for pass in &plan.passes {
@@ -276,7 +294,7 @@ fn frame_resource_key(
 fn validate_frame_images(
     plan: &Plan,
     available: &BTreeSet<&str>,
-    readback: &[(String, usize, usize)],
+    readback: &[ReadbackImage],
 ) -> Result<(), VulkanError> {
     let mut declared = BTreeSet::new();
     for pass in &plan.passes {
@@ -321,7 +339,7 @@ fn validate_frame_images(
             }
         }
     }
-    for (resource, _, _) in readback {
+    for ReadbackImage { resource, .. } in readback {
         if !available.contains(resource.as_str()) {
             return Err(VulkanError::Resource(format!(
                 "GPU readback resource {resource} has no allocated image"
@@ -2215,10 +2233,8 @@ impl VulkanRenderer {
             &readback,
         )?;
         let new_staging = if reused.is_none() && presentation.is_none() {
-            Some(self.buffer(
-                readback.iter().map(|(_, _, size)| *size as u64).sum(),
-                vk::BufferUsageFlags::TRANSFER_DST,
-            )?)
+            let last = readback.last().expect("final color readback");
+            Some(self.buffer(last.end() as u64, vk::BufferUsageFlags::TRANSFER_DST)?)
         } else {
             None
         };
@@ -2798,7 +2814,6 @@ impl VulkanRenderer {
         if let Some(timestamps) = timestamps {
             timestamps.end(command, 0);
         }
-        let mut offset = 0u64;
         if let Some(shared) = presentation {
             let output = images
                 .get_mut(&plan.output)
@@ -2820,8 +2835,8 @@ impl VulkanRenderer {
             );
             shared.record_copy(command, output.image, self.family);
         }
-        for (name, _, size) in &readback {
-            let image = images.get_mut(name).unwrap();
+        for plane in &readback {
+            let image = images.get_mut(&plane.resource).unwrap();
             transition(
                 &self.device,
                 command,
@@ -2831,7 +2846,7 @@ impl VulkanRenderer {
                 vk::AccessFlags::TRANSFER_READ,
             );
             let region = vk::BufferImageCopy::default()
-                .buffer_offset(offset)
+                .buffer_offset(plane.offset as u64)
                 .image_subresource(vk::ImageSubresourceLayers {
                     aspect_mask: image.aspect,
                     mip_level: 0,
@@ -2852,7 +2867,6 @@ impl VulkanRenderer {
                     &[region],
                 );
             }
-            offset += *size as u64;
         }
         unsafe {
             // Make transfer writes available and visible to host reads. Waiting
@@ -3070,10 +3084,9 @@ impl VulkanRenderer {
         };
         let mut triangles = BTreeSet::new();
         let mut objects = BTreeSet::new();
-        let mut offset = 0;
-        for (_, kind, size) in &readback {
-            let bytes = &data[offset..offset + size];
-            match kind {
+        for plane in &readback {
+            let bytes = &data[plane.offset..plane.end()];
+            match plane.kind {
                 1 => {
                     stats.shaded_pixels = bytes
                         .as_chunks::<4>()
@@ -3094,7 +3107,7 @@ impl VulkanRenderer {
                     for pixel in bytes.as_chunks::<16>().0 {
                         let id = f32::from_ne_bytes(pixel[12..16].try_into().unwrap()) as u32;
                         if id > 0 {
-                            if *kind == 2 {
+                            if plane.kind == 2 {
                                 objects.insert(id);
                             } else {
                                 triangles.insert(id);
@@ -3104,7 +3117,6 @@ impl VulkanRenderer {
                 }
                 _ => {}
             }
-            offset += size;
         }
         stats.triangles = triangles.len();
         stats.rasterized_triangles = triangles.len();
@@ -3995,6 +4007,19 @@ mod tests {
         }
     }
     #[test]
+    fn detailed_readback_aligns_float4_planes_on_odd_viewports() {
+        let plan = build_metadata_plan(&default_graph(RenderPath::Forward)).unwrap();
+        let planes = frame_readback(&plan, 7, 5, true);
+        assert_eq!(
+            planes
+                .iter()
+                .map(|plane| (plane.offset, plane.size))
+                .collect::<Vec<_>>(),
+            [(0, 140), (140, 140), (288, 560), (848, 560)],
+        );
+    }
+
+    #[test]
     fn frame_allocation_identity_includes_resource_ids_readback_and_viewport() {
         let graph = default_graph(RenderPath::Forward);
         let plan = build_metadata_plan(&graph).unwrap();
@@ -4097,12 +4122,7 @@ mod tests {
                 );
                 assert_eq!(
                     resources.staging.as_ref().unwrap().size,
-                    resources
-                        .key
-                        .readback
-                        .iter()
-                        .map(|(_, _, bytes)| *bytes as u64)
-                        .sum::<u64>()
+                    resources.key.readback.last().unwrap().end() as u64
                 );
             }
             renderer.set_detailed_stats(false);
