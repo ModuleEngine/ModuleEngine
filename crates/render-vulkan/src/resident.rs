@@ -443,7 +443,7 @@ impl Buffers {
 }
 
 enum RowsUpdate {
-    Full(Rows),
+    Full(Box<Rows>),
     Moved(Vec<(usize, Instance)>),
     None,
 }
@@ -690,7 +690,7 @@ impl GpuScene {
             uploads,
             triangles: rows.triangles,
             runs: rows.runs.clone(),
-            rows: RowsUpdate::Full(rows),
+            rows: RowsUpdate::Full(Box::new(rows)),
             meshes,
         }))
     }
@@ -804,7 +804,7 @@ impl GpuScene {
     pub(super) fn commit(&mut self, next: SceneUpload, source: &mut ResidentScene) {
         match next.rows {
             RowsUpdate::Full(rows) => {
-                self.rows = rows;
+                self.rows = *rows;
                 self.pool.commit(next.meshes);
             }
             RowsUpdate::Moved(rows) => {
