@@ -39,6 +39,11 @@ STATUS_WORDS = {
     "en": {"done": ("done",), "cur": ("in progress",)},
     "ru": {"done": ("сделано", "выполнено", "готово"), "cur": ("в работе",)},
 }
+# An optional task is tracked and shown but is not required to finish its phase.
+OPTIONAL_PREFIX = {
+    "en": re.compile(r"^optional\s*[·:]\s*", re.IGNORECASE),
+    "ru": re.compile(r"^необязательно\s*[·:]\s*", re.IGNORECASE),
+}
 DONE_PREFIX = re.compile(r"^(done|сделано|выполнено|готово)\b[^:]{0,40}:\s*", re.IGNORECASE)
 ESTIMATE = {
     lang: re.compile(rf"{number}(?:\s*[–-]\s*{number})?\s+{unit}")
@@ -56,6 +61,7 @@ class Task:
     acceptance: str
     detail: str = ""    # full task cell, for the campaign map card
     criteria: str = ""  # full acceptance cell
+    optional: bool = False  # does not gate its phase
 
 
 @dataclass
@@ -133,8 +139,9 @@ def parse(markdown: str, lang: str) -> list[Phase]:
             phases.append(Phase(section[1], section[2]))
         status = cells[-1]
         task_id = plain(cells[0])
+        optional = bool(OPTIONAL_PREFIX[lang].match(plain(status)))
         try:
-            state = classify(status, lang)
+            state = classify(OPTIONAL_PREFIX[lang].sub("", plain(status)), lang)
         except ValueError as exc:
             raise ValueError(f"{EN_PATH if lang == 'en' else RU_PATH}: {task_id}: {exc}") from exc
         phases[-1].tasks.append(Task(
@@ -145,6 +152,7 @@ def parse(markdown: str, lang: str) -> list[Phase]:
             acceptance=short(plain(cells[2])) if len(cells) > 3 else "",
             detail=plain(cells[1]),
             criteria=plain(cells[2]) if len(cells) > 3 else "",
+            optional=optional,
         ))
     return phases
 
@@ -160,6 +168,8 @@ def compare(en: list[Phase], ru: list[Phase]) -> list[str]:
     names = {"done": "done", "cur": "in progress", "todo": "not started"}
     for task_id, task in en_tasks.items():
         other = ru_tasks.get(task_id)
+        if other and other.optional != task.optional:
+            errors.append(f"{task_id}: optional marker differs between {EN_PATH} and {RU_PATH}")
         if other and other.state != task.state:
             errors.append(
                 f"{task_id}: status differs — English '{task.effort}' is {names[task.state]}, "
@@ -185,6 +195,7 @@ def merge(en: list[Phase], ru: list[Phase]) -> list[Phase]:
                 acceptance=local.acceptance if local else task.acceptance,
                 detail=local.detail if local else task.detail,
                 criteria=local.criteria if local else task.criteria,
+                optional=task.optional,
             ))
         merged.append(Phase(phase.id, ru_titles.get(phase.id, phase.title), tasks))
     return merged
