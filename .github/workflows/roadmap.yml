@@ -1,7 +1,7 @@
 name: Roadmap map
 
 # Rebuilds the visual roadmap from task statuses in docs/product-roadmap.md.
-# Pull requests only validate; pushes to main publish to GitHub Pages.
+# Pull requests only validate; pushes to main and the hourly schedule publish to GitHub Pages.
 # See docs/roadmap-map.md.
 
 on:
@@ -13,6 +13,8 @@ on:
       - scripts/roadmap_map.py
       - scripts/roadmap_map.html
       - scripts/roadmap_world.html
+      - scripts/roadmap_events.py
+      - scripts/test_roadmap_events.py
       - scripts/test_roadmap_browser.cjs
       - .github/workflows/roadmap.yml
   pull_request:
@@ -22,12 +24,18 @@ on:
       - scripts/roadmap_map.py
       - scripts/roadmap_map.html
       - scripts/roadmap_world.html
+      - scripts/roadmap_events.py
+      - scripts/test_roadmap_events.py
       - scripts/test_roadmap_browser.cjs
       - .github/workflows/roadmap.yml
+  schedule:
+    - cron: '17 * * * *'  # hourly: refreshes the GitHub activity on the campaign map
   workflow_dispatch:
 
 permissions:
   contents: read
+  issues: read
+  pull-requests: read
 
 concurrency:
   group: roadmap-map-${{ github.event.pull_request.number || github.ref }}
@@ -46,9 +54,13 @@ jobs:
         with:
           python-version: '3.12'
       - name: Roadmap page tests
-        run: python -B -m unittest discover -s scripts -p test_roadmap_map.py -v
+        run: python -B -m unittest discover -s scripts -p 'test_roadmap*.py' -v
+      - name: Fetch recent GitHub activity (build time only; the token is not shipped)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python -B scripts/roadmap_events.py --out _events/events.json
       - name: Check statuses and build the page
-        run: python -B scripts/roadmap_map.py --out _site/index.html
+        run: python -B scripts/roadmap_map.py --out _site/index.html --events _events/events.json
       - name: Open the campaign map with missing phases in Chromium
         run: |
           browser_tools="$RUNNER_TEMP/roadmap-browser"

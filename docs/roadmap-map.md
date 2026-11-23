@@ -19,12 +19,13 @@ The last column of every phase task table in the roadmap is the status:
 | `Done` | `Сделано` (also `Выполнено` or `Готово`) | Task done |
 | `In progress`, optionally `In progress (2–3 d)` | `В работе`, optionally `В работе (2–3 д)` | Task in progress |
 | An estimate such as `2–3 d` or `1.5 w` | An estimate such as `2–3 д` or `1,5 н` | Not started |
+| `Optional · 2–3 d` (before the estimate) | `Необязательно · 2–3 д` | Tracked like any task, but its phase and the checkpoints that depend on it finish without it. Both tables must carry the prefix |
 
 The dedicated roadmap chat records status transitions. Implementation chats pass along accepted results and verification evidence and update technical contracts in their own pull requests. When a transition is ready, the planning chat compares `main` with the working chats and proposes one status pull request for the confirmed completions and work that has actually started. Apply the proposal from the dedicated roadmap chat and edit both language tables together. Keep the original estimate in parentheses when marking a task in progress if the estimate still applies.
 
 The phase colour, the “Done / Now / Next” cards, the progress bar, the header label and the column headers are derived from these statuses:
 
-- a phase is done when all its tasks are done, and current when at least one is done or in progress;
+- a phase is done when all its required tasks are done. Otherwise, it is current when at least one required task is done or any task is in progress;
 - a phase is next when every phase it depends on is done or current;
 - a checkpoint (R1+R3+R4, R2+R5) is passed when all its phases are done, including a phase whose arrow is drawn through another phase (R1 through R4);
 - the header shows the task in progress, otherwise the next available task; when all tasks are done it says the track is complete, and when open tasks remain but no phase can start (for example, a dependency was removed from the plan) it says work is blocked and names what the phase waits for.
@@ -45,7 +46,7 @@ The campaign map is the same roadmap as a game-style pixel-art map, built from t
 
 | Task status | On the map |
 | --- | --- |
-| `Done` | Captured: bright colours, golden border, blue flag. A phase with every task done is marked with a crown |
+| `Done` | Captured: bright colours, golden border, blue flag. A phase with all required tasks done is marked with a crown |
 | `In progress` | Under siege: animated flame frame, camp and campfire |
 | Not started, the first one of a phase that has been started | The next move: yellow pennant and tent. Shown only while nothing in that phase is in progress |
 | Not started, anything else | Fog of war: the farther from the front, the thicker the fog |
@@ -56,11 +57,27 @@ The page is a static file with no network access: a Content-Security-Policy bloc
 
 What stays hand-written lives in [scripts/roadmap_world.html](../scripts/roadmap_world.html): region names and themes, the position of each region and landmark, and `STATIC` with the dependencies and goals of each phase. `STATIC` mirrors `phases` of the table page, and `scripts/test_roadmap_map.py` fails if they diverge. Provinces are laid out automatically in the order of the tasks, so a new task needs no edit in the template. A new phase needs an entry in `STATIC` and `REGS`; until it exists the build prints a warning and the phase is not shown. A phase removed from the roadmap disappears from the map together with its arrows.
 
+### Live GitHub activity
+
+At build time `scripts/roadmap_events.py` reads the repository's last 14 days of activity through the GitHub API and the workflow's own `GITHUB_TOKEN`, and the map shows it as objects tied to the province of the task an event mentions (`R2.3` in a title, commit message or branch name; a phase such as `R2` puts it in that region; with no reference it goes to the current front):
+
+| Event | On the map |
+| --- | --- |
+| Commit | A small flag next to the province |
+| Open pull request | A ship sailing towards the province from the nearest sea |
+| Merged pull request | A ship with a golden flag in port, with sparks |
+| Comment | A bird circling above the province |
+| Review comment | A floating scroll |
+
+Events older than three days are drawn dimmer. Under the map a chronicle lists the latest twelve; each entry selects its province and links to GitHub. The token stays in the build: the page contains no token, no author names and no comment bodies, only the kind, time, a one-line title, the PR number and a link inside this repository, and the page makes no requests. The events file is sanitized again when the page is built, and a failed or rate-limited API call only means fewer events: the map is built without them and the build prints a warning. The workflow also runs every hour so the activity stays fresh.
+
 ## Checks and local build
 
 ```sh
 python scripts/roadmap_map.py            # writes outputs/roadmap/index.html and outputs/roadmap/world/index.html
 python scripts/roadmap_map.py --check    # validation only
+python scripts/roadmap_events.py --repo owner/name --out events.json   # optional: GitHub activity (set GITHUB_TOKEN for a higher rate limit)
+python scripts/roadmap_map.py --events events.json --repo owner/name   # build with that activity
 ```
 
 The build fails when the English and Russian tables list different tasks or states, or a task has an unsupported status or estimate. Estimates use days (`d`/`д`) or weeks (`w`/`н`), with an optional range. Use a decimal point in English and a comma in Russian.

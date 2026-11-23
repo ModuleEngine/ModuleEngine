@@ -23,6 +23,8 @@ import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+import roadmap_events
+
 ROOT = Path(__file__).resolve().parent.parent
 EN_PATH = "docs/product-roadmap.md"
 RU_PATH = "docs/ru/product-roadmap.md"
@@ -31,6 +33,7 @@ WORLD_TEMPLATE_PATH = "scripts/roadmap_world.html"
 DEFAULT_OUT = "outputs/roadmap/index.html"
 WORLD_DIR = "world"  # the campaign map is written to <dir of --out>/world/index.html
 PLACEHOLDER = "/*@ROADMAP_DATA@*/null"
+EVENTS_PLACEHOLDER = "/*@EVENTS_DATA@*/null"
 
 HEADING = re.compile(r"^###\s+(?P<id>[A-Z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*)\s+—\s+(?P<title>.+?)\s*$")
 ANY_HEADING = re.compile(r"^#{1,3}\s")
@@ -38,6 +41,11 @@ TASK_ID = re.compile(r"^(?P<phase>[A-Z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*)\.\d+$")
 STATUS_WORDS = {
     "en": {"done": ("done",), "cur": ("in progress",)},
     "ru": {"done": ("сделано", "выполнено", "готово"), "cur": ("в работе",)},
+}
+# An optional task is tracked and shown but is not required to finish its phase.
+OPTIONAL_PREFIX = {
+    "en": re.compile(r"^optional\s*[·:]\s*", re.IGNORECASE),
+    "ru": re.compile(r"^необязательно\s*[·:]\s*", re.IGNORECASE),
 }
 DONE_PREFIX = re.compile(r"^(done|сделано|выполнено|готово)\b[^:]{0,40}:\s*", re.IGNORECASE)
 ESTIMATE = {
@@ -56,6 +64,7 @@ class Task:
     acceptance: str
     detail: str = ""    # full task cell, for the campaign map card
     criteria: str = ""  # full acceptance cell
+    optional: bool = False  # does not gate its phase
 
 
 @dataclass
@@ -133,8 +142,9 @@ def parse(markdown: str, lang: str) -> list[Phase]:
             phases.append(Phase(section[1], section[2]))
         status = cells[-1]
         task_id = plain(cells[0])
+        optional = bool(OPTIONAL_PREFIX[lang].match(plain(status)))
         try:
-            state = classify(status, lang)
+            state = classify(OPTIONAL_PREFIX[lang].sub("", plain(status)), lang)
         except ValueError as exc:
             raise ValueError(f"{EN_PATH if lang == 'en' else RU_PATH}: {task_id}: {exc}") from exc
         phases[-1].tasks.append(Task(
@@ -145,6 +155,7 @@ def parse(markdown: str, lang: str) -> list[Phase]:
             acceptance=short(plain(cells[2])) if len(cells) > 3 else "",
             detail=plain(cells[1]),
             criteria=plain(cells[2]) if len(cells) > 3 else "",
+            optional=optional,
         ))
     return phases
 
@@ -160,6 +171,8 @@ def compare(en: list[Phase], ru: list[Phase]) -> list[str]:
     names = {"done": "done", "cur": "in progress", "todo": "not started"}
     for task_id, task in en_tasks.items():
         other = ru_tasks.get(task_id)
+        if other and other.optional != task.optional:
+            errors.append(f"{task_id}: optional marker differs between {EN_PATH} and {RU_PATH}")
         if other and other.state != task.state:
             errors.append(
                 f"{task_id}: status differs — English '{task.effort}' is {names[task.state]}, "
@@ -185,6 +198,7 @@ def merge(en: list[Phase], ru: list[Phase]) -> list[Phase]:
                 acceptance=local.acceptance if local else task.acceptance,
                 detail=local.detail if local else task.detail,
                 criteria=local.criteria if local else task.criteria,
+                optional=task.optional,
             ))
         merged.append(Phase(phase.id, ru_titles.get(phase.id, phase.title), tasks))
     return merged
@@ -257,7 +271,15 @@ def dependency_errors(template: str, en: list[Phase], ru: list[Phase]) -> list[s
     return errors
 
 
-def build_world(root: Path) -> tuple[str, list[str], list[str]]:
+def inject_events(page: str, payload: dict | None) -> str:
+    """Put the sanitized events into the campaign map. `<` is escaped so no text can close the script block."""
+    if page.count(EVENTS_PLACEHOLDER) != 1:
+        raise ValueError(f"{WORLD_TEMPLATE_PATH} must contain {EVENTS_PLACEHOLDER} exactly once")
+    blob = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).replace("<", "\\u003c") if payload else "null"
+    return page.replace(EVENTS_PLACEHOLDER, blob)
+
+
+def build_world(root: Path, events_path: Path | None = None, repo: str = "") -> tuple[str, list[str], list[str]]:
     """The campaign map page, errors and warnings; statuses come from the same tables as the table page."""
     en = parse((root / EN_PATH).read_text(encoding="utf-8"), "en")
     ru = parse((root / RU_PATH).read_text(encoding="utf-8"), "ru")
@@ -266,18 +288,26 @@ def build_world(root: Path) -> tuple[str, list[str], list[str]]:
                 for pid in unplaced(template, en)]
     generated = dt.datetime.now(dt.timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
     errors = dependency_errors(template, en, ru)
-    return render(template, merge(en, ru), source_commit(root), generated), errors, warnings
+    page = render(template, merge(en, ru), source_commit(root), generated)
+    payload = None
+    if events_path is not None:
+        payload, event_warnings = roadmap_events.load_events(
+            events_path, repo, {t.id for p in en for t in p.tasks}, {p.id for p in en})
+        warnings += event_warnings
+    return inject_events(page, payload), errors, warnings
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", default=DEFAULT_OUT, help=f"output HTML (default {DEFAULT_OUT})")
+    parser.add_argument("--events", help="events JSON written by scripts/roadmap_events.py (optional)")
+    parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", ""), help="owner/name for event links")
     parser.add_argument("--check", action="store_true", help="only validate the roadmap; write nothing")
     args = parser.parse_args(argv)
 
     try:
         page, errors, warnings = build(ROOT)
-        world, world_errors, world_warnings = build_world(ROOT)
+        world, world_errors, world_warnings = build_world(ROOT, Path(args.events) if args.events else None, args.repo)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
