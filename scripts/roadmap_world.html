@@ -67,6 +67,16 @@
   .chron button{background:#3a2616;border:2px solid #7a5230;padding:3px 9px;color:#f2e6c4;font-size:12.5px}.chron button:hover{background:#523620}
 @media(max-width:760px){aside{top:auto;left:8px;right:8px;bottom:8px;width:auto;max-width:none;max-height:58vh;padding:14px 14px}aside h2{font-size:17px;padding-right:34px}header{padding:10px 12px}.hud{gap:6px 12px;font-size:12px}.bar{display:none}.chron b{flex-basis:100%;text-align:center}.tip{display:none!important}main{padding:8px}}
   @media (prefers-reduced-motion: reduce){.chip.cur,.ribbon.hot{animation:none}}
+  #chron{max-width:1200px;margin:0 auto 12px;padding:4px 16px 0;display:none}
+  #chron.on{display:block}
+  #chron h2{margin:6px 0;font:700 13px ui-monospace,Consolas,monospace;letter-spacing:.08em;text-transform:uppercase;color:#cdb98a}
+  #chron ul{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:6px}
+  #chron li{display:flex;gap:6px;align-items:stretch}
+  #chron li button{flex:1;min-width:0;text-align:left;display:flex;gap:8px;align-items:baseline;background:#2b1c10;border:2px solid #7a5230;padding:6px 8px;font-size:13px;color:#f2e6c4}
+  #chron li button:hover{background:#3a2616}
+  #chron li a{flex:0 0 auto;display:flex;align-items:center;padding:0 8px;background:#2b1c10;border:2px solid #7a5230;color:var(--gold);text-decoration:none}
+  #chron .ic{flex:0 0 auto}#chron .tt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #chron .tm{flex:0 0 auto;font:600 11px ui-monospace,Consolas,monospace;color:#cdb98a}
 </style>
 </head>
 <body>
@@ -77,11 +87,12 @@
   </div>
   <div class="hud" id="hud"></div>
 </header>
-<div class="legendbar"><span><i style="background:#4a7be0"></i>Захвачена</span><span><i style="background:#d9503f"></i>Под осадой</span><span><i style="background:#9c98a6"></i>Туман войны</span><span><i style="background:#ffd23a"></i>Следующий ход по плану</span><span><i style="background:#f2c14e"></i>Стрелка — порядок кампании</span></div>
+<div class="legendbar"><span><i style="background:#4a7be0"></i>Захвачена</span><span><i style="background:#d9503f"></i>Под осадой</span><span><i style="background:#9c98a6"></i>Туман войны</span><span><i style="background:#ffd23a"></i>Следующий ход по плану</span><span><i style="background:#f2c14e"></i>Стрелка — порядок кампании</span><span>⛵ PR · 🏴 влит · ⚔ коммит · 🕊 комментарий · 📜 ревью</span></div>
 <main>
   <div class="stage" id="stage"><div class="world" id="world"><canvas id="map" aria-label="Карта королевства ModuleEngine"></canvas></div></div>
   <aside id="panel" aria-live="polite"></aside>
 </main>
+<section id="chron" aria-label="Хроника кампании"></section>
 <div class="note">Наведите курсор на провинцию, нажмите — откроются критерии приёмки. Ленты областей и маяки рубежей тоже кликабельны. <span id="meta"></span></div>
 <div class="tip" id="tip"></div>
 <script>
@@ -180,6 +191,12 @@ const ancOf = k => anc[k] || (anc[k] = new Set(regOf[k].deps.filter(d => rk.incl
 const arrows = [];
 for (const k of rk) { const ds = regOf[k].deps.filter(d => rk.includes(d)); for (const d of ds) if (!ds.some(o => o !== d && ancOf(o).has(d))) arrows.push({ a: regOf[d], b: regOf[k] }); }
 const depth = {}; rk.forEach(k => depth[k] = regOf[k].provs.some(p => p.st !== 'next') ? 0 : 99); for (let it = 0; it < 12; it++) for (const a of arrows) depth[a.b.key] = Math.min(depth[a.b.key], depth[a.a.key] + 1);
+/* GitHub activity (scripts/roadmap_events.py, build time): each event belongs to the province of the task it mentions,
+   else to a province of the phase it mentions, else to the current front. A merged PR replaces its "opened" event. */
+const EVD = /*@EVENTS_DATA@*/null;
+const evHome = e => (e.task && taskById[e.task]) || (e.phase && regOf[e.phase] && (regOf[e.phase].provs.find(q => q.st === 'cur' || q.st === 'front') || regOf[e.phase].provs[0])) || (focusIdx >= 0 ? provs[focusIdx] : null);
+const mergedNums = new Set(((EVD && EVD.events) || []).filter(e => e.type === 'merge' && e.num).map(e => e.num));
+const EVENTS = ((EVD && EVD.events) || []).filter(e => !(e.type === 'pr' && e.num && mergedNums.has(e.num))).map(e => ({ ...e, p: evHome(e) })).filter(e => e.p).slice(0, 30);
 // @model-end
 
 /* ---------- colors ---------- */
@@ -204,6 +221,8 @@ const S = {
   mill: spr(['..vvv..', '..vkv..', '.vvvvv.', '.vvvvv.', 'vvvkvvv', 'vvvkvvv']),
   tent: spr(['...r...', '..rrr..', '.rrvrr.', 'rrvvvrr', 'rrvkvrr']),
   knight: spr(['..sss..', '..sks..', '.bbbbb.', 'sbbybbs', 'sbbbbbs', '.bbbbb.', '..p.p..', '..p.p..', '.kk.kk.']),
+  ship: spr(['....p....', '...pvv...', '..pvvvv..', '....p....', 'hhhhhhhhh', '.hhhhhhh.']), gship: spr(['....y....', '...yvv...', '..yvvvv..', '....y....', 'hhhhhhhhh', '.hhhhhhh.']),
+  scroll: spr(['.vvvvv.', 'vvkkkvv', 'vkvvkrv', '.vvvvv.']),
   fireA: spr(['.f.', 'faf', 'acc']), fireB: spr(['f..', 'aaf', 'cac']),
   gauge: spr(['.r.', '.p.', 'rp.', '.p.', 'rp.', '.p.', 'ppp']), crate: spr(['hhhhh', 'hukuh', 'hkuuh', 'hhhhh']), forge: spr(['..G..', '..G..', '.GGG.', 'GGaGG', 'GGGGG']),
   gate: spr(['.www.', 'wwwww', 'wMMMw', 'wMMMw', 'wMMMw']), obelisk: spr(['..y..', '.www.', '.wgw.', '.wgw.', '.wgw.', '.wgw.', 'wwwww']), bell: spr(['..y..', '.yyy.', 'yyyyy', 'yyyyy', '..k..']),
@@ -302,6 +321,22 @@ function drawArrow(ctx, e, t) {
 }
 const fireBorder = []; for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const i = y * W + x, q = ids[i]; if (q >= 0 && (bflag[i] || kind[i] === 3)) { const st = provs[q].st; if (st === 'cur' || st === 'front') fireBorder.push([x, y, st === 'cur']); } }
 const FIRE = ['#ffe066', '#ff9a1f', '#e0411a', '#a8220f'].map(P);
+/* ---------- GitHub activity objects ---------- */
+const AGE = e => (Date.now() - Date.parse(e.at)) / 36e5; // hours; 0 when the page has no clock
+const port = p => { let best = null; for (let k = 0; k < 24; k++) { const a = k / 24 * 6.283, dx = Math.cos(a), dy = Math.sin(a); for (let r = 8; r < 70; r++) { const x = Math.round(p.x + dx * r), y = Math.round(p.y + dy * r); if (x < 6 || y < 6 || x > W - 14 || y > H - 8) break; if (kind[y * W + x] === 0) { if (!best || r < best.r) best = { r, x, y, dx, dy }; break; } } } return best || { r: 0, x: p.x, y: p.y + 10, dx: 0, dy: 1 }; };
+EVENTS.forEach((e, k) => { e.k = k; e.anchor = port(e.p); e.old = AGE(e) > 72; });
+function events(ctx, t) {
+  const wv = Math.floor(t / 260) & 1;
+  for (const e of EVENTS) { const p = e.p, a = e.old ? .55 : 1; ctx.globalAlpha = a;
+    if (e.type === 'commit') { const fx = p.x - 15 + (e.k * 5) % 11, fy = p.y + 12 + (e.k % 3) * 2; ctx.fillStyle = '#3a2a1c'; ctx.fillRect(fx, fy - 4, 1, 5); ctx.fillStyle = '#f1f4f9'; ctx.fillRect(fx + 1, fy - 4 + wv, 3, 2); ctx.fillStyle = '#3d6fd8'; ctx.fillRect(fx + 1, fy - 3 + wv, 1, 1); }
+    else if (e.type === 'pr') { const an = e.anchor, d = reduced ? 8 : Math.max(0, 60 - ((t / 70 + e.k * 13) % 100)); ctx.drawImage(S.ship, Math.round(an.x + an.dx * d) - 4, Math.round(an.y + an.dy * d) - 3 + Math.round(Math.sin(t / 500 + e.k))); }
+    else if (e.type === 'merge') { const an = e.anchor; ctx.drawImage(S.gship, Math.round(an.x) - 4, Math.round(an.y) - 3 + Math.round(Math.sin(t / 600 + e.k)));
+      if (!e.old && !reduced) for (let q = 0; q < 3; q++) { const u = (t / 120 + q * 9 + e.k * 5) % 22; ctx.fillStyle = q & 1 ? '#ffe066' : '#ffffff'; ctx.fillRect(Math.round(an.x + Math.sin(u / 3 + q) * 4), Math.round(an.y - 4 - u), 1, 1); } }
+    else if (e.type === 'comment') { const w = reduced ? 0 : t / 700 + e.k * 2, bx = Math.round(p.x + 6 + Math.cos(w) * 13), by = Math.round(p.y - 12 + Math.sin(w) * 5); ctx.fillStyle = '#2b2433'; ctx.fillRect(bx - 1, by + (wv ? 0 : 1), 1, 1); ctx.fillRect(bx + 1, by + (wv ? 0 : 1), 1, 1); ctx.fillRect(bx, by + 1, 1, 1); }
+    else if (e.type === 'review') ctx.drawImage(S.scroll, p.x + 10 + (e.k % 3) * 3, p.y - 15 + (reduced ? 0 : Math.round(Math.sin(t / 450 + e.k))));
+  }
+  ctx.globalAlpha = 1;
+}
 function ambient(ctx, t) {
   const r7 = regOf.R7;
   if (r7) for (let k = 0; k < 16; k++) { const y = r7.cy - 34 + ((t / 70 + k * 37) % 70), x = r7.cx - 46 + (k * 53) % 92 + Math.sin(t / 500 + k) * 3; ctx.fillStyle = k & 1 ? '#e29a3e' : '#c0662a'; ctx.fillRect(Math.round(x), Math.round(y), 1, 1); }
@@ -351,7 +386,7 @@ function frame(t) {
   if (volSpot) for (let k = 0; k < 7; k++) { const u = ((t / 160 + k * 4) % 26), xx = volSpot[0] + 7 + Math.round(Math.sin(u / 4 + k) * 2.5); ctx.fillStyle = u < 8 ? '#ffb347' : u < 16 ? '#7a6a6a' : '#a59fa8'; ctx.fillRect(xx, Math.round(volSpot[1] - u), 1 + (u > 14 ? 1 : 0), 1 + (u > 14 ? 1 : 0)); }
   if (millSpot) { ctx.drawImage(S.mill, millSpot[0], millSpot[1]); ctx.drawImage((Math.floor(t / 500) & 1) ? S.bladeA : S.bladeB, millSpot[0] + 0, millSpot[1] - 3); }
   for (const e of aw) drawArrow(ctx, e, t);
-  ambient(ctx, t);
+  ambient(ctx, t); events(ctx, t);
   for (const [x, y, full] of fireBorder) { const h = hash(x, y, Math.floor(t / 100) + 7); if (h > (full ? .55 : .86) && ((x + y) & 1) === 0) { const hh = (full ? 1 : 0) + 1 + Math.floor(h * (full ? 4 : 2)); for (let k = 0; k < hh; k++) { ctx.fillStyle = k === 0 ? '#ffe066' : k < 3 ? '#ff9a1f' : '#e0411a'; ctx.fillRect(x, y - k - 1, 1, 1); } } }
   if (!reduced) requestAnimationFrame(frame);
 }
@@ -400,6 +435,14 @@ const taskProvs = provs.filter(p => p.kind === 'task'), total = taskProvs.filter
 const curIds = provs.filter(p => p.st === 'cur').map(p => p.id), frontIds = provs.filter(p => p.st === 'front' && p.kind === 'task').map(p => p.id), wonRegs = regs.filter(r => !r.landmark && r.provs.every(p => p.opt || p.st === 'done')).length;
 document.getElementById('hud').innerHTML = `<span>Захвачено <b>${total}/${taskProvs.length}</b><span class="bar">${taskProvs.map(p => `<i class="${p.st === 'done' ? 'on' : ''}"></i>`).join('')}</span></span><span>${curIds.length ? 'Осада' : 'Следующий ход'}: <b>${esc((curIds.length ? curIds : frontIds).join(', ') || '—')}</b></span><span>Областей: <b>${wonRegs}/${rk.length}</b></span>`;
 if (SRC) document.getElementById('meta').textContent = `Статусы из ${SRC.source}${SRC.commit ? ' · коммит ' + SRC.commit : ''} · собрано ${SRC.generated}`;
+/* chronicle: the latest GitHub events; all text from the events file is escaped */
+const EVN = { commit: ['⚔', 'Коммит'], pr: ['⛵', 'PR открыт'], merge: ['🏴', 'PR влит'], comment: ['🕊', 'Комментарий'], review: ['📜', 'Ревью'] };
+const ago = e => { const h = AGE(e); return h < 1 ? 'только что' : h < 48 ? Math.round(h) + ' ч назад' : Math.round(h / 24) + ' дн назад'; };
+if (EVENTS.length) { const chron = document.getElementById('chron'); chron.classList.add('on');
+  chron.innerHTML = '<h2>Хроника кампании · события GitHub</h2><ul>' + EVENTS.slice(0, 12).map(e => { const ref = e.num ? ' #' + e.num : '';
+    return `<li><button data-k="${e.k}" title="${esc(EVN[e.type][1])}${esc(ref)} → ${esc(e.p.id)}"><span class="ic">${EVN[e.type][0]}</span><span class="tt">${esc(e.title || EVN[e.type][1] + ref)}</span><span class="tm">${esc(e.p.id)} · ${esc(ago(e))}</span></button>${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener noreferrer" aria-label="Открыть на GitHub">↗</a>` : ''}</li>`; }).join('') + '</ul>';
+  chron.querySelectorAll('button[data-k]').forEach(b => b.onclick = () => selectProv(EVENTS[+b.dataset.k].p.i)); }
+if (EVD && EVD.fetched) document.getElementById('meta').textContent += ` · события GitHub на ${EVD.fetched.replace('T', ' ').replace('Z', ' UTC')}`;
 renderPanel(); requestAnimationFrame(frame);
 
 })();

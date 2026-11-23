@@ -57,11 +57,27 @@ The page is a static file with no network access: a Content-Security-Policy bloc
 
 What stays hand-written lives in [scripts/roadmap_world.html](../scripts/roadmap_world.html): region names and themes, the position of each region and landmark, and `STATIC` with the dependencies and goals of each phase. `STATIC` mirrors `phases` of the table page, and `scripts/test_roadmap_map.py` fails if they diverge. Provinces are laid out automatically in the order of the tasks, so a new task needs no edit in the template. A new phase needs an entry in `STATIC` and `REGS`; until it exists the build prints a warning and the phase is not shown. A phase removed from the roadmap disappears from the map together with its arrows.
 
+### Live GitHub activity
+
+At build time `scripts/roadmap_events.py` reads the repository's last 14 days of activity through the GitHub API and the workflow's own `GITHUB_TOKEN`, and the map shows it as objects tied to the province of the task an event mentions (`R2.3` in a title, commit message or branch name; a phase such as `R2` puts it in that region; with no reference it goes to the current front):
+
+| Event | On the map |
+| --- | --- |
+| Commit | A small flag next to the province |
+| Open pull request | A ship sailing towards the province from the nearest sea |
+| Merged pull request | A ship with a golden flag in port, with sparks |
+| Comment | A bird circling above the province |
+| Review comment | A floating scroll |
+
+Events older than three days are drawn dimmer. Under the map a chronicle lists the latest twelve; each entry selects its province and links to GitHub. The token stays in the build: the page contains no token, no author names and no comment bodies, only the kind, time, a one-line title, the PR number and a link inside this repository, and the page makes no requests. The events file is sanitized again when the page is built, and a failed or rate-limited API call only means fewer events: the map is built without them and the build prints a warning. The workflow also runs every hour so the activity stays fresh.
+
 ## Checks and local build
 
 ```sh
 python scripts/roadmap_map.py            # writes outputs/roadmap/index.html and outputs/roadmap/world/index.html
 python scripts/roadmap_map.py --check    # validation only
+python scripts/roadmap_events.py --repo owner/name --out events.json   # optional: GitHub activity (set GITHUB_TOKEN for a higher rate limit)
+python scripts/roadmap_map.py --events events.json --repo owner/name   # build with that activity
 ```
 
 The build fails when the English and Russian tables list different tasks or states, or a task has an unsupported status or estimate. Estimates use days (`d`/`д`) or weeks (`w`/`н`), with an optional range. Use a decimal point in English and a comma in Russian.
