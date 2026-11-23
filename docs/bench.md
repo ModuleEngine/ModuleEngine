@@ -74,6 +74,49 @@ The Player example `gpu_presentation_check` exercises native interop and
 checks that two in-flight material versions produce their individual reference
 pixels while the second submission reuses the unchanged texture.
 
+<a id="r23-scene-checks"></a>
+
+## R2.3 scene uploads and timing
+
+Use a Release Editor built with `bench`. Run native S3 with 11,000 drawables
+and 1,000 moving instances, then repeat in a new output directory with
+`MODULE_ENGINE_BENCHMARK_S3_STATIC=1` to hold every model fixed. Use the same
+viewport, profiling and vsync configuration as the baseline and keep other
+GPU work out of the measurement. Native runs should admit two tickets and
+transfer no CPU pixel bytes. An optimized build with the Vulkan package's
+debug assertions and the Khronos layer verifies synchronization separately
+from performance runs.
+
+`first_completed_frame_work` and every sample record bytes for vertices,
+mesh indices, instances, material rows, draw commands, texture images and
+the atlas. The moving series should write only changed instance rows in
+steady state. The fixed series should write zero scene bytes after the first
+submission. The counters exclude on-device copies for mesh pool growth.
+
+`cpu_scene_frame_ms` measures construction and application of the standalone
+scene delta plus the CPU elapsed time for the successful `render_scene_presented`
+call, through queue submission. The per-submission work reports renderer
+preparation, command recording, queue submit, and any blocking diagnostic
+GPU wait. The native producer polls asynchronously. Its observed ticket
+latency and the window-observed interval are separate measurements.
+`cpu_fixture_frame_ms` also includes the Core ECS fixture tick and
+standalone transform extraction. The roadmap's **S3 CPU frame** uses this
+full measured boundary. The S3 report also breaks down the same ECS tick
+into its eight-column query and motion writes. The render-call boundary is the one
+reported in the baseline `cpu_submit_ms`. The benchmark emits its own deltas,
+so the [GameHost acceptance fixture](shared-game-host.md#r16-scene-updates)
+separately checks the production path and its upload counters.
+
+Run `--bench-scene R23-structure <new output folder>` for the offscreen
+structural comparison. It applies one insertion, removal or triangle-count
+change at the start, middle and end of scenes with 1,000 and 11,000
+drawables. Each case warms both mesh/material states, records 24 edit
+samples with an unchanged control, and checks exact RGBA and render stats
+against the expanded snapshot. Compare delta application, Vulkan
+preparation, recording and queue submit as CPU work. Diagnostic GPU wait
+is recorded separately. The benchmark does not exercise ECS changes or
+the native window.
+
 ## Measurement and repeatability
 
 The launcher builds the Editor once in Release with the source-only `bench`

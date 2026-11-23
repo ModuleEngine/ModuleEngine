@@ -1117,7 +1117,12 @@ pub(crate) fn copy_native_fixture(root: &Path) {
         .unwrap()
         .parent()
         .unwrap();
-    for relative in NATIVE_FILES {
+    // The isolated Editor also compiles Rust workers against the copied Core.
+    for relative in NATIVE_FILES
+        .iter()
+        .copied()
+        .chain(["crates/engine-core/src/render_scene_update.rs"])
+    {
         let p = root.join(relative);
         fs::create_dir_all(p.parent().unwrap()).unwrap();
         fs::copy(original.join(relative), p).unwrap();

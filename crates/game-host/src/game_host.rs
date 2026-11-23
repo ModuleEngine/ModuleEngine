@@ -397,10 +397,10 @@ impl ExecutableSystem for RustSystem {
             .lock()
             .map_err(|_| "Game configuration poisoned")?
             .clone();
-        let mut input = self.components.script_context(
+        let mut input = self.components.script_context_from_world(
             ctx.game.time,
             ctx.dt as f64,
-            ctx.game.world.entities_snapshot(),
+            &ctx.game.world,
             &self.active_components,
         );
         input.asset_paths =

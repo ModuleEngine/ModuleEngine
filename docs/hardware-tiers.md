@@ -147,9 +147,9 @@ between texels and mip levels, and up to 16× anisotropy within device limits.
 A material descriptor set contains 1,023 usable image slots and a white
 fallback. The graphics queue uploads the original level and generates the
 remaining mip levels by linear blits in sRGB images. Each image uses its own
-device extent limit. A replacement descriptor set shares unchanged images
-and retains its own object-to-texture index buffer. Submitted frames keep
-their set, images and staging buffer until GPU completion. Descriptor sets
+device extent limit. A replacement descriptor set shares unchanged images.
+On the snapshot path each set retains its own object-to-texture index buffer.
+Submitted frames keep their set, images and staging buffer until GPU completion. Descriptor sets
 are populated before submission and stay immutable, so this path needs no
 update-after-bind, partially-bound or variable-count binding features.
 
@@ -158,6 +158,48 @@ passes using the original material ABI, and when a scene exceeds the indexed
 table capacity. An atlas must fit within 8192 pixels on each axis. See the
 [pass ABI](gpu-hlsl.md#hlsl-abi) and
 [reproduction](bench.md#r22-material-checks).
+
+<a id="r23-scene"></a>
+
+## R2.3 GPU-resident scene
+
+The resident scene requires the indexed material path, `multiDrawIndirect`,
+`drawIndirectFirstInstance`, and room for four vertex-stage storage buffers
+and five storage descriptors across the pipeline layout. An eligible device
+reports `resident_scene: true` in the Vulkan capabilities. A retained scene
+uses the resident path when its active scene raster passes are stock Forward,
+G-buffer or Depth/Normal, its data fit within the storage and material
+limits, and its transforms can be represented safely. Direct snapshots, Custom scene passes, and compatibility hardware
+use the existing vertex stream. Custom fullscreen and compute passes can run
+after resident geometry.
+
+Vulkan pools indexed mesh payloads for the lifetime of the device. The
+vertex stage reads local positions, UVs and triangle indices, applies the
+instance transform and computes the world-space face normal. A persistent
+instance buffer holds the transforms and material row indices. Persistent
+material rows hold the effective color and the R2.2 image index. The renderer
+keeps texture slots for unchanged images when it builds a new descriptor set.
+The mesh pool grows by copying its populated prefix on the GPU and recording
+only new mesh payloads from the CPU. Each stable object ID and primitive
+ordinal keeps its GPU slot while that drawable is present. Removing one
+drawable omits its slot from the ordered draw runs. Insertion can reuse a
+vacant slot, and changing a mesh updates the rows of that object. Unchanged
+buffer regions are copied on the GPU when an allocation grows.
+
+Draw runs preserve the published order and IDs. A run covers consecutive
+physical slots that share the same differences between physical and
+published object and triangle IDs. Three stock-pass constants restore the
+published IDs and map material reads back to physical slots. A structural
+edit still traverses the ordered scene on the CPU to assemble runs. Churn
+can fragment runs and increase the number of indirect commands. The
+[structural benchmark](bench.md#r23-scene-checks) measures those boundaries.
+
+Both frame slots use the same resident buffers. Queue barriers order
+previous vertex, fragment and indirect reads before transfer writes and
+make those writes visible to subsequent draws. A frame retains the buffers
+and descriptor generation it references through graphics completion.
+Cancellation suppresses publication and the submitted scene edits remain
+valid for the next frame. See the [S3 reproduction](bench.md#r23-scene-checks).
 
 <a id="reference-gpu"></a>
 

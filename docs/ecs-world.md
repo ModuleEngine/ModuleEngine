@@ -23,8 +23,11 @@ for id in world.entities_with(&["example.spin"]) {
 }
 ```
 
-`entities_with` intersects component columns, starting with the smallest column,
-and returns stable ID order. An empty requirement selects every entity. Dynamic
+`entities_with` resolves component columns once and starts with the smallest
+column. It intersects nearby-sized columns in stable ID order and uses keyed
+lookups for larger columns when few candidates remain. The query incorporates
+the current staged edits and removals even when a requested column is absent
+from the committed world. An empty requirement selects every entity. Dynamic
 values remain JSON described by registered component schemas. The
 [authored schedule](module-execution.md) runs nodes on the staged view of this world.
 
@@ -36,8 +39,40 @@ without beginning a new object lifetime; its references are checked at the
 publication boundary, allowing a packet to create mutually referring objects.
 
 `entities_snapshot` and `entity` return owned `GameEntity` DTOs for Inspector,
-serialization, IPC and validation. Changing such a DTO does not change the world.
-Apply it explicitly or issue commands. Native hot loops use column queries.
+serialization and boundaries that need complete entities. Apply edits to an
+owned DTO explicitly or issue commands. Gameplay and presentation read the live
+world through Core's membership and value accessors. `transform(id)` reads the
+local transform directly from the current view. The column maps and staged
+rows are private to Core.
+
+<a id="r17-consumers"></a>
+
+## R1.7 ECS consumers
+
+Crate Garden and Puzzle read live boards and cells with `entities_with`,
+`object` and `component`. Their authored-scene validation uses the same layout
+rules on resolved entity DTOs. ARPG systems and presentation select stable IDs
+and read individual values. The public ARPG player DTO is still available for
+callers that need the complete entity. Two Arenas supplies authored scenes and
+prefabs to Core and delegates live game rules to ARPG.
+
+GameWorker steps and renders through GameHost. The Host uses the R1.6 retained
+scene path and asks Core to project the current tick's world into
+`ScriptContext` for scheduled Rust. The projection includes stable-ID ordered
+objects, named references, and verbatim fields from active registered
+components. runtime-script transports this owned packet and the returned typed
+commands. The Host prepares the commands against the same staged world before
+the tick publishes. The Object provider remains a compatibility adapter.
+
+Check the Windows workspace suites and use the
+[R1.5 replay](module-execution.md#r15-verification),
+[stable ID and Rust IPC fixture](#r12-verification), and
+[R1.6 S3 presentation check](shared-game-host.md#r16-scene-updates) for
+the corresponding integration paths. Run native checks sequentially.
+
+```powershell
+cargo test --offline --locked --release --target x86_64-pc-windows-msvc --workspace --all-features -- --test-threads=1
+```
 
 ## Lifetime and transactions
 

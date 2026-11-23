@@ -992,18 +992,50 @@ impl EcsWorld {
             return self.entity_ids().collect();
         }
         let mut matches = Vec::new();
-        if let Some(smallest) = required
+        let columns: Option<Vec<_>> = required
             .iter()
             .map(|name| self.rows.components.get(*name))
-            .min_by_key(|column| column.map_or(0, BTreeMap::len))
-            .flatten()
-        {
-            matches.extend(smallest.keys().copied().filter(|&id| {
-                self.edit(id).is_none()
-                    && required
-                        .iter()
-                        .all(|name| self.rows.components[*name].contains_key(&id))
-            }));
+            .collect();
+        if let Some(mut columns) = columns {
+            let (smallest, _) = columns
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, column)| column.len())
+                .unwrap();
+            let base = columns.swap_remove(smallest);
+            matches.extend(base.keys().copied());
+            for column in columns {
+                if matches.is_empty() {
+                    break;
+                }
+                if std::ptr::eq(base, column) {
+                    continue;
+                }
+                // Walk similarly sized ordered sets. Use keyed lookups
+                // when scanning the column would visit far more keys.
+                if column.len() <= matches.len().saturating_mul(4) {
+                    let mut keys = column.keys().copied();
+                    let mut key = keys.next();
+                    matches.retain(|&id| {
+                        while let Some(candidate) = key {
+                            match candidate.cmp(&id) {
+                                std::cmp::Ordering::Less => key = keys.next(),
+                                std::cmp::Ordering::Equal => {
+                                    key = keys.next();
+                                    return true;
+                                }
+                                std::cmp::Ordering::Greater => break,
+                            }
+                        }
+                        false
+                    });
+                } else {
+                    matches.retain(|id| column.contains_key(id));
+                }
+            }
+            if self.staged.is_some() {
+                matches.retain(|&id| self.edit(id).is_none());
+            }
         }
         if let Some(staged) = &self.staged {
             let unchanged_count = matches.len();
@@ -1103,7 +1135,8 @@ impl EcsWorld {
         }
     }
 
-    fn transform(&self, id: u64) -> Option<&Transform> {
+    /// Read one local transform from the current committed or staged view.
+    pub fn transform(&self, id: u64) -> Option<&Transform> {
         match self.edit(id) {
             Some(edit) => edit.as_ref().map(|row| &row.transform),
             None => self.rows.native(id),
@@ -1142,14 +1175,19 @@ impl EcsWorld {
     }
 
     pub fn component_mut(&mut self, id: u64, name: &str) -> Option<&mut serde_json::Value> {
-        self.component(id, name)?;
         if self.staged.is_some() {
-            self.stage_row(id)?.components.get_mut(name)
-        } else {
-            let rows = Arc::make_mut(&mut self.rows);
-            rows.mark_binding_changed(id, name);
-            rows.components.get_mut(name)?.get_mut(&id)
+            self.component(id, name)?;
+            return self.stage_row(id)?.components.get_mut(name);
         }
+        // Check before potentially cloning a shared world or notifying render
+        // extraction. For ordinary values in a unique world, the mutable
+        // lookup itself can report absence.
+        if Arc::strong_count(&self.rows) != 1 || matches!(name, "mesh" | "material") {
+            self.component(id, name)?;
+        }
+        let rows = Arc::make_mut(&mut self.rows);
+        rows.mark_binding_changed(id, name);
+        rows.components.get_mut(name)?.get_mut(&id)
     }
 
     pub fn insert_component(
@@ -1411,6 +1449,12 @@ impl PreparedWorldCommands<'_> {
 }
 
 impl EcsWorld {
+    /// Validate and apply a portable command batch to the current ECS view.
+    pub fn apply_commands(&mut self, commands: &[WorldCommand]) -> Result<(), String> {
+        self.prepare_commands(commands)?.apply();
+        Ok(())
+    }
+
     pub fn prepare_commands(
         &mut self,
         commands: &[WorldCommand],
@@ -1502,8 +1546,7 @@ impl WorldProvider for EcsWorld {
     }
 
     fn apply_commands(&mut self, commands: &[WorldCommand]) -> Result<(), String> {
-        self.prepare_commands(commands)?.apply();
-        Ok(())
+        EcsWorld::apply_commands(self, commands)
     }
 
     fn step(&mut self, dt: f32, speed: f32) {
@@ -1825,6 +1868,117 @@ mod tests {
                 .insert_component(999, "a", serde_json::json!({}))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn column_intersections_follow_committed_and_nested_staged_membership() {
+        let null = serde_json::Value::Null;
+        let mut world = EcsWorld::from_entities(
+            (1..=64)
+                .rev()
+                .map(|id| {
+                    let mut row = entity(id, None, &[("common", null.clone())]);
+                    if id % 3 != 0 {
+                        row.components.insert("dense".into(), null.clone());
+                    }
+                    if id == 2 || id == 61 {
+                        row.components.insert("rare".into(), null.clone());
+                    }
+                    row
+                })
+                .collect(),
+        )
+        .unwrap();
+        let compare = |world: &EcsWorld| {
+            for required in [
+                &[][..],
+                &["common"],
+                &["common", "dense"],
+                &["dense", "common", "dense"],
+                &["common", "rare", "dense"],
+                &["common", "absent"],
+                &["common", "staged_only"],
+            ] {
+                let expected: Vec<_> = world
+                    .entity_ids()
+                    .filter(|&id| {
+                        required
+                            .iter()
+                            .all(|name| world.component(id, name).is_some())
+                    })
+                    .collect();
+                assert_eq!(world.entities_with(required), expected, "{required:?}");
+            }
+        };
+        compare(&world);
+        world.remove_component(2, "dense");
+        world.insert_component(3, "rare", null.clone()).unwrap();
+        compare(&world);
+
+        let committed = world.checkpoint_tick(true);
+        world
+            .apply_commands(&[WorldCommand::Remove { id: 61 }])
+            .unwrap();
+        world
+            .upsert_entity(entity(
+                80,
+                None,
+                &[
+                    ("common", null.clone()),
+                    ("dense", null.clone()),
+                    ("rare", null.clone()),
+                ],
+            ))
+            .unwrap();
+        world
+            .insert_component(4, "staged_only", null.clone())
+            .unwrap();
+        compare(&world);
+
+        let parent = world.checkpoint_tick(false);
+        world.remove_component(80, "common");
+        world.insert_component(5, "staged_only", null).unwrap();
+        compare(&world);
+        world = parent;
+        world.compact_staged();
+        compare(&world);
+        world.finish_tick(committed);
+        compare(&world);
+        assert_eq!(world.entities_with(&["common", "rare", "dense"]), [80]);
+        assert_eq!(world.entities_with(&["common", "staged_only"]), [4]);
+    }
+
+    #[test]
+    fn missing_component_write_preserves_shared_world_and_render_tracking() {
+        let null = serde_json::Value::Null;
+        let mut world = EcsWorld::from_entities(vec![
+            entity(1, None, &[("motion", null.clone()), ("mesh", null.clone())]),
+            entity(2, None, &[]),
+        ])
+        .unwrap();
+        let shared = world.rows.clone();
+        assert!(world.component_mut(2, "motion").is_none());
+        assert!(Arc::ptr_eq(&world.rows, &shared));
+        drop(shared);
+
+        let writes = world.rows.render_writes;
+        *world.component_mut(1, "motion").unwrap() = serde_json::json!({"offset":0.25});
+        assert!(world.component_mut(2, "mesh").is_none());
+        assert_eq!(world.rows.render_writes, writes);
+        *world.component_mut(1, "mesh").unwrap() = serde_json::json!({"path":"mesh"});
+        assert_eq!(world.rows.render_writes, writes + 1);
+
+        let before = *world.transform(1).unwrap();
+        let checkpoint = world.checkpoint_tick(true);
+        world.transform_mut(1).unwrap().translation[1] = 0.25;
+        assert_eq!(
+            world.transform(1),
+            world.object(1).as_ref().map(|row| &row.transform)
+        );
+        assert_ne!(world.transform(1), Some(&before));
+        assert_eq!(checkpoint.transform(1), Some(&before));
+        assert!(world.component_mut(2, "motion").is_none());
+        assert!(world.edit(2).is_none());
     }
 
     #[test]

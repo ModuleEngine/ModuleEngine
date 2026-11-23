@@ -65,8 +65,12 @@ pub fn offset(time: f32, id: u64) -> f32 {
     (time * 1.5 + id as f32 * 0.03125).sin() * 0.35
 }
 
-pub fn tick(world: &mut EcsWorld, frame: usize) -> Vec<u64> {
+pub fn tick(world: &mut EcsWorld, frame: usize, query_ms: Option<&mut f64>) -> Vec<u64> {
+    let query_started = query_ms.as_ref().map(|_| std::time::Instant::now());
     let entities = world.entities_with(&COMPONENTS);
+    if let Some((query_ms, started)) = query_ms.zip(query_started) {
+        *query_ms = started.elapsed().as_secs_f64() * 1000.;
+    }
     let time = time(frame);
     for &id in &entities[..MOVING] {
         let motion = world.component_mut(id, COMPONENTS[0]).unwrap();

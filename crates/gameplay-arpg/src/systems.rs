@@ -1,6 +1,6 @@
 use super::*;
 use crate::components::{Actor, Ai, Health, Melee, Obstacle, Portal};
-use crate::queries::{attack_direction, distance, normalized};
+use crate::queries::{attack_direction, distance, normalized, world_component};
 use crate::state::read_frame;
 
 type TickFn = fn(&mut SystemContext<'_>, &mut ArpgFrame, &mut Value) -> Result<(), String>;
@@ -151,16 +151,8 @@ fn input_system(
     Ok(())
 }
 
-fn column_component<T: for<'de> Deserialize<'de>>(
-    world: &EcsWorld,
-    id: u64,
-    name: &str,
-) -> Option<T> {
-    serde_json::from_value(world.component(id, name)?.clone()).ok()
-}
-
-fn column_health(world: &EcsWorld, id: u64) -> f32 {
-    column_component::<Health>(world, id, "health").map_or(1., |health| health.current)
+fn current_health(world: &EcsWorld, id: u64) -> f32 {
+    world_component::<Health>(world, id, "health").map_or(1., |health| health.current)
 }
 
 fn ai_system(
@@ -177,15 +169,15 @@ fn ai_system(
             Some((
                 id,
                 ctx.game.world.object(id)?.transform.translation,
-                column_component::<Actor>(&ctx.game.world, id, "actor")?,
-                column_health(&ctx.game.world, id),
+                world_component::<Actor>(&ctx.game.world, id, "actor")?,
+                current_health(&ctx.game.world, id),
             ))
         })
         .collect();
     for id in ctx.game.world.entities_with(&["ai", "actor"]) {
         let (Some(ai), Some(actor)) = (
-            column_component::<Ai>(&ctx.game.world, id, "ai"),
-            column_component::<Actor>(&ctx.game.world, id, "actor"),
+            world_component::<Ai>(&ctx.game.world, id, "ai"),
+            world_component::<Actor>(&ctx.game.world, id, "actor"),
         ) else {
             continue;
         };
@@ -204,7 +196,7 @@ fn ai_system(
         if d > ai.aggro_radius {
             continue;
         }
-        let melee = column_component::<Melee>(&ctx.game.world, id, "melee");
+        let melee = world_component::<Melee>(&ctx.game.world, id, "melee");
         let attack = melee.as_ref().is_some_and(|m| d < m.range * 0.85);
         let movement = if attack {
             [0., 0.]
@@ -251,7 +243,7 @@ fn movement_system(
         if intent.lifetime.is_some_and(|previous| previous != lifetime) {
             continue;
         }
-        let Some(actor) = column_component::<Actor>(&ctx.game.world, *id, "actor") else {
+        let Some(actor) = world_component::<Actor>(&ctx.game.world, *id, "actor") else {
             continue;
         };
         let Some(transform) = ctx.game.world.transform_mut(*id) else {
@@ -288,7 +280,7 @@ fn collision_system(
         .filter_map(|id| {
             Some((
                 ctx.game.world.object(id)?.transform.translation,
-                column_component::<Obstacle>(&ctx.game.world, id, "obstacle")?.half_extents,
+                world_component::<Obstacle>(&ctx.game.world, id, "obstacle")?.half_extents,
             ))
         })
         .collect();
@@ -302,7 +294,7 @@ fn collision_system(
                 position
             }
         };
-        let Some(actor) = column_component::<Actor>(&ctx.game.world, id, "actor") else {
+        let Some(actor) = world_component::<Actor>(&ctx.game.world, id, "actor") else {
             continue;
         };
         let Some(transform) = ctx.game.world.transform_mut(id) else {
@@ -374,12 +366,12 @@ fn combat_system(
         .entities_with(&["actor", "melee"])
         .into_iter()
         .filter_map(|id| {
-            column_component::<Actor>(&ctx.game.world, id, "actor")?;
+            world_component::<Actor>(&ctx.game.world, id, "actor")?;
             Some((
                 id,
                 ctx.game.world.object(id)?.transform.translation,
-                column_component::<Melee>(&ctx.game.world, id, "melee")?,
-                column_health(&ctx.game.world, id),
+                world_component::<Melee>(&ctx.game.world, id, "melee")?,
+                current_health(&ctx.game.world, id),
             ))
         })
         .collect();
@@ -469,7 +461,7 @@ fn combat_system(
             else {
                 continue;
             };
-            let Some(mut hp) = column_component::<Health>(&ctx.game.world, target, "health") else {
+            let Some(mut hp) = world_component::<Health>(&ctx.game.world, target, "health") else {
                 continue;
             };
             hp.current = (hp.current - melee.damage).max(0.);
@@ -594,7 +586,7 @@ fn health_system(
     // be spawned again, and a revived entity can die again in a later tick.
     emitted.retain(|id, lifetime| {
         ctx.game.world.component(*id, "health").is_some()
-            && column_health(&ctx.game.world, *id) <= 0.
+            && current_health(&ctx.game.world, *id) <= 0.
             && ctx.game.world.lifetime(*id) == Some(*lifetime)
     });
     let dead: Vec<_> = ctx
@@ -602,7 +594,7 @@ fn health_system(
         .world
         .entities_with(&["health"])
         .into_iter()
-        .filter(|id| column_health(&ctx.game.world, *id) <= 0.)
+        .filter(|id| current_health(&ctx.game.world, *id) <= 0.)
         // Capture death metadata before removing a parent can remove another
         // dead entity in this same batch.
         .filter_map(|id| {
@@ -670,7 +662,7 @@ fn portal_system(
         return Ok(());
     };
     for id in ctx.game.world.entities_with(&["portal"]) {
-        let Some(portal) = column_component::<Portal>(&ctx.game.world, id, "portal") else {
+        let Some(portal) = world_component::<Portal>(&ctx.game.world, id, "portal") else {
             continue;
         };
         let Some(target) = ctx
@@ -1231,7 +1223,7 @@ mod tests {
     }
 
     #[test]
-    fn combat_column_updates_preserve_simultaneous_lethal_swing_eligibility() {
+    fn combat_updates_preserve_simultaneous_lethal_swing_eligibility() {
         for kind in [WorldKind::Objects, WorldKind::Ecs] {
             let mut player = actor(1, "player", [0., 0., 0.], 0.);
             player.components.insert("player".into(), json!({}));

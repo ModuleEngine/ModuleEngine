@@ -84,6 +84,18 @@ A scene raster pass with `scene_materials: true` uses the original material ABI 
 
 Forward and G-buffer also declare `bindless_materials: true`. Built-in → Custom copies the complete manifest and both HLSL branches. For the indexed fragment the compiler defines `MODULE_ENGINE_BINDLESS_MATERIALS`. Set 1 has `Texture2D<float4>[]` at binding 0, `SamplerState` at binding 1 and `StructuredBuffer<uint>` at binding 2. The index buffer has one row per scene item. Add the flat, one-based `ids.y - 1` to `asuint(values[3].w)` to address the row. Use `NonUniformResourceIndex` on the stored image index and `Sample` with unwrapped UVs to preserve derivatives. The sRGB image view decodes the color. A dual-variant pass accepts only a Scene3D input and up to 15 scalar parameters. Push constants still occupy 128 bytes and the vertex layout stays unchanged.
 
+The [resident stock path](hardware-tiers.md#r23-scene) uses an internal
+vertex shader with storage buffers in set 0 at bindings 1–4 for positions
+and UVs, indices, instances, and colors. It produces the stock varyings,
+including the existing triangle and object IDs. The indexed fragment
+interface in set 1 stays the same, with the R2.2 image indices now read from
+the persistent scene buffer. A resident draw run uses `values[3].y/z` as
+unsigned bit patterns to restore the object and triangle IDs for the current
+published order. The row base at `values[3].w` maps the published object ID
+back into its persistent material slot. Changing a stock pass to Custom selects the
+published expanded vertex interface. Player export seals the internal vertex
+stage alongside the stock compatibility stage.
+
 Exports seal both fragment variants. An existing Custom pass declaring only `scene_materials` keeps its atlas binding and all 16 parameter slots on every device. [Device selection](hardware-tiers.md#r22-materials).
 
 Inline HLSL searches for literal #include in assets/gpu of the selected package, then at that package's root. A nested quoted include first searches the containing file's directory; an angle include uses assets/gpu→root. JSON from a separate Full/Team package uses its marker/resource root. Standalone JSON without a marker does not make its directory a new compiler root; source_id is not a path. Export gathers these dependencies recursively. Resolved include contents are read before pipeline selection and included in the fingerprint: changing a header invalidates the compile/pipeline cache even when inline text is unchanged. This was verified by changes in real GPU pixels. A macro in place of an include name is rejected during dependency collection so export cannot lose unknown files.
@@ -102,7 +114,7 @@ Root HLSL text uses the same shader identity with LF, CRLF or mixed LF/CRLF line
 
 An older self-contained Player package keeps its own executable and pinned artifacts unchanged. If a rebuilt runtime expects a different key from an older sealed package, re-export it with a matching current Editor/Player pair; do not rename `.spirv` files or relax package pins. A Team installation carrying an older selected Player variant needs a new supported Team delivery built from matching Full sources. Missing artifacts still fail without invoking DXC or falling back to authoring tools.
 
-The backend retains pass images and the vertex buffer between frames with the same configuration/size; explicit CPU rendering also reuses its readback buffer. The GPU material atlas is uploaded when the decoded texture set changes and is reused. Native presentation returns a GPU lease without CPU RGBA pixels. Explicit CPU rendering with `set_detailed_stats(false)` reads only RGBA8 without depth, normals or color-ID reads. Ownership/coverage counts are not measured in this mode; zero does not mean an invisible scene. Submitted counts remain available.
+The backend retains pass images and any compatibility vertex buffer between frames with the same configuration/size; explicit CPU rendering also reuses its readback buffer. The GPU material atlas is uploaded when the decoded texture set changes and is reused. Native presentation returns a GPU lease without CPU RGBA pixels. Explicit CPU rendering with `set_detailed_stats(false)` reads only RGBA8 without depth, normals or color-ID reads. Ownership/coverage counts are not measured in this mode; zero does not mean an invisible scene. Submitted counts remain available.
 
 Resource identity includes pass and output IDs, not just the pipeline set: removing AO and adding an identical pass with another ID requires a new image set. Otherwise a reused `ao.color` does not match the new `pass_id.color`. The GPU plan is checked separately from the image cache; settings contracts are checked against metadata without rereading shaders. For an unchanged frame, the plan is reused and external includes are checked at 250 ms intervals; explicit preparation always reads current includes.
 

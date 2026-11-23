@@ -186,8 +186,11 @@ a fresh reset if the receiver has missed the retained delta. An empty delta
 can carry visual time when a frame is required without drawable edits. Scene
 synchronization is independent of request acceptance and GPU completion.
 Polling, cancellation and Busy keep the existing frame-publication and
-one-shot rules. Vulkan retains the CPU drawable list for its existing geometry
-passes. Persistent GPU mesh, material and instance buffers are R2.3 work.
+one-shot rules. Vulkan retains the ordered CPU drawable list and tracks the
+rows named by accepted deltas. On the [R2.3 path](hardware-tiers.md#r23-scene)
+the next successful graphics submission publishes those GPU updates. A busy
+request keeps edits pending. A reset or scene switch reconciles the rows
+against the new accepted list and can reuse meshes already in the device pool.
 
 The software renderer, explicit `author_snapshot()` for picking/diagnostics,
 and compatibility world providers retain the snapshot path. A contribution can

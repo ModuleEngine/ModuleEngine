@@ -75,7 +75,7 @@ pub(crate) fn texture_atlas(scene: &SceneSnapshot) -> Result<TextureAtlas, Vulka
         _textures: textures.into_values().collect(),
     })
 }
-pub(crate) fn vertices(
+pub(crate) fn legacy_vertices(
     scene: &SceneSnapshot,
     rects: &BTreeMap<usize, [f32; 4]>,
 ) -> (Vec<u8>, usize) {
