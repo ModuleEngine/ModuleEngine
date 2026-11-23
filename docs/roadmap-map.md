@@ -59,7 +59,7 @@ What stays hand-written lives in [scripts/roadmap_world.html](../scripts/roadmap
 
 ### Live GitHub activity
 
-At build time `scripts/roadmap_events.py` reads the repository's last 14 days of activity through the GitHub API and the workflow's own `GITHUB_TOKEN`, and the map shows it as objects tied to the province of the task an event mentions (`R2.3` in a title, commit message or branch name; a phase such as `R2` puts it in that region; with no reference it goes to the current front):
+At build time `scripts/roadmap_events.py` reads the repository's last 14 days of activity through the GitHub API and the workflow's own `GITHUB_TOKEN`, and the map shows it as objects at the place an event references. A task such as `R2.3` in a title, commit message or branch name points to its province. An AI task such as `AI-A.2` points to its phase tower. A phase such as `R2` puts the event in that region, and an event with no reference goes to the current front:
 
 | Event | On the map |
 | --- | --- |
@@ -69,7 +69,7 @@ At build time `scripts/roadmap_events.py` reads the repository's last 14 days of
 | Comment | A bird circling above the province |
 | Review comment | A floating scroll |
 
-Events older than three days are drawn dimmer. Under the map a chronicle lists the latest twelve; each entry selects its province and links to GitHub. The token stays in the build: the page contains no token, no author names and no comment bodies, only the kind, time, a one-line title, the PR number and a link inside this repository, and the page makes no requests. The events file is sanitized again when the page is built, and a failed or rate-limited API call only means fewer events: the map is built without them and the build prints a warning. The workflow also runs every hour so the activity stays fresh.
+Events older than three days are drawn dimmer. Under the map a chronicle lists the latest twelve; each entry selects its province or tower and links to GitHub. The token stays in the build: the page contains no token, no author names and no comment bodies, only the kind, time, a one-line title, the PR number and a link inside this repository, and the page makes no requests. The events file is sanitized again when the page is built, and a failed or rate-limited API call only means fewer events: the map is built without them and the build prints a warning. The workflow also runs every hour so the activity stays fresh.
 
 ## Checks and local build
 
