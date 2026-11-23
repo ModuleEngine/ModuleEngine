@@ -392,13 +392,13 @@ Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
 | R1.4 | [Fixed-tick transaction](ecs-world.md#lifetime-and-transactions) stages command buffers and changed ECS rows. A failed tick discards the journal. | Late rejection and recovery through `GameHost`. The empty S3 transaction with the canonical ECS avoids a whole-world traversal. Structural packets, active schema validation on edited worlds, and compatibility provider diffs can still walk the world. See [verification](ecs-world.md#r14-verification). | Done |
 | R1.5 | [Bevy schedule](module-execution.md) runs Core and ARPG gameplay at a fixed 60 Hz in the saved stage and node order. | Two Windows replays match the baseline event log for all ten G1 levels and the Small monsters ARPG encounter. `GameHost` late rejection rolls back and retries the tick. See [verification](module-execution.md#r15-verification). | Done |
 | R1.6 | Change-driven extraction: render extraction reads `Changed<…>` and produces deltas (spawned, moved, removed, material changed) instead of a full `SceneSnapshot`. The full snapshot remains for the software renderer and diagnostics. | On S3 with 1,000 moving objects the delta contains only those objects. Schema-only edits must not produce a transform delta. | Done |
-| R1.7 | Migrate consumers: `game-host`/`game_worker`, `runtime-script` typed commands, `project-g1`, `project-puzzle`, `gameplay-arpg`, `example-two-arenas`. The Object provider stays a compatibility adapter. | All crate test suites pass; no consumer touches the old column maps. | In progress (4–6 d) |
-| R1.8 | Acceptance and removal of the old storage. Measure the [session checkpoint copy cost](#r18-session-checkpoint). | S2 tick p95 [not worse](bench.md#not-worse) than R0.6. S3 ECS tick p99 ≤2 ms in the standalone fixture, taken over all samples of the five paired runs combined (each run's own p99 is reported alongside). The paired comparison with R0.6 is reported in full; its memory and S3 ECS differences are the [accepted cost](#r18-accepted-cost) of R1.1/R1.2 and do not block. Compare S3 with session metadata against the R1.4 baseline and report the copy cost separately. S1/S2 absolute gates pass (60 FPS, S1 peak working set ≤1 GiB). Independent review. | 2 d |
+| R1.7 | Migrate consumers: `game-host`/`game_worker`, `runtime-script` typed commands, `project-g1`, `project-puzzle`, `gameplay-arpg`, `example-two-arenas`. The Object provider stays a compatibility adapter. | All crate test suites pass; no consumer touches the old column maps. | Done |
+| R1.8 | Acceptance and removal of the old storage. Measure the [session checkpoint copy cost](#r18-session-checkpoint). | S2 tick p95 [not worse](bench.md#not-worse) than R0.6. S3 ECS tick p99 ≤2 ms in the standalone fixture, taken over all samples of the five paired runs combined (each run's own p99 is reported alongside). The paired comparison with R0.6 is reported in full; its memory and S3 ECS differences are the [accepted cost](#r18-accepted-cost) of R1.1/R1.2 and do not block. Compare S3 with session metadata against the R1.4 baseline and report the copy cost separately. S1/S2 absolute gates pass (60 FPS, S1 peak working set ≤1 GiB). Independent review. | Done |
 | R1.9 | S3 ECS tick optimisation ([accepted regression](#r18-accepted-cost) from R1.8). First add a per-operation microbenchmark for the 1,000 motion updates: Bevy lookup, `Arc`/binding bookkeeping, JSON access. Then batch transform updates and move the per-write bookkeeping to once per batch. | Paired Release comparison against the R1.8 candidate on `main` after #38 (`133f98f`) or later: S3 ECS mean and p95 lower, no S3 sample above 2 ms in a strict per-sample run, S2 tick p95 [not worse](bench.md#not-worse) than R0.6. Late rejection and retry through `GameHost` still pass. Independent review. | Optional · 2–3 d |
 
 <a id="r18-accepted-cost"></a>
 
-**R1.8 accepted cost versus R0.6.** The R1.8 candidate fails the paired
+**R1.8 accepted cost versus R0.6.** The earlier R1.8 snapshot `8e3b5bd` failed the paired
 [not-worse](bench.md#not-worse) comparison with R0.6 on peak working set
 (about +28 % on S1, +32 % on S2) and on the standalone S3 ECS tick (mean about
 +60 %, p95 about +56 %). Both follow from the storage chosen in R1.1/R1.2:
@@ -407,15 +407,21 @@ resident data and per-write bookkeeping that the R0.6 plain maps did not have.
 The product owner accepted this on 23 November 2026 in return for the
 R1.6 change-driven extraction and the transactional tick.
 
-R1.8 closes on absolute budgets (S3 ECS tick p99 ≤2 ms over the combined
-samples, S1/S2 60 FPS, S1 ≤1 GiB) and the S2 tick comparison, with the
-differences above recorded, once that check is recorded on the head that is
-merged. That head now also contains the R2.3 S3 changes (#38). Evidence so far
-is for `8e3b5bd` only: the combined p99 of 1,200 samples is 1.688 ms, while
-per-run p99 is 2.071, 1.510, 1.584, 1.515 and 1.635 ms (all four samples
-above 2 ms fall in the first run, maximum 2.322 ms). R1.9 is optional: it
-reduces the S3 tick cost and does not block closing R1.8, R1 or R2.3. Peak
-memory is not targeted further here.
+In that snapshot, the combined p99 of 1,200 standalone S3 ECS tick samples
+was 1.688 ms. Per-run p99 was 2.071, 1.510, 1.584, 1.515 and 1.635 ms. All four
+samples above 2 ms fell in the first run, with a maximum of 2.322 ms.
+
+R1.8 was accepted in [PR #39](https://github.com/myjname/ModuleEngine/pull/39)
+at `6ba445c2ffa9baef46a51131cf0073610fb34067`, which includes the S3 changes
+from [PR #38](https://github.com/myjname/ModuleEngine/pull/38). The standalone
+S3 ECS tick p99 was 0.7939 ms across 1,200 samples, with a maximum of 0.9590 ms.
+S2 tick p95 improved from 3.7197 to 3.5307 ms. S1 and S2 met the 60 FPS gate in
+all five pairs, and S1 peak working set was 330.105 MiB against a 1 GiB limit.
+Independent review confirmed that the acceptance criteria were met. The full
+paired comparison still failed solely on the accepted S1/S2 memory increases.
+
+R1.9 remains an optional optimisation of the S3 tick. R1 was completed with
+its eight required tasks. Peak memory is outside the scope of R1.9.
 
 <a id="r18-session-checkpoint"></a>
 
@@ -439,8 +445,8 @@ budget, address it in R1.8 and recheck late rejection and retry through
 | --- | --- | --- | --- |
 | R2.1 | Device layer: tier detection, a memory allocator (`gpu-allocator`) instead of one allocation per resource, 2–3 frames in flight with per-frame command pools and timeline semaphores, a staging ring and a transfer queue, a deletion queue that replaces `retirement.rs` semantics. Spike first: allocator and frame pacing on S3. | Zero validation errors on S1–S3; in steady state the CPU never waits for the frame it just submitted. | Done |
 | R2.2 | Bindless resources: one global descriptor set with descriptor indexing (texture array, samplers, storage buffers) or buffer device address. Replace the atlas with per-texture images, mipmaps generated at import or on upload, anisotropic sampling. The push-constant ABI gains bindless indices; custom HLSL passes keep working. | 1,000 unique textures without the 8192 px limit; no shimmering on a moving camera over S4 floors; existing custom-pass tests pass. | Done |
-| R2.3 | GPU-resident scene: one mesh pool (shared vertex/index buffers) uploaded once per mesh; instance buffer with transforms and material indices updated from R1.6 deltas; material buffer. Remove the CPU vertex transform in `geometry.rs`. | Upload bytes per frame proportional to changed objects; S3 CPU frame ≤1 ms. | In progress (1.5–2 w) |
-| R2.4 | GPU culling and indirect drawing: compute frustum culling, `vkCmdDrawIndexedIndirectCount`, then two-phase Hi-Z occlusion culling. | Draw calls per pass do not grow with object count; S3 scaled to 100,000 instances keeps 60 FPS at 1080p on the [R0.4 reference GPU](hardware-tiers.md#reference-gpu). | 1.5–2 w |
+| R2.3 | GPU-resident scene: one mesh pool (shared vertex/index buffers) uploaded once per mesh; instance buffer with transforms and material indices updated from R1.6 deltas; material buffer. Remove the CPU vertex transform in `geometry.rs`. | Upload bytes per frame proportional to changed objects; S3 CPU frame ≤1 ms. | Done |
+| R2.4 | GPU culling and indirect drawing: compute frustum culling, `vkCmdDrawIndexedIndirectCount`, then two-phase Hi-Z occlusion culling. | Draw calls per pass do not grow with object count; S3 scaled to 100,000 instances keeps 60 FPS at 1080p on the [R0.4 reference GPU](hardware-tiers.md#reference-gpu). | In progress (1.5–2 w) |
 | R2.5 | Render graph v2: automatic barriers with synchronization2, transient resource aliasing, async compute queue. Existing graph documents load unchanged; built-in passes (forward, gbuffer, deferred, SSAO, FXAA, tonemap, color encode) are migrated. | Existing graph and custom-pass tests pass; built-ins match the old images within the `image_quality_check` tolerance; transient memory on S4 is at least 30 % lower. | 2–3 w |
 | R2.6 | Game swapchain for Player: present modes, frame pacing, resize, prepared for HDR output. | Player S1/S2 run directly on the swapchain; frame-time p95 [not worse](bench.md#not-worse) than R0.6. | 1 w |
 | R2.7 | Parity and switch: the old renderer behind a feature flag until S1/S2 pass, then removal. | S1/S2 gates pass on the new renderer; old code deleted; independent review. | 0.5–1 w |
