@@ -25,7 +25,7 @@ The dedicated roadmap chat records status transitions. Implementation chats pass
 
 The phase colour, the “Done / Now / Next” cards, the progress bar, the header label and the column headers are derived from these statuses:
 
-- a phase is done when all its tasks are done, and current when at least one is done or in progress;
+- a phase is done when all its required tasks are done. Otherwise, it is current when at least one required task is done or any task is in progress;
 - a phase is next when every phase it depends on is done or current;
 - a checkpoint (R1+R3+R4, R2+R5) is passed when all its phases are done, including a phase whose arrow is drawn through another phase (R1 through R4);
 - the header shows the task in progress, otherwise the next available task; when all tasks are done it says the track is complete, and when open tasks remain but no phase can start (for example, a dependency was removed from the plan) it says work is blocked and names what the phase waits for.
@@ -46,7 +46,7 @@ The campaign map is the same roadmap as a game-style pixel-art map, built from t
 
 | Task status | On the map |
 | --- | --- |
-| `Done` | Captured: bright colours, golden border, blue flag. A phase with every task done is marked with a crown |
+| `Done` | Captured: bright colours, golden border, blue flag. A phase with all required tasks done is marked with a crown |
 | `In progress` | Under siege: animated flame frame, camp and campfire |
 | Not started, the first one of a phase that has been started | The next move: yellow pennant and tent. Shown only while nothing in that phase is in progress |
 | Not started, anything else | Fog of war: the farther from the front, the thicker the fog |
