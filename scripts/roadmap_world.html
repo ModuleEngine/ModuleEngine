@@ -118,9 +118,9 @@ const ST_OF = { done: 'done', cur: 'cur', todo: 'next' };
 const DATA = {};
 for (const k of Object.keys(STATIC)) {
   const src = SRC ? SRC.phases.find(p => p.id === STATIC[k].id) : null;
-  DATA[k] = { ...STATIC[k], key: k, tasks: src ? src.tasks.map(t => ({ id: t.id, title: t.text, crit: t.criteria || t.acceptance, detail: t.detail || t.text, eff: t.effort, st: ST_OF[t.state] })) : [] };
+  DATA[k] = { ...STATIC[k], key: k, tasks: src ? src.tasks.map(t => ({ id: t.id, title: t.text, crit: t.criteria || t.acceptance, detail: t.detail || t.text, eff: t.effort, st: ST_OF[t.state], opt: !!t.optional })) : [] };
 }
-const isDone = k => { const d = DATA[k]; return d.cls === 'done' || (d.tasks.length ? d.tasks.every(t => t.st === 'done') : d.cls === 'gate' && d.deps.length > 0 && d.deps.every(isDone)); };
+const isDone = k => { const d = DATA[k]; return d.cls === 'done' || (d.tasks.length ? d.tasks.every(t => t.opt || t.st === 'done') : d.cls === 'gate' && d.deps.length > 0 && d.deps.every(isDone)); };
 const W = 480, H = 330;
 const BIO = {
   plains: { pal: ['#86bf5c','#7cb455','#72a94e','#92c966'], coast: '#e2d19b', deco: ['gauge','tree','gauge','hut'], n: 6 },
@@ -280,7 +280,7 @@ const bayer = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
 const FOG = P('#dcd2b6'), GOLD = P('#f2c14e'), RB = P('#3a2a1a'), ROADC = P('#7b5230'), ROADL = P('#b98d57');
 
 /* campaign arrows: curved Bezier between regions */
-const regDone = r => r.provs.every(p => p.st === 'done'), regAct = r => r.provs.some(p => p.st !== 'next');
+const regDone = r => r.provs.every(p => p.opt || p.st === 'done'), regAct = r => r.provs.some(p => p.st !== 'next');
 function bez(a, b, bend) { const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2, dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy); const c = [mx - dy / L * L * bend, my + dx / L * L * bend]; const pts = []; const n = Math.ceil(L * 1.3); for (let s = 0; s <= n; s++) { const t = s / n, u = 1 - t; pts.push([u * u * a[0] + 2 * u * t * c[0] + t * t * b[0], u * u * a[1] + 2 * u * t * c[1] + t * t * b[1]]); } return pts; }
 const aw = arrows.map((e, k) => { const A = [e.a.cx, e.a.cy], B = [e.b.cx, e.b.cy]; let pts = bez(A, B, k % 2 ? .22 : -.22); const trim = (arr, d, fromEnd) => { let i = fromEnd ? arr.length - 1 : 0; const o = fromEnd ? arr[arr.length - 1] : arr[0]; while (i > 0 && i < arr.length - 1 && Math.hypot(arr[i][0] - o[0], arr[i][1] - o[1]) < d) i += fromEnd ? -1 : 1; return fromEnd ? arr.slice(0, i + 1) : arr.slice(i); };
   pts = trim(trim(pts, 17, false), 20, true); return { ...e, pts, st: regDone(e.a) ? 'done' : regAct(e.a) ? 'act' : 'fut' }; });
@@ -363,8 +363,8 @@ const pct = (x, y) => `left:${x / W * 100}%;top:${y / H * 100}%`;
 const chipEls = provs.map(p => { const b = document.createElement('button'); b.className = 'chip ' + p.st; b.textContent = p.id; b.style.cssText = pct(p.x, p.y + (p.kind === 'task' ? 5 : 3));
   b.setAttribute('aria-label', `${p.id}: ${p.title}. ${ST[p.st].name}`); b.onclick = () => selectProv(p.i); b.onmouseenter = e => { hov = p.i; showTip(p, e); redraw(); }; b.onmouseleave = () => { hov = -1; hideTip(); redraw(); }; world.appendChild(b); return b; });
 const ribEls = regs.filter(r => !r.landmark).map(r => { const b = document.createElement('button'); const done = r.provs.filter(p => p.st === 'done').length;
-  b.className = 'ribbon' + (!regAct(r) ? ' fogged' : '') + (r.provs.some(p => p.st === 'cur') ? ' hot' : '') + (r.provs.every(p => p.st === 'done') ? ' won' : ''); b.style.cssText = pct(r.cx, Math.min(...r.provs.map(p => p.y)) - 21); b.style.fontSize = 'var(--rf,11px)';
-  b.innerHTML = `${r.provs.every(p => p.st === 'done') ? '♛ ' : ''}${r.fant}<small>${r.key} · ${done}/${r.provs.length}</small>`; b.onclick = () => selectReg(r.key); b.onmouseenter = () => { hovReg = r.key; redraw(); }; b.onmouseleave = () => { hovReg = null; redraw(); }; b.dataset.k = r.key; world.appendChild(b); return b; });
+  b.className = 'ribbon' + (!regAct(r) ? ' fogged' : '') + (r.provs.some(p => p.st === 'cur') ? ' hot' : '') + (r.provs.every(p => p.opt || p.st === 'done') ? ' won' : ''); b.style.cssText = pct(r.cx, Math.min(...r.provs.map(p => p.y)) - 21); b.style.fontSize = 'var(--rf,11px)';
+  b.innerHTML = `${r.provs.every(p => p.opt || p.st === 'done') ? '♛ ' : ''}${r.fant}<small>${r.key} · ${done}/${r.provs.length}</small>`; b.onclick = () => selectReg(r.key); b.onmouseenter = () => { hovReg = r.key; redraw(); }; b.onmouseleave = () => { hovReg = null; redraw(); }; b.dataset.k = r.key; world.appendChild(b); return b; });
 function fit() { const avail = Math.max(320, Math.min(innerWidth - 32, 1700) - 12); const sc = Math.max(2, Math.floor(Math.min(avail / W, (innerHeight - 200) / H) * 2) / 2); cv.style.width = W * sc + 'px'; cv.style.height = H * sc + 'px'; world.style.width = W * sc + 'px'; world.style.height = H * sc + 'px'; stage.style.width = Math.min(W * sc + 12, avail + 12) + 'px'; world.style.setProperty('--cf', Math.max(8, Math.round(sc * 3.2)) + 'px'); world.style.setProperty('--rf', Math.max(9, Math.round(sc * 3.6)) + 'px'); }
 addEventListener('resize', fit); fit();
 const tip = document.getElementById('tip');
@@ -397,7 +397,7 @@ function closePanel() { sel = -1; selReg = null; renderPanel(); redraw(); }
 function selectProv(i) { if (provs[i].reg.landmark || true) { sel = i; selReg = null; renderPanel(); redraw(); } }
 function selectReg(k) { sel = -1; selReg = k; renderPanel(); redraw(); }
 const taskProvs = provs.filter(p => p.kind === 'task'), total = taskProvs.filter(p => p.st === 'done').length;
-const curIds = provs.filter(p => p.st === 'cur').map(p => p.id), frontIds = provs.filter(p => p.st === 'front' && p.kind === 'task').map(p => p.id), wonRegs = regs.filter(r => !r.landmark && r.provs.every(p => p.st === 'done')).length;
+const curIds = provs.filter(p => p.st === 'cur').map(p => p.id), frontIds = provs.filter(p => p.st === 'front' && p.kind === 'task').map(p => p.id), wonRegs = regs.filter(r => !r.landmark && r.provs.every(p => p.opt || p.st === 'done')).length;
 document.getElementById('hud').innerHTML = `<span>Захвачено <b>${total}/${taskProvs.length}</b><span class="bar">${taskProvs.map(p => `<i class="${p.st === 'done' ? 'on' : ''}"></i>`).join('')}</span></span><span>${curIds.length ? 'Осада' : 'Следующий ход'}: <b>${esc((curIds.length ? curIds : frontIds).join(', ') || '—')}</b></span><span>Областей: <b>${wonRegs}/${rk.length}</b></span>`;
 if (SRC) document.getElementById('meta').textContent = `Статусы из ${SRC.source}${SRC.commit ? ' · коммит ' + SRC.commit : ''} · собрано ${SRC.generated}`;
 renderPanel(); requestAnimationFrame(frame);
