@@ -1063,17 +1063,10 @@ fn compatibility_factory(kind: WorldKind) -> Result<Option<GameWorldFactory>, St
     match kind {
         WorldKind::Ecs => Ok(None),
         WorldKind::Objects => Ok(Some(Arc::new(|objects| {
-            make_provider(WorldKind::Objects, objects)
+            Ok(Box::new(ObjectsWorld::from_objects(objects)?))
         }))),
         WorldKind::Custom => Err("Custom worlds need an explicit compatibility factory".into()),
     }
-}
-
-fn make_provider(
-    kind: WorldKind,
-    objects: Vec<WorldObject>,
-) -> Result<Box<dyn WorldProvider>, String> {
-    match kind {WorldKind::Objects=>Ok(Box::new(ObjectsWorld::from_objects(objects)?)),WorldKind::Ecs=>Ok(Box::new(EcsWorld::from_objects(objects)?)),WorldKind::Custom=>Err("GameSession needs a selected editable world factory; built-in convenience supports Object and ECS".into())}
 }
 
 #[cfg(test)]
@@ -1085,6 +1078,17 @@ mod tests {
         SystemPort, SystemResource, SystemStage, Transform,
     };
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    fn make_provider(
+        kind: WorldKind,
+        objects: Vec<WorldObject>,
+    ) -> Result<Box<dyn WorldProvider>, String> {
+        match kind {
+            WorldKind::Objects => Ok(Box::new(ObjectsWorld::from_objects(objects)?)),
+            WorldKind::Ecs => Ok(Box::new(EcsWorld::from_objects(objects)?)),
+            WorldKind::Custom => unreachable!("Fixture selects a built-in world kind"),
+        }
+    }
 
     #[derive(Clone, Default)]
     struct FixtureControl {
