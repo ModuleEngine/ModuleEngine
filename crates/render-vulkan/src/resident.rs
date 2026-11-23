@@ -15,6 +15,10 @@ use std::{
 
 pub(crate) const VERTEX_SHADER: &str = include_str!("../../../assets/gpu/resident_scene.hlsl");
 
+pub(crate) fn culled_vertex_source() -> String {
+    format!("#define MODULE_ENGINE_GPU_CULLING 1\n{VERTEX_SHADER}")
+}
+
 /// The R1.6 receiver remains authoritative for order, contents and revisions.
 /// A busy or failed submission leaves its pending edits available for retry.
 pub struct ResidentScene {
@@ -111,6 +115,7 @@ struct MeshRange {
     first: u32,
     count: u32,
     extent: f32,
+    bounds: u32,
 }
 
 type MeshEntries = HashMap<u64, Vec<(Mesh, MeshRange)>>;
@@ -120,12 +125,16 @@ struct MeshPool {
     meshes: MeshEntries,
     vertex_count: usize,
     index_count: usize,
+    bounds_count: usize,
+    corner_count: usize,
 }
 
 impl MeshPool {
     fn commit(&mut self, upload: MeshUpload) {
         self.vertex_count += upload.vertices.len();
         self.index_count += upload.indices.len();
+        self.bounds_count += upload.bounds.len();
+        self.corner_count += upload.corners.len();
         for (key, entries) in upload.meshes {
             self.meshes.entry(key).or_default().extend(entries);
         }
@@ -139,6 +148,8 @@ struct MeshUpload {
     meshes: MeshEntries,
     vertices: Vec<[u32; 5]>,
     indices: Vec<[u32; 1]>,
+    bounds: Vec<[u32; 8]>,
+    corners: Vec<[u32; 1]>,
 }
 
 fn positions(mesh: &Mesh) -> impl Iterator<Item = u32> + '_ {
@@ -150,7 +161,13 @@ fn positions(mesh: &Mesh) -> impl Iterator<Item = u32> + '_ {
 }
 
 impl MeshUpload {
-    fn get(&mut self, pool: &MeshPool, mesh: &Mesh, limit: u64) -> Result<MeshRange, VulkanError> {
+    fn get(
+        &mut self,
+        pool: &MeshPool,
+        mesh: &Mesh,
+        limit: u64,
+        gpu_culling: bool,
+    ) -> Result<MeshRange, VulkanError> {
         let mut hash = DefaultHasher::new();
         mesh.vertices.len().hash(&mut hash);
         mesh.texcoords.len().hash(&mut hash);
@@ -200,9 +217,39 @@ impl MeshUpload {
         let first = indices as u32;
         self.indices
             .extend(triangles.flatten().map(|i| [base + *i as u32]));
+        let count = (pool.index_count + self.indices.len()) as u32 - first;
+        let bounds = (pool.bounds_count + self.bounds.len()) as u32;
+        if gpu_culling {
+            if u64::from(bounds) * 32 + 32 > limit {
+                return Err(VulkanError::SceneBufferLimit);
+            }
+            // Bound the same valid triangles the resident vertex stage draws.
+            let mut lo = [f32::INFINITY; 3];
+            let mut hi = [f32::NEG_INFINITY; 3];
+            for vertex in mesh
+                .triangles
+                .iter()
+                .filter(|tri| tri.iter().all(|i| valid(*i)))
+                .flatten()
+            {
+                for (axis, value) in mesh.vertices[*vertex].into_iter().enumerate() {
+                    lo[axis] = lo[axis].min(value);
+                    hi[axis] = hi[axis].max(value);
+                }
+            }
+            let [x, y, z] = lo;
+            let [a, b, c] = hi;
+            self.bounds
+                .push([x, y, z, 0., a, b, c, 0.].map(f32::to_bits));
+            // The color vertex shader addresses a triangle corner so it can
+            // preserve the flat face normal and the published triangle ID.
+            // One ascending index stream serves every mesh via vertexOffset.
+            let uploaded = (pool.corner_count + self.corners.len()) as u32;
+            self.corners.extend((uploaded..count).map(|index| [index]));
+        }
         let range = MeshRange {
             first,
-            count: (pool.index_count + self.indices.len()) as u32 - first,
+            count,
             extent: mesh
                 .vertices
                 .iter()
@@ -211,6 +258,7 @@ impl MeshUpload {
                 .filter(|v| v.is_finite())
                 .map(f32::abs)
                 .fold(0., f32::max),
+            bounds,
         };
         self.meshes
             .entry(key)
@@ -272,6 +320,7 @@ struct Rows {
     slots: HashMap<Drawable, usize>,
     order: Vec<usize>,
     runs: Arc<[DrawRun]>,
+    cull_runs: Vec<[u32; 4]>,
     triangles: usize,
 }
 
@@ -320,7 +369,15 @@ pub(super) struct Buffers {
     pub instances: Arc<Buffer>,
     pub colors: Arc<Buffer>,
     images: Arc<Buffer>,
-    draws: Arc<Buffer>,
+    pub draws: Arc<Buffer>,
+    pub culling: Option<CullingInputs>,
+}
+
+#[derive(Clone)]
+pub(super) struct CullingInputs {
+    pub bounds: Arc<Buffer>,
+    pub corners: Arc<Buffer>,
+    pub runs: Arc<Buffer>,
 }
 
 impl Buffers {
@@ -476,6 +533,9 @@ impl GpuScene {
             renderer.device_buffer(capacity, usage).map(Arc::new)
         };
         let storage = vk::BufferUsageFlags::STORAGE_BUFFER;
+        let index_usage = vk::BufferUsageFlags::INDEX_BUFFER;
+        let indirect = vk::BufferUsageFlags::INDIRECT_BUFFER;
+        let gpu_culling = renderer.capabilities.gpu_frustum_culling;
         let image_rows = buffer(prior.map(|b| &b.images), (items + 1) * 4, storage)?;
         let Some((materials, uploads)) = renderer.prepare_resident_materials(
             scene,
@@ -513,7 +573,7 @@ impl GpuScene {
                 .map(|&slot| self.rows.geometry[slot]);
             let mesh = match old {
                 Some(old) if incremental && !source.changed_groups.contains(&item.id) => old.mesh,
-                _ => meshes.get(&self.pool, &item.mesh, limit)?,
+                _ => meshes.get(&self.pool, &item.mesh, limit, gpu_culling)?,
             };
             if !safe_model(item, mesh.extent) {
                 return Ok(None);
@@ -544,6 +604,7 @@ impl GpuScene {
             model(&mut row, item);
             row[12] = (triangle_origin + 1).wrapping_sub(mesh.first / 3);
             row[13] = slot as u32;
+            row[14] = mesh.bounds;
             rows.triangles += mesh.count as usize / 3;
             rows.instances[slot] = row;
             rows.colors[slot] = std::array::from_fn(|c| {
@@ -552,7 +613,40 @@ impl GpuScene {
             rows.draws[slot] = [mesh.count, 1, mesh.first, slot as u32];
             rows.images[slot + 1] = [materials.index(item.material.base_color_texture.as_ref())];
         }
+        if gpu_culling {
+            rows.cull_runs.extend(runs.iter().map(|run| {
+                let first_slot = run.first as u32;
+                [
+                    first_slot.wrapping_add(run.object_bias),
+                    first_slot,
+                    run.triangle_bias,
+                    0,
+                ]
+            }));
+        }
         rows.runs = runs.into();
+        let prior_culling = prior.and_then(|b| b.culling.as_ref());
+        let culling = if gpu_culling {
+            Some(CullingInputs {
+                bounds: buffer(
+                    prior_culling.map(|b| &b.bounds),
+                    (self.pool.bounds_count + meshes.bounds.len()) * 32,
+                    storage,
+                )?,
+                corners: buffer(
+                    prior_culling.map(|b| &b.corners),
+                    (self.pool.corner_count + meshes.corners.len()) * 4,
+                    index_usage,
+                )?,
+                runs: buffer(
+                    prior_culling.map(|b| &b.runs),
+                    rows.cull_runs.len() * 16,
+                    storage,
+                )?,
+            })
+        } else {
+            None
+        };
         let buffers = Buffers {
             vertices: buffer(
                 prior.map(|b| &b.vertices),
@@ -562,7 +656,11 @@ impl GpuScene {
             indices: buffer(
                 prior.map(|b| &b.indices),
                 (self.pool.index_count + meshes.indices.len()) * 4,
-                storage,
+                if gpu_culling {
+                    storage | index_usage
+                } else {
+                    storage
+                },
             )?,
             instances: buffer(
                 prior.map(|b| &b.instances),
@@ -577,9 +675,14 @@ impl GpuScene {
             draws: buffer(
                 prior.map(|b| &b.draws),
                 items * size_of::<Draw>(),
-                vk::BufferUsageFlags::INDIRECT_BUFFER,
+                if gpu_culling {
+                    indirect | storage
+                } else {
+                    indirect
+                },
             )?,
             images: image_rows,
+            culling,
         };
         Ok(Some(SceneUpload {
             buffers,
@@ -602,13 +705,17 @@ impl GpuScene {
         if matches!(next.rows, RowsUpdate::None) {
             return;
         }
-        // Submissions use one graphics queue. A prior vertex/fragment/indirect
+        // Submissions use one graphics queue. A prior shader/indirect/index
         // read must finish before an in-place write, and the new rows must be
         // available before ANY following draw can read the shared buffers.
         let consumers = vk::PipelineStageFlags::VERTEX_SHADER
             | vk::PipelineStageFlags::FRAGMENT_SHADER
-            | vk::PipelineStageFlags::DRAW_INDIRECT;
-        let reads = vk::AccessFlags::SHADER_READ | vk::AccessFlags::INDIRECT_COMMAND_READ;
+            | vk::PipelineStageFlags::COMPUTE_SHADER
+            | vk::PipelineStageFlags::DRAW_INDIRECT
+            | vk::PipelineStageFlags::VERTEX_INPUT;
+        let reads = vk::AccessFlags::SHADER_READ
+            | vk::AccessFlags::INDIRECT_COMMAND_READ
+            | vk::AccessFlags::INDEX_READ;
         barrier(
             device,
             command,
@@ -654,6 +761,25 @@ impl GpuScene {
                     before.map(|b| (&*b.draws, self.rows.draws.as_slice())),
                     &rows.draws,
                 );
+                if let Some(culling) = &after.culling {
+                    let prior = before.and_then(|b| b.culling.as_ref());
+                    work.culling_input_write_bytes = update.append(
+                        prior.map(|b| &*b.bounds),
+                        &culling.bounds,
+                        &next.meshes.bounds,
+                        self.pool.bounds_count,
+                    ) + update.changed(
+                        &culling.runs,
+                        prior.map(|b| (&*b.runs, self.rows.cull_runs.as_slice())),
+                        &rows.cull_runs,
+                    );
+                    work.mesh_index_write_bytes += update.append(
+                        prior.map(|b| &*b.corners),
+                        &culling.corners,
+                        &next.meshes.corners,
+                        self.pool.corner_count,
+                    );
+                }
             }
             RowsUpdate::Moved(rows) => {
                 let mut data = Vec::new();
@@ -824,6 +950,65 @@ mod tests {
         Camera, ObjectsWorld, RenderOverrides, SceneChange, SceneChangeKind, WorldProvider,
     };
     use std::collections::BTreeMap;
+
+    #[test]
+    fn gpu_culling_draws_zero_visible_items_and_respects_the_indirect_limit() {
+        crate::requires_capabilities!(Vulkan, Dxc);
+        let mut renderer = VulkanRenderer::new().unwrap();
+        if !renderer.capabilities().gpu_frustum_culling {
+            return;
+        }
+        renderer.set_culling_stats(true);
+        let mut snapshot = ObjectsWorld::demo().snapshot();
+        let objects = snapshot.items.len();
+        assert!(objects > 1);
+        for item in &mut snapshot.items {
+            item.model[0][3] += 10_000.;
+        }
+        let mut scene = ResidentScene::default();
+        scene
+            .apply(SceneUpdate::Reset {
+                revision: 0,
+                snapshot,
+            })
+            .unwrap();
+        let graph = default_graph(RenderPath::Forward);
+        let draw = |renderer: &mut VulkanRenderer, scene: &mut ResidentScene| {
+            renderer
+                .render_scene(
+                    super::super::SceneInput::Retained(scene),
+                    Camera::default(),
+                    96,
+                    72,
+                    &graph,
+                    &BTreeMap::new(),
+                    &RenderOverrides::default(),
+                )
+                .unwrap()
+        };
+        let culled = draw(&mut renderer, &mut scene);
+        assert_eq!(culled.stats.shaded_pixels, 0);
+        let work = renderer.last_frame_work().unwrap();
+        assert_eq!(work.scene_draw_calls, 1);
+        let counters = work.culling_stats.unwrap();
+        assert_eq!(
+            (
+                counters.frustum_candidates,
+                counters.occluders,
+                counters.visible
+            ),
+            (0, 0, 0)
+        );
+
+        renderer.max_indirect_draws = 1;
+        let fallback = draw(&mut renderer, &mut scene);
+        let work = renderer.last_frame_work().unwrap();
+        assert!(work.resident_scene);
+        assert!(work.culling_mode.is_none());
+        assert_eq!(work.scene_draw_calls, objects);
+        assert_eq!(fallback.rgba, culled.rgba);
+        assert_eq!(fallback.stats, culled.stats);
+    }
 
     #[test]
     fn ordered_edits_keep_unrelated_gpu_rows_and_images() {

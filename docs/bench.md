@@ -117,6 +117,48 @@ preparation, recording and queue submit as CPU work. Diagnostic GPU wait
 is recorded separately. The benchmark does not exercise ECS changes or
 the native window.
 
+<a id="r24-culling-checks"></a>
+
+## R2.4 culling checks
+
+Build the Editor with `cargo build --release --features bench -p module-engine-editor`.
+Use a new output folder for each run.
+
+- `--bench-scene R24-visibility <output>` checks Forward and Deferred at
+  641×361 with 8, 257 and 4,099 drawables. It compares both GPU culling modes
+  with the R2.3 retained renderer using exact RGBA and render stats. The
+  fixture covers an offscreen object, partial visibility at the frame edge,
+  equal-depth order after insertion into a fragmented draw list, and an
+  occluded target revealed by both camera orbit and an occluder edit. It
+  saves paired PNGs and per-frame counters, including an offscreen
+  reference comparison for one 1080p S3-100k frame.
+- `--bench-scene S3-100k <output>` runs the native S3 workload at 1920×1080
+  with 100,000 unique positions at the original grid spacing. The camera
+  backs out by `sqrt(100000 / 11000)` to frame the larger field. The
+  original 11,000 items, 1,000 moving entities, 2,000 ECS entities, 200 meshes
+  and 500 distinct textures are retained.
+  `--bench-scene S3 <output>` keeps the original 11,000-item workload.
+
+S3 and S3-100k report the requested mode. Set
+`MODULE_ENGINE_BENCHMARK_S3_CULLING` to `hiz` (default), `frustum`, or
+`off` (R2.3 submission) to select the control. `culling_mode` in each
+sample reports the actual path. `scene_draw_calls` and `occluder_draw_calls`
+count Vulkan commands. `culling_stats` gives the number of frustum
+candidates, seed commands and compacted scene commands. The stats field
+`visible_objects` counts objects owning final pixels in a detailed readback.
+`culling_input_write_bytes` counts CPU writes for the mesh bounds and the
+ordered run table. The one-time corner index upload is included in
+`mesh_index_write_bytes`.
+
+Measure on the [reference GPU](hardware-tiers.md#reference-gpu) with
+`MODULE_ENGINE_GUI_VSYNC=off` and record `effective_present_mode`. Native S3
+reports 30 warmup frames and 240 measured frames plus the CPU and producer
+timings. Evaluate the 60 FPS requirement from the window-observed mean
+interval and report its p95. For GPU timings, set
+`MODULE_ENGINE_BENCHMARK_PROFILING=on`. The internal `Scene culling` sample
+includes the seed, pyramid and compaction. Run validation with the Khronos
+layer and synchronization validation in a separate session.
+
 ## Measurement and repeatability
 
 The launcher builds the Editor once in Release with the source-only `bench`

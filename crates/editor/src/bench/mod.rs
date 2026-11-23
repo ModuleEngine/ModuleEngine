@@ -4,6 +4,7 @@ mod materials;
 #[path = "../../../../examples/bench/s3_ecs.rs"]
 mod s3_ecs;
 mod structure;
+mod visibility;
 
 use eframe::egui;
 use fixtures::Fixture;
@@ -17,8 +18,8 @@ use module_engine_player::{
     ui,
 };
 use module_engine_vulkan::{
-    FrameWork, RenderPath, ResidentScene, SceneInput, VulkanRenderer, builtin_hlsl_source,
-    builtin_manifest, default_graph,
+    FrameWork, RenderPath, ResidentScene, SceneCulling, SceneInput, VulkanRenderer,
+    builtin_hlsl_source, builtin_manifest, default_graph,
 };
 use serde_json::{Value, json};
 use std::{
@@ -43,10 +44,11 @@ pub fn run(id: &str, folder: &Path) -> Result<(), String> {
     let folder = folder.canonicalize().map_err(|e| e.to_string())?;
     match id {
         "S1" | "S2" => game(id, &root, &folder),
-        "S3" | "S4" | "S5" => scene(id, &root, &folder),
+        "S3" | "S3-100k" | "S4" | "S5" => scene(id, &root, &folder),
         "S4-floor" | "S4-floor-atlas" => s4_floor(&root, &folder, id == "S4-floor-atlas"),
         "R2-textures" => materials::check(&root, &folder),
         "R23-structure" => structure::run(&root, &folder),
+        "R24-visibility" => visibility::run(&root, &folder),
         _ => Err(format!("Unknown benchmark scene {id}")),
     }
 }
@@ -190,8 +192,21 @@ fn scene(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
     };
     let gui_vsync = ui::gui_vsync_requested()?;
     let frame_profiling = ui::benchmark_profiling_enabled()?;
-    let static_s3 = id == "S3" && std::env::var_os("MODULE_ENGINE_BENCHMARK_S3_STATIC").is_some();
-    let retained = if id == "S3" {
+    let s3 = matches!(id, "S3" | "S3-100k");
+    let static_s3 = s3 && std::env::var_os("MODULE_ENGINE_BENCHMARK_S3_STATIC").is_some();
+    let culling = if s3 {
+        match std::env::var("MODULE_ENGINE_BENCHMARK_S3_CULLING").as_deref() {
+            Err(std::env::VarError::NotPresent) | Ok("hiz") => SceneCulling::HiZ,
+            Ok("frustum") => SceneCulling::Frustum,
+            Ok("off") => SceneCulling::Off,
+            _ => {
+                return Err("MODULE_ENGINE_BENCHMARK_S3_CULLING must be off, frustum or hiz".into());
+            }
+        }
+    } else {
+        SceneCulling::Off
+    };
+    let retained = if s3 {
         let mut scene = ResidentScene::default();
         scene.apply(SceneUpdate::Reset {
             revision: 0,
@@ -203,6 +218,7 @@ fn scene(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
     };
     let report = json!({
         "static_s3":static_s3,
+        "requested_culling":culling,
         "version":1,"scene":id,"status":"incomplete","fixture":fixture.inventory,"gui_vsync":gui_vsync,
         "frame_profiling":frame_profiling,
         "loaded_draw_items":fixture.scene.items.len(),"loaded_triangles":triangles,"camera":fixture.camera,
@@ -256,9 +272,11 @@ fn scene(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
             }
             renderer.set_detailed_stats(false);
             renderer.set_frame_profiling(frame_profiling);
+            renderer.set_scene_culling(culling);
+            renderer.set_culling_stats(s3);
             // S3 measures overlap. S4 and S5 keep the original one-request
             // protocol and S5's single expanded-stream memory preflight.
-            let frame_window = if id == "S3" { renderer.frame_capacity() } else { 1 };
+            let frame_window = if s3 { renderer.frame_capacity() } else { 1 };
             let probe = renderer.probe_vertex_allocation(triangles);
             let mut blocked = probe.blocked.clone();
             if id == "S5" {

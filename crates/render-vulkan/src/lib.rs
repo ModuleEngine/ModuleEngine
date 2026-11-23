@@ -33,8 +33,8 @@ pub use module_engine_core::RendererPerformance;
 use presentation::instance;
 pub use retirement::{ProducerRetirementReport, finish_producer_retirements};
 pub use vulkan::{
-    FrameWork, RenderGraphValidator, ResidentScene, SceneInput, VertexAllocation, VulkanRenderer,
-    validate_overrides, validate_overrides_at,
+    CullingStats, FrameWork, RenderGraphValidator, ResidentScene, SceneCulling, SceneInput,
+    VertexAllocation, VulkanRenderer, validate_overrides, validate_overrides_at,
 };
 
 mod error {

@@ -25,8 +25,13 @@ struct SceneVarying {
     [[vk::location(2)]] float depth : TEXCOORD1;
     [[vk::location(3)]] nointerpolation float2 ids : TEXCOORD2;
     [[vk::location(4)]] float2 uv : TEXCOORD3;
+#ifdef MODULE_ENGINE_GPU_CULLING
+    [[vk::location(5)]] nointerpolation uint materialRow : TEXCOORD4;
+#else
     [[vk::location(5)]] nointerpolation float4 atlasRect : TEXCOORD4;
+#endif
 };
+#ifndef MODULE_ENGINE_GPU_CULLING
 SceneVarying mainVS(Vertex v) {
     float3 local = v.position - eyeNear.xyz;
     float3 p = float3(dot(local,rightAspect.xyz),dot(local,upFar.xyz),dot(local,forwardFocal.xyz));
@@ -36,12 +41,17 @@ SceneVarying mainVS(Vertex v) {
                      p.z*farZ/(farZ-nearZ)-farZ*nearZ/(farZ-nearZ),p.z);
     o.normal=v.normal; o.color=v.color; o.depth=p.z; o.ids=v.ids; o.uv=v.uv; o.atlasRect=v.atlasRect; return o;
 }
+#endif
 #ifdef MODULE_ENGINE_BINDLESS_MATERIALS
 [[vk::binding(0,1)]] Texture2D<float4> materialImages[];
 [[vk::binding(1,1)]] SamplerState materialSampler;
 [[vk::binding(2,1)]] StructuredBuffer<uint> materialIndices;
 float3 baseColor(SceneVarying v) {
+#ifdef MODULE_ENGINE_GPU_CULLING
+    uint row = v.materialRow;
+#else
     uint row = asuint(values[3].w) + (uint(v.ids.y) - 1);
+#endif
     uint index = NonUniformResourceIndex(materialIndices[row]);
     return v.color.rgb * materialImages[index].Sample(materialSampler, v.uv).rgb;
 }
