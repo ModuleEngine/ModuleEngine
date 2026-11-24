@@ -4991,6 +4991,7 @@ mod tests {
 
     #[test]
     fn editing_two_sources_then_switching_tabs_compiles_each_correct_source() {
+        module_engine_script::requires_offline_sdk!();
         let (_sources, mut editor) = isolated_editor(demo_document(WorldKind::Objects));
         for id in ["a", "b"] {
             editor.document.root.nodes.push(make_node(
@@ -5029,6 +5030,7 @@ mod tests {
 
     #[test]
     fn compiled_scalar_timeout_pauses_simulation_and_is_not_repeated() {
+        module_engine_script::requires_offline_sdk!();
         let (_sources, mut editor) = isolated_editor(demo_document(WorldKind::Objects));
         let source = "fn speed(_time:f64,_base:f64)->f64 { loop {} }";
         let root = crate::project::source_root();

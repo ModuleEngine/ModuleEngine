@@ -78,6 +78,8 @@ class PolicyTests(unittest.TestCase):
         self.assertIn("    if: needs.plan.outputs.roadmap_only == 'true'", text)
         self.assertIn("  contents: read", text)
         self.assertIn("  merge_group:", text)
+        self.assertNotIn("CARGO_PROFILE_TEST_DEBUG:", text)
+        self.assertNotIn("CARGO_PROFILE_DEV_DEBUG:", text)
         self.assertIn("--component rustfmt --component clippy", text)
         self.assertIn("run: python scripts/verify.py --profile clippy --plan", text)
         self.assertIn("run: python scripts/verify.py --profile clippy --timeout 1800", text)

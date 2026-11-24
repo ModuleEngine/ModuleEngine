@@ -103,8 +103,6 @@ jobs:
           VK_DRIVER_FILES="$icd" vulkaninfo --summary
       - name: Verify the explicit DXC capability skip on Linux
         if: runner.os == 'Linux'
-        env:
-          CARGO_PROFILE_TEST_DEBUG: '0'
         run: python scripts/ci_workspace_tests.py --without-dxc
       - name: Restore pinned Linux DXC
         if: runner.os == 'Linux'
@@ -113,21 +111,15 @@ jobs:
           echo "MODULE_ENGINE_DXC=$GITHUB_WORKSPACE/.tools/ci-dxc/bin/dxc" >> "$GITHUB_ENV"
           LD_LIBRARY_PATH="$GITHUB_WORKSPACE/.tools/ci-dxc/lib" .tools/ci-dxc/bin/dxc --version
       - name: Run all workspace tests and report package counts
-        env:
-          CARGO_PROFILE_TEST_DEBUG: '0'
         run: python scripts/ci_workspace_tests.py
       - name: Check and build the minimal Player
-        env:
-          CARGO_PROFILE_DEV_DEBUG: '0'
         run: |
           python scripts/ci_workspace_tests.py --check-minimal-player
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo build --locked -p module-engine-player --no-default-features
+          cargo build --locked -p module-engine-player --no-default-features --config profile.dev.debug=0
         shell: pwsh
       - name: Test the minimal Player separately
-        env:
-          CARGO_PROFILE_TEST_DEBUG: '0'
-        run: cargo test --locked -p module-engine-player --no-default-features
+        run: cargo test --locked -p module-engine-player --no-default-features --config profile.test.debug=0
       - name: Third-party license policy and notices file
         run: python scripts/third_party_licenses.py --check
       - name: Launcher and CI policy unit checks

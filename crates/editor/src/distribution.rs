@@ -838,7 +838,6 @@ const NATIVE_FILES: &[&str] = &[
     "crates/runtime-script/src/sdk_cache.rs",
     "crates/runtime-script/src/native_tools.rs",
     "crates/runtime-script/src/freshness.rs",
-    "crates/runtime-script/src/verification.rs",
     "crates/runtime-script/src/dep_info.rs",
     "crates/runtime-script/src/freshness/audited_dependencies.rs",
     "crates/runtime-script/src/jobs.rs",

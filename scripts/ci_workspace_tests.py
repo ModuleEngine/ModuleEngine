@@ -82,11 +82,17 @@ def workspace(output):
     output.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, CARGO_TERM_COLOR="never", RUST_TEST_THREADS="1",
                MODULE_ENGINE_VERIFY_SERIAL="1")
+    # Isolated SDK fixtures still use the same dependency build cache. Script
+    # keeps its worker products under this target's custom-workers directory.
+    env.setdefault("CARGO_TARGET_DIR", str(Path("target").resolve()))
     metadata = json.loads(subprocess.check_output(
         ["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"], env=env))
     names = {item["id"]: item["name"] for item in metadata["packages"]
              if item["id"] in metadata["workspace_members"]}
+    # Limit the parent Cargo's debug info without exporting a profile override
+    # into Custom's worker environment, where it would invalidate reuse proofs.
     command = ["cargo", "test", "--workspace", "--locked", "--no-fail-fast",
+               "--config", "profile.test.debug=0",
                "--message-format=json-render-diagnostics", "--", "--show-output"]
     print(" ".join(command), flush=True)
     log = output / "workspace.log"
@@ -135,7 +141,8 @@ def without_dxc(output):
         Path(path).exists() for path in ("tools/dxc/bin/dxc", "tools/dxc/dxc")
     ):
         raise VerificationError("The no-DXC step requires a checkout and PATH without DXC")
-    command = ["cargo", "test", "--locked", "-p", "module-engine-vulkan", "--lib",
+    command = ["cargo", "test", "--locked", "--config", "profile.test.debug=0",
+               "-p", "module-engine-vulkan", "--lib",
                ALLOCATION_TEST, "--", "--exact", "--nocapture"]
     print(" ".join(command), flush=True)
     result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
