@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// built-in stores; transforms are local to that parent, never renderer matrices.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WorldObject {
+    /// A nonzero stable object ID.
     pub id: u64,
     pub parent: Option<u64>,
     pub transform: Transform,
@@ -399,10 +400,17 @@ pub(crate) fn edit_object_map(
     candidate: &mut BTreeMap<u64, WorldObject>,
     commands: &[WorldCommand],
 ) -> Result<(), String> {
+    const NONZERO_ID_REQUIRED: &str = "Entity IDs must be nonzero";
     check_world_packet_size(commands)?;
+    if candidate.contains_key(&0) {
+        return Err(NONZERO_ID_REQUIRED.into());
+    }
     for command in commands {
         match command {
             WorldCommand::Spawn { object } => {
+                if object.id == 0 {
+                    return Err(NONZERO_ID_REQUIRED.into());
+                }
                 if candidate.contains_key(&object.id) {
                     return Err(format!("Object {} already exists", object.id));
                 }
@@ -480,7 +488,7 @@ pub(crate) fn validate_object_transform(id: u64, transform: &Transform) -> Resul
     Ok(())
 }
 
-pub(crate) fn validate_object_map(candidate: &BTreeMap<u64, WorldObject>) -> Result<(), String> {
+fn validate_object_map(candidate: &BTreeMap<u64, WorldObject>) -> Result<(), String> {
     if candidate.len() > 65536 {
         return Err("Built-in editable world exceeds 65536 objects".into());
     }

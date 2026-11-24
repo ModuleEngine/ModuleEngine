@@ -45,11 +45,21 @@ The source module's schema defines fields: numbers use its range, bool uses a ch
 
 Field names may contain the complete component namespace, such as `example.spin.speed`. Inspector writes actual component fields that the executable system reads after saving and reopening. The source-installed `example.spin` component is an example: its **Radians per second**, **Axis**, and **Enabled** control object rotation.
 
-Inactive data is retained in the authored project. It is hidden from the ordinary inspector and available in the explicit **Advanced: raw components / overrides / references** section. Here, entire maps can be edited and custom fields or object references added. **Apply raw JSON** validates the candidate; malformed JSON or an invalid scene does not replace the saved source.
+Inactive data remains in the authored project. Open **Advanced: components / overrides / references** to edit entire maps, add custom fields or add object references. **Apply raw JSON** validates the candidate before replacing the authored scene.
 
 **Create template from selected** creates a linked prefab from the object's current resolved fields and color. Position, parent, ID, and references remain with the instance. The name field is optional: when empty, the editor chooses an available name. Other objects receive the prefab through the **No template / template name** list.
 
-**Linked template source** edits defaults; **Apply template defaults to instances** updates all linked instances. An individual instance edit is written into `overrides`, for example:
+<a id="linked-template-drafts"></a>
+
+**Linked template source** keeps a draft per template when you switch objects.
+**Apply template defaults to instances** validates and publishes the selected
+draft for all linked instances. A rejected edit remains available in Inspector.
+If the authored template changed since editing started, discard the draft before
+editing the new version. **Discard Inspector drafts** also clears drafts for
+templates that are out of view. Saving, switching projects and closing require
+you to apply or discard pending Inspector drafts.
+
+Individual instance edits go into `overrides`. This instance sets its own health.
 
 ~~~json
 {

@@ -64,6 +64,15 @@ fn update(ctx: &mut ScriptContext) {
 
 По умолчанию preflight проверяет структуру сцен. Host передаёт `workspace.with_composition(composition)` для определения типов и активности ссылок, а `with_validator(|document| ...)` проверяет кандидат до записи snapshots, корзины и изменяемых файлов. Типы нельзя восстановить из validator callback. Без composition доступны только явные встроенные render contracts; source components остаются непрозрачными. Replay истории возвращает уже записанные границы документов и файлов.
 
+<a id="history-resource-check"></a>
+
+Undo, Redo и Restore контрольной версии проверяют манифест кандидата, авторские
+файлы сцен и типизированные ссылки на ресурсы по контрактам выбранного Engine.
+Неизвестные или неактивные данные компонентов и свойств сохраняют точные
+значения JSON. Например, `archive.navigation.path` может хранить логический
+маршрут. Если активное поле ссылается на отсутствующий файл, редактор отклоняет
+кандидата и сохраняет текущий документ и позицию в истории.
+
 Значения `AssetReference`, полученные только из installed defaults, тоже входят в usages с указанием источника. Это относится к `ComponentSchema` и к `ModuleDescriptor.properties` / `PropertySchema` всех четырёх scope. Если Move/Delete/Replace/Detach потребовал бы изменить immutable default, операция отклоняется до записи файлов и журнала. Stable `asset://ID` допускает Move с прежним ID. Явный допустимый null подавляет default; Detach не может незаметно вернуть зависимость через default.
 
 Для Object и legacy Component свойств host дополнительно передаёт `with_property_object_ids(live_ids)`: это реальные ID принятого graph Runtime, а не ID авторской Game-сцены и не ключи property store. Сам сервис не запускает фабрики мира ради сканирования. Пустое множество означает отсутствие live объектов; отсутствие snapshot при потенциально применимых scoped asset contracts даёт ошибку контекста. Editor проверяет соответствие текущего world source принятому runtime и передаёт один и тот же snapshot каталогу и файловой операции. Backend и snapshot участвуют в проверке актуальности фонового каталога.

@@ -173,6 +173,11 @@ fn stopped_game_hint(ui: &egui::Ui, rect: egui::Rect) {
         .galley(origin + Vec2::splat(8.), text, Color32::LIGHT_GRAY);
 }
 
+struct TemplateDraft {
+    base: Prefab,
+    value: Prefab,
+}
+
 pub struct GameWorkbench {
     // Code outlives Stop; mutable script instances and Game actors do not.
     programs: Arc<CompiledProgramStore>,
@@ -197,8 +202,7 @@ pub struct GameWorkbench {
     component_drafts: BTreeMap<String, Value>,
     inspector_drafts: inspector_drafts::InspectorDrafts,
     advanced: String,
-    template_key: Option<String>,
-    template_draft: Option<Prefab>,
+    template_drafts: BTreeMap<String, TemplateDraft>,
     template_name: String,
     hierarchy: hierarchy_ui::HierarchyState,
     systems: CanvasState,
@@ -217,7 +221,6 @@ pub struct GameWorkbench {
     migration: String,
     compile_root: Option<PathBuf>,
     backend_root: Option<PathBuf>,
-    world_kind: WorldKind,
     play_session: bool,
     deferred_preparation: bool,
     // Interactive execution has one persistent owner. Deferred preparation is
@@ -285,8 +288,7 @@ impl Default for GameWorkbench {
             component_drafts: BTreeMap::new(),
             inspector_drafts: Default::default(),
             advanced: String::new(),
-            template_key: None,
-            template_draft: None,
+            template_drafts: BTreeMap::new(),
             template_name: String::new(),
             hierarchy: Default::default(),
             systems: {
@@ -309,7 +311,6 @@ impl Default for GameWorkbench {
             migration: "null".into(),
             compile_root: None,
             backend_root: None,
-            world_kind: WorldKind::Objects,
             play_session: false,
             deferred_preparation: false,
             background_game: false,
@@ -767,14 +768,7 @@ impl GameWorkbench {
         if !self.deferred_preparation {
             return Ok(());
         }
-        let kind = if self.game_preparation.is_some() || self.preview_preparation.is_some() {
-            game_host::world_kind(document)?
-        } else {
-            // No initial host result needs a kind check. Incomplete Engine
-            // drafts remain editable while a previous host stays installed.
-            self.world_kind
-        };
-        let mut first_error = self.poll_host_preparation(document, kind, false).err();
+        let mut first_error = self.poll_host_preparation(document, false).err();
         if self
             .rejected_game
             .as_ref()
@@ -803,7 +797,7 @@ impl GameWorkbench {
                 self.rejected_preview_dependencies = None;
                 self.preview_activity = None;
             }
-            if let Err(error) = self.poll_host_preparation(&preview, kind, true) {
+            if let Err(error) = self.poll_host_preparation(&preview, true) {
                 first_error.get_or_insert(error);
             }
         }
@@ -901,7 +895,6 @@ impl GameWorkbench {
     fn poll_host_preparation(
         &mut self,
         document: &GraphDocument,
-        kind: WorldKind,
         preview: bool,
     ) -> Result<(), String> {
         let slot = if preview {
@@ -925,10 +918,9 @@ impl GameWorkbench {
         } else {
             &self.game_context
         };
-        if kind != job.context.kind
-            || current_context.as_ref() != Some(&job.context)
-            || !job.document.execution_eq(document)
-        {
+        // The request already resolved the provider in the selected Engine.
+        // Its execution document and Engine context own the completion.
+        if current_context.as_ref() != Some(&job.context) || !job.document.execution_eq(document) {
             job.progress
                 .succeed("Request superseded by a new configuration; previous result preserved");
             retire_in_background(result);
@@ -1108,7 +1100,7 @@ impl GameWorkbench {
         } else {
             DocumentCandidate::Borrowed(document)
         };
-        self.poll_host_preparation(&candidate, kind, preview)?;
+        self.poll_host_preparation(&candidate, preview)?;
         if if preview {
             self.preview_preparation.is_some()
         } else {
@@ -1320,12 +1312,20 @@ impl GameWorkbench {
                 .is_some_and(|(draft, base)| draft != base)
     }
     pub fn has_inspector_drafts(&self) -> bool {
-        self.inspector_drafts
-            .has_drafts(&self.component_drafts, &self.advanced)
+        !self.template_drafts.is_empty()
+            || self
+                .inspector_drafts
+                .has_drafts(&self.component_drafts, &self.advanced)
     }
     pub fn discard_inspector_drafts(&mut self) {
         self.inspector_drafts.clear();
         self.component_drafts.clear();
+        self.template_drafts.clear();
+    }
+    pub(super) fn reconcile_template_drafts(&mut self, game: Option<&GameProject>) {
+        self.template_drafts.retain(|name, draft| {
+            game.and_then(|game| game.prefabs.get(name)) != Some(&draft.value)
+        });
     }
     pub fn discard_graph_draft(&mut self) {
         self.graph_draft = None;
@@ -1374,7 +1374,6 @@ impl GameWorkbench {
         self.game_frame = GameFrameCache::default();
         update_render_diagnostic(&mut self.error, &mut self.render_error, Ok(()));
         self.play_session = false;
-        self.template_key = None;
         self.cancel_pending_custom();
         self.pending_worker_epoch = None;
         self.custom_errors.clear();
@@ -1393,7 +1392,6 @@ impl GameWorkbench {
         kind: WorldKind,
     ) -> Result<(), String> {
         self.compile_root = compile_root.map(Path::to_path_buf);
-        self.world_kind = kind;
         if self.deferred_preparation {
             let result = self.ensure_deferred(document, root, compile_root, kind, false);
             if let Err(error) = &result {
@@ -2343,29 +2341,10 @@ impl GameWorkbench {
                 });
                 if active.contains("mesh")||active.contains("material"){self.asset_ui(ui,&manifest,object,prefab,!self.play_session);}
                 ui.add_enabled_ui(!self.play_session,|ui|{ui.horizontal_wrapped(|ui|{ui.label("New linked template");ui.text_edit_singleline(&mut self.template_name);});});
-                if ui.add_enabled(!self.play_session,egui::Button::new("Create template from selected")).clicked(){match create_template(&mut game,&self.scene,&entity,&self.template_name){Ok(_)=>{self.template_name.clear();self.template_key=None;},Err(error)=>self.error=Some(error)}}
+                if ui.add_enabled(!self.play_session,egui::Button::new("Create template from selected")).clicked(){match create_template(&mut game,&self.scene,&entity,&self.template_name){Ok(_)=>self.template_name.clear(),Err(error)=>self.error=Some(error)}}
                 let template_name=game.scenes[&self.scene].objects.iter().find(|object|object.object.id==id).and_then(|object|object.prefab.clone());
-                if let Some(name)=template_name&&let Some(template)=game.prefabs.get(&name){
-                    if self.template_key.as_deref()!=Some(&name){self.template_draft=Some(template.clone());self.template_key=Some(name.clone());}
-                    ui.collapsing(format!("Linked template source: {name}"),|ui|{ui.add_enabled_ui(!self.play_session,|ui|{
-                        if let Some(draft)=&mut self.template_draft {
-                            ui.color_edit_button_srgba_unmultiplied(&mut draft.color);
-                            let attached=draft.components.keys().cloned().collect::<BTreeSet<_>>();
-                            for (component,value) in &mut draft.components {
-                                if active.contains(component) && let Some(schema)=schemas.schema(component) {
-                                    ui.push_id(format!("template-{component}"),|ui|{
-                                        ui.collapsing(&schema.label,|ui|{
-                                            let mut edited=schemas.resolve_component(component,value);
-                                            if component_editor(ui,schema,&mut edited,&attached,&fields) {
-                                                schemas.apply_component_edits(component,value,&edited);
-                                            }
-                                        });
-                                    });
-                                }
-                            }
-                        }
-                        if ui.button("Apply template defaults to instances").clicked()&&let Some(draft)=&self.template_draft{game.prefabs.insert(name.clone(),draft.clone());}
-                    });});
+                if let Some(name)=template_name&&let Some(template)=game.prefabs.get_mut(&name){
+                    self.linked_template_ui(ui, &name, template, schemas, &fields);
                 }
             }
         });
@@ -2375,6 +2354,54 @@ impl GameWorkbench {
         } else {
             false
         }
+    }
+
+    fn linked_template_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        name: &str,
+        template: &mut Prefab,
+        schemas: &ComponentRegistry,
+        fields: &ComponentEditorContext<'_>,
+    ) {
+        ui.collapsing(format!("Linked template source: {name}"), |ui| {
+            let mut draft = self
+                .template_drafts
+                .remove(name)
+                .filter(|draft| draft.value != *template)
+                .unwrap_or_else(|| TemplateDraft {
+                    base: template.clone(),
+                    value: template.clone(),
+                });
+            let conflict = draft.base != *template;
+            if conflict {
+                ui.colored_label(Color32::LIGHT_RED, "Template source changed. Discard Inspector drafts before editing the new version.");
+            }
+            ui.add_enabled_ui(!self.play_session && !conflict, |ui| {
+                ui.color_edit_button_srgba_unmultiplied(&mut draft.value.color);
+                let attached = draft.value.components.keys().cloned().collect::<BTreeSet<_>>();
+                for (component, value) in &mut draft.value.components {
+                    if fields.components.contains(component) && let Some(schema) = schemas.schema(component) {
+                        ui.push_id((name, component), |ui| {
+                            ui.collapsing(&schema.label, |ui| {
+                                let mut edited = schemas.resolve_component(component, value);
+                                if component_editor(ui, schema, &mut edited, &attached, fields) {
+                                    schemas.apply_component_edits(component, value, &edited);
+                                }
+                            });
+                        });
+                    }
+                }
+                if ui.add_enabled(draft.value != draft.base, egui::Button::new("Apply template defaults to instances")).clicked() {
+                    *template = draft.value.clone();
+                }
+            });
+            // The editor still has to validate and publish this candidate. Keep
+            // the draft until the authored template actually accepts its value.
+            if draft.value != draft.base {
+                self.template_drafts.insert(name.to_owned(), draft);
+            }
+        });
     }
     /// Shared controls for both the Rust editor and the Game window. Compiled
     /// instances and rejected state belong to Game, independently of preview Scripts.
@@ -2685,8 +2712,9 @@ impl GameWorkbench {
         ui: &mut egui::Ui,
         document: &mut GraphDocument,
         root: &Path,
+        modules: &ModuleRegistry,
     ) -> bool {
-        self.world_kind = match game_host::world_kind(document) {
+        let kind = match game_host::selected_world_kind(document, modules) {
             Ok(kind) => kind,
             Err(error) => {
                 ui.colored_label(Color32::LIGHT_RED, error);
@@ -3080,8 +3108,7 @@ if ui.button("+ Resource").clicked(){let name=unique_name("resource",draft.resou
             // The accepted document is the requested configuration. Its old
             // executable hosts remain live until ensure's worker accepts it.
             let compile = self.compile_root.clone();
-            if let Err(error) =
-                self.ensure_deferred(document, root, compile.as_deref(), self.world_kind, true)
+            if let Err(error) = self.ensure_deferred(document, root, compile.as_deref(), kind, true)
             {
                 self.error = Some(error);
             }
@@ -3113,7 +3140,7 @@ if ui.button("+ Resource").clicked(){let name=unique_name("resource",draft.resou
             root,
             &backend,
             compile.as_deref(),
-            self.world_kind,
+            kind,
             self.programs.clone(),
         ) {
             Ok(mut host) => {
@@ -7708,7 +7735,12 @@ pub fn update(ctx: &mut ScriptContext) {
                 ..Default::default()
             },
             |ui| {
-                assert!(!workbench.systems_ui(ui, &mut document, &root));
+                assert!(!workbench.systems_ui(
+                    ui,
+                    &mut document,
+                    &root,
+                    &crate::host::registry().unwrap()
+                ));
             },
         );
         assert!(!output.shapes.is_empty());

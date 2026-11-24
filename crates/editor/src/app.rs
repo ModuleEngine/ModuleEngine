@@ -217,8 +217,15 @@ impl Editor {
     /// Bind legacy PropertySchema dependency scans to the accepted live world.
     /// A pending world replacement cannot borrow the previous provider's IDs.
     pub(super) fn asset_property_object_ids(&self) -> Option<std::collections::BTreeSet<u64>> {
+        self.asset_property_object_ids_for(&self.document)
+    }
+
+    fn asset_property_object_ids_for(
+        &self,
+        document: &GraphDocument,
+    ) -> Option<std::collections::BTreeSet<u64>> {
         let runtime = self.runtime.as_ref()?;
-        if !runtime.world_source_matches(&self.document) {
+        if !runtime.world_source_matches(document) {
             return None;
         }
         Some(
@@ -1003,6 +1010,8 @@ impl Editor {
 
     fn changed(&mut self, rebuild: bool) {
         self.overview.invalidate(self.last_tick);
+        self.game_workbench
+            .reconcile_template_drafts(self.document.game.as_ref());
         if self.document.game.is_some()
             && let Some(active_kind) = self.game_workbench.game_world_kind()
             && let Ok(kind) = crate::game_host::selected_world_kind(&self.document, &self.registry)
@@ -1945,18 +1954,17 @@ impl Editor {
         if self.document.game.is_some() {
             // Game may already be open before Play. Refresh its stopped copy
             // from author data before graphics sync can accept that document.
-            if self.playing || self.game_workbench.has_game_host() {
-                let (root, compile, kind) = self.game_context();
-                if let Err(error) =
+            if (self.playing || self.game_workbench.has_game_host())
+                && let Err(error) = self.game_context().and_then(|(root, compile, kind)| {
                     self.game_workbench
                         .ensure(&self.document, &root, compile.as_deref(), kind)
-                {
-                    self.game_preparation_error = Some((error.clone(), error.clone()));
-                    self.game_workbench.suspend_game_execution();
-                    self.runtime_error = Some(error);
-                    self.playing = false;
-                    return;
-                }
+                })
+            {
+                self.game_preparation_error = Some((error.clone(), error.clone()));
+                self.game_workbench.suspend_game_execution();
+                self.runtime_error = Some(error);
+                self.playing = false;
+                return;
             }
             if let Err(error) = self.game_workbench.sync_graphics(&self.document) {
                 let displayed =
@@ -2069,20 +2077,8 @@ impl Editor {
     }
 
     pub(super) fn game_scene_panel(&mut self, ui: &mut egui::Ui) {
-        let root = self.project_asset_root();
-        let backend = self
-            .distribution
-            .as_ref()
-            .map(|p| p.package_root.clone())
-            .unwrap_or_else(project::source_root);
-        let compile = self
-            .distribution
-            .as_ref()
-            .and_then(|p| p.compile_root().ok());
-        self.game_workbench
-            .set_engine_context(compile.as_deref(), &backend);
-        let kind = match crate::game_host::selected_world_kind(&self.document, &self.registry) {
-            Ok(kind) => kind,
+        let (root, compile, kind) = match self.game_context() {
+            Ok(context) => context,
             Err(error) => {
                 self.game_workbench.error = Some(error.clone());
                 ui.colored_label(Color32::LIGHT_RED, error);
@@ -2126,21 +2122,10 @@ impl Editor {
         }
     }
     pub(super) fn game_systems_panel(&mut self, ui: &mut egui::Ui) {
-        let root = self.project_asset_root();
-        let backend = self
-            .distribution
-            .as_ref()
-            .map(|p| p.package_root.clone())
-            .unwrap_or_else(project::source_root);
-        let compile = self
-            .distribution
-            .as_ref()
-            .and_then(|p| p.compile_root().ok());
-        self.game_workbench
-            .set_engine_context(compile.as_deref(), &backend);
+        let (root, _) = self.configure_game_roots();
         if self
             .game_workbench
-            .systems_ui(ui, &mut self.document, &root)
+            .systems_ui(ui, &mut self.document, &root, &self.registry)
         {
             self.changed(false);
         }
@@ -2600,11 +2585,12 @@ impl Editor {
             }
         });
         if self.is_game_source(&self.current_source) {
-            let (root, compile, kind) = self.game_context();
-            if let Err(error) =
+            let (root, compile) = self.configure_game_roots();
+            let kind = crate::game_host::selected_world_kind(&self.document, &self.registry);
+            if let Err(error) = kind.and_then(|kind| {
                 self.game_workbench
                     .ensure(&self.document, &root, compile.as_deref(), kind)
-            {
+            }) {
                 ui.colored_label(Color32::LIGHT_RED, format!("Preparing Game: {error}"));
             }
             self.game_workbench.custom_editor_ui(
@@ -3317,6 +3303,108 @@ mod tests {
     }
 
     #[test]
+    fn scene_and_play_become_ready_with_the_connected_world() {
+        use crate::{engine_profiles, host::world_fixture, scene_view_ui::SceneViewportState};
+        use module_engine_core::GameProject;
+        use std::time::{Duration, Instant};
+
+        let base = project::source_root().join(".work/test-temp");
+        let sources =
+            module_engine_script::TestArtifactGuard::new(&base, "connected-world").unwrap();
+        let root = sources.path();
+        let _installation = world_fixture::Installation::at(root);
+        crate::distribution::copy_native_fixture(root);
+
+        let mut failures = Vec::new();
+        for (module, expected) in [
+            ("world.objects", WorldKind::Objects),
+            ("world.ecs", WorldKind::Ecs),
+            (world_fixture::ID, WorldKind::Custom),
+        ] {
+            let mut document = demo_document(WorldKind::Objects);
+            document.root.nodes.truncate(4);
+            document.root.edges.truncate(3);
+            document.custom_sources.clear();
+            document.root.nodes[0].module = module.into();
+            document.game = Some(GameProject::empty());
+            crate::distribution::write_full_manifest(root, &document).unwrap();
+            for archived_at in [None, Some(0), Some(4)] {
+                let mut document = document.clone();
+                if let Some(index) = archived_at {
+                    document.root.nodes.insert(
+                        index,
+                        module_engine_core::make_node(
+                            "archived-ecs",
+                            "world.ecs",
+                            "Disconnected ECS",
+                            [0., 0.],
+                            serde_json::json!({}),
+                        ),
+                    );
+                }
+                engine_profiles::finish_template(
+                    &mut document,
+                    engine_profiles::ProfileKind::Neutral,
+                    root,
+                )
+                .unwrap();
+                let mut editor = Editor::new(document.clone(), root.join("world-test.json"));
+                editor.game_workbench.set_deferred_preparation(true);
+                editor.game_workbench.set_background_game(true, None);
+
+                let ctx = egui::Context::default();
+                let mut view = SceneViewportState::default();
+                ctx.run_ui(egui::RawInput::default(), |ui| {
+                    editor.scene_panel(ui, &mut view)
+                })
+                .drop_without_applying_deltas();
+                editor.dispatch_command(editor_workflow::Command::PlayPause, &ctx);
+                assert!(editor.playing, "Play rejected: {}", editor.status);
+                editor.tick_simulation(1. / 60.);
+
+                let deadline = Instant::now() + Duration::from_secs(5);
+                loop {
+                    editor.poll_candidates();
+                    let scene = editor
+                        .game_workbench
+                        .preview_host
+                        .as_ref()
+                        .map(|host| host.session.world_kind());
+                    let play = editor.game_workbench.game_world_kind();
+                    let playing = editor
+                        .game_workbench
+                        .game_snapshot()
+                        .is_some_and(|snapshot| {
+                            snapshot.playing && snapshot.state.tick > 0 && snapshot.fault.is_none()
+                        });
+                    if scene == Some(expected) && play == Some(expected) && playing {
+                        assert!(editor.game_workbench.is_play_session());
+                        assert_eq!(editor.document, document);
+                        break;
+                    }
+                    if editor.runtime_error.is_some()
+                        || Instant::now() >= deadline
+                        || (!editor.game_workbench.has_pending_preparation()
+                            && !editor.game_workbench.has_game_host())
+                    {
+                        failures.push(format!(
+                            "{module} with disconnected ECS at {archived_at:?}: Scene={scene:?}; Play={play:?}; error={:?}; operations={:?}",
+                            editor.runtime_error, editor.game_workbench.activity_snapshots(),
+                        ));
+                        break;
+                    }
+                    if editor.game_workbench.has_game_host() {
+                        editor.tick_simulation(1. / 60.);
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                editor.stop_game();
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
     fn rust_empty_and_stale_selection_have_real_availability_without_document_edits() {
         let mut document = demo_document(WorldKind::Objects);
         document.custom_sources.clear();
@@ -3444,6 +3532,405 @@ mod tests {
                 _ => None,
             })
             .unwrap_or_else(|| panic!("visible control missing: {label}"))
+    }
+
+    fn test_panel_frame(
+        editor: &mut Editor,
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+        mut panel: impl FnMut(&mut Editor, &mut egui::Ui),
+    ) -> egui::FullOutput {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(950., 1350.),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| panel(editor, ui),
+        );
+        output.textures_delta.clear();
+        output
+    }
+
+    fn click_test_panel_at(
+        editor: &mut Editor,
+        ctx: &egui::Context,
+        point: egui::Pos2,
+        panel: fn(&mut Editor, &mut egui::Ui),
+    ) {
+        test_panel_frame(editor, ctx, vec![egui::Event::PointerMoved(point)], panel)
+            .drop_without_applying_deltas();
+        for pressed in [true, false] {
+            test_panel_frame(
+                editor,
+                ctx,
+                vec![egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                }],
+                panel,
+            )
+            .drop_without_applying_deltas();
+        }
+    }
+
+    fn click_test_panel(
+        editor: &mut Editor,
+        ctx: &egui::Context,
+        label: &str,
+        panel: fn(&mut Editor, &mut egui::Ui),
+    ) {
+        let output = test_panel_frame(editor, ctx, vec![], panel);
+        let point = text_center(&output, label);
+        output.drop_without_applying_deltas();
+        click_test_panel_at(editor, ctx, point, panel);
+    }
+
+    fn inspector_fixture(
+        objects: Vec<module_engine_core::AuthoredObject>,
+        prefabs: std::collections::BTreeMap<String, module_engine_core::Prefab>,
+    ) -> (module_engine_script::TestArtifactGuard, Editor) {
+        let mut document = demo_document(WorldKind::Objects);
+        document.root.nodes.truncate(4);
+        document.root.edges.truncate(3);
+        document.custom_sources.clear();
+        let mut game = module_engine_core::GameProject::empty();
+        game.prefabs = prefabs;
+        game.scenes.get_mut("empty").unwrap().objects = objects;
+        document.game = Some(game);
+        crate::engine_profiles::finish_template(
+            &mut document,
+            crate::engine_profiles::ProfileKind::Neutral,
+            &project::source_root(),
+        )
+        .unwrap();
+        let (fixture, mut editor) = isolated_editor(document);
+        editor.game_workbench.scene = "empty".into();
+        (fixture, editor)
+    }
+
+    fn apply_inspector_json(
+        editor: &mut Editor,
+        ctx: &egui::Context,
+        components: &serde_json::Value,
+    ) {
+        let inspector = Editor::scene_inspector_panel;
+        let output = test_panel_frame(editor, ctx, vec![], inspector);
+        let text = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text().contains("\"components\"") => {
+                    Some(text.pos + Vec2::splat(8.))
+                }
+                _ => None,
+            })
+            .expect("Advanced object JSON field");
+        click_test_panel_at(editor, ctx, text, inspector);
+        test_panel_frame(
+            editor,
+            ctx,
+            vec![
+                egui::Event::Key {
+                    key: egui::Key::A,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::COMMAND,
+                },
+                egui::Event::Paste(
+                    serde_json::json!({"components":components,"overrides":{},"references":{}})
+                        .to_string(),
+                ),
+            ],
+            inspector,
+        )
+        .drop_without_applying_deltas();
+        click_test_panel(editor, ctx, "Apply raw JSON", inspector);
+        assert_eq!(
+            serde_json::json!(
+                editor.document.game.as_ref().unwrap().scenes["empty"].objects[0].components
+            ),
+            *components,
+            "{}",
+            editor.status,
+        );
+    }
+
+    #[test]
+    fn inspector_history_preserves_opaque_paths_and_rejects_missing_files() {
+        use super::editor_workflow::Command;
+        use module_engine_core::{AuthoredObject, WorldObject};
+        use serde_json::json;
+
+        let archive = json!({"path":"waypoints/route-A","payload":{"literal.key":[null, {"path":"asset://opaque"}]}});
+        let mut failures = Vec::new();
+        for missing_file in [false, true] {
+            let (fixture, mut editor) = inspector_fixture(
+                vec![AuthoredObject::new(WorldObject {
+                    id: 1,
+                    parent: None,
+                    transform: Default::default(),
+                    color: [255; 4],
+                })],
+                Default::default(),
+            );
+            editor.game_workbench.select(Some(1));
+            let before = editor.document.clone();
+            let (components, resource) = if missing_file {
+                let path = fixture.path().join("palette.png");
+                let file = std::fs::File::create(&path).unwrap();
+                let mut encoder = png::Encoder::new(file, 1, 1);
+                encoder.set_color(png::ColorType::Rgba);
+                encoder
+                    .write_header()
+                    .unwrap()
+                    .write_image_data(&[255; 4])
+                    .unwrap();
+                (
+                    json!({"material":{"base_color_texture":"palette.png"}}),
+                    Some(path),
+                )
+            } else {
+                (json!({"archive.navigation":archive}), None)
+            };
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|style| style.animation_time = 0.);
+            let inspector = Editor::scene_inspector_panel;
+            click_test_panel(
+                &mut editor,
+                &ctx,
+                "Advanced: components / overrides / references",
+                inspector,
+            );
+            apply_inspector_json(&mut editor, &ctx, &components);
+            let authored = editor.document.clone();
+            assert!(editor.save(), "{}", editor.status);
+            assert_eq!(
+                project::read(std::path::Path::new(&editor.path)).unwrap(),
+                authored
+            );
+            click_test_panel(&mut editor, &ctx, "Save checkpoint", Editor::history_panel);
+            assert!(
+                editor.status.starts_with("Version ") && editor.status.ends_with(" saved"),
+                "{}",
+                editor.status
+            );
+
+            editor.dispatch_command(Command::Undo, &ctx);
+            assert_eq!(editor.document, before, "{}", editor.status);
+            let initial_cursor = editor.history.cursor();
+            if let Some(path) = resource {
+                std::fs::remove_file(path).unwrap();
+            }
+            editor.dispatch_command(Command::Redo, &ctx);
+            if missing_file {
+                assert!(
+                    editor
+                        .status
+                        .starts_with("Version not restored: palette.png:"),
+                    "{}",
+                    editor.status
+                );
+                assert_eq!(editor.document, before);
+                assert_eq!(editor.history.cursor(), initial_cursor);
+            } else if editor.document == authored {
+                editor.dispatch_command(Command::Undo, &ctx);
+                assert_eq!(editor.document, before);
+            } else {
+                failures.push(format!("Redo: {}", editor.status));
+            }
+
+            click_test_panel(&mut editor, &ctx, "Saved versions", Editor::history_panel);
+            click_test_panel(&mut editor, &ctx, "Restore", Editor::history_panel);
+            if missing_file {
+                assert!(
+                    editor
+                        .status
+                        .starts_with("Version not restored: palette.png:"),
+                    "{}",
+                    editor.status
+                );
+                assert_eq!(editor.document, before);
+                assert_eq!(editor.history.cursor(), initial_cursor);
+            } else if editor.document != authored {
+                failures.push(format!("Restore: {}", editor.status));
+            } else {
+                let mut later = components;
+                later["archive.navigation"]["path"] = json!("waypoints/route-B");
+                apply_inspector_json(&mut editor, &ctx, &later);
+                editor.dispatch_command(Command::Undo, &ctx);
+                assert_eq!(editor.document, authored, "{}", editor.status);
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    fn linked_template_control(
+        editor: &mut Editor,
+        ctx: &egui::Context,
+        label: &str,
+    ) -> Option<egui::Pos2> {
+        let output = test_panel_frame(editor, ctx, vec![], Editor::scene_inspector_panel);
+        let header = text_center(&output, "Linked template source: Alpha");
+        output.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.pos.y > header.y && text.galley.text() == label => {
+                Some(text.pos + text.galley.size() * 0.5)
+            }
+            _ => None,
+        })
+    }
+
+    fn type_template_value(editor: &mut Editor, ctx: &egui::Context, from: &str, to: &str) {
+        let control = linked_template_control(editor, ctx, from).expect("template value control");
+        click_test_panel_at(editor, ctx, control, Editor::scene_inspector_panel);
+        test_panel_frame(
+            editor,
+            ctx,
+            vec![egui::Event::Paste(to.into())],
+            Editor::scene_inspector_panel,
+        );
+        test_panel_frame(
+            editor,
+            ctx,
+            vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            }],
+            Editor::scene_inspector_panel,
+        );
+        assert!(
+            linked_template_control(editor, ctx, to).is_some(),
+            "template field did not receive {to}"
+        );
+    }
+
+    #[test]
+    fn linked_template_inspector_retains_edits_across_selection_apply_discard_and_close() {
+        use super::editor_workflow::Command;
+        use module_engine_core::{AuthoredObject, Prefab, WorldObject};
+        use serde_json::json;
+
+        let templates = [(1, "Alpha", 0.37), (2, "Beta", 0.24)];
+        let objects = templates
+            .iter()
+            .map(|&(id, name, _)| {
+                let mut object = AuthoredObject::new(WorldObject {
+                    id,
+                    parent: None,
+                    transform: Default::default(),
+                    color: [255; 4],
+                });
+                object.prefab = Some(name.into());
+                object
+            })
+            .collect();
+        let prefabs = templates
+            .iter()
+            .map(|&(_, name, red)| {
+                (
+                    name.into(),
+                    Prefab {
+                        color: [255; 4],
+                        components: [(
+                            "material".into(),
+                            json!({"base_color":[red, 0.81, 0.82, 0.83], "future.key":null}),
+                        )]
+                        .into(),
+                    },
+                )
+            })
+            .collect();
+        let (_fixture, mut editor) = inspector_fixture(objects, prefabs);
+        let authored = editor.document.clone();
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|style| style.animation_time = 0.);
+        let hierarchy = Editor::scene_hierarchy_panel;
+        let inspector = Editor::scene_inspector_panel;
+
+        click_test_panel(&mut editor, &ctx, "Alpha", hierarchy);
+        click_test_panel(
+            &mut editor,
+            &ctx,
+            "Linked template source: Alpha",
+            inspector,
+        );
+        let material = linked_template_control(&mut editor, &ctx, "material")
+            .expect("template material section");
+        click_test_panel_at(&mut editor, &ctx, material, inspector);
+        type_template_value(&mut editor, &ctx, "0.37", "0.68");
+        assert_eq!(editor.document, authored);
+
+        click_test_panel(&mut editor, &ctx, "Beta", hierarchy);
+        let beta = test_panel_frame(&mut editor, &ctx, vec![], inspector);
+        text_center(&beta, "Linked template source: Beta");
+        let draft_was_visible = beta.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Inspector drafts · unapplied")
+        });
+        click_test_panel(&mut editor, &ctx, "Alpha", hierarchy);
+        assert!(
+            linked_template_control(&mut editor, &ctx, "0.68").is_some(),
+            "Alpha lost the unapplied value after Alpha → Beta → Alpha (draft visible at Beta: {draft_was_visible})"
+        );
+        assert!(draft_was_visible);
+        assert!(editor.has_unsaved_work());
+        assert_eq!(editor.document, authored);
+
+        click_test_panel(
+            &mut editor,
+            &ctx,
+            "Apply template defaults to instances",
+            inspector,
+        );
+        let mut applied = authored;
+        applied
+            .game
+            .as_mut()
+            .unwrap()
+            .prefabs
+            .get_mut("Alpha")
+            .unwrap()
+            .components
+            .get_mut("material")
+            .unwrap()["base_color"][0] = json!(0.68);
+        assert_eq!(editor.document, applied, "{}", editor.status);
+        assert!(!editor.game_workbench.has_inspector_drafts());
+        editor.dispatch_command(Command::Save, &ctx);
+        assert!(!editor.has_unsaved_work(), "{}", editor.status);
+
+        type_template_value(&mut editor, &ctx, "0.68", "0.21");
+        click_test_panel(&mut editor, &ctx, "Beta", hierarchy);
+        test_panel_frame(&mut editor, &ctx, vec![], inspector);
+        assert!(
+            editor.has_unsaved_work(),
+            "Alpha still has a draft while Beta is selected"
+        );
+        editor.dispatch_command(Command::Quit, &ctx);
+        assert!(
+            editor.workflow.blocks_document_edits(),
+            "Quit must wait for the Inspector draft"
+        );
+        let modal = |editor: &mut Editor, ui: &mut egui::Ui| editor.draw_workflow_modals(ui.ctx());
+        test_panel_frame(&mut editor, &ctx, vec![], modal);
+        let guard = test_panel_frame(&mut editor, &ctx, vec![], modal);
+        text_center(&guard, "Unsaved changes");
+        click_test_panel(&mut editor, &ctx, "Cancel", modal);
+
+        click_test_panel(&mut editor, &ctx, "Discard Inspector drafts", inspector);
+        assert_eq!(editor.document, applied);
+        assert!(!editor.has_unsaved_work());
+        click_test_panel(&mut editor, &ctx, "Alpha", hierarchy);
+        assert!(linked_template_control(&mut editor, &ctx, "0.68").is_some());
+        editor.dispatch_command(Command::Quit, &ctx);
+        assert!(!editor.workflow.blocks_document_edits());
     }
 
     fn click_authoring(editor: &mut Editor, ctx: &egui::Context, graph_id: u64, point: egui::Pos2) {
@@ -4509,7 +4996,7 @@ mod tests {
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(5));
         }
-        let (asset_root, compile, kind) = editor.game_context();
+        let (asset_root, compile, kind) = editor.game_context().unwrap();
         editor
             .game_workbench
             .ensure(&editor.document, &asset_root, compile.as_deref(), kind)
@@ -4707,7 +5194,7 @@ mod tests {
             editor.playing = false;
             editor.authoring_intent = true;
             editor.game_workbench.scene = "arena".into();
-            let (asset_root, compile, kind) = editor.game_context();
+            let (asset_root, compile, kind) = editor.game_context().unwrap();
             editor
                 .game_workbench
                 .ensure(&editor.document, &asset_root, compile.as_deref(), kind)

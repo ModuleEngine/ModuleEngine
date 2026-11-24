@@ -70,6 +70,15 @@ fn update(ctx: &mut ScriptContext) {
 
 By default, preflight checks scene structure. The host passes `workspace.with_composition(composition)` to determine reference types and activity, while `with_validator(|document| ...)` validates the candidate before snapshots, trash, and modified files are written. Types cannot be reconstructed from the validator callback. Without composition, only explicit built-in render contracts are available; source components remain opaque. History replay returns previously recorded document and file boundaries.
 
+<a id="history-resource-check"></a>
+
+Undo, Redo and checkpoint Restore verify the candidate's manifest, authored scene
+files and typed asset references using the selected Engine's asset contracts.
+Unknown or inactive component and property payloads keep their exact JSON values.
+For example, `archive.navigation.path` can hold a logical route. Missing files
+referenced by active asset fields still reject the candidate and preserve the
+current document and history position.
+
 `AssetReference` values obtained only from installed defaults are also included in usages with their source identified. This applies to `ComponentSchema` and to `ModuleDescriptor.properties` / `PropertySchema` of all four scopes. If Move/Delete/Replace/Detach would require changing an immutable default, the operation is rejected before files and the log are written. A stable `asset://ID` allows Move with the same ID. An explicitly permitted null suppresses the default; Detach cannot silently reintroduce a dependency through a default.
 
 For Object and legacy Component properties, the host also passes `with_property_object_ids(live_ids)`: these are the actual IDs of the accepted graph Runtime, not authored Game-scene IDs or property-store keys. The service itself does not run world factories for scanning. An empty set means there are no live objects; a missing snapshot with potentially applicable scoped asset contracts produces a context error. Editor checks that the current world source matches the accepted runtime and passes the same snapshot to the catalog and file operation. Backend and snapshot participate in background catalog freshness validation.

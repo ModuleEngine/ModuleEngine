@@ -51,14 +51,20 @@ keeps scene-only edits possible without publishing derived caches as frozen
 Engine configuration. Source hooks must preserve foreign data; see
 [optional package ownership](optional-gameplay.md).
 
+<a id="world-and-renderer-selection"></a>
+
 ## World and renderer selection
 
 `ModuleRegistry::render_route` follows the viewport's actual frame connection,
 renderer scene connection and extraction world connection. It validates registered
 implementations without constructing them. The host uses that exact world and a
-`Box<dyn FrameRenderer>` from its registered renderer factory. No first-installed
-renderer fallback exists. The old editor world selector changes the graph's
-built-in world node before entering this shared route.
+`Box<dyn FrameRenderer>` from its registered renderer factory. Scene and Play
+resolve the connected provider's kind from the selected Engine's catalog. A
+disconnected world node can be added or moved without changing that selection.
+The execution document and Engine context identify each pending preparation.
+A completion for a superseded document or context is discarded. The legacy
+editor world selector changes the built-in world node in the graph
+before entering this shared route.
 
 Default ECS gameplay keeps its canonical ECS as the sole mutable owner and never
 constructs a second provider. Registered projection providers are populated from

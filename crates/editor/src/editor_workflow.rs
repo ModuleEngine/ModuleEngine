@@ -3407,11 +3407,12 @@ pub(crate) mod workflow_tests {
                     ..Default::default()
                 },
                 |ui| {
-                    assert!(
-                        !editor
-                            .game_workbench
-                            .systems_ui(ui, &mut editor.document, root)
-                    );
+                    assert!(!editor.game_workbench.systems_ui(
+                        ui,
+                        &mut editor.document,
+                        root,
+                        &editor.registry
+                    ));
                 },
             )
         }
