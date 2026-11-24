@@ -45,7 +45,10 @@ pub fn run(id: &str, folder: &Path) -> Result<(), String> {
     match id {
         "S1" | "S2" => game(id, &root, &folder),
         "S3" | "S3-100k" | "S4" | "S5" => scene(id, &root, &folder),
-        "S4-floor" | "S4-floor-atlas" => s4_floor(&root, &folder, id == "S4-floor-atlas"),
+        "S4-floor" | "S4-floor-atlas" => {
+            s4_floor(&root, &folder, RenderPath::Forward, id == "S4-floor-atlas")
+        }
+        "S4-floor-deferred" => s4_floor(&root, &folder, RenderPath::Deferred, false),
         "R2-textures" => materials::check(&root, &folder),
         "R23-structure" => structure::run(&root, &folder),
         "R24-visibility" => visibility::run(&root, &folder),
@@ -53,12 +56,17 @@ pub fn run(id: &str, folder: &Path) -> Result<(), String> {
     }
 }
 
-// A fixed camera path through the same Forward graph as S4. Explicit readback
-// makes consecutive PNGs reproducible without involving the desktop compositor.
-fn s4_floor(root: &Path, folder: &Path, atlas_control: bool) -> Result<(), String> {
+// A fixed camera path through the stock graphs. Explicit readback makes
+// consecutive PNGs reproducible without involving the desktop compositor.
+fn s4_floor(
+    root: &Path,
+    folder: &Path,
+    path: RenderPath,
+    atlas_control: bool,
+) -> Result<(), String> {
     const FRAMES: usize = 32;
     let mut fixture = Fixture::load("S4", root)?;
-    let mut graph = default_graph(RenderPath::Forward);
+    let mut graph = default_graph(path);
     let mut sources = BTreeMap::new();
     let mut renderer = VulkanRenderer::new_at(root.to_owned()).map_err(|e| e.to_string())?;
     let capabilities = renderer.capabilities();
@@ -98,7 +106,7 @@ fn s4_floor(root: &Path, folder: &Path, atlas_control: bool) -> Result<(), Strin
         &json!({
             "fixture": fixture.inventory,
             "render_pixels": SIZE,
-            "graph": "Forward",
+            "graph": format!("{path:?}"),
             "materials": if atlas_control || !capabilities.bindless_materials { "atlas" } else { "bindless" },
             "cameras": cameras,
             "adapter": renderer.device_name(),
@@ -120,7 +128,13 @@ fn s4_floor(root: &Path, folder: &Path, atlas_control: bool) -> Result<(), Strin
             .map_err(|e| e.to_string())?;
         crate::write_png(&folder.join(format!("frame-{index:03}.png")), &frame)?;
     }
-    Ok(())
+    let allocations = renderer
+        .synchronous_graph_image_allocations()
+        .ok_or("S4 benchmark has no completed synchronous graph allocations")?;
+    write(
+        &folder.join("graph-memory.json"),
+        &json!({"graph": format!("{path:?}"), "slot": 0, "render_pixels": SIZE, "images": allocations}),
+    )
 }
 
 fn game(id: &str, root: &Path, folder: &Path) -> Result<(), String> {

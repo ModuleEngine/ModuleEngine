@@ -70,6 +70,9 @@ These commands use the stock Vulkan renderer with explicit PNG readback.
   using the original 256 px atlas fixture and the original Custom HLSL
   material ABI. Both directories contain the exact camera parameters and PNGs.
 
+The [S4 baseline for R2.5](evidence/r25-s4/README.md) records the Forward and
+Deferred images and the corresponding graph image memory measured at 1080p.
+
 The Player example `gpu_presentation_check` exercises native interop and
 checks that two in-flight material versions produce their individual reference
 pixels while the second submission reuses the unchanged texture.
@@ -158,6 +161,19 @@ interval and report its p95. For GPU timings, set
 `MODULE_ENGINE_BENCHMARK_PROFILING=on`. The internal `Scene culling` sample
 includes the seed, pyramid and compaction. Run validation with the Khronos
 layer and synchronization validation in a separate session.
+
+The [R2.4 receipt](evidence/r24/README.md) records the historical pass on the
+mean interval. S3-100k averaged 1.764 ms with Hi-Z and 1.733 ms with culling
+off. Each Hi-Z run had one interval over 1000/60 ms (20.6348, 20.8540 and
+20.6695 ms). On the occlusion fixture, the current-frame depth seed reduced
+the indirect list from 2,052 to 4 with exact reference pixels. That fixture
+has no on/off pair of frame-time measurements.
+
+For a **new** 60 FPS gate, any interval above 1000/60 ms fails unless the
+criterion states an allowance before measurement, with a maximum count or
+rate and a worst-interval limit. Report the count and worst interval along
+with the mean and p95. The original R2.4 mean-based verdict still applies to
+the historical runs.
 
 ## Measurement and repeatability
 

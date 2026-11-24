@@ -241,6 +241,15 @@ Source-free Player exports include the internal SPIR-V variants.
 See the [reference and native S3 checks](bench.md#r24-culling-checks)
 and Khronos [indexed indirect count requirements](https://docs.vulkan.org/refpages/latest/refpages/source/vkCmdDrawIndexedIndirectCount.html).
 
+The [R2.4 Windows evidence](evidence/r24/README.md) confirms the original
+mean-cadence gate. S3-100k averaged 1.764 ms with the current-frame Hi-Z seed
+and 1.733 ms with culling off. The three Hi-Z runs had one over-budget
+interval each, at 20.6348, 20.8540 and 20.6695 ms. The separate occlusion
+fixture went from 2,052 candidate records to 4, with exact reference RGBA
+and no paired on/off timing. For later 60 FPS gates, an interval over
+1000/60 ms fails unless the criterion specifies an allowed count or rate
+and a worst-interval limit before measurement. Report both quantities.
+
 <a id="reference-gpu"></a>
 
 ## Reference GPU and measured scope

@@ -4,6 +4,15 @@
 
 [English](current-status.md) | [Русский](ru/current-status.md) | [Documentation](README.md)
 
+**24 November 2026 — R2.4 evidence, the S4 baseline and the ARPG tick trial are available.**
+The [R2.4 receipt](evidence/r24/README.md) records the Windows and combined
+review. [CI](ci.md#что-выполняется) checks new documentation links for local
+paths. The [published S4 reference](evidence/r25-s4/README.md) gives both
+stock graphs' images and per-slot transient memory for R2.5. The [ARPG
+trial](evidence/rv-c-arpg/README.md) measures 20 living enemies, checkpoints,
+serialization and late-rejected tick retry. See the [R6 access and Bevy
+decision](decisions.md#rv-c-arpg-tick).
+
 **24 November 2026 — Scene, Play and Inspector history follow their source contracts.**
 Scene and Play use the connected [world provider](shared-game-host.md#world-and-renderer-selection).
 Undo, Redo and Restore keep opaque author data and still check [required files](asset-workspace-api.md#history-resource-check).

@@ -6,7 +6,7 @@ license.workspace = true
 publish = false
 
 [features]
-bench = []
+bench = ["module-engine-vulkan/bench"]
 
 [dependencies]
 module-engine-player = { path = "../player", features = ["ui", "arpg", "puzzle", "g1", "vulkan", "audio", "persistence"] }

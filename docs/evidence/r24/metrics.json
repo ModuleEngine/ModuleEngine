@@ -1,0 +1,144 @@
+{
+  "native_source": "df279ba180ef085208929897e87ad2c2c9fe0ea8",
+  "native_source_digest": "451514ed07c817962c1c9cbc8f40ddfda7f1732d6f16ee4087de2247fa8fdf59",
+  "implementation_merge": "29542663bd77597897f9e5dc6e684ebb1a81d2dc",
+  "followup_review_main": "c93f919695b98e93162b045721f0137227b49961",
+  "followup_visibility_source_checkout": "33068733787412b5bc1664c22032c6f34e18fb17",
+  "native_artifacts_sha256": {
+    "module-engine-editor.exe": "0eb0205106515d1d4e85ea928241a599afd5aa1cc3084191f9416271abeaf19c",
+    "editor-validation.exe": "3e1c953d2fbef2214f4646a18efa981adc591f2e465c2070c7986d1115b86a66",
+    "gpu-presentation-check.exe": "58dbce97764abeee4ef8fa05b1ddf5b8b451e17e17b42b427b727ae5b233c848"
+  },
+  "historical_reviews_sha256": {
+    "r24-independent": "c226d6777715f92f8042b348f20ec884c7a6ea44f22b8237ff5307c84b434d28",
+    "pre-r25-windows": "20a246ae5de0f1c16f1d4b2eb540fac814b256ccd25a18a3f75554c1806e84ee",
+    "pre-r25-linux": "8163763397e1944eb2e3283fdfe7f8e70ad38ebc550b41a949c9d99231db4bd5",
+    "pre-r25-combined": "7fc950bb503110e075bdbdf6455b8f241f2c14b0320c596570166b66765e73a8"
+  },
+  "s3_100k": [
+    {
+      "run": "s3-100k-hiz-1",
+      "report_sha256": "a446cc3889b02e545ce6b0a045411d11652837d4bdef328191c9bd81b59ca2be",
+      "frames": 240,
+      "mean_ms": 1.769381667,
+      "p95_ms": 2.1571,
+      "over_16_6667_ms": [
+        {
+          "sample_1_based": 96,
+          "ms": 20.6348
+        }
+      ],
+      "scene_draw_calls": [
+        1
+      ],
+      "cpu_pixel_readback_bytes": 0
+    },
+    {
+      "run": "s3-100k-hiz-2",
+      "report_sha256": "5b29e825786a44f282dff0b87fd50128f2a5c7260d39ece338d76c0ddf28df15",
+      "frames": 240,
+      "mean_ms": 1.76429625,
+      "p95_ms": 2.2025,
+      "over_16_6667_ms": [
+        {
+          "sample_1_based": 97,
+          "ms": 20.854
+        }
+      ],
+      "scene_draw_calls": [
+        1
+      ],
+      "cpu_pixel_readback_bytes": 0
+    },
+    {
+      "run": "s3-100k-hiz-3",
+      "report_sha256": "48c270bb7661e52414cbd8d798e1994282b485024de270a0fe1e05a1e5d8c793",
+      "frames": 240,
+      "mean_ms": 1.757163333,
+      "p95_ms": 2.2129,
+      "over_16_6667_ms": [
+        {
+          "sample_1_based": 99,
+          "ms": 20.6695
+        }
+      ],
+      "scene_draw_calls": [
+        1
+      ],
+      "cpu_pixel_readback_bytes": 0
+    },
+    {
+      "run": "s3-100k-r23-control",
+      "report_sha256": "b35ad575b16e7a9350cab36a5e9b042da062e6dd6e157c3fb5dbd83b142a1790",
+      "frames": 240,
+      "mean_ms": 1.732555,
+      "p95_ms": 2.2149,
+      "over_16_6667_ms": [
+        {
+          "sample_1_based": 103,
+          "ms": 20.7628
+        }
+      ],
+      "scene_draw_calls": [
+        1
+      ],
+      "cpu_pixel_readback_bytes": 0
+    }
+  ],
+  "visibility": [
+    {
+      "run": "r24",
+      "report_sha256": "b691d948035a3f159202600452365c1d75ca2f2baab5d22b9ea63602a50c86cc",
+      "s3_capture_sha256": "9bcd275ca3a82c3b356f93a37bd79faef94568362f8a562989afaacb353969e9",
+      "comparisons_exact": 36,
+      "hidden_4099_counts": {
+        "forward": {
+          "frustum_candidates": 2052,
+          "occluders": 1,
+          "visible": 4
+        },
+        "deferred": {
+          "frustum_candidates": 2052,
+          "occluders": 1,
+          "visible": 4
+        }
+      },
+      "paired_png_sha256": {
+        "deferred-hiz-257-hidden-reference.png": "9758b7e45b017ea16a4e3dff1cac229cb526628a224126cb7c962b1988119dc8",
+        "deferred-hiz-257-moved_wall-reference.png": "6e774b7fa31c3bf301f12bdfb1e2f331f312403364917f298a36210c15fa9cd0",
+        "deferred-hiz-257-orbit-reference.png": "24bfefdff21a64e90630bef1f36e770bd22563c14b6dbb99062e2d18cc3e1716",
+        "forward-hiz-257-hidden-reference.png": "79878293a51ab6656de03dcf5c137eca0e639863a702a701a36ec1adc7a703d2",
+        "forward-hiz-257-moved_wall-reference.png": "a91fc51a71692e67ca0c95e92b91a5d9096ec73f52033460848fc3bd8cad1334",
+        "forward-hiz-257-orbit-reference.png": "adb6d33a3aa0b01b857609413d923d3ea15d729d1eb9211f0b3a296dada89a11",
+        "s3-100k-1080p-reference.png": "eabafbfe0c27be9abe2d5bd7cebfcd56efaa42d57c0285b631ee8c2ac16d110c"
+      }
+    },
+    {
+      "run": "windows-review",
+      "report_sha256": "7a9566632b7ac65184571066e1d289bc086bbe3a0f181e5f5bf29dee65543eee",
+      "s3_capture_sha256": "c1972dd8b072b4da0ad060e240f4e0ed22cd1116cad0ad0c5d86dbf5cfd74279",
+      "comparisons_exact": 36,
+      "hidden_4099_counts": {
+        "forward": {
+          "frustum_candidates": 2052,
+          "occluders": 1,
+          "visible": 4
+        },
+        "deferred": {
+          "frustum_candidates": 2052,
+          "occluders": 1,
+          "visible": 4
+        }
+      },
+      "paired_png_sha256": {
+        "deferred-hiz-257-hidden-reference.png": "9758b7e45b017ea16a4e3dff1cac229cb526628a224126cb7c962b1988119dc8",
+        "deferred-hiz-257-moved_wall-reference.png": "6e774b7fa31c3bf301f12bdfb1e2f331f312403364917f298a36210c15fa9cd0",
+        "deferred-hiz-257-orbit-reference.png": "24bfefdff21a64e90630bef1f36e770bd22563c14b6dbb99062e2d18cc3e1716",
+        "forward-hiz-257-hidden-reference.png": "79878293a51ab6656de03dcf5c137eca0e639863a702a701a36ec1adc7a703d2",
+        "forward-hiz-257-moved_wall-reference.png": "a91fc51a71692e67ca0c95e92b91a5d9096ec73f52033460848fc3bd8cad1334",
+        "forward-hiz-257-orbit-reference.png": "adb6d33a3aa0b01b857609413d923d3ea15d729d1eb9211f0b3a296dada89a11",
+        "s3-100k-1080p-reference.png": "eabafbfe0c27be9abe2d5bd7cebfcd56efaa42d57c0285b631ee8c2ac16d110c"
+      }
+    }
+  ]
+}

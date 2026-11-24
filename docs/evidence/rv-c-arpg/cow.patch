@@ -1,0 +1,219 @@
+--- a/crates/engine-core/src/game.rs
++++ b/crates/engine-core/src/game.rs
+@@ -127,11 +127,15 @@
+     #[serde(rename = "entities", with = "crate::world::entity_dto_map")]
+     pub world: EcsWorld,
+     #[serde(default)]
+-    pub module_data: BTreeMap<String, Value>,
++    pub module_data: BTreeMap<String, Arc<Value>>,
+     #[serde(default)]
+-    pub control: SessionControl,
++    pub control: Arc<SessionControl>,
+ }
+ impl GameState {
++    pub fn rv_c4_control_mut(&mut self) -> &mut SessionControl {
++        Arc::make_mut(&mut self.control)
++    }
++
+     pub(crate) fn checkpoint_tick(&mut self, validated_world: bool) -> Self {
+         let Self {
+             scene,
+@@ -364,7 +368,7 @@
+                     .collect(),
+             )?,
+             module_data: BTreeMap::new(),
+-            control: SessionControl::default(),
++            control: Arc::default(),
+         })
+     }
+     pub fn project(&self) -> &GameProject {
+@@ -382,7 +386,12 @@
+         }
+         let mut candidate = self.state.clone();
+         for (key, value) in values {
+-            if key.trim().is_empty() || candidate.module_data.insert(key.clone(), value).is_some() {
++            if key.trim().is_empty()
++                || candidate
++                    .module_data
++                    .insert(key.clone(), value.into())
++                    .is_some()
++            {
+                 return Err(format!(
+                     "Session bootstrap has an empty or duplicate key '{key}'"
+                 ));
+--- a/crates/engine-core/src/rv_c4_probe.rs
++++ b/crates/engine-core/src/rv_c4_probe.rs
+@@ -76,6 +76,17 @@
+     }
+ }
+
++pub fn replace_shared_value(
++    target: &mut std::sync::Arc<serde_json::Value>,
++    replacement: serde_json::Value,
++) {
++    if let Some(owned) = std::sync::Arc::get_mut(target) {
++        *owned = replacement;
++    } else {
++        *target = replacement.into();
++    }
++}
++
+ pub fn stop() -> serde_json::Value {
+     MODE.set(Mode::Total);
+     serde_json::json!({
+--- a/crates/engine-core/src/systems.rs
++++ b/crates/engine-core/src/systems.rs
+@@ -1,6 +1,6 @@
+ //! General source-installed executable systems. The graph chooses the schedule;
+ //! factories choose behavior. Contracts are validated before any lifecycle hook.
+-use crate::rv_c4_probe::{Section, time};
++use crate::rv_c4_probe::{Section, replace_shared_value, time};
+ use crate::{GameEvent, GameInput, GameState};
+ use bevy_ecs::{
+     resource::Resource,
+@@ -87,7 +87,7 @@
+ #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+ pub struct ResourceValue {
+     pub data_type: String,
+-    pub value: Value,
++    pub value: Arc<Value>,
+ }
+ pub type ResourceStore = BTreeMap<String, ResourceValue>;
+
+@@ -181,7 +181,7 @@
+             crate::validate_world_commands(&candidate.world.objects_snapshot(), &[])?;
+             *self.game = candidate;
+         }
+-        resource.value = value;
++        replace_shared_value(&mut resource.value, value);
+         Ok(())
+     }
+     /// Portable world edits preserve component state and subtree semantics.
+@@ -813,7 +813,7 @@
+                     r.name.clone(),
+                     ResourceValue {
+                         data_type: r.data_type.clone(),
+-                        value: r.initial.clone(),
++                        value: r.initial.clone().into(),
+                     },
+                 )
+             })
+@@ -1062,13 +1062,14 @@
+         events: &[GameEvent],
+     ) -> Result<(), String> {
+         for resource in resources.values_mut() {
+-            resource.value = match resource.data_type.as_str() {
++            let value = match resource.data_type.as_str() {
+                 "GameInput" => serde_json::to_value(input).map_err(|e| e.to_string())?,
+                 "GameEvents" => time(Section::EventProjection, || serde_json::to_value(events))
+                     .map_err(|e| e.to_string())?,
+                 // GameWorld uses the typed capability, without copying entities.
+-                _ => time(Section::ResourceRefreshClone, || resource.value.clone()),
++                _ => time(Section::ResourceRefreshClone, || (*resource.value).clone()),
+             };
++            replace_shared_value(&mut resource.value, value);
+         }
+         Ok(())
+     }
+--- a/crates/game-host/examples/rv_c4_arpg.rs
++++ b/crates/game-host/examples/rv_c4_arpg.rs
+@@ -27,10 +27,10 @@
+         ctx.set_resource("counter", after.clone())?;
+         ctx.game
+             .module_data
+-            .insert("probe.rv_c4".into(), after.clone());
++            .insert("probe.rv_c4".into(), after.clone().into());
+         ctx.events
+             .push(GameEvent::new("probe.rv_c4", after.clone()));
+-        ctx.game.control.halted = self.0.load(Ordering::Relaxed);
++        ctx.game.rv_c4_control_mut().halted = self.0.load(Ordering::Relaxed);
+         *state = after;
+         Ok(())
+     }
+--- a/crates/gameplay-arpg/src/queries.rs
++++ b/crates/gameplay-arpg/src/queries.rs
+@@ -16,10 +16,11 @@
+         read_frame(self).unwrap_or_default()
+     }
+     fn set_arpg(&mut self, frame: ArpgFrame) -> Result<(), String> {
+-        self.module_data.insert(
+-            FRAME_KEY.into(),
+-            time(Section::FrameEncode, || serde_json::to_value(frame))
+-                .map_err(|e| e.to_string())?,
++        let value = time(Section::FrameEncode, || serde_json::to_value(frame))
++            .map_err(|e| e.to_string())?;
++        rv_c4_probe::replace_shared_value(
++            self.module_data.entry(FRAME_KEY.into()).or_default(),
++            value,
+         );
+         Ok(())
+     }
+--- a/crates/gameplay-arpg/src/state.rs
++++ b/crates/gameplay-arpg/src/state.rs
+@@ -165,7 +165,7 @@
+     game.module_data.get(FRAME_KEY).map_or_else(
+         || Ok(ArpgFrame::default()),
+         |value| {
+-            let value = time(Section::FrameValueClone, || value.clone());
++            let value = time(Section::FrameValueClone, || (**value).clone());
+             time(Section::FrameDecode, || serde_json::from_value(value))
+                 .map_err(|error| format!("Invalid {FRAME_KEY}: {error}"))
+         },
+--- a/crates/gameplay-arpg/src/systems.rs
++++ b/crates/gameplay-arpg/src/systems.rs
+@@ -619,11 +619,11 @@
+         ctx.events.push(ArpgEvent::Death { object: id }.into());
+         if player {
+             frame.status = GameStatus::Defeat;
+-            ctx.game.control.halted = true;
++            ctx.game.rv_c4_control_mut().halted = true;
+         } else {
+             if victory {
+                 frame.status = GameStatus::Victory;
+-                ctx.game.control.halted = true;
++                ctx.game.rv_c4_control_mut().halted = true;
+                 ctx.events.push(ArpgEvent::Victory.into());
+             }
+             if ctx.game.world.contains(id) {
+@@ -676,7 +676,7 @@
+         if distance(pos, target) <= portal.radius
+             && (!portal.requires_clear || ctx.game.living_enemies() == 0)
+         {
+-            ctx.game.control.transition = Some(SceneTransition {
++            ctx.game.rv_c4_control_mut().transition = Some(SceneTransition {
+                 destination: portal.scene,
+                 carry: ctx
+                     .game
+--- a/crates/project-puzzle/src/lib.rs
++++ b/crates/project-puzzle/src/lib.rs
+@@ -37,7 +37,7 @@
+     game.module_data.get(FRAME_KEY).map_or_else(
+         || Ok(PuzzleFrame::default()),
+         |value| {
+-            serde_json::from_value(value.clone())
++            serde_json::from_value((**value).clone())
+                 .map_err(|error| format!("Invalid {FRAME_KEY}: {error}"))
+         },
+     )
+@@ -46,7 +46,9 @@
+ fn store_frame(game: &mut GameState, frame: PuzzleFrame) -> Result<(), String> {
+     game.module_data.insert(
+         FRAME_KEY.into(),
+-        serde_json::to_value(frame).map_err(|error| error.to_string())?,
++        serde_json::to_value(frame)
++            .map_err(|error| error.to_string())?
++            .into(),
+     );
+     Ok(())
+ }
+--- a/crates/project-puzzle/src/systems.rs
++++ b/crates/project-puzzle/src/systems.rs
+@@ -200,7 +200,7 @@
+             None
+         };
+         if let Some(name) = event {
+-            ctx.game.control.halted = true;
++            ctx.game.rv_c4_control_mut().halted = true;
+             ctx.events_resource_mut("events")?
+                 .push(GameEvent::new(name, json!({"turns":current.turns})));
+             store_frame(ctx.game, current)?;
