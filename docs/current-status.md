@@ -22,8 +22,9 @@ Ordinary workspace tests cover the four cases through Editor and Core.
 
 **24 November 2026 — the full CI route exercises the whole workspace.**
 Windows and Linux run workspace tests and a separate minimal Player build and
-test. Linux runs the migration and Vulkan rollback cases, with an extra DXC
-absence check. Bootstrap and verification preflight the Python interpreter.
+test. Linux requires the migration, Vulkan rollback, initial Scene preparation
+and hidden Game Rust recovery and Apply tests, with an extra DXC absence check.
+Bootstrap and verification preflight the Python interpreter.
 See [CI](ci.md) and [verification](verification.md).
 
 **23 November 2026 — R2.4 compacts stock scene draws on the GPU.**

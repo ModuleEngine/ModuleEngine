@@ -13,6 +13,8 @@ from verify import VerificationError, test_skips
 
 
 MIGRATION_TEST = "workspace_files::tests::migration_copy_accepts_case_distinct_filename_and_preserves_legacy_source"
+SCENE_PREPARATION_TEST = "app::scene_workspace::tests::initial_scene_preparation_draws_waiting_ui_before_host_is_ready"
+HIDDEN_GAME_RUST_TEST = "app::tests::rust_panel_prepares_hidden_game_recovers_bad_source_and_applies_to_game_backend"
 ALLOCATION_TEST = "vulkan::tests::failed_partial_native_allocations_release_owned_handles_and_device_recovers"
 SUMMARY = re.compile(r"^test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;")
 CASE = re.compile(r"^test (.+?) \.\.\. (.*)$")
@@ -142,7 +144,12 @@ def workspace(output):
            for reason in row["capability_skips"].values()):
         raise VerificationError("CI fetched the lockfile but a Custom SDK test reported missing offline dependencies")
     if sys.platform == "linux":
-        required = {("module-engine-editor", MIGRATION_TEST), ("module-engine-vulkan", ALLOCATION_TEST)}
+        required = {
+            ("module-engine-editor", MIGRATION_TEST),
+            ("module-engine-editor", SCENE_PREPARATION_TEST),
+            ("module-engine-editor", HIDDEN_GAME_RUST_TEST),
+            ("module-engine-vulkan", ALLOCATION_TEST),
+        }
         if missing := required - executed:
             raise VerificationError(f"Required Linux regressions did not execute: {sorted(missing)}")
     return 0
