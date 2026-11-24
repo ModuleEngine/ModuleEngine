@@ -443,9 +443,9 @@ budget, address it in R1.8 and recheck late rejection and retry through
 
 Two independent reviews of `main` at `c93f919` were made on 23 November 2026, one on Windows with the reference GPU and one on Linux with a software Vulkan device. They were combined on 24 November 2026. Their findings are planned as three required stages and one optional stage:
 
-1. **RV-A** first: the whole workspace in required CI, so that the regression tests written in RV-B and later run on every pull request.
-2. **RV-B**: the editor scenarios found by the review. R2.5 starts after RV-A and RV-B are done.
-3. **RV-C** alongside the start of R2.5: evidence that a clean clone can read, the R2.5 baseline and, before R6, the measured ARPG tick and the decision on typed components.
+1. **RV-A** first: the whole workspace in required CI, so that the regression tests written in RV-B and later run on every pull request. A pull request that changes only status cells of existing tasks in the two roadmap files keeps the light `Roadmap status checks` route; every other pull request takes the full route.
+2. **RV-B**: the editor scenarios found by the review. R2.5 starts after RV-A, RV-B.1–RV-B.3 and RV-C.3 are done; RV-B.4 may close separately.
+3. **RV-C** alongside the start of R2.5: evidence that a clean clone can read, the R2.5 baseline and, before any R6 task, the measured ARPG tick and the decision on typed components.
 4. **RV-D** is optional: maintenance items taken when work touches the subsystem.
 
 <a id="rebuild-rv-a"></a>
@@ -456,14 +456,14 @@ Two independent reviews of `main` at `c93f919` were made on 23 November 2026, on
 | --- | --- | --- | --- |
 | RV-A.1 | Fix the two tests that fail on `main` outside required CI. `migration_copy_accepts_case_distinct_filename_and_preserves_legacy_source` in `crates/editor/src/workspace_files.rs` compares two whole migration results, although the scene asset ID is generated and the path depends on the destination. `failed_partial_native_allocations_release_owned_handles_and_device_recovers` in `crates/render-vulkan/src/vulkan.rs` declares only Vulkan but renders a graph that needs DXC. | On Linux the migration test checks the meaning of the result, its references and the preserved source while allowing different IDs and paths. Without DXC the render test is skipped with a visible reason; with Vulkan and DXC it checks handle release and device recovery. | 1 d |
 | RV-A.2 | Required CI runs `cargo test --workspace --locked` on Windows and Linux after `cargo fetch --locked`. Linux prepares software Vulkan and the pinned DXC for the render tests; a separate step without DXC checks that capability skips stay explicit. | The required gate fails when any non-ignored workspace test fails, and the run report lists counts per package. Both failures fixed in RV-A.1 would have failed it. | 1–2 d |
-| RV-A.3 | Minimal Player as its own configuration in required CI: build and tests with `--no-default-features`. | Code paths for absent games and renderer are compiled and tested on every pull request; a game or Vulkan dependency added to the minimal Player fails CI. | 0.5 d |
+| RV-A.3 | Minimal Player as its own configuration in required CI: build and tests with `--no-default-features`. | Code paths for absent games and renderer are compiled and tested on every pull request that takes the full route (a change limited to roadmap status cells keeps `Roadmap status checks`); a game or Vulkan dependency added to the minimal Player fails CI. | 0.5 d |
 | RV-A.4 | A completed CI run for every merge commit on `main`. Superseded runs are cancelled only for pull requests. | Two merges in quick succession each get a finished `main` run; pull request runs still cancel superseded ones. | 0.5 d |
 | RV-A.5 | Explicit offline-cache precondition for tests that build the Custom SDK with `--offline`. Today 23 tests in Script, Host and Editor fail without a full `cargo fetch`. | Without the cache these tests stop with one clear reason that names the missing step; in required CI dependencies are fetched before tests. | 1 d |
 | RV-A.6 | Minimum Python version for `scripts/`. `tarfile.extractall(filter=...)` needs Python 3.12 or a backport (3.9.17 and later); on 3.9.13 two CI DXC unpacking tests failed. | The minimum version is documented in both languages, and `bootstrap` and `verify.py` report an unsupported interpreter before running tests. | 0.5 d |
 
 <a id="rebuild-rv-b"></a>
 
-### RV-B — Editor scenarios from the review · 1–1.5 weeks · depends on RV-A; before R2.5
+### RV-B — Editor scenarios from the review · 1–1.5 weeks · depends on RV-A; RV-B.1–RV-B.3 before R2.5
 
 Each fix starts with a regression test that fails on the current code and runs in the required CI from RV-A.
 
@@ -476,14 +476,14 @@ Each fix starts with a regression test that fails on the current code and runs i
 
 <a id="rebuild-rv-c"></a>
 
-### RV-C — Readable evidence and measured decisions · 1–1.5 weeks · depends on RV-A; RV-C.3 before R2.5, RV-C.4 before R6
+### RV-C — Readable evidence and measured decisions · 1–1.5 weeks · depends on RV-A; RV-C.3 before R2.5, RV-C.4 before all of R6
 
 | # | Task | Acceptance | Effort |
 | --- | --- | --- | --- |
 | RV-C.1 | Keep compact acceptance evidence next to the code in `docs/evidence/<task>/`: the comparison result, bench conditions, commit SHA, artifact hashes and the reviewer's conclusion. Large logs and PNG files stay local. Start with R2.4: the Windows review evidence and the combined review, with links that resolve in a clean clone. | A clean clone opens every link of the R2.4 evidence. A link check in CI rejects new links from `docs/` into `outputs/`, `work/` or absolute local paths. | 1–2 d |
-| RV-C.2 | Record what the R2.4 result shows and what it does not. S3-100k averages about 1.76 ms with culling and 1.733 ms with culling off, so the 60 FPS target holds with a large margin but culling gives no speed-up on that scene; the speed-up is shown by the occlusion scene (4 of 2,052 commands left). Each of the three series had one interval above 16.67 ms, the worst 20.854 ms. Name the implemented Hi-Z variant: a current-frame depth seed of large occluders, then the test. | The R2.4 notes and [hardware tiers](hardware-tiers.md#r24-culling) state the long intervals, the culling gain on each scene and the Hi-Z variant in both languages. Later frame-rate criteria say whether single intervals above 16.67 ms are allowed. | 0.5 d |
+| RV-C.2 | Record what the R2.4 result shows and what it does not. S3-100k averages about 1.76 ms with culling and 1.733 ms with culling off, so the 60 FPS target holds with a large margin but culling gives no speed-up on that scene. On the occlusion scene the measured result is fewer draw commands (2,052 down to 4) with an image that matches the reference; no paired frame-time run with culling on and off exists for that scene, so a speed-up claim there needs its own paired measurement. R2.4 stays accepted on its original criteria. Each of the three series had one interval above 16.67 ms, the worst 20.854 ms. Name the implemented Hi-Z variant: a current-frame depth seed of large occluders, then the test. | The R2.4 notes and [hardware tiers](hardware-tiers.md#r24-culling) state the long intervals, the measured effect on each scene (frame time on S3-100k, command count on the occlusion scene) and the Hi-Z variant in both languages. Later frame-rate criteria say whether single intervals above 16.67 ms are allowed. | 0.5 d |
 | RV-C.3 | R2.5 baseline before the render graph work: S4 reference images and transient memory on `main`, published as in RV-C.1. | R2.5 compares against a published baseline (images, transient memory, commit, conditions) that a clean clone can read. | 1 d |
-| RV-C.4 | Measure the ARPG tick with 20–30 enemies and split out the per-tick copies (resources, events, system states, `module_data`, `control`) and the `ArpgFrame` serialization. Evaluate copy-on-write on the same load, keeping rollback and retry. Record in [decisions](decisions.md) which frequently used components get typed access and what role Bevy keeps. | A paired Release measurement reports the share of copies and serialization. A dated decision in both languages exists before R6 starts. Late rejection and retry through `GameHost` still pass. | 2–3 d |
+| RV-C.4 | Measure the ARPG tick with 20–30 enemies and split out the per-tick copies (resources, events, system states, `module_data`, `control`) and the `ArpgFrame` serialization. Evaluate copy-on-write on the same load, keeping rollback and retry. Record in [decisions](decisions.md) which frequently used components get typed access and what role Bevy keeps. | A paired Release measurement reports the share of copies and serialization. A dated decision in both languages exists before any R6 task starts. Late rejection and retry through `GameHost` still pass. | 2–3 d |
 
 <a id="rebuild-rv-d"></a>
 
@@ -502,7 +502,7 @@ Each fix starts with a regression test that fails on the current code and runs i
 
 <a id="rebuild-r2"></a>
 
-### R2 — GPU-driven renderer foundation · 8–12 weeks · depends on R0; R2.3 also on R1.6; R2.5 also on [RV-A and RV-B](#rebuild-rv)
+### R2 — GPU-driven renderer foundation · 8–12 weeks · depends on R0; R2.3 also on R1.6; R2.5 also on RV-A, RV-B.1, RV-B.2, RV-B.3 and RV-C.3 ([review fixes](#rebuild-rv))
 
 | # | Task | Acceptance | Effort |
 | --- | --- | --- | --- |
@@ -551,7 +551,7 @@ Each fix starts with a regression test that fails on the current code and runs i
 
 <a id="rebuild-r6"></a>
 
-### R6 — Physics with `rapier3d`, audio with `kira`, shared math · 2–3 weeks · depends on R1; R6.1 also on [RV-C.4](#rebuild-rv-c); can overlap R2–R5
+### R6 — Physics with `rapier3d`, audio with `kira`, shared math · 2–3 weeks · depends on R1; all of R6 also on [RV-C.4](#rebuild-rv-c); can overlap R2–R5
 
 | # | Task | Acceptance | Effort |
 | --- | --- | --- | --- |
@@ -621,7 +621,7 @@ Each fix starts with a regression test that fails on the current code and runs i
 
 - R0 → R1 → R4 and R6.
 - R0 → R2.1 → R2.2 → R2.3 (also needs R1.6) → R2.4 → R2.5 → R2.6 → R2.7.
-- [Review fixes](#rebuild-rv): R0 → RV-A → RV-B → R2.5; RV-A → RV-C (RV-C.3 before R2.5, RV-C.4 before R6); RV-D is optional and taken alongside related work.
+- [Review fixes](#rebuild-rv): R0 → RV-A → RV-B.1–RV-B.3 → R2.5 (RV-B.4 may close separately); RV-A → RV-C (RV-C.3 before R2.5, RV-C.4 before all of R6); RV-D is optional and taken alongside related work.
 - R2.1 → R3, in parallel with the rest of R2.
 - R1 + R3 + R4 accepted → resume the 0.5 brief and UI work.
 - R1 + R4 + R6 accepted → [AI-assisted live authoring](#ai-authoring) AI-A → AI-B (outside this track's effort totals).

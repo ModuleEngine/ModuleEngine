@@ -108,6 +108,23 @@ def roadmap(spec, lang):
     return "\n".join(lines)
 
 
+def review_track(**overrides):
+    """R0-R2 with the review fixes: R2.5 waits for RV-A, RV-B.1-RV-B.3 and RV-C.3 (TASK_DEPS of the campaign map).
+    R2 comes first so that the next move cannot come from the order of the sections alone."""
+    spec = {"R0": ["done"], "R2": ["done"] * 4 + ["todo"], "R1": ["done", "opt"],
+            "RV-A": ["todo"] * 6, "RV-B": ["todo"] * 4, "RV-C": ["todo"] * 4, "RV-D": ["opt"] * 2}
+    spec.update(overrides)
+    return spec
+
+
+def review_done_except(*open_tasks):
+    """RV-A, RV-B and RV-C done except the named tasks, which stay open."""
+    spec = {}
+    for phase, n in (("RV-A", 6), ("RV-B", 4), ("RV-C", 4)):
+        spec[phase] = ["todo" if f"{phase}.{i}" in open_tasks else "done" for i in range(1, n + 1)]
+    return review_track(**spec)
+
+
 def without_phase(markdown, phase_id):
     """Remove one phase section: its heading and everything up to the next anchor or heading."""
     heading = re.search(rf"^### {re.escape(phase_id)} — .*$", markdown, re.M)
@@ -135,7 +152,8 @@ class PageModelTest(unittest.TestCase):
     def model(self, en_text, ru_text):
         merged = roadmap_map.merge(roadmap_map.parse(en_text, "en"), roadmap_map.parse(ru_text, "ru"))
         template = (ROOT / roadmap_map.TEMPLATE_PATH).read_text(encoding="utf-8")
-        page = roadmap_map.render(template, merged, "test", "now")
+        deps = roadmap_map.task_deps(WORLD_TEMPLATE.read_text(encoding="utf-8"))
+        page = roadmap_map.render(template, merged, "test", "now", deps)
         code = page[page.index("// @model-begin"):page.index("// @model-end")]
         script = code + """
 process.stdout.write(JSON.stringify({
@@ -198,6 +216,14 @@ process.stdout.write(JSON.stringify({
         self.assertEqual(m["phases"]["R1"]["cls"], "done")
         self.assertEqual(m["phases"]["g05"]["cls"], "done")
         self.assertIn(["R1.3", "Впереди"], [list(t) for t in m["phases"]["R1"]["tasks"]])
+
+    def test_review_fixes_come_before_r25_and_r25_before_optional_work(self):
+        self.assertEqual(self.fixture(review_track())["summary"]["task"], "RV-A.1")
+        self.assertEqual(self.fixture(review_done_except())["summary"]["task"], "R2.5")
+
+    def test_open_rv_c3_keeps_r25_out_of_the_headline(self):
+        m = self.fixture(review_done_except("RV-C.3"))
+        self.assertEqual(m["summary"]["task"], "RV-C.3")
 
     def test_phase_of_only_optional_tasks_is_done_only_when_they_are(self):
         open_ = self.fixture({"R0": ["done"], "RV-A": ["done"], "RV-D": ["opt", "opt"]})
@@ -399,6 +425,17 @@ process.stdout.write(JSON.stringify({
         states = dict(after["provs"])
         self.assertEqual((states["R1.7"], states["R2.3"]), ("front", "front"))
 
+    def test_review_fixes_are_the_next_move_not_an_optional_task(self):
+        m = self.fixture(review_track())
+        states = dict(m["provs"])
+        self.assertEqual((m["focus"], states["R1.2"], states["R2.5"]), ("RV-A.1", "next", "next"))
+        m = self.fixture(review_done_except())
+        self.assertEqual((m["focus"], dict(m["provs"])["RV-D.1"]), ("R2.5", "next"))
+
+    def test_r25_waits_for_rv_c3_but_not_for_rv_b4(self):
+        self.assertEqual(dict(self.fixture(review_done_except("RV-C.3"))["provs"])["R2.5"], "next")
+        self.assertEqual(dict(self.fixture(review_done_except("RV-B.4"))["provs"])["R2.5"], "front")
+
     def test_missing_required_task_never_unlocks_the_waiting_one(self):
         """Safety net behind the build error: the model keeps R2.3 blocked while R1.6 is absent."""
         m = self.fixture({"R0": ["done"], "R1": ["done"] * 5, "R2": ["done", "done", "todo", "todo"]})
@@ -411,7 +448,8 @@ process.stdout.write(JSON.stringify({
         for task, deps in model["taskDeps"].items():
             phase = task.split(".")[0]
             # "R2.3 also on R1.6" names the task; "R2.5 also on RV-A and RV-B" names whole phases
-            found = re.search(rf"^### {re.escape(phase)} — .*{re.escape(task)} also on ([^;]+)", en, re.M)
+            # "all of R6 also on RV-C.4" covers every task of the phase
+            found = re.search(rf"^### {re.escape(phase)} — .*(?:{re.escape(task)}|{re.escape(phase)}) also on ([^;]+)", en, re.M)
             self.assertTrue(found, f"{task} has no 'also on' note in its phase heading")
             for dep in deps:
                 self.assertTrue(re.search(rf"(?<![\w.-]){re.escape(dep)}(?![\w-])|(?<![\w.-]){re.escape(dep.rsplit('.', 1)[0])}(?![\w.-])", found[1]),

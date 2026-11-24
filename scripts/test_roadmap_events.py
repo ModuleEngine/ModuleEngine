@@ -298,7 +298,7 @@ class WorldEventsModelTest(unittest.TestCase):
     def test_an_event_without_a_reference_goes_to_the_front(self):
         out = self.model([self.ev("commit")])
         self.assertEqual(len(out), 1)
-        self.assertRegex(out[0][2], r"^R\d+\.\d+$")
+        self.assertRegex(out[0][2], r"^R[A-Z0-9-]*\.\d+$")
 
     def test_a_merged_pr_replaces_its_opened_event(self):
         out = self.model([self.ev("pr", num=7, task="R1.6"), self.ev("merge", num=7, task="R1.6"),
