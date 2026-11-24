@@ -517,9 +517,10 @@ mod tests {
     }
     #[test]
     fn initial_scene_preparation_draws_waiting_ui_before_host_is_ready() {
-        module_engine_script::requires_offline_sdk!();
         crate::requires_editor_vulkan!();
         let mut editor = editor();
+        // Keep the native Scene load while removing the demo's gameplay compile.
+        editor.document.game.as_mut().unwrap().execution = Default::default();
         editor.game_workbench.set_deferred_preparation(true);
         let ctx = egui::Context::default();
         let mut view = SceneViewportState::default();
@@ -538,14 +539,18 @@ mod tests {
         assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains("Preparing Scene"))));
         output.drop_without_applying_deltas();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while editor.game_workbench.has_pending_preparation() {
+        loop {
             editor
                 .game_workbench
                 .poll_preparation(&editor.document)
                 .unwrap();
+            if !editor.game_workbench.has_pending_preparation() {
+                break;
+            }
             assert!(
                 std::time::Instant::now() < deadline,
-                "Scene preparation did not finish"
+                "Scene preparation did not finish: {:?}",
+                editor.game_workbench.activity_snapshots()
             );
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
@@ -555,7 +560,8 @@ mod tests {
                 .game_workbench
                 .activity_snapshots()
                 .iter()
-                .any(|activity| activity.state == crate::activity::ActivityState::Succeeded)
+                .any(|activity| activity.title == "Preparing Scene"
+                    && activity.state == crate::activity::ActivityState::Succeeded)
         );
     }
     #[test]

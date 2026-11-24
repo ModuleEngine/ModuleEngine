@@ -49,9 +49,12 @@ Both jobs run `cargo fetch --locked` before `cargo test --workspace --locked`.
 The workspace command runs all normal unit, integration and doc tests and
 records passed, failed, ignored and capability-skipped counts per package.
 Any ordinary test failure or a missing Custom SDK cache fails the job.
-On Linux, the migration and Vulkan allocation-recovery tests must pass
-without a skip in the workspace run. The preceding exact Vulkan check runs
-with Mesa and no DXC and requires one test and its explicit DXC skip reason.
+On Linux, the migration and Vulkan allocation-recovery tests and the Editor
+tests for initial Scene preparation and Rust recovery and Apply with Game
+hidden must pass without a skip in the workspace run. The Scene test uses a
+native renderer without compiling gameplay code. The Rust test gives each of
+the three compiler requests its own deadline. The preceding exact Vulkan check
+runs with Mesa and no DXC and requires one test and its explicit DXC skip reason.
 
 The minimal Player is built and tested in separate Cargo invocations with
 `-p module-engine-player --no-default-features`. Its normal and build dependency

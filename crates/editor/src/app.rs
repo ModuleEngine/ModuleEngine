@@ -4678,6 +4678,8 @@ mod tests {
 
     #[test]
     fn rust_panel_prepares_hidden_game_recovers_bad_source_and_applies_to_game_backend() {
+        use std::time::{Duration, Instant};
+
         module_engine_script::requires_offline_sdk!();
         crate::requires_editor_vulkan!();
         let root = crate::project::source_root();
@@ -4711,13 +4713,34 @@ mod tests {
         frame(&mut editor, vec![]).drop_without_applying_deltas();
         assert!(editor.game_workbench.host.is_none());
         assert!(editor.game_workbench.has_pending_preparation());
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
-        while editor.game_workbench.has_pending_preparation() {
+        // Each request can build a cold Custom SDK, including the rejected source.
+        let phase_timeout = Duration::from_secs(90);
+        let deadline = Instant::now() + phase_timeout;
+        loop {
             frame(&mut editor, vec![]).drop_without_applying_deltas();
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(std::time::Duration::from_millis(5));
+            if !editor.game_workbench.has_pending_preparation() {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Game must finish rejecting the invalid Rust source: {:?}",
+                editor.game_workbench.activity_snapshots()
+            );
+            std::thread::sleep(Duration::from_millis(5));
         }
         assert!(editor.game_workbench.host.is_none());
+        let activities = editor.game_workbench.activity_snapshots();
+        assert!(
+            activities
+                .iter()
+                .any(|activity| activity.title == "Preparing Game"
+                    && activity.state == crate::activity::ActivityState::Failed
+                    && activity
+                        .error
+                        .as_deref()
+                        .is_some_and(|error| error.contains("unclosed delimiter"))),
+            "Game must report the Rust syntax error: {activities:?}"
+        );
         let output = frame(&mut editor, vec![]);
         assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().starts_with("Preparing Game:"))));
         output.drop_without_applying_deltas();
@@ -4726,6 +4749,7 @@ mod tests {
             .custom_sources
             .insert(id.into(), good.clone());
         editor.changed(false);
+        let deadline = Instant::now() + phase_timeout;
         loop {
             frame(&mut editor, vec![]).drop_without_applying_deltas();
             if editor.game_workbench.host.is_some()
@@ -4734,10 +4758,11 @@ mod tests {
                 break;
             }
             assert!(
-                std::time::Instant::now() < deadline,
-                "correcting the Rust text must retry initial host preparation without opening Game"
+                Instant::now() < deadline,
+                "correcting the Rust text must retry initial host preparation without opening Game: {:?}",
+                editor.game_workbench.activity_snapshots()
             );
-            std::thread::sleep(std::time::Duration::from_millis(5));
+            std::thread::sleep(Duration::from_millis(5));
         }
         let edited = format!("{good}\n// edited and applied from the standalone Rust pane\n");
         editor
@@ -4756,6 +4781,7 @@ mod tests {
         assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains("previous compiled version"))));
         let apply = text_center(&output, "Apply Rust");
         output.drop_without_applying_deltas();
+        let deadline = Instant::now() + phase_timeout;
         for pressed in [true, false] {
             frame(
                 &mut editor,
@@ -4789,10 +4815,11 @@ mod tests {
                 break;
             }
             assert!(
-                std::time::Instant::now() < deadline,
-                "Rust Apply must update the Game instances"
+                Instant::now() < deadline,
+                "Rust Apply must update the Game instances: {:?}",
+                editor.game_workbench.activity_snapshots()
             );
-            std::thread::sleep(std::time::Duration::from_millis(5));
+            std::thread::sleep(Duration::from_millis(5));
         }
         assert!(!editor.scripts.has_active(id));
         let output = frame(&mut editor, vec![]);
