@@ -17,6 +17,8 @@ import sys
 import time
 import uuid
 
+from python_runtime import require_python
+
 MAX_LINE = 1024 * 1024
 PLATFORM = {"Windows": "windows", "Linux": "linux"}.get(platform.system(), "unsupported")
 
@@ -384,6 +386,7 @@ class Runner:
 
 
 def main(argv=None, root=None):
+    require_python()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=["quick", "contracts", "clippy", "native", "native-tools", "package", "render"], default="quick")
     read_only = parser.add_mutually_exclusive_group()

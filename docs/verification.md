@@ -16,8 +16,13 @@ normal executable, generated fixtures and validated native captures; it does not
 
 ## Launch and Environment
 
-New profiles require Python 3.9+ without third-party packages and an already configured native
-Rust/Cargo toolchain. Nothing is installed or downloaded. Cargo runs
+The Python scripts require Python 3.9.17 or newer with `tarfile.data_filter`
+and use the standard library. CPython 3.9.17 backported the extraction filter
+used to restore DXC. Early patch releases of Python 3.10 and 3.11 also need
+the backport. CI uses Python 3.12. [CPython 3.9.17 changelog](https://docs.python.org/release/3.9.17/whatsnew/changelog.html#library)
+
+Verification profiles also require a configured native Rust/Cargo toolchain.
+The launcher installs nothing and Cargo runs
 with `--offline --locked`. Verify pinned tools using the existing
 `scripts/bootstrap.ps1 -Json`; restoration remains a separate explicit operation.
 On Linux, source the existing `.tools/linux-x86_64/env.sh` and check the conditions in the
@@ -27,7 +32,11 @@ The Windows wrapper for new profiles also does not replace `CARGO_HOME`: if the 
 offline registry is in `.work/cargo-home`, before running set
 `$env:CARGO_HOME = (Resolve-Path .work/cargo-home).Path`. Use the actual
 installed cache; Cargo diagnoses missing packages, rather than fixing them
-through downloading or cleanup.
+through downloading or cleanup. Tests that compile Custom SDK workers or read
+their offline dependency sources check the selected Cargo cache once per test
+process. If dependencies are missing, each affected test reports its reason and
+the `cargo fetch --locked` preparation command. CI requires those dependencies
+and fails if an SDK test reports a cache skip.
 
 ```powershell
 $python = 'C:\path\to\python.exe'
@@ -101,7 +110,8 @@ compiles HLSL in tests marked for DXC, and executes Vulkan tests on a compatible
 Vulkan 1.3 device. An adapter must expose dynamic rendering and a graphics+compute
 queue. A software Vulkan device can meet the offscreen requirement.
 Tests which build their own sealed Player shaders still need DXC during setup.
-The allocation rollback test needs Vulkan only. Shader compilation and reflection
+The allocation rollback test needs Vulkan and DXC for its recovery render.
+Shader compilation and reflection
 tests can run with DXC alone. Both GameUI scenarios in `native` need Vulkan and DXC.
 Its linker, cache context and Windows executable spelling checks run independently.
 
@@ -311,9 +321,9 @@ timeouts are specified in the registry.
 
 ## Legacy and Performance
 
-`verify.ps1` and `verify.sh` without arguments retain their previous scope, order, and
-settings. `verify.ps1 -NativeBenchmarks` still does not require Python. Only
-normal release Editor selection was fixed: the executable comes from CargoJSON with
+`verify.ps1` and `verify.sh` without arguments retain the legacy suite and
+check Python before tests. The same preflight applies to
+`verify.ps1 -NativeBenchmarks` through bootstrap. The normal release Editor comes from CargoJSON with
 identity/unique successful product and native PE checks rather than a manually constructed path.
 
 There is no new separate `performance` profile. Legacy `-NativeBenchmarks` runs

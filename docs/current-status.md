@@ -4,6 +4,12 @@
 
 [English](current-status.md) | [Русский](ru/current-status.md) | [Documentation](README.md)
 
+**24 November 2026 — the full CI route exercises the whole workspace.**
+Windows and Linux run workspace tests and a separate minimal Player build and
+test. Linux runs the migration and Vulkan rollback cases, with an extra DXC
+absence check. Bootstrap and verification preflight the Python interpreter.
+See [CI](ci.md) and [verification](verification.md).
+
 **23 November 2026 — R2.4 compacts stock scene draws on the GPU.**
 On qualifying Vulkan devices the retained renderer performs frustum
 culling and submits one indexed indirect count command per scene raster pass.
@@ -411,7 +417,7 @@ The finished `outputs/ModuleEngine.exe`, `ModuleEngine-review-fixed.exe`, `Modul
 - Windows: root [verify.ps1](../verify.ps1); the optional `-NativeBenchmarks` branch requires a desktop and an isolated measurement.
 - Linux: root [verify.sh](../verify.sh); native toolchain/DXC/Vulkan requirements are in the [Linux guide](linux-support.md). The script includes offscreen checks and does not complete desktop/export acceptance.
 - The [registry and stdlib launcher](verification.md) add explicit `quick`, `contracts`, `clippy`, `native`, `native-tools`, `package` profiles; `--plan`/`--list` read configuration without Cargo. Native tests run directly from the CargoJSON-selected executable with the normal loader environment. Windows-only checks are marked `skipped` on Linux. `package` checks minimal Cargo product/snapshot fixtures, not a full Full/Team/Player export.
-- The scope of legacy invocations without arguments is preserved; Windows `-NativeBenchmarks` selects the actual normal Editor from CargoJSON and still does not require Python. The new launcher requires an already installed Python 3.9+ without third-party dependencies. Performance remains a separate opt-in legacy/targeted route with its previous limitations.
+- The scope of legacy invocations without arguments is preserved. Windows `-NativeBenchmarks` selects the normal Editor from CargoJSON. See the [current Python requirement](verification.md#запуск-и-окружение). Performance remains a separate opt-in legacy/targeted route with its previous limitations.
 
 The launcher and its unit fixtures are implemented separately from Rust. Unit checks and planning are not a new engine/native/package acceptance; real profiles require their own reports on the current snapshot. Work and data-preservation rules: [AGENTS.md](../AGENTS.md).
 

@@ -5,6 +5,8 @@ from pathlib import Path
 import tarfile
 import urllib.request
 
+from python_runtime import require_python
+
 
 def sha256(path):
     value = hashlib.sha256()
@@ -15,6 +17,7 @@ def sha256(path):
 
 
 def restore(root, download=urllib.request.urlretrieve):
+    require_python()
     pin = json.loads((root / "scripts/linux-toolchain.json").read_text(encoding="utf-8"))["dxc"]
     destination = root / ".tools/ci-dxc"
     destination.mkdir(parents=True, exist_ok=False)
@@ -22,7 +25,7 @@ def restore(root, download=urllib.request.urlretrieve):
     download(pin["url"], archive)
     if sha256(archive) != pin["sha256"]:
         raise ValueError("Pinned Linux DXC archive checksum mismatch")
-    # Python 3.12 data filter rejects absolute/traversing paths and unsafe links.
+    # The data filter rejects absolute/traversing paths and unsafe links.
     with tarfile.open(archive, "r:gz") as stream:
         stream.extractall(destination, filter="data")
     for relative, expected in pin["files"].items():

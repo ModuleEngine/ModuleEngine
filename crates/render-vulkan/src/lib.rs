@@ -127,16 +127,7 @@ mod error {
         }
 
         pub(crate) fn dxc_unavailable(&self) -> bool {
-            match self {
-                Self::MissingDxc { .. } => true,
-                Self::DxcOverride { source, .. } => matches!(
-                    source.as_ref(), Self::Io { source, .. } if source.kind() == io::ErrorKind::NotFound
-                ),
-                Self::DxcLaunch { path, source } => {
-                    source.kind() == io::ErrorKind::NotFound && !path.exists()
-                }
-                _ => false,
-            }
+            matches!(self, Self::MissingDxc { .. })
         }
     }
 

@@ -24,49 +24,13 @@ if ($verificationNewArguments.Count -gt 0) {
         throw '-OutputRoot and -Timeout require -Profile.'
     }
 
-    $verificationCandidates = @()
     $verificationExplicitPython = $Python
     if (-not $PSBoundParameters.ContainsKey('Python')) { $verificationExplicitPython = $env:MODULE_ENGINE_VERIFY_PYTHON }
-    if ($PSBoundParameters.ContainsKey('Python') -or $env:MODULE_ENGINE_VERIFY_PYTHON) {
-        if (-not $verificationExplicitPython -or -not [System.IO.Path]::IsPathRooted($verificationExplicitPython)) {
-            throw '-Python / MODULE_ENGINE_VERIFY_PYTHON must name an absolute Python executable.'
-        }
-        $verificationCandidates += [pscustomobject]@{ Path = $verificationExplicitPython; Prefix = @() }
-    } else {
-        foreach ($verificationCommandName in @('py', 'python3', 'python')) {
-            foreach ($verificationCommand in @(Get-Command $verificationCommandName -CommandType Application -All -ErrorAction SilentlyContinue)) {
-                $verificationPrefix = @()
-                if ($verificationCommandName -eq 'py') { $verificationPrefix = @('-3') }
-                $verificationCandidates += [pscustomobject]@{ Path = $verificationCommand.Source; Prefix = $verificationPrefix }
-            }
-        }
+    if ($PSBoundParameters.ContainsKey('Python') -and -not $verificationExplicitPython) {
+        throw '-Python must name an absolute Python executable.'
     }
-    $verificationInterpreter = $null
-    foreach ($verificationCandidate in $verificationCandidates) {
-        # Never invoke the Windows Store execution aliases while probing Python.
-        if ($verificationCandidate.Path -match '(?i)[\\/]WindowsApps[\\/]' -or
-            -not (Test-Path -LiteralPath $verificationCandidate.Path -PathType Leaf)) { continue }
-        try {
-            $verificationPrefix = @($verificationCandidate.Prefix)
-            $LASTEXITCODE = 0
-            $verificationProbe = @(& $verificationCandidate.Path @verificationPrefix -c 'import json, sys; print(json.dumps(dict(executable=sys.executable, version=list(sys.version_info[:2]))))' 2>$null)
-            $verificationProbeExit = $LASTEXITCODE
-            if ($verificationProbeExit -ne 0) { continue }
-            $verificationPythonInfo = ($verificationProbe -join "`n") | ConvertFrom-Json
-            if ($verificationPythonInfo.version.Count -ne 2 -or
-                [int]$verificationPythonInfo.version[0] -ne 3 -or [int]$verificationPythonInfo.version[1] -lt 9 -or
-                -not [System.IO.Path]::IsPathRooted([string]$verificationPythonInfo.executable) -or
-                $verificationPythonInfo.executable -match '(?i)[\\/]WindowsApps[\\/]' -or
-                -not (Test-Path -LiteralPath $verificationPythonInfo.executable -PathType Leaf)) { continue }
-            $verificationInterpreter = $verificationCandidate
-            break
-        } catch {
-            # An unavailable launcher/candidate is not a usable Python runtime.
-        }
-    }
-    if ($null -eq $verificationInterpreter) {
-        throw 'Python 3.9+ was not found. Pass -Python <absolute-python.exe> or set MODULE_ENGINE_VERIFY_PYTHON; WindowsApps aliases are ignored.'
-    }
+    . (Join-Path $PSScriptRoot 'scripts/python-runtime.ps1')
+    $verificationInterpreter = Find-ModuleEnginePython $verificationExplicitPython
     $verificationRunnerArguments = @()
     if ($Profile) { $verificationRunnerArguments += @('--profile', $Profile) }
     if ($Plan) { $verificationRunnerArguments += '--plan' }
@@ -76,9 +40,8 @@ if ($verificationNewArguments.Count -gt 0) {
     if ($PSBoundParameters.ContainsKey('Timeout')) {
         $verificationRunnerArguments += @('--timeout', $Timeout.ToString([System.Globalization.CultureInfo]::InvariantCulture))
     }
-    $verificationPrefix = @($verificationInterpreter.Prefix)
     $LASTEXITCODE = 0
-    & $verificationInterpreter.Path @verificationPrefix (Join-Path $PSScriptRoot 'scripts/verify.py') @verificationRunnerArguments
+    & $verificationInterpreter (Join-Path $PSScriptRoot 'scripts/verify.py') @verificationRunnerArguments
     exit $LASTEXITCODE
 }
 

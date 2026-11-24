@@ -28,6 +28,82 @@ mod freshness;
 mod native_tools;
 mod program_store;
 mod sdk_cache;
+#[doc(hidden)]
+pub mod verification {
+    //! Capability preflight for tests that build actual Custom SDK workers.
+    use crate::ScriptCompiler;
+    use std::{path::Path, process::Command, sync::OnceLock};
+
+    fn offline_sdk() -> Result<Option<String>, String> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let compiler = ScriptCompiler::new(root.clone(), root.join(".work/test-temp"));
+        let mut command = Command::new(
+            compiler
+                .cargo_binary
+                .as_deref()
+                .unwrap_or(Path::new("cargo")),
+        );
+        command
+            .current_dir(&root)
+            .args(["fetch", "--offline", "--locked"]);
+        if let Some(home) = &compiler.cargo_home {
+            command.env("CARGO_HOME", home);
+        }
+        if let Some(home) = &compiler.rustup_home {
+            command.env("RUSTUP_HOME", home);
+        }
+        if let Some(toolchain) = &compiler.rustup_toolchain {
+            command.env("RUSTUP_TOOLCHAIN", toolchain);
+        }
+        let result = command.output().map_err(|error| error.to_string())?;
+        if result.status.success() {
+            return Ok(None);
+        }
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        let missing_index_entry =
+            stderr.contains("no matching package named") && stderr.contains("--offline");
+        let missing_archive = stderr.contains("failed to download")
+            && stderr.contains("attempting to make an HTTP request, but --offline was specified");
+        if missing_index_entry || missing_archive {
+            let home = compiler.cargo_home.as_ref().map_or_else(
+                || "Cargo's default home".into(),
+                |path| path.display().to_string(),
+            );
+            Ok(Some(format!(
+                "Custom SDK: offline Cargo dependencies are missing. Run cargo fetch --locked from the checkout using {home}."
+            )))
+        } else {
+            Err(stderr.into_owned())
+        }
+    }
+
+    pub fn offline_sdk_available() -> bool {
+        static OFFLINE_SDK: OnceLock<Result<Option<String>, String>> = OnceLock::new();
+        match OFFLINE_SDK.get_or_init(offline_sdk) {
+            Ok(None) => true,
+            Ok(Some(reason)) => {
+                let current = std::thread::current();
+                let name = current
+                    .name()
+                    .expect("the SDK preflight runs on a libtest thread");
+                let reason = reason.replace(['\r', '\n', '\t'], " ");
+                println!("\nMODULEENGINE_TEST_SKIP\t{name}\t{reason}");
+                false
+            }
+            Err(error) => panic!("Custom SDK offline cache probe failed: {error}"),
+        }
+    }
+
+    /// Place this before creating fixtures or starting a real SDK build.
+    #[macro_export]
+    macro_rules! requires_offline_sdk {
+        () => {
+            if !$crate::verification::offline_sdk_available() {
+                return;
+            }
+        };
+    }
+}
 pub use program_store::{CompiledProgramStore, ProgramStoreLimits, ProgramStoreStats};
 mod cleanup;
 pub use cleanup::{
@@ -1593,6 +1669,7 @@ mod tests {
 
     #[test]
     fn native_cargo_target_modes_use_actual_artifacts_and_cleanup_scopes() {
+        crate::requires_offline_sdk!();
         const CHILD: &str = "MODULE_ENGINE_STAGE3_NATIVE_CASE";
         let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
@@ -1948,6 +2025,7 @@ mod tests {
 
     #[test]
     fn binding_assets_preserves_declared_state_without_stealing_active_worker() {
+        crate::requires_offline_sdk!();
         let compiler_root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .canonicalize()
@@ -2105,6 +2183,7 @@ fn update(ctx: &mut ScriptContext) {
 
     #[test]
     fn real_persistent_state_is_transactional_hot_applicable_and_precompiled_relocatable() {
+        crate::requires_offline_sdk!();
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
@@ -2114,8 +2193,7 @@ fn update(ctx: &mut ScriptContext) {
         let artifacts =
             TestArtifactGuard::new(&root.join(".work/test-temp"), "state-test").unwrap();
         let work = artifacts.path().to_path_buf();
-        let mut compiler = ScriptCompiler::new(root.clone(), work.clone());
-        compiler.cargo_home = resolve_cargo_home(&root, None);
+        let compiler = ScriptCompiler::new(root.clone(), work.clone());
         let source = r#"// module-engine-state: {"schema":"counter.v1","initial":{"count":0,"asset":""}}
 fn update(ctx: &mut ScriptContext) {
     let count = ctx.state["count"].as_u64().unwrap() + 1;
@@ -2315,6 +2393,7 @@ fn update(ctx: &mut ScriptContext) {
 
     #[test]
     fn actual_compiled_custom_hot_apply_changes_both_worlds_and_exposure_and_bounds_workers() {
+        crate::requires_offline_sdk!();
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
@@ -2325,16 +2404,6 @@ fn update(ctx: &mut ScriptContext) {
             TestArtifactGuard::new(&root.join(".work/test-temp"), "script-test").unwrap();
         let work = artifacts.path().to_path_buf();
         let compiler = ScriptCompiler::new(root.clone(), work.clone());
-        // Retain the Windows project/sibling cache regression. Native Linux
-        // subprocesses keep the constructor's explicitly selected Cargo home,
-        // so testing a shared source checkout does not write its Windows cache.
-        #[cfg(windows)]
-        let compiler = {
-            let mut compiler = compiler;
-            compiler.cargo_home = resolve_cargo_home(&root, None);
-            assert!(compiler.cargo_home.is_some());
-            compiler
-        };
         // The default custom-workers dependency target is shared across test
         // fixtures and separate from the outer native Cargo build.
         let mut host = ScriptHost::new(compiler);

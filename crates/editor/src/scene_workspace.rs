@@ -523,6 +523,7 @@ mod tests {
     }
     #[test]
     fn initial_scene_preparation_draws_waiting_ui_before_host_is_ready() {
+        module_engine_script::requires_offline_sdk!();
         crate::requires_editor_vulkan!();
         let mut editor = editor();
         editor.game_workbench.set_deferred_preparation(true);
@@ -719,6 +720,7 @@ mod tests {
     }
     #[test]
     fn retained_preview_survives_transform_updates_and_game_camera_is_independent() {
+        module_engine_script::requires_offline_sdk!();
         crate::requires_editor_vulkan!();
         let mut editor = editor();
         let (root, compile, kind) = editor.game_context();
@@ -821,6 +823,7 @@ mod tests {
     }
     #[test]
     fn game_opened_before_play_uses_latest_author_scene_and_pause_retains_live_copy() {
+        module_engine_script::requires_offline_sdk!();
         crate::requires_editor_vulkan!();
         let mut editor = editor();
         let (root, compile, kind) = editor.game_context();

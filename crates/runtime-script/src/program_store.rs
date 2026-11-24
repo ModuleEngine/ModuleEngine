@@ -1171,6 +1171,7 @@ mod tests {
     }
     #[test]
     fn cancelled_owner_publication_does_not_grant_a_handoff_to_its_waiter() {
+        crate::requires_offline_sdk!();
         if crate::cache_context::native_cache_test_child(
             "program_store::tests::cancelled_owner_publication_does_not_grant_a_handoff_to_its_waiter",
             false,
@@ -1262,6 +1263,7 @@ mod tests {
     }
     #[test]
     fn handoff_composes_fresh_content_sdk_tool_config_environment_and_product_checks() {
+        crate::requires_offline_sdk!();
         if crate::cache_context::native_cache_test_child(
             "program_store::tests::handoff_composes_fresh_content_sdk_tool_config_environment_and_product_checks",
             false,
@@ -1509,6 +1511,7 @@ mod tests {
     }
     #[test]
     fn validated_handoff_rejects_changed_source_cancel_and_corrupt_products() {
+        crate::requires_offline_sdk!();
         if crate::cache_context::native_cache_test_child(
             "program_store::tests::validated_handoff_rejects_changed_source_cancel_and_corrupt_products",
             false,
@@ -1790,6 +1793,7 @@ mod tests {
     }
     #[test]
     fn real_program_coalesces_preserves_independent_state_and_outlives_eviction() {
+        crate::requires_offline_sdk!();
         if crate::cache_context::native_cache_test_child(
             "program_store::tests::real_program_coalesces_preserves_independent_state_and_outlives_eviction",
             false,
@@ -1913,6 +1917,7 @@ fn update(ctx: &mut ScriptContext) {
     }
     #[test]
     fn real_missing_and_corrupt_root_and_sdk_products_repair_in_owned_scopes() {
+        crate::requires_offline_sdk!();
         if crate::cache_context::native_cache_test_child(
             "program_store::tests::real_missing_and_corrupt_root_and_sdk_products_repair_in_owned_scopes",
             false,
@@ -2077,6 +2082,7 @@ fn update(ctx: &mut ScriptContext) {
 
     #[test]
     fn real_include_content_change_with_preserved_mtime_never_reuses_stale_code() {
+        crate::requires_offline_sdk!();
         if crate::cache_context::native_cache_test_child(
             "program_store::tests::real_include_content_change_with_preserved_mtime_never_reuses_stale_code",
             false,

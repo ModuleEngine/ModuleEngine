@@ -3484,6 +3484,7 @@ mod tests {
 
     #[test]
     fn gpu_library_add_wire_render_and_history_use_real_pass_id() {
+        module_engine_script::requires_offline_sdk!();
         crate::requires_editor_vulkan!();
         let root = crate::project::source_root();
         let mut document = crate::host::gpu_document(WorldKind::Objects, RenderPath::Forward);
@@ -4190,6 +4191,7 @@ mod tests {
 
     #[test]
     fn rust_panel_prepares_hidden_game_recovers_bad_source_and_applies_to_game_backend() {
+        module_engine_script::requires_offline_sdk!();
         crate::requires_editor_vulkan!();
         let root = crate::project::source_root();
         let id = "game-controller";
@@ -4491,6 +4493,7 @@ mod tests {
 
     #[test]
     fn aa_checkbox_reports_background_work_and_preserves_the_running_copy() {
+        module_engine_script::requires_offline_sdk!();
         crate::requires_editor_vulkan!();
         use std::{
             sync::Arc,
@@ -4639,6 +4642,7 @@ mod tests {
         );
         assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains("Running:"))));
         output.drop_without_applying_deltas();
+        let deadline = Instant::now() + Duration::from_secs(45);
         let mut responsive_frames = 0;
         loop {
             draw(&mut editor, vec![]).drop_without_applying_deltas();
@@ -4653,7 +4657,11 @@ mod tests {
             {
                 break;
             }
-            assert!(Instant::now() < deadline, "AA preparation did not finish");
+            assert!(
+                Instant::now() < deadline,
+                "AA preparation did not finish: {:?}",
+                editor.preparation_activities()
+            );
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(responsive_frames > 0);
@@ -4683,6 +4691,7 @@ mod tests {
     }
     #[test]
     fn graph_node_drag_preserves_game_and_scene_hosts() {
+        module_engine_script::requires_offline_sdk!();
         crate::requires_editor_vulkan!();
         use std::{sync::Arc, time::Instant};
         let count = std::env::var("MODULE_ENGINE_GRAPH_DRAG_FRAMES")
@@ -4987,6 +4996,7 @@ mod tests {
 
     #[test]
     fn editing_two_sources_then_switching_tabs_compiles_each_correct_source() {
+        module_engine_script::requires_offline_sdk!();
         let (_sources, mut editor) = isolated_editor(demo_document(WorldKind::Objects));
         for id in ["a", "b"] {
             editor.document.root.nodes.push(make_node(
@@ -5025,6 +5035,7 @@ mod tests {
 
     #[test]
     fn compiled_scalar_timeout_pauses_simulation_and_is_not_repeated() {
+        module_engine_script::requires_offline_sdk!();
         let (_sources, mut editor) = isolated_editor(demo_document(WorldKind::Objects));
         let source = "fn speed(_time:f64,_base:f64)->f64 { loop {} }";
         let root = crate::project::source_root();

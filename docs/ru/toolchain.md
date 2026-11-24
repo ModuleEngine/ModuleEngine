@@ -2,6 +2,11 @@
 
 [English](../toolchain.md) | [Русский](toolchain.md) | [Документация](README.md)
 
+Bootstrap проверяет Python до диагностики или восстановления инструментов.
+Подходит Python 3.9.17 или новее с `tarfile.data_filter`. Интерпретатор можно
+выбрать через `-Python <absolute-python.exe>` или `MODULE_ENGINE_VERIFY_PYTHON`.
+См. [требование к Python](verification.md#запуск-и-окружение).
+
 `toolchain-manifest.json` определяет версию Rust и целевую платформу хоста. Запустите
 `./scripts/bootstrap.ps1 -Json` для диагностики без изменений. Общий результат `ok` требует
 закреплённых компилятора Rust и Cargo, рабочих команд rustfmt/cargo-fmt и Clippy

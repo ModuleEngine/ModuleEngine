@@ -55,7 +55,7 @@ Building and editable Rust Custom require Rust/Cargo 1.99.0, MSVC C++ build tool
 cargo run --locked -p module-engine-editor
 ~~~
 
-Doctor checks tools without downloads. An explicit `.\scripts\bootstrap.ps1 -Restore` restores pinned Rust/DXC and Cargo dependencies locally in the project. After creating the local Rust installation, source `. .\.tools\env.ps1` in a new PowerShell session. MSVC/SDK and the driver remain host requirements; a cold Rust installation has not been verified separately.
+Bootstrap requires [Python 3.9.17 or newer with `tarfile.data_filter`](docs/toolchain.md). Doctor checks tools without downloads. An explicit `.\scripts\bootstrap.ps1 -Restore` restores pinned Rust/DXC and Cargo dependencies locally in the project. After creating the local Rust installation, source `. .\.tools\env.ps1` in a new PowerShell session. MSVC/SDK and the driver remain host requirements. A cold Rust installation has not been verified separately.
 
 Formats 1–3 open through an explicit migration to another file: `ModuleEngine.exe --migrate-copy game-project.json game-project-v4.json arpg`; the original is preserved. See [Engine profiles](docs/engine-profiles.md).
 

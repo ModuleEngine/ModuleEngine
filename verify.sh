@@ -9,7 +9,9 @@ if [ "$#" -gt 0 ]; then
 fi
 cd "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 if [ "$(uname -s)" != Linux ]; then echo 'Use verify.ps1 on Windows.' >&2; exit 2; fi
-python3 scripts/linux_prerequisites.py --require build
+verification_python=${MODULE_ENGINE_VERIFY_PYTHON:-python3}
+"$verification_python" -B scripts/python_runtime.py >/dev/null
+"$verification_python" scripts/linux_prerequisites.py --require build
 host=$(rustc -vV | sed -n 's/^host: //p')
 case "$host" in *linux*) ;; *) echo 'A native Linux Rust toolchain is required.' >&2; exit 2 ;; esac
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$PWD/.work/linux-target/$host}"

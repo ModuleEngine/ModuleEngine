@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import ci_plan
 import ci_linux_dxc
+import ci_workspace_tests
 
 
 class PolicyTests(unittest.TestCase):
@@ -77,6 +78,9 @@ class PolicyTests(unittest.TestCase):
         self.assertIn("    if: needs.plan.outputs.roadmap_only == 'true'", text)
         self.assertIn("  contents: read", text)
         self.assertIn("  merge_group:", text)
+        self.assertNotIn("CARGO_PROFILE_TEST_DEBUG:", text)
+        self.assertNotIn("CARGO_PROFILE_DEV_DEBUG:", text)
+        self.assertIn('echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/.tools/ci-dxc/lib" >> "$GITHUB_ENV"', text)
         self.assertIn("--component rustfmt --component clippy", text)
         self.assertIn("run: python scripts/verify.py --profile clippy --plan", text)
         self.assertIn("run: python scripts/verify.py --profile clippy --timeout 1800", text)
@@ -105,6 +109,76 @@ class PolicyTests(unittest.TestCase):
         self.assertIn("if: runner.os == 'Windows' && needs.plan.outputs.native == 'true'", text)
         self.assertIn("if: runner.os == 'Linux' && needs.plan.outputs.native == 'true'", text)
         self.assertIn("if: needs.plan.outputs.package == 'true'", text)
+
+    def test_full_matrix_fetches_before_workspace_and_separate_player_checks(self):
+        text = (Path(__file__).resolve().parent.parent / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        commands = [
+            "cargo fetch --locked", "scripts/ci_workspace_tests.py --without-dxc",
+            "scripts/ci_linux_dxc.py", "run: python scripts/ci_workspace_tests.py\n",
+            "scripts/ci_workspace_tests.py --check-minimal-player",
+            "cargo build --locked -p module-engine-player --no-default-features",
+            "cargo test --locked -p module-engine-player --no-default-features",
+        ]
+        self.assertEqual(sorted(text.index(command) for command in commands),
+                         [text.index(command) for command in commands])
+        for block in text.split("      - name: ")[1:]:
+            if any(command in block for command in commands[3:]):
+                self.assertNotIn("        if:", block.split("      - ", 1)[0])
+
+    def test_concurrency_does_not_share_a_group_across_main_runs(self):
+        text = (Path(__file__).resolve().parent.parent / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        group = "github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id)"
+        self.assertIn("group: module-engine-ci-${{ github.workflow }}-${{ " + group + " }}", text)
+        self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", text)
+        # GitHub keeps one pending run per group. Exercise both the running
+        # and pending decisions for three arrivals in the same workflow.
+        for event, expected in (("push", []), ("pull_request", [2, 1])):
+            groups, cancelled = {}, []
+            for run in (1, 2, 3):
+                key = "pr-42" if event == "pull_request" else f"run-{run}"
+                active, pending = groups.get(key, (None, None))
+                if pending is not None:
+                    cancelled.append(pending)
+                if active is not None and event == "pull_request" and active not in cancelled:
+                    cancelled.append(active)
+                groups[key] = (active, run) if active else (run, None)
+            self.assertCountEqual(cancelled, expected)
+
+
+class WorkspaceReportingTests(unittest.TestCase):
+    def test_sums_unit_and_doc_results_and_distinguishes_capability_skips(self):
+        artifact = {"reason": "compiler-artifact", "package_id": "crate#test",
+                    "executable": "/target/debug/deps/test-123",
+                    "profile": {"test": True}, "target": {"kind": ["lib"], "name": "test"}}
+        log = [
+            json.dumps(artifact), "     Running unittests src/lib.rs (/target/debug/deps/test-123)",
+            "test works ... Vulkan debug: validation layer unavailable",
+            "Vulkan debug named DEVICE: fixture", "ok",
+            "test needs_gpu ... ok", "test failed_again ... FAILED", "test ignored ... ignored",
+            "successes:", "---- works stdout ----", "running 1 test", "test child_case ... ok",
+            "test result: ok. 1 passed; 0 failed; 0 ignored;", "---- needs_gpu stdout ----",
+            "MODULEENGINE_TEST_SKIP\tneeds_gpu\tVulkan: no loader",
+            "test result: FAILED. 2 passed; 1 failed; 1 ignored;",
+            "   Doc-tests test", "test doc_example ... ok",
+            "test result: FAILED. 1 passed; 1 failed; 0 ignored;",
+        ]
+        counts, executed = ci_workspace_tests.report(log, {"crate#test": "crate"})
+        self.assertEqual(counts["crate"], {"passed": 2, "failed": 2, "ignored": 1,
+                                          "capability_skips": {"needs_gpu": "Vulkan: no loader"}})
+        self.assertEqual(executed, {("crate", "works"), ("crate", "doc_example")})
+
+    def test_missing_cargo_attribution_cannot_turn_into_a_green_report(self):
+        with self.assertRaisesRegex(ci_workspace_tests.VerificationError, "No Cargo package"):
+            ci_workspace_tests.report(["test result: ok. 1 passed; 0 failed; 0 ignored;"], {})
+
+    def test_minimal_player_rejects_game_and_vulkan_dependencies(self):
+        with patch("ci_workspace_tests.subprocess.check_output",
+                   return_value="module-engine-player v0.4.0\nmodule-engine-host v0.4.0\n"):
+            ci_workspace_tests.check_minimal_player()
+        for dependency in ("module-engine-vulkan", "module-engine-project-puzzle", "module-engine-two-arenas"):
+            with patch("ci_workspace_tests.subprocess.check_output", return_value=f"{dependency} v0.4.0\n"):
+                with self.assertRaisesRegex(ci_workspace_tests.VerificationError, dependency):
+                    ci_workspace_tests.check_minimal_player()
 
 
 class RoadmapRouteTests(unittest.TestCase):
