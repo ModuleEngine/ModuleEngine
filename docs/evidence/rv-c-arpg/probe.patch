@@ -1,0 +1,484 @@
+--- a/crates/engine-core/src/lib.rs
++++ b/crates/engine-core/src/lib.rs
+@@ -44,3 +44,4 @@
+ pub use settings::*;
+ pub use systems::*;
+ pub use world::*;
++pub mod rv_c4_probe;
+--- a/crates/engine-core/src/game.rs
++++ b/crates/engine-core/src/game.rs
+@@ -1,5 +1,6 @@
+ //! Fixed-step, provider-neutral gameplay. Behaviors are separately registered
+ //! systems; scene names, encounters and progression are authored data.
++use crate::rv_c4_probe::{Section, time as probe_time};
+ use crate::{
+     ComponentValidationContext, EcsWorld, GameProject, ObjectsWorld, SceneSnapshot, SystemExecutor,
+     SystemRegistry, TickTransaction, WorldCommand, WorldKind, WorldObject, WorldProvider,
+@@ -145,8 +146,8 @@
+             time: *time,
+             tick: *tick,
+             world: world.checkpoint_tick(validated_world),
+-            module_data: module_data.clone(),
+-            control: control.clone(),
++            module_data: probe_time(Section::ModuleData, || module_data.clone()),
++            control: probe_time(Section::Control, || control.clone()),
+         }
+     }
+
+@@ -396,6 +397,9 @@
+     }
+     pub fn system_states(&self) -> BTreeMap<String, Value> {
+         self.executor.states()
++    }
++    pub fn rv_c4_resources(&self) -> &crate::ResourceStore {
++        self.executor.resources()
+     }
+     pub fn world_objects(&self) -> Vec<WorldObject> {
+         self.state.world.objects_snapshot()
+--- a/crates/engine-core/src/systems.rs
++++ b/crates/engine-core/src/systems.rs
+@@ -1,5 +1,6 @@
+ //! General source-installed executable systems. The graph chooses the schedule;
+ //! factories choose behavior. Contracts are validated before any lifecycle hook.
++use crate::rv_c4_probe::{Section, time};
+ use crate::{GameEvent, GameInput, GameState};
+ use bevy_ecs::{
+     resource::Resource,
+@@ -883,13 +884,14 @@
+         transaction: &mut dyn TickTransaction,
+         validated_world: bool,
+     ) -> Result<(), String> {
+-        let original_resources = self.resources.clone();
+-        let original_events = events.clone();
+-        let states = self
+-            .systems
+-            .iter()
+-            .map(|s| (s.state.clone(), s.initialized))
+-            .collect();
++        let original_resources = time(Section::Resources, || self.resources.clone());
++        let original_events = time(Section::Events, || events.clone());
++        let states = time(Section::SystemStates, || {
++            self.systems
++                .iter()
++                .map(|s| (s.state.clone(), s.initialized))
++                .collect()
++        });
+         // Run on the existing staged ECS journal. The caller retains the
+         // accepted branch for host validation and rollback while Bevy owns the
+         // candidate. Neither branch clones the underlying Bevy entity rows.
+@@ -1062,9 +1064,10 @@
+         for resource in resources.values_mut() {
+             resource.value = match resource.data_type.as_str() {
+                 "GameInput" => serde_json::to_value(input).map_err(|e| e.to_string())?,
+-                "GameEvents" => serde_json::to_value(events).map_err(|e| e.to_string())?,
++                "GameEvents" => time(Section::EventProjection, || serde_json::to_value(events))
++                    .map_err(|e| e.to_string())?,
+                 // GameWorld uses the typed capability, without copying entities.
+-                _ => resource.value.clone(),
++                _ => time(Section::ResourceRefreshClone, || resource.value.clone()),
+             };
+         }
+         Ok(())
+--- /dev/null
++++ b/crates/engine-core/src/rv_c4_probe.rs
+@@ -0,0 +1,85 @@
++//! Temporary RV-C.4 benchmark counters, on the single game thread.
++use std::cell::{Cell, RefCell};
++use std::collections::BTreeMap;
++use std::time::Instant;
++
++#[derive(Clone, Copy, PartialEq)]
++pub enum Mode {
++    Total,
++    Sections,
++    Components,
++}
++
++#[derive(Clone, Copy)]
++pub enum Section {
++    Resources,
++    Events,
++    SystemStates,
++    ModuleData,
++    Control,
++    FrameValueClone,
++    FrameDecode,
++    FrameEncode,
++    ResourceRefreshClone,
++    EventProjection,
++}
++
++const NAMES: [&str; 10] = [
++    "checkpoint_resources",
++    "checkpoint_events",
++    "checkpoint_system_states",
++    "checkpoint_module_data",
++    "checkpoint_control",
++    "arpg_frame_json_clone",
++    "arpg_frame_decode",
++    "arpg_frame_encode",
++    "refresh_resource_json_clone",
++    "refresh_events_json_encode",
++];
++
++thread_local! {
++    static MODE: Cell<Mode> = const { Cell::new(Mode::Total) };
++    static SECTIONS: RefCell<[[u64; 2]; NAMES.len()]> = const { RefCell::new([[0; 2]; NAMES.len()]) };
++    static COMPONENTS: RefCell<BTreeMap<String, [u64; 3]>> = const { RefCell::new(BTreeMap::new()) };
++}
++
++pub fn start(mode: Mode) {
++    SECTIONS.with(|data| *data.borrow_mut() = [[0; 2]; NAMES.len()]);
++    COMPONENTS.with(|data| data.borrow_mut().clear());
++    MODE.set(mode);
++}
++
++pub fn time<T>(section: Section, operation: impl FnOnce() -> T) -> T {
++    if MODE.get() != Mode::Sections {
++        return operation();
++    }
++    let started = Instant::now();
++    let result = operation();
++    let nanos = started.elapsed().as_nanos() as u64;
++    SECTIONS.with(|data| {
++        let [calls, ns] = &mut data.borrow_mut()[section as usize];
++        *calls += 1;
++        *ns += nanos;
++    });
++    result
++}
++
++pub fn component(name: &str, present: bool, decoded: bool) {
++    if MODE.get() == Mode::Components {
++        COMPONENTS.with(|data| {
++            let mut data = data.borrow_mut();
++            let [attempts, found, valid] = data.entry(name.to_owned()).or_default();
++            *attempts += 1;
++            *found += u64::from(present);
++            *valid += u64::from(decoded);
++        });
++    }
++}
++
++pub fn stop() -> serde_json::Value {
++    MODE.set(Mode::Total);
++    serde_json::json!({
++        "sections": SECTIONS.with(|data| NAMES.into_iter().zip(*data.borrow()).collect::<BTreeMap<_, _>>()),
++        "components": COMPONENTS.with(|data| data.take()),
++    })
++}
+--- a/crates/gameplay-arpg/src/state.rs
++++ b/crates/gameplay-arpg/src/state.rs
+@@ -161,10 +161,12 @@
+     }
+ }
+ pub(crate) fn read_frame(game: &GameState) -> Result<ArpgFrame, String> {
++    use module_engine_core::rv_c4_probe::{Section, time};
+     game.module_data.get(FRAME_KEY).map_or_else(
+         || Ok(ArpgFrame::default()),
+         |value| {
+-            serde_json::from_value(value.clone())
++            let value = time(Section::FrameValueClone, || value.clone());
++            time(Section::FrameDecode, || serde_json::from_value(value))
+                 .map_err(|error| format!("Invalid {FRAME_KEY}: {error}"))
+         },
+     )
+--- a/crates/gameplay-arpg/src/queries.rs
++++ b/crates/gameplay-arpg/src/queries.rs
+@@ -1,6 +1,7 @@
+ use super::*;
+ use crate::components::{Actor, Health, Melee};
+ use crate::state::read_frame;
++use module_engine_core::rv_c4_probe::{self, Section, time};
+
+ pub trait GameStateExt {
+     fn arpg(&self) -> ArpgFrame;
+@@ -17,7 +18,8 @@
+     fn set_arpg(&mut self, frame: ArpgFrame) -> Result<(), String> {
+         self.module_data.insert(
+             FRAME_KEY.into(),
+-            serde_json::to_value(frame).map_err(|e| e.to_string())?,
++            time(Section::FrameEncode, || serde_json::to_value(frame))
++                .map_err(|e| e.to_string())?,
+         );
+         Ok(())
+     }
+@@ -83,7 +85,10 @@
+     id: u64,
+     name: &str,
+ ) -> Option<T> {
+-    T::deserialize(world.component(id, name)?).ok()
++    let value = world.component(id, name);
++    let decoded = value.and_then(|value| T::deserialize(value).ok());
++    rv_c4_probe::component(name, value.is_some(), decoded.is_some());
++    decoded
+ }
+ pub(crate) fn normalized(v: [f32; 2]) -> [f32; 2] {
+     let length = (v[0] * v[0] + v[1] * v[1]).sqrt();
+--- /dev/null
++++ b/crates/game-host/examples/rv_c4_arpg.rs
+@@ -0,0 +1,264 @@
++//! Isolated benchmark over the stock native ARPG schedule and GameHost.
++use module_engine_arpg::{ArpgInput, GameStateExt};
++use module_engine_core::{rv_c4_probe as probe, *};
++use module_engine_host::{GameHost, HostOptions, RenderMode};
++use module_engine_host_services::HostServiceRegistry;
++use module_engine_project::hash_bytes;
++use serde_json::{Value, json};
++use std::collections::BTreeMap;
++use std::path::{Path, PathBuf};
++use std::sync::{
++    Arc,
++    atomic::{AtomicBool, Ordering},
++};
++use std::time::Instant;
++
++const DT: f64 = 1. / 60.;
++const WARMUP: usize = 120;
++const TICKS: usize = 600;
++const ENEMIES: usize = 20;
++
++struct RejectLate(Arc<AtomicBool>);
++impl ExecutableSystem for RejectLate {
++    fn step(&mut self, ctx: &mut SystemContext<'_>, state: &mut Value) -> Result<(), String> {
++        let before = state.as_u64().unwrap_or(0);
++        assert_eq!(ctx.resource("counter")?, &json!(before));
++        let after = json!(before + 1);
++        ctx.set_resource("counter", after.clone())?;
++        ctx.game
++            .module_data
++            .insert("probe.rv_c4".into(), after.clone());
++        ctx.events
++            .push(GameEvent::new("probe.rv_c4", after.clone()));
++        ctx.game.control.halted = self.0.load(Ordering::Relaxed);
++        *state = after;
++        Ok(())
++    }
++
++    fn commit_tick(&mut self) -> Result<(), String> {
++        if self.0.load(Ordering::Relaxed) {
++            return Err("RV-C.4 late commit rejection".into());
++        }
++        Ok(())
++    }
++}
++
++fn build(reject: Option<Arc<AtomicBool>>) -> Result<GameHost, String> {
++    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
++    let mut document = demo_document(WorldKind::Ecs);
++    document.root.nodes.truncate(4);
++    document.root.edges.truncate(3);
++    document.custom_sources.clear();
++    let mut project = module_engine_two_arenas::demo_project();
++    let arena = project.scenes.get_mut("arena").unwrap();
++    // Keep the authored spawn positions and the full eight-node schedule.
++    // Raise both sides' HP for a sustained fight with exactly 20 living enemies.
++    let health = json!({"maximum":10000.0,"current":10000.0});
++    let player = arena
++        .objects
++        .iter_mut()
++        .find(|entry| entry.object.id == 1)
++        .unwrap();
++    player.components.insert("health".into(), health.clone());
++    project
++        .prefabs
++        .get_mut("small-monster")
++        .unwrap()
++        .components
++        .insert("health".into(), health);
++    let mut systems = SystemRegistry::builtin();
++    module_engine_arpg::install(&mut systems)?;
++    if let Some(reject) = reject {
++        systems.register(
++            SystemDescriptor {
++                id: "probe.rv_c4".into(),
++                state_schema: "probe.rv_c4/1".into(),
++                components: vec![],
++                ports: vec![SystemPort {
++                    name: "counter".into(),
++                    data_type: "Number".into(),
++                    access: ResourceAccess::ReadWrite,
++                }],
++                requires: vec![],
++            },
++            move |_| Ok(Box::new(RejectLate(reject.clone()))),
++        )?;
++        project.execution.resources.push(SystemResource {
++            name: "counter".into(),
++            data_type: "Number".into(),
++            external: true,
++            initial: json!(0),
++        });
++        project.execution.stages.push(SystemStage {
++            name: "Late rejection probe".into(),
++            nodes: vec![SystemNode {
++                id: "late".into(),
++                module: "probe.rv_c4".into(),
++                params: json!({}),
++                bindings: BTreeMap::from([("counter".into(), "counter".into())]),
++                after: vec!["system-7".into()],
++            }],
++        });
++    }
++    document.game = Some(project);
++    let composition = CompositionContext::new(ModuleRegistry::builtin(), systems)?;
++    let profile = document.engine_lock.as_ref().unwrap().profile.clone();
++    composition
++        .capture_lock(&document, profile, Some(SdkIdentity::current()))?
++        .apply_to(&mut document);
++    let mut host = GameHost::build(
++        document,
++        composition,
++        HostOptions {
++            asset_root: root,
++            backend_root: None,
++            compile_root: None,
++            render: RenderMode::Headless {
++                world_node: "world".into(),
++            },
++            services: HostServiceRegistry::default(),
++            services_enabled: false,
++        },
++        None,
++    )?;
++    host.set_frame_profiling(true);
++    assert_eq!(host.session.state().living_enemies(), ENEMIES);
++    Ok(host)
++}
++
++fn input(index: usize) -> GameInput {
++    let movement = match index % 180 {
++        0..40 => [0., -0.6],
++        40..65 => [0.5, 0.],
++        65..105 => [0., 0.6],
++        105..130 => [-0.5, 0.],
++        _ => [0., 0.],
++    };
++    ArpgInput {
++        movement,
++        aim_world: [0.; 3],
++        attack: index.is_multiple_of(22),
++        ..Default::default()
++    }
++    .into_input()
++}
++
++fn accepted(host: &GameHost) -> Value {
++    let state = host.session.state();
++    json!({
++        "state": state,
++        "lifetimes": state.world.entity_ids().map(|id| (id, state.world.lifetime(id))).collect::<Vec<_>>(),
++        "states": host.session.system_states(),
++        "resources": host.session.rv_c4_resources(),
++    })
++}
++
++fn digest(value: &Value) -> String {
++    hash_bytes(&serde_json::to_vec(value).unwrap())
++}
++
++fn rollback(reject_tick: bool) -> Result<Value, String> {
++    let reject = Arc::new(AtomicBool::new(false));
++    let mut retried = build(Some(reject.clone()))?;
++    for index in 0..WARMUP {
++        let input = input(index);
++        assert_eq!(retried.step(DT, &input)?, 1);
++    }
++    let before = accepted(&retried);
++    assert_eq!(before["states"]["late"], json!(WARMUP));
++    assert_eq!(before["state"]["module_data"]["probe.rv_c4"], json!(WARMUP));
++    assert!(!retried.session.events().is_empty());
++    let input = input(WARMUP);
++    let failure = if reject_tick {
++        reject.store(true, Ordering::Relaxed);
++        let error = retried.step(DT, &input).expect_err("commit must reject");
++        assert!(
++            error.contains("System 'late' commit: RV-C.4 late commit rejection"),
++            "{error}"
++        );
++        assert_eq!(before, accepted(&retried));
++        assert!(retried.session.events().is_empty());
++        reject.store(false, Ordering::Relaxed);
++        // Advance using the rejected call's accumulated DT and no new time.
++        assert_eq!(retried.step(0., &input)?, 1);
++        Some(
++            json!({"error":error,"previous_state_lifetimes_resources_system_states_control_preserved":true,
++            "rejected_events_empty":true}),
++        )
++    } else {
++        assert_eq!(retried.step(DT, &input)?, 1);
++        None
++    };
++    let after = accepted(&retried);
++    assert_eq!(after["states"]["late"], json!(WARMUP + 1));
++    assert_eq!(retried.session.state().tick as usize, WARMUP + 1);
++    // Compare the digests with a separate 'oracle' process so both processes
++    // start with the same lifetime-ID counter. Rollback above checks the
++    // original object's exact lifetimes in the same host.
++    Ok(
++        json!({"failure":failure,"accepted_before_sha256":digest(&before),
++        "accepted_after_sha256":digest(&after), "ticks_after":WARMUP+1,
++        "accepted_events_sha256":digest(&json!(retried.session.events()))}),
++    )
++}
++
++fn measure(mode: probe::Mode) -> Result<Value, String> {
++    let mut host = build(None)?;
++    let fixture =
++        hash_bytes(&serde_json::to_vec(host.accepted_document().game.as_ref().unwrap()).unwrap());
++    for index in 0..WARMUP {
++        assert_eq!(host.step(DT, &input(index))?, 1);
++        host.session.take_profiled_ticks_ms().unwrap();
++    }
++    assert_eq!(host.session.state().living_enemies(), ENEMIES);
++    let mut tick_ms = Vec::with_capacity(TICKS);
++    let mut host_step_ms = Vec::with_capacity(TICKS);
++    let mut events = Vec::with_capacity(TICKS);
++    let mut counts = BTreeMap::new();
++    probe::start(mode);
++    for index in WARMUP..WARMUP + TICKS {
++        let input = input(index);
++        let start = Instant::now();
++        let ticks = host.step(DT, &input)?;
++        host_step_ms.push(start.elapsed().as_secs_f64() * 1000.);
++        assert_eq!(ticks, 1);
++        tick_ms.push(host.session.take_profiled_ticks_ms().unwrap());
++        let tick_events = host.session.events();
++        for event in tick_events {
++            *counts.entry(event.name.clone()).or_insert(0) += 1;
++        }
++        events.push(tick_events.to_vec());
++    }
++    let counters = probe::stop();
++    assert!(!counts.contains_key("Death"));
++    assert!(counts.get("Hit").copied().unwrap_or(0) > 0, "{counts:?}");
++    assert_eq!(host.session.state().living_enemies(), ENEMIES);
++    let accepted = accepted(&host);
++    Ok(
++        json!({"fixture_sha256":fixture,"warmup":WARMUP,"ticks":TICKS,"living_enemies":ENEMIES,
++        "event_counts":counts,"event_trace_sha256":digest(&json!(events)),"accepted_sha256":digest(&accepted),
++        "tick_ms":tick_ms,"host_step_ms":host_step_ms,"counters":counters}),
++    )
++}
++
++fn main() -> Result<(), String> {
++    let mut args = std::env::args().skip(1);
++    let mode = args
++        .next()
++        .ok_or("Expected total, sections, components, rollback or oracle")?;
++    let path = PathBuf::from(args.next().ok_or("Expected output JSON path")?);
++    let report = match mode.as_str() {
++        "total" => measure(probe::Mode::Total)?,
++        "sections" => measure(probe::Mode::Sections)?,
++        "components" => measure(probe::Mode::Components)?,
++        "rollback" => rollback(true)?,
++        "oracle" => rollback(false)?,
++        _ => return Err(format!("Unknown mode {mode}")),
++    };
++    let file = std::fs::File::options()
++        .write(true)
++        .create_new(true)
++        .open(path)
++        .map_err(|e| e.to_string())?;
++    serde_json::to_writer_pretty(file, &report).map_err(|e| e.to_string())
++}

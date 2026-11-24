@@ -1,0 +1,58 @@
+{
+  "main_sha": "9aa0e7633b2bfbf87fbd7d89bb6c6085cc04c8c5",
+  "main_forward_exe_sha256": "51907c3d8fc52cebf65e24a49a292bbf9b27869d3c2e37d00883c0f7f85db0ac",
+  "diagnostic_exe_sha256": "6bcc71b5409281eb555586c0523b692a28d94ec560a61d5b5b7dde1ab301320c",
+  "sponza_manifest_sha256": "a6c33ebe222fe6984a764e904cf55f198d246e00c4b4a362ec3503b2585b59a5",
+  "dxc_sha256": "aa7965b3763d9c710baaa5a28cedcc633449962a75d1391d161a85304a41b3e2",
+  "graphs": {
+    "Forward": {
+      "image": "forward-000.png",
+      "image_sha256": "806025fc910f7e797f7ed5b1bebef054a18f4cf84dbc7c48922b338989c24406",
+      "frame_index": 0,
+      "camera": {
+        "distance": 13.0,
+        "pitch": 0.10000000149011612,
+        "target": [
+          -5.0,
+          0.44999998807907104,
+          0.0
+        ],
+        "yaw": 1.5707963705062866
+      },
+      "render_pixels": [
+        1920,
+        1080
+      ],
+      "materials": "bindless",
+      "capture_report_sha256": "e3e646208cbd2ca8e7a836c5b96cc943c580e54962825b228abb8804fb1cc057",
+      "occupied_graph_image_bytes": 203489280,
+      "image_count": 8,
+      "memory_report_sha256": "f4a2831bd9ad433244183c0506c347db31c038c05b1c2623279e41aa112d800e"
+    },
+    "Deferred": {
+      "image": "deferred-031.png",
+      "image_sha256": "591a750a521aa9178c7ba82e0df7f30787e4ac39f2806e82ebf856d87175fce2",
+      "frame_index": 31,
+      "camera": {
+        "distance": 13.0,
+        "pitch": 0.10000000149011612,
+        "target": [
+          -5.775000095367432,
+          0.44999998807907104,
+          0.38750001788139343
+        ],
+        "yaw": 1.5707963705062866
+      },
+      "render_pixels": [
+        1920,
+        1080
+      ],
+      "materials": "bindless",
+      "capture_report_sha256": "6e1bbd3a7820d5f8146c70950967bbaafc980e26f3725a7c4e1bc1bb9d93835c",
+      "occupied_graph_image_bytes": 238878720,
+      "image_count": 9,
+      "memory_report_sha256": "ba755e95af4f28acfa18baaca85fe4120cf5ad93b244767d5fb4a4b4714c9a6d"
+    }
+  },
+  "main_forward_diagnostic_equal_png_count": 32
+}

@@ -23,6 +23,13 @@ can use `Roadmap status checks` after bilingual validation. This job runs the
 generator and Node model tests, `--check`, and builds both HTML pages. The
 standalone Roadmap map workflow still checks Chromium and publishes Pages.
 
+Planning also runs [check_doc_links.py](../scripts/check_doc_links.py) on
+both routes. It compares documentation link destinations with the event base
+and rejects new links into the checkout's `outputs/` or `work/` directories
+or to absolute local paths. Existing historical references retain their
+occurrence count per document. Keep compact acceptance evidence in tracked
+files such as the [R2.4 receipt](evidence/r24/README.md).
+
 An updated PR cancels its obsolete active run and replaces any pending run in
 the same PR group. Each push to `main`, merge-queue event, and manual run has
 its own group keyed by run ID. A second merge can start before the first

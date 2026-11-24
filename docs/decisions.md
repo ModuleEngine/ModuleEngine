@@ -35,6 +35,36 @@ This log separates the accepted product scope from selected implementation detai
 - The 0.1 software renderer is retained as a separate module.
 
 
+<a id="rv-c-arpg-tick"></a>
+
+## ARPG typed access and the role of Bevy — 24 November 2026
+
+Keep Bevy as Core's ECS storage for native rows and change tracking and
+as the executor of the single-threaded authored schedule. Stable IDs,
+the staged ECS journal and validation remain Core contracts. Start typed
+gameplay access with ARPG-owned `Actor`, `Health`, `Melee` and `Ai`, alongside
+Core's existing native `Transform`. The ARPG package owns its gameplay types
+and admits them through registered schemas. The saved documents, Editor and
+Rust IPC continue to use the portable representation. Verify typed access
+against the same authored values, rejection and retry contracts.
+
+In the 20-enemy Release encounter, those four types accounted for 97.96%
+of 206,149 reads through ARPG's component JSON decoder. This is an access
+count. The measured time concentration was in `ArpgFrame`: encode, decode
+and the decode input clone were 48.31% of the original fixed tick. Prioritize
+retaining a typed `ArpgFrame` across the ARPG systems within a tick and
+converting at the portable boundary. Measure that path and its rejection
+behavior before changing the storage strategy for other components.
+
+Keep the current rollback representation for this delivery. Sharing resource
+and module data payloads and deferring `control` copies reduced checkpoints
+from 36.92 to 13.00 µs. The seven round means had medians of 966.0 and
+962.6 µs for whole ticks, with paired changes from −5.80% to +3.32%. Both
+versions preserved the previous state on late rejection and matched the
+fresh accepted tick after retry through `GameHost`. The result supports
+targeting repeated serialization and hot access before a broader storage
+change. [Measurement, prototype and rollback](evidence/rv-c-arpg/README.md)
+
 <a id="r21-device-prototype"></a>
 
 ## R2.1 Vulkan device choice — 22 November 2026

@@ -24,6 +24,8 @@ jobs:
     name: Select verification routes
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    env:
+      CI_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
     outputs:
       native: ${{ steps.routes.outputs.native }}
       package: ${{ steps.routes.outputs.package }}
@@ -37,9 +39,9 @@ jobs:
         with:
           python-version: '3.12'
       - id: routes
-        env:
-          CI_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
         run: python scripts/ci_plan.py --base "$CI_BASE"
+      - name: Reject new documentation links to local files
+        run: python scripts/check_doc_links.py --base "$CI_BASE"
 
   checks:
     name: Workspace and selected routes (${{ matrix.os }})

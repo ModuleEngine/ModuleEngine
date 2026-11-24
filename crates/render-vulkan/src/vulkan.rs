@@ -200,6 +200,18 @@ struct FrameResources {
     staging: Option<Buffer>,
     culling: Option<culling::Frame>,
 }
+
+/// A graph-owned image's bound Vulkan range, for the synchronous benchmark.
+#[cfg(feature = "bench")]
+#[derive(serde::Serialize)]
+pub struct GraphImageAllocation {
+    pub resource: String,
+    pub format: String,
+    pub memory_binding: usize,
+    pub offset_bytes: u64,
+    pub required_bytes: u64,
+}
+
 /// Allocation identity is independent from shader/pipeline identity. Reusing a
 /// pipeline under a new pass ID must still allocate its newly named resources.
 #[derive(Debug, PartialEq, Eq)]
@@ -828,6 +840,37 @@ impl VulkanRenderer {
     }
     pub fn last_frame_work(&self) -> Option<FrameWork> {
         self.last_frame_work
+    }
+
+    /// Inspect the completed synchronous readback slot. Binding numbers are
+    /// local to this report. Ranges on the same binding may be unioned to
+    /// compare renderers that alias the storage of multiple images.
+    #[cfg(feature = "bench")]
+    pub fn synchronous_graph_image_allocations(&self) -> Option<Vec<GraphImageAllocation>> {
+        let resources = self.slots[0].resources.as_ref()?;
+        let mut bindings = BTreeMap::new();
+        Some(
+            resources
+                .images
+                .iter()
+                .map(|(resource, image)| {
+                    let (memory, offset_bytes) = image.memory.as_ref().unwrap().binding();
+                    let next_binding = bindings.len();
+                    let memory_binding = *bindings.entry(memory).or_insert(next_binding);
+                    // The slot owns the image and its bound memory. This query
+                    // is diagnostic and neither allocates nor submits work.
+                    let required_bytes =
+                        unsafe { self.device.get_image_memory_requirements(image.image).size };
+                    GraphImageAllocation {
+                        resource: resource.clone(),
+                        format: format!("{:?}", image.format),
+                        memory_binding,
+                        offset_bytes,
+                        required_bytes,
+                    }
+                })
+                .collect(),
+        )
     }
 
     pub fn set_scene_culling(&mut self, mode: SceneCulling) {
