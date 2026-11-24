@@ -503,5 +503,61 @@ process.stdout.write(JSON.stringify({
         self.assertEqual(out["world"], out["table"])
 
 
+@unittest.skipUnless(shutil.which("node"), "Node.js is needed to run the page model")
+class NextMovePriorityTest(unittest.TestCase):
+    """Both views must choose the same eligible task without skipping an R2 predecessor."""
+
+    def full_track(self, open_tasks=(), markdown_order=False):
+        spec = review_done_except(*open_tasks)
+        spec["R1"] = ["done"] * 8 + ["opt"]
+        spec["R2"] = ["done"] * 4 + ["todo"] * 3
+        if markdown_order:
+            en, _ru = live()
+            spec = {phase.id: spec[phase.id] for phase in roadmap_map.parse(en, "en") if phase.id in spec}
+        return spec
+
+    def assert_next_move(self, spec, expected):
+        for view, model in (("page", PageModelTest()), ("world", WorldModelTest())):
+            with self.subTest(view=view):
+                result = model.fixture(spec)
+                actual = result["summary"]["task"] if view == "page" else result["focus"]
+                self.assertEqual(actual, expected)
+
+    def test_full_r2_chain_waits_for_r25_prerequisites_in_both_orders(self):
+        for markdown_order in (False, True):
+            for prerequisite in ("RV-A.1", "RV-B.1", "RV-B.2", "RV-B.3", "RV-C.3"):
+                with self.subTest(markdown_order=markdown_order, prerequisite=prerequisite):
+                    self.assert_next_move(self.full_track((prerequisite,), markdown_order), prerequisite)
+
+    def test_unstarted_review_phases_take_precedence_over_r26_and_r27(self):
+        spec = review_track(R2=["done"] * 4 + ["todo"] * 3)
+        self.assert_next_move(spec, "RV-A.1")
+
+    def test_only_phases_with_satisfied_entry_conditions_can_start(self):
+        # R2.3 waits for an unfinished R1.6. R3 only needs R2.1, but R5 needs all of R2.
+        spec = {"R0": ["done"], "R2": ["done", "done", "todo"], "R5": ["todo"], "R3": ["todo"]}
+        self.assert_next_move(spec, "R3.1")
+        del spec["R3"]
+        self.assert_next_move(spec, None)
+        self.assertEqual(PageModelTest().fixture(spec)["summary"]["waits"], ["R1.6"])
+
+    def test_r25_precedes_nonblocking_review_work_in_both_orders(self):
+        for markdown_order in (False, True):
+            for open_tasks in ((), ("RV-B.4",), ("RV-C.4",), ("RV-B.4", "RV-C.4")):
+                with self.subTest(markdown_order=markdown_order, open_tasks=open_tasks):
+                    self.assert_next_move(self.full_track(open_tasks, markdown_order), "R2.5")
+
+    def test_r24_cannot_bypass_blocked_r23_and_completion_unlocks_r23(self):
+        for markdown_order in (False, True):
+            spec = self.full_track(markdown_order=markdown_order)
+            spec["R1"][5] = "todo"
+            spec["R2"] = ["done"] * 2 + ["todo"] * 5
+            with self.subTest(markdown_order=markdown_order, prerequisite="open"):
+                self.assert_next_move(spec, "R1.6")
+            spec["R1"][5] = "done"
+            with self.subTest(markdown_order=markdown_order, prerequisite="done"):
+                self.assert_next_move(spec, "R2.3")
+
+
 if __name__ == "__main__":
     unittest.main()

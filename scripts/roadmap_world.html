@@ -98,6 +98,7 @@
 <script>
 (() => {
 // @model-begin (scripts/test_roadmap_map.py runs this part in Node)
+/*@ROADMAP_MOVES@*/
 // Task statuses: scripts/roadmap_map.py replaces the placeholder with the tasks parsed from docs/product-roadmap.md.
 // Everything else (region names, layout, dependencies) is hand-written below.
 const SRC = /*@ROADMAP_DATA@*/null;
@@ -187,20 +188,13 @@ const areg = { key: 'AI', fant: 'Башни Магов', bio: 'cliffs', title: '
 regs.push(vreg, areg);
 for (const k of Object.keys(LAND)) { const d = DATA[k], reg = k.startsWith('ai') ? areg : vreg; const st = isDone(k) ? 'done' : 'next';
   const p = { i: provs.length, reg, id: d.id, key: k, title: d.title, crit: d.goal, eff: d.effort, st, x: LAND[k][0], y: LAND[k][1], kind: k.startsWith('ai') ? 'tower' : 'light', d }; provs.push(p); reg.provs.push(p); }
-/* the next move: in a region that is started but has nothing in progress, the first open task, unless it waits for a task of another phase */
 const taskById = Object.fromEntries(provs.filter(p => p.kind === 'task').map(p => [p.id, p]));
-const unblocked = p => (TASK_DEPS[p.id] || []).every(d => taskById[d] && taskById[d].st === 'done'); // scripts/roadmap_map.py fails the build when a required task is missing
-// a started region offers its first open required task; an open optional task alone is not a move
-for (const r of regs) { if (r.landmark) continue; const done = r.provs.filter(p => p.st === 'done').length; if (done > 0 && done < r.provs.length && !r.provs.some(p => p.st === 'cur')) { const f = r.provs.find(p => p.st === 'next' && !p.opt); if (f && unblocked(f)) f.st = 'front'; } }
-/* with no move anywhere: the first open task in roadmap order whose phase can start, required before optional
-   (the table page picks the same task for its headline) */
-if (!provs.some(p => p.st === 'cur' || p.st === 'front')) {
-  const rank = p => { const i = SRC ? SRC.phases.findIndex(ph => ph.id === DATA[p.reg.key].id) : -1; return i < 0 ? Infinity : i; };
-  const open = provs.filter(p => p.kind === 'task' && p.st === 'next' && unblocked(p)).sort((a, b) => rank(a) - rank(b) || a.i - b.i);
-  const ready = p => DATA[p.reg.key].deps.every(isDone);
-  const f = open.find(p => !p.opt && ready(p)) || open.find(ready) || open[0]; if (f) f.st = 'front';
-}
-const N = provs.length, curIdx = provs.findIndex(p => p.st === 'cur'), focusIdx = curIdx >= 0 ? curIdx : provs.findIndex(p => p.st === 'front');
+const towerByTask = Object.fromEntries(areg.provs.flatMap(tower => tower.d.tasks.map(t => [t.id, tower])));
+const locationOf = id => taskById[id] || towerByTask[id];
+const moves = SRC ? roadmapMoves(SRC.phases, STATIC, TASK_DEPS) : { current: [], next: [] };
+for (const id of moves.next) locationOf(id).st = 'front';
+for (const id of moves.current) locationOf(id).st = 'cur';
+const N = provs.length, focusIdx = locationOf(moves.current[0] || moves.next[0])?.i ?? -1;
 const regOf = Object.fromEntries(regs.map(r => [r.key, r]));
 for (const r of regs) { if (r.landmark) continue; const xs = r.provs.map(p => p.x), ys = r.provs.map(p => p.y); r.cx = xs.reduce((a, b) => a + b) / xs.length; r.cy = ys.reduce((a, b) => a + b) / ys.length; }
 /* region graph with transitive reduction */
@@ -212,8 +206,7 @@ const depth = {}; rk.forEach(k => depth[k] = regOf[k].provs.some(p => p.st !== '
 /* GitHub activity (scripts/roadmap_events.py, build time): place each event at its task's province or tower,
    else in its phase's region, else at the current front. A merged PR replaces its "opened" event. */
 const EVD = /*@EVENTS_DATA@*/null;
-const towerByTask = Object.fromEntries(areg.provs.flatMap(tower => tower.d.tasks.map(t => [t.id, tower])));
-const evHome = e => (e.task && (taskById[e.task] || towerByTask[e.task]))
+const evHome = e => (e.task && locationOf(e.task))
   || (e.phase && regOf[e.phase] && (regOf[e.phase].provs.find(q => q.st === 'cur' || q.st === 'front') || regOf[e.phase].provs[0]))
   || (focusIdx >= 0 ? provs[focusIdx] : null);
 const mergedNums = new Set(((EVD && EVD.events) || []).filter(e => e.type === 'merge' && e.num).map(e => e.num));
@@ -454,7 +447,7 @@ function closePanel() { sel = -1; selReg = null; renderPanel(); redraw(); }
 function selectProv(i) { if (provs[i].reg.landmark || true) { sel = i; selReg = null; renderPanel(); redraw(); } }
 function selectReg(k) { sel = -1; selReg = k; renderPanel(); redraw(); }
 const taskProvs = provs.filter(p => p.kind === 'task'), total = taskProvs.filter(p => p.st === 'done').length;
-const curIds = provs.filter(p => p.st === 'cur').map(p => p.id), frontIds = provs.filter(p => p.st === 'front' && p.kind === 'task').map(p => p.id), wonRegs = regs.filter(r => !r.landmark && regDone(r)).length;
+const curIds = moves.current, frontIds = moves.next, wonRegs = regs.filter(r => !r.landmark && regDone(r)).length;
 document.getElementById('hud').innerHTML = `<span>Захвачено <b>${total}/${taskProvs.length}</b><span class="bar">${taskProvs.map(p => `<i class="${p.st === 'done' ? 'on' : ''}"></i>`).join('')}</span></span><span>${curIds.length ? 'Осада' : 'Следующий ход'}: <b>${esc((curIds.length ? curIds : frontIds).join(', ') || '—')}</b></span><span>Областей: <b>${wonRegs}/${rk.length}</b></span>`;
 if (SRC) document.getElementById('meta').textContent = `Статусы из ${SRC.source}${SRC.commit ? ' · коммит ' + SRC.commit : ''} · собрано ${SRC.generated}`;
 /* chronicle: the latest GitHub events; all text from the events file is escaped */

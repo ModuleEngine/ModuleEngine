@@ -278,6 +278,7 @@
 (() => {
   'use strict';
   // @model-begin (scripts/test_roadmap_map.py runs this part in Node)
+  /*@ROADMAP_MOVES@*/
   const D = 'Готово', C = 'В работе', N = 'Впереди';
   const phases = {
     v042: { id: '0.4.2', kicker: 'Рубеж версий · закрыт', title: 'Чёткий кадр и перенос панелей', cls: 'done', tag: 'ПРИНЯТА 17.11',
@@ -500,17 +501,13 @@
   order.forEach(k => phases[k].tasks.forEach(t => flat.push({ k, t })));
   const open = flat.filter(x => x.t[4] !== D);
   const summary = (() => {
-    const inProgress = flat.find(x => x.t[4] === C);
-    if (inProgress) return { kind: 'cur', item: inProgress, remaining: open.length };
-    // A required task comes before an optional one, and a task that waits for a task of another phase
-    // (TASK_DEPS of the campaign map, passed in by scripts/roadmap_map.py) is skipped until that task is done.
-    const doneIds = new Set(flat.filter(x => x.t[4] === D).map(x => x.t[0]));
-    const ready = x => ['cur', 'next'].includes(phases[x.k].cls) && ((SRC && SRC.taskDeps) || {})[x.t[0]]?.every(d => doneIds.has(d)) !== false;
-    const available = open.find(x => !x.t[5] && ready(x)) || open.find(ready);
-    if (available) return { kind: 'next', item: available, remaining: open.length };
+    const moves = SRC ? roadmapMoves(SRC.phases, phases, SRC.taskDeps)
+      : { current: flat.filter(x => x.t[4] === C).map(x => x.t[0]), next: [] };
+    const id = moves.current[0] || moves.next[0];
+    if (id) return { kind: moves.current.length ? 'cur' : 'next', item: flat.find(x => x.t[0] === id), remaining: open.length };
     if (!open.length) return { kind: flat.length ? 'done' : 'empty', remaining: 0 };
-    const k = open[0].k;
-    return { kind: 'blocked', phase: k, waits: phases[k].deps.filter(d => stateOf(d) !== 'done'), remaining: open.length };
+    const k = moves.blocked ? flat.find(x => x.t[0] === moves.blocked.task.id).k : open[0].k;
+    return { kind: 'blocked', phase: k, waits: moves.blocked?.waits || [], remaining: open.length };
   })();
   // @model-end
 
@@ -681,11 +678,11 @@
     progress(p);
   } else if (summary.kind === 'blocked') {
     const p = phases[summary.phase];
-    const waits = summary.waits.map(d => phases[d].id + (phases[d].missing ? ' (нет в плане)' : '')).join(', ');
+    const waits = summary.waits.map(id => id + (phases[id]?.missing ? ' (нет в плане)' : '')).join(', ');
     focusKey = summary.phase;
     $('pill').textContent = `${curLabel} · ${p.id} ждёт ${waits || 'зависимостей'}`;
     $('now-cur-big').textContent = `Нет доступной задачи: ${p.id} ждёт ${waits || 'зависимостей'}`;
-    $('now-cur-sub').textContent = `В плане ${summary.remaining} незавершённых задач, но ни одна фаза не может начаться. Проверь зависимости ${p.id} в docs/product-roadmap.md.`;
+    $('now-cur-sub').textContent = `Незавершённых задач в плане: ${summary.remaining}. Проверь зависимости ${p.id} в docs/product-roadmap.md.`;
     progress(p);
   } else if (summary.kind === 'done') {
     $('pill').textContent = 'Все фазы трека готовы';

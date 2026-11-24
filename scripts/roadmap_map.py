@@ -227,6 +227,9 @@ def render(template: str, phases: list[Phase], commit: str, generated: str,
         "taskDeps": task_dependencies or {},
     }
     blob = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+    if "/*@ROADMAP_MOVES@*/" in template:
+        moves = Path(__file__).with_name("roadmap_moves.js").read_text(encoding="utf-8")
+        template = template.replace("/*@ROADMAP_MOVES@*/", moves)
     return template.replace(PLACEHOLDER, blob)
 
 
