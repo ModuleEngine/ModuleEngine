@@ -437,9 +437,72 @@ copy cost materially contributes to a regression or threatens the S3 tick
 budget, address it in R1.8 and recheck late rejection and retry through
 `GameHost`.
 
+<a id="rebuild-rv"></a>
+
+### Review fixes after R2.4
+
+Two independent reviews of `main` at `c93f919` were made on 23 November 2026, one on Windows with the reference GPU and one on Linux with a software Vulkan device. They were combined on 24 November 2026. Their findings are planned as three required stages and one optional stage:
+
+1. **RV-A** first: the whole workspace in required CI, so that the regression tests written in RV-B and later run on every pull request.
+2. **RV-B**: the editor scenarios found by the review. R2.5 starts after RV-A and RV-B are done.
+3. **RV-C** alongside the start of R2.5: evidence that a clean clone can read, the R2.5 baseline and, before R6, the measured ARPG tick and the decision on typed components.
+4. **RV-D** is optional: maintenance items taken when work touches the subsystem.
+
+<a id="rebuild-rv-a"></a>
+
+### RV-A — Green CI covers the whole workspace · 4–6 days · depends on R0; before R2.5
+
+| # | Task | Acceptance | Effort |
+| --- | --- | --- | --- |
+| RV-A.1 | Fix the two tests that fail on `main` outside required CI. `migration_copy_accepts_case_distinct_filename_and_preserves_legacy_source` in `crates/editor/src/workspace_files.rs` compares two whole migration results, although the scene asset ID is generated and the path depends on the destination. `failed_partial_native_allocations_release_owned_handles_and_device_recovers` in `crates/render-vulkan/src/vulkan.rs` declares only Vulkan but renders a graph that needs DXC. | On Linux the migration test checks the meaning of the result, its references and the preserved source while allowing different IDs and paths. Without DXC the render test is skipped with a visible reason; with Vulkan and DXC it checks handle release and device recovery. | 1 d |
+| RV-A.2 | Required CI runs `cargo test --workspace --locked` on Windows and Linux after `cargo fetch --locked`. Linux prepares software Vulkan and the pinned DXC for the render tests; a separate step without DXC checks that capability skips stay explicit. | The required gate fails when any non-ignored workspace test fails, and the run report lists counts per package. Both failures fixed in RV-A.1 would have failed it. | 1–2 d |
+| RV-A.3 | Minimal Player as its own configuration in required CI: build and tests with `--no-default-features`. | Code paths for absent games and renderer are compiled and tested on every pull request; a game or Vulkan dependency added to the minimal Player fails CI. | 0.5 d |
+| RV-A.4 | A completed CI run for every merge commit on `main`. Superseded runs are cancelled only for pull requests. | Two merges in quick succession each get a finished `main` run; pull request runs still cancel superseded ones. | 0.5 d |
+| RV-A.5 | Explicit offline-cache precondition for tests that build the Custom SDK with `--offline`. Today 23 tests in Script, Host and Editor fail without a full `cargo fetch`. | Without the cache these tests stop with one clear reason that names the missing step; in required CI dependencies are fetched before tests. | 1 d |
+| RV-A.6 | Minimum Python version for `scripts/`. `tarfile.extractall(filter=...)` needs Python 3.12 or a backport (3.9.17 and later); on 3.9.13 two CI DXC unpacking tests failed. | The minimum version is documented in both languages, and `bootstrap` and `verify.py` report an unsupported interpreter before running tests. | 0.5 d |
+
+<a id="rebuild-rv-b"></a>
+
+### RV-B — Editor scenarios from the review · 1–1.5 weeks · depends on RV-A; before R2.5
+
+Each fix starts with a regression test that fails on the current code and runs in the required CI from RV-A.
+
+| # | Task | Acceptance | Effort |
+| --- | --- | --- | --- |
+| RV-B.1 | Scene and Play select the world that the project actually connects. Today a project with a connected `world.objects` node and a disabled `world.ecs` node still gets ECS, and with a connected Custom the choice differs between code paths (3 of 6 cases diverged). | Scene and Play reach the ready state with the actually connected Objects, ECS or Custom; adding or moving a disabled node does not change the result. | 1–2 d |
+| RV-B.2 | Undo, Redo and Restore keep the data of a disabled module. Today a logical route such as `{"archive.navigation":{"path":"waypoints/route-A"}}` saved through Inspector is treated as a required file during Restore. | Undo, Redo and Restore preserve unknown fields unchanged; a referenced file that is really missing is still reported. | 1–2 d |
+| RV-B.3 | An unapplied linked-template edit survives switching objects. Today a colour or field change of template A is lost after selecting an object with template B, and Inspector may show `Inspector drafts · none`. The finding comes from reading the code, so the first step is a test that reproduces it. | After A → B → A the edit is kept, or the user confirms discarding it beforehand; Apply, Discard and project close see the same draft. | 1–2 d |
+| RV-B.4 | One policy for ID 0 in Core. Today `Spawn` validation accepts ID 0 for both providers, then Objects publishes the object and ECS rejects it; the constructors also differ. | The constructor, validation and apply follow one policy for both providers; after a rejection the previous state is unchanged. | 0.5–1 d |
+
+<a id="rebuild-rv-c"></a>
+
+### RV-C — Readable evidence and measured decisions · 1–1.5 weeks · depends on RV-A; RV-C.3 before R2.5, RV-C.4 before R6
+
+| # | Task | Acceptance | Effort |
+| --- | --- | --- | --- |
+| RV-C.1 | Keep compact acceptance evidence next to the code in `docs/evidence/<task>/`: the comparison result, bench conditions, commit SHA, artifact hashes and the reviewer's conclusion. Large logs and PNG files stay local. Start with R2.4: the Windows review evidence and the combined review, with links that resolve in a clean clone. | A clean clone opens every link of the R2.4 evidence. A link check in CI rejects new links from `docs/` into `outputs/`, `work/` or absolute local paths. | 1–2 d |
+| RV-C.2 | Record what the R2.4 result shows and what it does not. S3-100k averages about 1.76 ms with culling and 1.733 ms with culling off, so the 60 FPS target holds with a large margin but culling gives no speed-up on that scene; the speed-up is shown by the occlusion scene (4 of 2,052 commands left). Each of the three series had one interval above 16.67 ms, the worst 20.854 ms. Name the implemented Hi-Z variant: a current-frame depth seed of large occluders, then the test. | The R2.4 notes and [hardware tiers](hardware-tiers.md#r24-culling) state the long intervals, the culling gain on each scene and the Hi-Z variant in both languages. Later frame-rate criteria say whether single intervals above 16.67 ms are allowed. | 0.5 d |
+| RV-C.3 | R2.5 baseline before the render graph work: S4 reference images and transient memory on `main`, published as in RV-C.1. | R2.5 compares against a published baseline (images, transient memory, commit, conditions) that a clean clone can read. | 1 d |
+| RV-C.4 | Measure the ARPG tick with 20–30 enemies and split out the per-tick copies (resources, events, system states, `module_data`, `control`) and the `ArpgFrame` serialization. Evaluate copy-on-write on the same load, keeping rollback and retry. Record in [decisions](decisions.md) which frequently used components get typed access and what role Bevy keeps. | A paired Release measurement reports the share of copies and serialization. A dated decision in both languages exists before R6 starts. Late rejection and retry through `GameHost` still pass. | 2–3 d |
+
+<a id="rebuild-rv-d"></a>
+
+### RV-D — Maintenance from the review · optional · take each item when work touches its subsystem
+
+| # | Task | Acceptance | Effort |
+| --- | --- | --- | --- |
+| RV-D.1 | Custom worker protocol on its own channel instead of a marker in the stdout that user code also writes to. | User output, including the marker text, does not break the packet parser; a test covers it. | Optional · 1–2 d |
+| RV-D.2 | Enforce `clippy::undocumented_unsafe_blocks` in `render-vulkan`, then in presentation, native dialogs and Host waits. | The lint is enforced for `render-vulkan` in the clippy profile; every `unsafe` block there states its preconditions. | Optional · 1–2 d |
+| RV-D.3 | Editor verification modules behind a feature flag, as `bench` already is. | A release Editor builds without the verification modules; verification routes enable the feature; the EXE size change is recorded. | Optional · 1 d |
+| RV-D.4 | Compare the not-worse tolerance (the larger of 5 % and twice the range of five baseline runs) with the median absolute deviation or a confidence interval of the median on recorded series. | A dated decision in [benchmarks](bench.md#not-worse) to keep or change the rule, with the recorded series behind it. | Optional · 1 d |
+| RV-D.5 | Typed errors at Core boundaries: `WorldProvider` and the renderer adapter keep the error type instead of `String`. | `VulkanError` and world errors reach the caller with their kind; these boundaries gain no new `Result<_, String>`. | Optional · 3–4 d |
+| RV-D.6 | Report malformed component values. `world_component` in ARPG and similar readers count or log deserialization failures instead of treating the component as absent. | A malformed `health` produces a diagnostic in debug builds and a counter in verification output. | Optional · 0.5 d |
+| RV-D.7 | Explicit consent before compiling Custom Rust from an unfamiliar Team project. | Opening such a project runs no `build.rs` or procedural macro until the user agrees; the answer is remembered per project. | Optional · 1–2 d |
+| RV-D.8 | Documentation entry point. README describes the current state and the R track without paths from one PC, the build version is separated from milestone status, and `current-status.md` is split into a short current snapshot and an archive. | README and `current-status.md` in both languages match `main`; the archive keeps old entries with working links. | Optional · 1 d |
+
 <a id="rebuild-r2"></a>
 
-### R2 — GPU-driven renderer foundation · 8–12 weeks · depends on R0; R2.3 also on R1.6
+### R2 — GPU-driven renderer foundation · 8–12 weeks · depends on R0; R2.3 also on R1.6; R2.5 also on [RV-A and RV-B](#rebuild-rv)
 
 | # | Task | Acceptance | Effort |
 | --- | --- | --- | --- |
@@ -470,7 +533,7 @@ budget, address it in R1.8 and recheck late rejection and retry through
 | # | Task | Acceptance | Effort |
 | --- | --- | --- | --- |
 | R4.1 | Define an editor extension interface: a game registers its panels, inspectors, verification scenarios and Play hooks. | Interface documented in [architecture](architecture.md). | 2 d |
-| R4.2 | Move game-specific code out of `game_ui.rs` and related editor files into the `ui` features of `gameplay-arpg`, `project-g1` and `project-puzzle`; turn `example-two-arenas` into an example that uses the same interface. | The editor crate builds with no game crate in its dependencies. | 4–6 d |
+| R4.2 | Move game-specific code out of `game_ui.rs` and related editor files into the `ui` features of `gameplay-arpg`, `project-g1` and `project-puzzle`, together with the game presentation registration in `crates/player/src/presentations.rs`; turn `example-two-arenas` into an example that uses the same interface. | The editor crate builds with no game crate in its dependencies, and Player registers game presentations through the same interface. | 4–6 d |
 | R4.3 | Composition selects which games are linked into an editor build. | Adding a test game requires no change in `crates/editor`; G1 and ARPG behave as before. | 1–2 d |
 
 <a id="rebuild-r5"></a>
@@ -488,7 +551,7 @@ budget, address it in R1.8 and recheck late rejection and retry through
 
 <a id="rebuild-r6"></a>
 
-### R6 — Physics with `rapier3d`, audio with `kira`, shared math · 2–3 weeks · depends on R1; can overlap R2–R5
+### R6 — Physics with `rapier3d`, audio with `kira`, shared math · 2–3 weeks · depends on R1; R6.1 also on [RV-C.4](#rebuild-rv-c); can overlap R2–R5
 
 | # | Task | Acceptance | Effort |
 | --- | --- | --- | --- |
@@ -558,6 +621,7 @@ budget, address it in R1.8 and recheck late rejection and retry through
 
 - R0 → R1 → R4 and R6.
 - R0 → R2.1 → R2.2 → R2.3 (also needs R1.6) → R2.4 → R2.5 → R2.6 → R2.7.
+- [Review fixes](#rebuild-rv): R0 → RV-A → RV-B → R2.5; RV-A → RV-C (RV-C.3 before R2.5, RV-C.4 before R6); RV-D is optional and taken alongside related work.
 - R2.1 → R3, in parallel with the rest of R2.
 - R1 + R3 + R4 accepted → resume the 0.5 brief and UI work.
 - R1 + R4 + R6 accepted → [AI-assisted live authoring](#ai-authoring) AI-A → AI-B (outside this track's effort totals).
@@ -569,6 +633,7 @@ budget, address it in R1.8 and recheck late rejection and retry through
 | Libraries and animation | R6, R7 | 5–8 weeks |
 | Modern image | R5, R8, R9, R10 | 23–37 weeks |
 | Whole track | R0–R10 | about 44–71 weeks (11–17 months) |
+| Review fixes | RV-A, RV-B, RV-C | about 3–4 weeks, outside the R0–R10 total; optional RV-D about 2–3 weeks more |
 
 The first useful checkpoint is after R2 + R5: a GPU-driven renderer with PBR and shadows, about 4.5–7 months in (R0, R1, R2 and R5). 0.5 and UI work resume after R1, R3 and R4; R5–R10 can then continue in parallel with the version route, and R6–R7 should land before [0.9a](#combat) needs them. Replace these estimates with measured throughput after R0 and again after R2.
 

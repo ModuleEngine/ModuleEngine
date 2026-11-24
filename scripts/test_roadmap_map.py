@@ -199,6 +199,12 @@ process.stdout.write(JSON.stringify({
         self.assertEqual(m["phases"]["g05"]["cls"], "done")
         self.assertIn(["R1.3", "Впереди"], [list(t) for t in m["phases"]["R1"]["tasks"]])
 
+    def test_phase_of_only_optional_tasks_is_done_only_when_they_are(self):
+        open_ = self.fixture({"R0": ["done"], "RV-A": ["done"], "RV-D": ["opt", "opt"]})
+        self.assertEqual(open_["phases"]["RV-D"]["cls"], "next")
+        done = self.fixture({"R0": ["done"], "RV-A": ["done"], "RV-D": ["done", "done"]})
+        self.assertEqual(done["phases"]["RV-D"]["cls"], "done")
+
     def test_every_listed_dependency_has_an_arrow(self):
         m = self.fixture({"R0": ["cur"]})["phases"]
         template = (ROOT / roadmap_map.TEMPLATE_PATH).read_text(encoding="utf-8")
@@ -404,8 +410,12 @@ process.stdout.write(JSON.stringify({
         self.assertTrue(model["taskDeps"])
         for task, deps in model["taskDeps"].items():
             phase = task.split(".")[0]
+            # "R2.3 also on R1.6" names the task; "R2.5 also on RV-A and RV-B" names whole phases
+            found = re.search(rf"^### {re.escape(phase)} — .*{re.escape(task)} also on ([^;]+)", en, re.M)
+            self.assertTrue(found, f"{task} has no 'also on' note in its phase heading")
             for dep in deps:
-                self.assertTrue(re.search(rf"^### {phase} — .*{re.escape(task)} also on {re.escape(dep)}", en, re.M), f"{task} needs {dep}")
+                self.assertTrue(re.search(rf"(?<![\w.-]){re.escape(dep)}(?![\w-])|(?<![\w.-]){re.escape(dep.rsplit('.', 1)[0])}(?![\w.-])", found[1]),
+                                f"{task} needs {dep}")
 
     def test_card_gets_the_full_acceptance_text(self):
         criteria = "Textures: 1 000 unique ones; no floor flicker on S4. Custom passes keep working."
