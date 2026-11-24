@@ -1071,6 +1071,7 @@ fn preference_save(profile: &Path) -> PathBuf {
 #[test]
 #[ignore = "Actual native Custom compilation and IPC; run sequentially"]
 fn compiled_settings_menu_scopes_instances_and_local_choice_overrides_rules_and_raw_controls() {
+    module_engine_script::requires_offline_sdk!();
     let (mut host, _, profile, _temp) = compiled_settings_host();
     let authored = host.accepted_document().clone();
     host.step_budget(1. / 60., &GameInput::default(), 1)
@@ -1123,6 +1124,7 @@ fn compiled_settings_menu_scopes_instances_and_local_choice_overrides_rules_and_
 #[test]
 #[ignore = "Actual native Custom compilation and IPC; run sequentially"]
 fn compiled_settings_later_rejection_rolls_back_preferences_menus_worker_states_and_save() {
+    module_engine_script::requires_offline_sdk!();
     let (mut host, reject, profile, _temp) = compiled_settings_host();
     host.step_budget(1. / 60., &GameInput::default(), 1)
         .unwrap();
@@ -1180,6 +1182,7 @@ fn compiled_settings_later_rejection_rolls_back_preferences_menus_worker_states_
 #[test]
 #[ignore = "Actual native Custom compilation and IPC; run sequentially"]
 fn compiled_settings_invalid_and_stale_requests_preserve_last_good_and_removed_binding_hides() {
+    module_engine_script::requires_offline_sdk!();
     let (mut host, _, profile, _temp) = compiled_settings_host();
     host.step_budget(1. / 60., &GameInput::default(), 1)
         .unwrap();
@@ -2205,6 +2208,7 @@ fn respawn_same_id_and_actual_same_scene_transition_never_blend_unrelated_lifeti
 
 #[test]
 fn compiled_custom_string_reset_snaps_only_committed_teleport_and_rejection_keeps_history() {
+    module_engine_script::requires_offline_sdk!();
     // Keep the real compiler/IPC fixture and construct the host with a CPU
     // renderer before installing the Recorder used by the assertions.
     let root = super::test_support::workspace_root();

@@ -596,6 +596,7 @@ mod tests {
     #[test]
     #[ignore = "requires restored native Windows tools and registry sources"]
     fn actual_windows_exe_tool_names_compile_with_and_without_store() {
+        crate::requires_offline_sdk!();
         const TEST: &str =
             "cache_context::tests::actual_windows_exe_tool_names_compile_with_and_without_store";
         const CHILD: &str = "MODULE_ENGINE_EXE_NAMES_TEST_CHILD";
@@ -718,6 +719,7 @@ mod tests {
     #[test]
     #[ignore = "requires restored native tools and audited registry sources"]
     fn actual_supported_native_context_is_cacheable() {
+        crate::requires_offline_sdk!();
         if native_cache_test_child(
             "cache_context::tests::actual_supported_native_context_is_cacheable",
             true,

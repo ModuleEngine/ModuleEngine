@@ -2,7 +2,8 @@
 
 [English](../ci.md) | [Русский](ci.md) | [Документация](README.md)
 
-Обычные PR получают отдельные проверки `contracts` и `clippy` на Windows и Linux.
+Обычные PR запускают тесты workspace, минимальную конфигурацию Player и
+отдельные проверки `contracts` и `clippy` на Windows и Linux.
 Изменение исполняемых исходников добавляет проверки native и package. Для переходов
 только по статусам дорожной карты предусмотрена отдельная проверка. `CI required`
 успешен после планирования и всех обязательных заданий выбранного маршрута.
@@ -19,6 +20,11 @@ Full/Team/Player находятся за пределами этого CI.
 Задание запускает тесты генератора и модели Node, `--check` и сборку обеих страниц.
 Отдельный workflow Roadmap map сохраняет проверку Chromium и публикацию в Pages.
 
+Обновление PR отменяет устаревший активный прогон и вытесняет ожидающий прогон
+в группе этого PR. У каждого push в `main`, события merge queue и ручного
+запуска своя группа по ID прогона. Второе слияние может запустить проверку до
+окончания первой и не может отменить или вытеснить её.
+
 Остальные изменения проходят обычную матрицу. В ней правки только в `docs/`,
 Markdown, `LICENSE-MIT`, `LICENSE-APACHE` или `.gitignore` пропускают native и
 package. Неизвестные исходные пути, пустой diff, первый push и ручной запуск
@@ -26,8 +32,22 @@ package. Неизвестные исходные пути, пустой diff, п
 
 | Runner | Обычная матрица | При изменении исходников |
 | --- | --- | --- |
-| `windows-2022` | Python unit checks, [проверка лицензий](licensing.md#third-party-code), `contracts`, `clippy` | `native-tools`, затем `package` |
-| `ubuntu-24.04` | Python unit checks, [проверка лицензий](licensing.md#third-party-code), `contracts`, `clippy` | `native` на явно выбранном Mesa lavapipe, затем `package` |
+| `windows-2022` | Workspace, минимальный Player, Python unit checks, [проверка лицензий](licensing.md#third-party-code), `contracts`, `clippy` | `native-tools`, затем `package` |
+| `ubuntu-24.04` | Workspace на Mesa lavapipe с закреплённым DXC, точечная проверка без DXC, минимальный Player, Python unit checks, [проверка лицензий](licensing.md#third-party-code), `contracts`, `clippy` | `native` на Mesa lavapipe, затем `package` |
+
+Оба задания выполняют `cargo fetch --locked` перед `cargo test --workspace --locked`.
+Команда workspace запускает обычные модульные, интеграционные и документационные
+тесты и записывает по пакетам число пройденных, упавших, игнорируемых и пропущенных
+из-за отсутствия возможностей тестов. Сбой обычного теста или отсутствие кеша
+Custom SDK проваливает задание. В Linux тесты миграции и восстановления Vulkan
+после сбоя выделения должны пройти в workspace без пропуска. Перед этим
+точечная проверка Vulkan выполняется на Mesa без DXC и требует ровно один тест
+с явной причиной пропуска из-за отсутствия DXC.
+
+Минимальный Player собирается и тестируется отдельными вызовами Cargo с
+`-p module-engine-player --no-default-features`. В графе обычных зависимостей и
+зависимостей сборки нет игровых пакетов и Vulkan. Two Arenas используется в
+тестовой fixture Player вне этого графа.
 
 Обычная матрица отдельно планирует и выполняет `clippy` на обеих платформах,
 включая документационные PR вне маршрута только по статусам. Команда:
@@ -51,9 +71,9 @@ Linux full `native` запускает offscreen tests с software Vulkan, бе�
 и отдельные caches/TEMP; авторский рабочий каталог разработчика не используется.
 Rust version/native target берутся из существующих Windows/Linux manifests.
 Перед offline launcher CI явно устанавливает pinned Rust с компонентами `rustfmt` и `clippy` и делает
-`cargo fetch --locked`. Linux явно устанавливает системные link библиотеки;
-native маршрут дополнительно устанавливает Mesa и восстанавливает DXC по
-существующему archive SHA и всем file SHA из `scripts/linux-toolchain.json`.
+`cargo fetch --locked`. Linux-матрица устанавливает системные библиотеки для
+линковки и Mesa, затем восстанавливает DXC по хешам архива и файлов из
+`scripts/linux-toolchain.json`.
 Сбой установки, fetch, компиляции или теста — отказ CI, без fallback версии.
 
 Launcher использует короткий checkout-local `.work/v/<run-token>` и записывает

@@ -11,8 +11,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: module-engine-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: module-engine-ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_INCREMENTAL: '0'
@@ -42,7 +42,7 @@ jobs:
         run: python scripts/ci_plan.py --base "$CI_BASE"
 
   checks:
-    name: Contracts and selected routes (${{ matrix.os }})
+    name: Workspace and selected routes (${{ matrix.os }})
     needs: plan
     if: needs.plan.outputs.roadmap_only == 'false'
     strategy:
@@ -63,7 +63,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y build-essential pkg-config libx11-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan1
+          sudo apt-get install --no-install-recommends -y build-essential pkg-config libx11-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan1 mesa-vulkan-drivers vulkan-tools
       - name: Install and select pinned native Rust
         shell: pwsh
         run: |
@@ -94,6 +94,40 @@ jobs:
             target/${{ steps.cargo-cache-context.outputs.native_host }}/release
       - name: Fetch locked dependencies before offline verification
         run: cargo fetch --locked
+      - name: Select and verify Linux software Vulkan
+        if: runner.os == 'Linux'
+        run: |
+          icd=$(find /usr/share/vulkan/icd.d -maxdepth 1 -name 'lvp_icd*.json' -print -quit)
+          test -n "$icd"
+          echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
+          VK_DRIVER_FILES="$icd" vulkaninfo --summary
+      - name: Verify the explicit DXC capability skip on Linux
+        if: runner.os == 'Linux'
+        env:
+          CARGO_PROFILE_TEST_DEBUG: '0'
+        run: python scripts/ci_workspace_tests.py --without-dxc
+      - name: Restore pinned Linux DXC
+        if: runner.os == 'Linux'
+        run: |
+          python scripts/ci_linux_dxc.py
+          echo "MODULE_ENGINE_DXC=$GITHUB_WORKSPACE/.tools/ci-dxc/bin/dxc" >> "$GITHUB_ENV"
+          LD_LIBRARY_PATH="$GITHUB_WORKSPACE/.tools/ci-dxc/lib" .tools/ci-dxc/bin/dxc --version
+      - name: Run all workspace tests and report package counts
+        env:
+          CARGO_PROFILE_TEST_DEBUG: '0'
+        run: python scripts/ci_workspace_tests.py
+      - name: Check and build the minimal Player
+        env:
+          CARGO_PROFILE_DEV_DEBUG: '0'
+        run: |
+          python scripts/ci_workspace_tests.py --check-minimal-player
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --locked -p module-engine-player --no-default-features
+        shell: pwsh
+      - name: Test the minimal Player separately
+        env:
+          CARGO_PROFILE_TEST_DEBUG: '0'
+        run: cargo test --locked -p module-engine-player --no-default-features
       - name: Third-party license policy and notices file
         run: python scripts/third_party_licenses.py --check
       - name: Launcher and CI policy unit checks
@@ -111,21 +145,6 @@ jobs:
       - name: Windows native toolchain contracts (no GPU acceptance)
         if: runner.os == 'Windows' && needs.plan.outputs.native == 'true'
         run: python scripts/verify.py --profile native-tools --timeout 1800
-      - name: Restore pinned Linux DXC and software Vulkan
-        if: runner.os == 'Linux' && needs.plan.outputs.native == 'true'
-        run: |
-          sudo apt-get install --no-install-recommends -y mesa-vulkan-drivers vulkan-tools
-          python scripts/ci_linux_dxc.py
-          echo "MODULE_ENGINE_DXC=$GITHUB_WORKSPACE/.tools/ci-dxc/bin/dxc" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/.tools/ci-dxc/lib" >> "$GITHUB_ENV"
-          icd=$(find /usr/share/vulkan/icd.d -maxdepth 1 -name 'lvp_icd*.json' -print -quit)
-          test -n "$icd"
-          echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
-      - name: Linux software Vulkan environment
-        if: runner.os == 'Linux' && needs.plan.outputs.native == 'true'
-        run: |
-          "$MODULE_ENGINE_DXC" --version
-          vulkaninfo --summary
       - name: Linux native offscreen contracts (Mesa software device)
         if: runner.os == 'Linux' && needs.plan.outputs.native == 'true'
         run: python scripts/verify.py --profile native --require-capabilities --timeout 1800

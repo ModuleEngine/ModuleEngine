@@ -1648,6 +1648,11 @@ mod tests {
         document.engine_profile = None;
         document.legacy_archive.clear();
         let opaque = serde_json::json!({"literal.key":null,"nested":[false,{"0":"opaque"}]});
+        let mut assets = AssetManifest::default();
+        assets
+            .register("legacy-notes", "assets/unassigned/notes.bin", &source)
+            .unwrap();
+        document.asset_manifest = serde_json::to_value(&assets).unwrap();
         document
             .properties
             .inactive
@@ -1678,15 +1683,8 @@ mod tests {
         };
 
         let kind = crate::engine_profiles::ProfileKind::Puzzle;
-        let (control, _) = migrate_copy(&json, &source.join("migrated.json"), kind).unwrap();
-        assert_eq!(
-            crate::project::read(&control.path).unwrap(),
-            control.document
-        );
-        assert_eq!(
-            control.document.legacy_archive["/unknown_source_record"],
-            opaque
-        );
+        let control_path = source.join("migrated.json");
+        let (control, control_report) = migrate_copy(&json, &control_path, kind).unwrap();
         assert_source_preserved();
         let same_file = migrate_copy(&json, &json, kind).unwrap_err();
         assert!(same_file.contains("source filename cannot be its destination"));
@@ -1696,25 +1694,48 @@ mod tests {
         assert_source_preserved();
         let (migrated, report) = result
             .expect("A distinct case-sensitive filename must be accepted as a migration copy");
-        assert_eq!(migrated.path, case_distinct);
-        assert_eq!(report.source_schema, 3);
+
+        let mut expected = control.document.clone();
+        expected.game.as_mut().unwrap().scene_assets.clear();
         assert_eq!(
-            report.source_sha256,
-            module_engine_project::hash_bytes(&original)
+            expected.game.as_ref().unwrap().scenes,
+            document.game.as_ref().unwrap().scenes
         );
-        assert_eq!(
-            crate::project::read(&migrated.path).unwrap(),
-            migrated.document
-        );
-        assert_eq!(migrated.document, control.document);
-        assert_eq!(
-            migrated.document.properties.inactive.global["future.global"],
-            opaque
-        );
-        assert_eq!(
-            fs::read(project_binding_path(&migrated.path).unwrap()).unwrap(),
-            original_binding
-        );
+        let mut scene_paths = BTreeSet::new();
+        for (copy, report, destination) in [
+            (&control, &control_report, control_path),
+            (&migrated, &report, case_distinct),
+        ] {
+            assert_eq!(copy.path, destination);
+            assert_eq!(report.source_schema, 3);
+            assert_eq!(
+                report.source_sha256,
+                module_engine_project::hash_bytes(&original)
+            );
+            assert_source_copy(copy, &expected);
+            assert_eq!(
+                copy.document.legacy_archive["/unknown_source_record"],
+                opaque
+            );
+            assert_eq!(
+                copy.document.properties.inactive.global["future.global"],
+                opaque
+            );
+            let destination_root = copy.path.parent().unwrap();
+            for scene in copy.document.game.as_ref().unwrap().scene_assets.values() {
+                assert!(
+                    scene_paths.insert(destination_root.join(&scene.path)),
+                    "independent migrations must publish independent scene files"
+                );
+            }
+            let copied_assets = AssetManifest::from_value(&copy.document.asset_manifest).unwrap();
+            assert_eq!(copied_assets, assets);
+            copied_assets.verify(destination_root).unwrap();
+            assert_eq!(
+                fs::read(project_binding_path(&copy.path).unwrap()).unwrap(),
+                original_binding
+            );
+        }
         assert_source_preserved();
         cleanup(&root);
     }

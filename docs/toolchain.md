@@ -2,6 +2,11 @@
 
 [English](toolchain.md) | [Русский](ru/toolchain.md) | [Documentation](README.md)
 
+Bootstrap checks Python before probing or restoring tools. Use Python 3.9.17
+or newer with `tarfile.data_filter`. Select an interpreter with
+`-Python <absolute-python.exe>` or `MODULE_ENGINE_VERIFY_PYTHON`.
+See the [Python requirement](verification.md#запуск-и-окружение).
+
 `toolchain-manifest.json` owns the Rust version and host target. Run
 `./scripts/bootstrap.ps1 -Json` for a read-only doctor. Its overall `ok` requires
 the pinned Rust compiler and Cargo, working rustfmt/cargo-fmt and Clippy commands

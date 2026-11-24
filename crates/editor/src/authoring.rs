@@ -982,6 +982,7 @@ mod tests {
     }
     #[test]
     fn nongame_custom_resolves_asset_ids_in_selected_project_and_retains_state_on_relocation() {
+        module_engine_script::requires_offline_sdk!();
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
@@ -1048,6 +1049,7 @@ mod tests {
 
     #[test]
     fn prepared_preview_states_commit_or_reject_together_and_hot_apply_requires_compatible_state() {
+        module_engine_script::requires_offline_sdk!();
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()

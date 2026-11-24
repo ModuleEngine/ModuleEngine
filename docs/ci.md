@@ -4,7 +4,8 @@
 
 [English](ci.md) | [Русский](ru/ci.md) | [Documentation](README.md)
 
-Ordinary PRs receive separate `contracts` and `clippy` checks on Windows and Linux.
+Ordinary PRs run the workspace tests, the minimal Player configuration, and
+separate `contracts` and `clippy` checks on Windows and Linux.
 Executable-source changes add native and package checks. Status-only roadmap
 transitions have a dedicated check. `CI required` succeeds after planning and
 every job required by the selected route. Performance, desktop dialogs, hardware
@@ -22,6 +23,11 @@ can use `Roadmap status checks` after bilingual validation. This job runs the
 generator and Node model tests, `--check`, and builds both HTML pages. The
 standalone Roadmap map workflow still checks Chromium and publishes Pages.
 
+An updated PR cancels its obsolete active run and replaces any pending run in
+the same PR group. Each push to `main`, merge-queue event, and manual run has
+its own group keyed by run ID. A second merge can start before the first
+finishes and cannot cancel or replace its run.
+
 Other changes use the ordinary matrix. Within it, edits limited to `docs/`,
 Markdown, `LICENSE-MIT`, `LICENSE-APACHE`, or `.gitignore` skip native and package
 routes. Unknown source paths, empty diffs, initial pushes and manual runs enable
@@ -29,8 +35,21 @@ them. Failure to determine the diff fails planning.
 
 | Runner | Ordinary matrix | When sources change |
 | --- | --- | --- |
-| `windows-2022` | Python unit checks, [license policy](licensing.md#third-party-code), `contracts`, `clippy` | `native-tools`, then `package` |
-| `ubuntu-24.04` | Python unit checks, [license policy](licensing.md#third-party-code), `contracts`, `clippy` | `native` on explicitly selected Mesa lavapipe, then `package` |
+| `windows-2022` | Workspace, minimal Player, Python unit checks, [license policy](licensing.md#third-party-code), `contracts`, `clippy` | `native-tools`, then `package` |
+| `ubuntu-24.04` | Workspace on Mesa lavapipe with pinned DXC, exact no-DXC check, minimal Player, Python unit checks, [license policy](licensing.md#third-party-code), `contracts`, `clippy` | `native` on Mesa lavapipe, then `package` |
+
+Both jobs run `cargo fetch --locked` before `cargo test --workspace --locked`.
+The workspace command runs all normal unit, integration and doc tests and
+records passed, failed, ignored and capability-skipped counts per package.
+Any ordinary test failure or a missing Custom SDK cache fails the job.
+On Linux, the migration and Vulkan allocation-recovery tests must pass
+without a skip in the workspace run. The preceding exact Vulkan check runs
+with Mesa and no DXC and requires one test and its explicit DXC skip reason.
+
+The minimal Player is built and tested in separate Cargo invocations with
+`-p module-engine-player --no-default-features`. Its normal and build dependency
+graph must exclude game packages and Vulkan. The Player's test-only Two Arenas
+fixture is outside that graph.
 
 The ordinary matrix plans and runs `clippy` separately on both platforms,
 including documentation PRs outside the status-only route. Its command is
@@ -53,9 +72,8 @@ each VM run sequentially. Each job receives a fresh hosted checkout
 and separate caches/TEMP; the developer's authored working directory is not used.
 Rust version/native target come from the existing Windows/Linux manifests.
 Before the offline launcher, CI explicitly installs pinned Rust with the `rustfmt` and `clippy` components and runs
-`cargo fetch --locked`. Linux explicitly installs system link libraries;
-the native route additionally installs Mesa and restores DXC using the
-existing archive SHA and all file SHAs from `scripts/linux-toolchain.json`.
+`cargo fetch --locked`. The Linux matrix installs system link libraries and Mesa,
+then restores DXC using the archive and file hashes in `scripts/linux-toolchain.json`.
 An installation, fetch, compilation, or test failure fails CI, without a fallback version.
 
 The launcher uses a short checkout-local `.work/v/<run-token>` and records

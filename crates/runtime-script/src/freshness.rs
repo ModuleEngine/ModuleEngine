@@ -1804,21 +1804,15 @@ mod tests {
             .unwrap()
             .parent()
             .unwrap();
-        let homes = [
-            std::env::var_os("CARGO_HOME").map(PathBuf::from),
-            Some(workspace.join(".work/cargo-home")),
-            Some(workspace.join(".tools/linux-x86_64/cargo")),
-        ];
-        homes
-            .into_iter()
+        let home =
+            crate::resolve_cargo_home(workspace, std::env::var_os("CARGO_HOME").map(PathBuf::from))
+                .or_else(|| std::env::home_dir().map(|home| home.join(".cargo")))
+                .expect("Cargo home for offline dependencies");
+        fs::read_dir(home.join("registry/src"))
+            .expect("The locked registry has been unpacked by Cargo")
             .flatten()
-            .find_map(|home| {
-                fs::read_dir(home.join("registry/src"))
-                    .ok()?
-                    .flatten()
-                    .map(|entry| entry.path())
-                    .find(|root| root.join("sha2-0.10.9/Cargo.toml").is_file())
-            })
+            .map(|entry| entry.path())
+            .find(|root| root.join("sha2-0.10.9/Cargo.toml").is_file())
             .expect("The offline locked registry used by the Runtime tests must be available")
     }
     fn fixture() -> Fixture {
@@ -1994,6 +1988,7 @@ mod tests {
     }
     #[test]
     fn sdk_package_name_is_proven_but_unknown_macro_environment_stays_uncacheable() {
+        crate::requires_offline_sdk!();
         let f = fixture();
         let core = f.context.sdk_root.join("crates/engine-core");
         let source = core.join("src/lib.rs");
@@ -2029,6 +2024,7 @@ mod tests {
 
     #[test]
     fn source_environment_and_restored_mtime_content_choose_correct_keys() {
+        crate::requires_offline_sdk!();
         let mut f = fixture();
         let first = prepared(&f, None);
         f.context.environment.insert("DISPLAY".into(), ":9".into());
@@ -2077,6 +2073,7 @@ mod tests {
     }
     #[test]
     fn seal_discovers_includes_before_reuse_and_detects_during_build_changes() {
+        crate::requires_offline_sdk!();
         let f = fixture();
         let include = f.directory.join("custom.rs");
         write(&include, "const VALUE:u8=1;");
@@ -2123,6 +2120,7 @@ mod tests {
     }
     #[test]
     fn seal_checks_configuration_absence_membership_and_artifact_contents() {
+        crate::requires_offline_sdk!();
         let f = fixture();
         let before = prepared(&f, None);
         let build = facts(&f, None);
@@ -2181,6 +2179,7 @@ mod tests {
     }
     #[test]
     fn unsupported_inputs_and_missing_hints_remain_safe_misses() {
+        crate::requires_offline_sdk!();
         let mut f = fixture();
         for (key, value) in [
             ("RUSTFLAGS", "--cfg custom"),
@@ -2255,6 +2254,7 @@ mod tests {
     }
     #[test]
     fn registry_tree_digest_rejects_added_files_and_has_fixed_framing() {
+        crate::requires_offline_sdk!();
         let f = fixture();
         let tree = f.directory.join("tree");
         write(&tree.join("a.rs"), "one");
@@ -2290,6 +2290,7 @@ mod tests {
     }
     #[test]
     fn loader_exception_requires_exact_regular_dxc_membership() {
+        crate::requires_offline_sdk!();
         let mut f = fixture();
         let libs = f.directory.join("original-dxc/lib");
         write(&libs.join("libdxcompiler.so"), "compiler");
@@ -2306,6 +2307,7 @@ mod tests {
     }
     #[test]
     fn sdk_output_receipt_tracks_controls_membership_and_excludes_worker_products() {
+        crate::requires_offline_sdk!();
         let mut f = fixture();
         // Cargo target names can differ from the package name for a modified SDK.
         let mut metadata: Value = serde_json::from_str(&f.context.metadata).unwrap();
@@ -2382,6 +2384,7 @@ mod tests {
     }
     #[test]
     fn warm_seal_cannot_bless_changed_immutable_program_or_dependency() {
+        crate::requires_offline_sdk!();
         let f = fixture();
         let proof = prepared(&f, None);
         let build = facts(&f, None);
@@ -2399,6 +2402,7 @@ mod tests {
     }
     #[test]
     fn controlled_target_env_compares_canonical_directory_identity() {
+        crate::requires_offline_sdk!();
         let f = fixture();
         let proof = prepared(&f, None);
         let manifest = f.context.work_root.join("Cargo.toml");
@@ -2427,6 +2431,7 @@ mod tests {
     }
     #[test]
     fn unmapped_cargo_metadata_mismatch_is_uncacheable_but_authored_env_stays_strict() {
+        crate::requires_offline_sdk!();
         let mut f = fixture();
         f.context
             .environment
@@ -2462,6 +2467,7 @@ mod tests {
     }
     #[test]
     fn implicit_or_relative_cargo_home_never_claims_configuration_proof() {
+        crate::requires_offline_sdk!();
         let mut f = fixture();
         for home in [None, Some(PathBuf::from("relative-cargo-home"))] {
             f.context.cargo_home = home;
@@ -2498,6 +2504,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn same_content_without_execute_permission_requires_artifact_repair() {
+        crate::requires_offline_sdk!();
         use std::os::unix::fs::PermissionsExt;
         let f = fixture();
         let proof = prepared(&f, None);

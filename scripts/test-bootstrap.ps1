@@ -1,6 +1,8 @@
 # Isolated regression tests: every Rust/DXC command is a fixture PowerShell script.
-param()
+param([string]$Python = $env:MODULE_ENGINE_VERIFY_PYTHON)
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'python-runtime.ps1')
+$pythonExecutable = Find-ModuleEnginePython $Python
 $repositoryRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $fixtureParent = Join-Path $repositoryRoot '.work'
 $fixtureRoot = Join-Path $fixtureParent ("bootstrap-fixture-" + [Guid]::NewGuid().ToString('N'))
@@ -43,7 +45,7 @@ switch ($tool) {
 }
 '@
 $harness = @'
-param([string]$FixtureRoot, [switch]$Restore)
+param([string]$FixtureRoot, [string]$Python, [switch]$Restore)
 $ErrorActionPreference = 'Stop'
 $env:MODULE_ENGINE_BOOTSTRAP_FIXTURE_ROOT = $FixtureRoot
 function Get-Command([string]$Name, $ErrorAction) {
@@ -55,13 +57,15 @@ function Get-Command([string]$Name, $ErrorAction) {
 }
 function Invoke-WebRequest { throw 'Tests must not download tools' }
 function Expand-Archive { throw 'Tests must not unpack real tools' }
-& (Join-Path $FixtureRoot 'scripts/bootstrap.ps1') -Json -Restore:$Restore
+& (Join-Path $FixtureRoot 'scripts/bootstrap.ps1') -Json -Restore:$Restore -Python $Python
 exit $LASTEXITCODE
 '@
 function New-Fixture([string]$name, [hashtable]$toolStates) {
     $root = Join-Path $fixtureRoot $name
     New-Item -ItemType Directory -Path (Join-Path $root 'scripts'), (Join-Path $root 'mock-tools'), (Join-Path $root 'tools/dxc') -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'bootstrap.ps1'), (Join-Path $PSScriptRoot 'env.ps1') -Destination (Join-Path $root 'scripts')
+    foreach ($name in @('bootstrap.ps1', 'env.ps1', 'python-runtime.ps1', 'python_runtime.py')) {
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $root 'scripts')
+    }
     foreach ($tool in @('rustc','cargo','rustfmt','cargo-fmt','cargo-clippy','clippy-driver','rustup')) {
         $mockTool | Set-Content -LiteralPath (Join-Path $root "mock-tools/$tool.ps1") -Encoding utf8
     }
@@ -81,7 +85,7 @@ function New-Fixture([string]$name, [hashtable]$toolStates) {
     return $root
 }
 function Invoke-Fixture([string]$root, [switch]$Restore) {
-    $arguments = @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $root 'harness.ps1'),'-FixtureRoot',$root)
+    $arguments = @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $root 'harness.ps1'),'-FixtureRoot',$root,'-Python',$pythonExecutable)
     if ($Restore) { $arguments += '-Restore' }
     $output = @(& $shellPath @arguments 2>&1)
     $code = $LASTEXITCODE

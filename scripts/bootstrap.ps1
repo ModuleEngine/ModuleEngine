@@ -1,6 +1,8 @@
-param([switch]$Restore, [switch]$Json, [switch]$RustOnly)
+param([switch]$Restore, [switch]$Json, [switch]$RustOnly, [string]$Python = $env:MODULE_ENGINE_VERIFY_PYTHON)
 $ErrorActionPreference = 'Stop'
 if ($Restore -and $RustOnly) { throw '-RustOnly is a verification mode and cannot restore tools.' }
+. (Join-Path $PSScriptRoot 'python-runtime.ps1')
+$null = Find-ModuleEnginePython $Python
 $projectRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $pins = Get-Content -LiteralPath (Join-Path $projectRoot 'toolchain-manifest.json') -Raw | ConvertFrom-Json
 if ($pins.schema_version -ne 1) { throw 'Unsupported tool manifest' }

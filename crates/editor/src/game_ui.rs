@@ -4176,6 +4176,7 @@ mod tests {
     #[test]
     #[ignore = "native cache acceptance: run the compiled test binary with the normal native loader environment"]
     fn scene_and_game_reuse_code_after_stop_with_independent_initial_state_and_workers() {
+        module_engine_script::requires_offline_sdk!();
         crate::requires_editor_vulkan!();
         let root = crate::project::source_root();
         let mut document = native_test_document();
@@ -4276,6 +4277,7 @@ pub fn update(ctx: &mut ScriptContext) {
     #[test]
     #[ignore = "latency acceptance: run explicitly without competing Rust/GPU setup"]
     fn interactive_game_ui_keeps_drawing_and_applying_rust_during_slow_ticks() {
+        module_engine_script::requires_offline_sdk!();
         crate::requires_editor_vulkan!();
         fn diagnostic(workbench: &GameWorkbench, expected_source: &str) -> String {
             let requests: Vec<_> = workbench
@@ -4496,6 +4498,7 @@ pub fn update(ctx: &mut ScriptContext) {
     }
     #[test]
     fn interactive_undo_reverts_failed_gpu_target_and_paused_restart_bypasses_input_backlog() {
+        module_engine_script::requires_offline_sdk!();
         crate::requires_editor_vulkan!();
         let root = crate::project::source_root();
         let document = native_test_document();
@@ -4624,6 +4627,7 @@ pub fn update(ctx: &mut ScriptContext) {
     }
     #[test]
     fn rejected_full_host_retries_disk_header_repair_without_inline_edit() {
+        module_engine_script::requires_offline_sdk!();
         crate::requires_editor_vulkan!();
         let (mut workbench, mut document, root, context) = preparation_fixture();
         let relative = format!(".work/full-host-retry-{}.hlsli", std::process::id());
@@ -5024,6 +5028,7 @@ pub fn update(ctx: &mut ScriptContext) {
     }
     #[test]
     fn deferred_gpu_change_preserves_paused_play_and_bad_hlsl_keeps_last_good() {
+        module_engine_script::requires_offline_sdk!();
         crate::requires_editor_vulkan!();
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
@@ -7192,6 +7197,7 @@ pub fn update(ctx: &mut ScriptContext) {
 
     #[test]
     fn game_rust_editor_shows_its_own_errors_and_applies_reset_and_migration_to_game_slots() {
+        module_engine_script::requires_offline_sdk!();
         crate::requires_editor_vulkan!();
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
@@ -7534,6 +7540,7 @@ pub fn update(ctx: &mut ScriptContext) {
     }
     #[test]
     fn removing_disconnected_ecs_does_not_replace_playing_object_host() {
+        module_engine_script::requires_offline_sdk!();
         crate::requires_editor_vulkan!();
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
@@ -7588,6 +7595,7 @@ pub fn update(ctx: &mut ScriptContext) {
     }
     #[test]
     fn owned_custom_failure_and_cancel_keep_last_good_instance_running() {
+        module_engine_script::requires_offline_sdk!();
         crate::requires_editor_vulkan!();
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")

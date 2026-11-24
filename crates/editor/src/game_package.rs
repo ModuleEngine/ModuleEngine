@@ -1221,6 +1221,7 @@ mod tests {
     #[test]
     #[ignore = "explicitly migrates a copy of the checked-in v3 game and compiles its worker"]
     fn existing_game_project_save_load_save_keeps_exact_bytes() {
+        module_engine_script::requires_offline_sdk!();
         let source = backend_root().join("game-project.json");
         let before = fs::read(&source).unwrap();
         let folder = fixture();
@@ -1261,6 +1262,7 @@ mod tests {
     #[test]
     #[ignore = "builds a native Player and Rust worker from the Full checkout"]
     fn stable_ids_survive_authored_save_player_export_and_rust_ipc() {
+        module_engine_script::requires_offline_sdk!();
         use module_engine_core::{
             AuthoredObject, ExecutionGraph, GameProject, GameState, Prefab, SystemNode,
             SystemResource, SystemStage, Transform, WorldKind, WorldObject, demo_document,
@@ -1964,6 +1966,7 @@ mod tests {
 
     #[test]
     fn player_failed_compilation_leaves_destination_retryable() {
+        module_engine_script::requires_offline_sdk!();
         crate::requires_editor_vulkan!();
         let backend = backend_root();
         let folder = fixture();

@@ -3484,6 +3484,7 @@ mod tests {
 
     #[test]
     fn gpu_library_add_wire_render_and_history_use_real_pass_id() {
+        module_engine_script::requires_offline_sdk!();
         crate::requires_editor_vulkan!();
         let root = crate::project::source_root();
         let mut document = crate::host::gpu_document(WorldKind::Objects, RenderPath::Forward);
@@ -4190,6 +4191,7 @@ mod tests {
 
     #[test]
     fn rust_panel_prepares_hidden_game_recovers_bad_source_and_applies_to_game_backend() {
+        module_engine_script::requires_offline_sdk!();
         crate::requires_editor_vulkan!();
         let root = crate::project::source_root();
         let id = "game-controller";
@@ -4491,6 +4493,7 @@ mod tests {
 
     #[test]
     fn aa_checkbox_reports_background_work_and_preserves_the_running_copy() {
+        module_engine_script::requires_offline_sdk!();
         crate::requires_editor_vulkan!();
         use std::{
             sync::Arc,
@@ -4683,6 +4686,7 @@ mod tests {
     }
     #[test]
     fn graph_node_drag_preserves_game_and_scene_hosts() {
+        module_engine_script::requires_offline_sdk!();
         crate::requires_editor_vulkan!();
         use std::{sync::Arc, time::Instant};
         let count = std::env::var("MODULE_ENGINE_GRAPH_DRAG_FRAMES")

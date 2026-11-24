@@ -3931,7 +3931,7 @@ mod tests {
     use module_engine_core::{ObjectsWorld, WorldProvider, make_edge};
     #[test]
     fn failed_partial_native_allocations_release_owned_handles_and_device_recovers() {
-        crate::requires_capabilities!(Vulkan);
+        crate::requires_capabilities!(Vulkan, Dxc);
         let mut renderer = VulkanRenderer::new().unwrap();
         let counts = renderer.allocations.clone();
         let initial = counts.snapshot();

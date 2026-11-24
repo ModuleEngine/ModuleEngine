@@ -2,6 +2,12 @@
 
 [English](../current-status.md) | [Русский](current-status.md) | [Документация](README.md)
 
+**24 ноября 2026 — полный маршрут CI проверяет весь workspace.**
+Windows и Linux запускают тесты workspace и отдельные сборку и тесты минимального
+Player. Linux выполняет сценарии миграции и отката Vulkan с дополнительной
+проверкой отсутствия DXC. Bootstrap и проверочные скрипты заранее проверяют Python.
+См. [CI](ci.md) и [маршруты проверок](verification.md).
+
 **23 ноября 2026 — R2.4 уплотняет команды штатных проходов сцены на GPU.**
 На подходящих устройствах Vulkan резидентный рендерер отсекает объекты
 по пирамиде видимости и отправляет одну индексированную косвенную команду
@@ -406,7 +412,7 @@ Target-cold одной попытки проходит оба таймера <=4
 - Windows: корневой [verify.ps1](../../verify.ps1); необязательная ветка `-NativeBenchmarks` требует рабочего стола и изолированного замера.
 - Linux: корневой [verify.sh](../../verify.sh), условия native toolchain/DXC/Vulkan — в [Linux guide](linux-support.md). Скрипт включает offscreen проверки и не закрывает desktop/export acceptance.
 - [Реестр и stdlib launcher](verification.md) добавляют явные `quick`, `contracts`, `clippy`, `native`, `native-tools`, `package`; `--plan`/`--list` читают конфигурацию без Cargo. Native tests запускаются напрямую из CargoJSON-selected executable с normal loader environment. Windows-only проверки на Linux отмечаются `skipped`. `package` проверяет минимальные Cargo product/snapshot fixtures, а не полный Full/Team/Player export.
-- Объём legacy-вызовов без аргументов сохранён; Windows `-NativeBenchmarks` выбирает actual normal Editor из CargoJSON и по-прежнему не требует Python. Новый launcher требует уже установленный Python 3.9+ без сторонних зависимостей. Performance остаётся отдельным opt-in legacy/адресным маршрутом с прежними ограничениями.
+- Объём legacy-вызовов без аргументов сохранён. Windows `-NativeBenchmarks` выбирает обычный Editor из CargoJSON. См. [текущее требование к Python](verification.md#запуск-и-окружение). Performance остаётся отдельным opt-in legacy/адресным маршрутом с прежними ограничениями.
 
 Launcher и его unit fixtures реализованы отдельно от Rust. Unit-проверки и планирование не являются новой приёмкой engine/native/package; реальные профили требуют своих отчётов на текущем snapshot. Правила работы и сохранности данных: [AGENTS.md](agent-guide.md).
 

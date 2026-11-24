@@ -53,7 +53,7 @@
 cargo run --locked -p module-engine-editor
 ~~~
 
-Doctor проверяет инструменты без загрузок. Явный .\scripts\bootstrap.ps1 -Restore восстанавливает закреплённые Rust/DXC и Cargo-зависимости локально в проекте. После создания локального Rust подключите . .\.tools\env.ps1 в новой PowerShell-сессии. MSVC/SDK и драйвер остаются требованиями хоста; холодная установка Rust отдельно не проверена.
+Bootstrap требует [Python 3.9.17 или новее с `tarfile.data_filter`](docs/ru/toolchain.md). Doctor проверяет инструменты без загрузок. Явный `.\scripts\bootstrap.ps1 -Restore` восстанавливает закреплённые Rust/DXC и Cargo-зависимости локально в проекте. После создания локального Rust подключите `. .\.tools\env.ps1` в новой PowerShell-сессии. MSVC/SDK и драйвер остаются требованиями хоста. Холодная установка Rust отдельно не проверена.
 
 Форматы 1–3 открываются через явную миграцию в другой файл: `ModuleEngine.exe --migrate-copy game-project.json game-project-v4.json arpg`; исходник сохраняется. Подробности: [Engine profiles](docs/ru/engine-profiles.md).
 
