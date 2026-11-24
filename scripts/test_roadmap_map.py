@@ -108,6 +108,23 @@ def roadmap(spec, lang):
     return "\n".join(lines)
 
 
+def review_track(**overrides):
+    """R0-R2 with the review fixes: R2.5 waits for RV-A, RV-B.1-RV-B.3 and RV-C.3 (TASK_DEPS of the campaign map).
+    R2 comes first so that the next move cannot come from the order of the sections alone."""
+    spec = {"R0": ["done"], "R2": ["done"] * 4 + ["todo"], "R1": ["done", "opt"],
+            "RV-A": ["todo"] * 6, "RV-B": ["todo"] * 4, "RV-C": ["todo"] * 4, "RV-D": ["opt"] * 2}
+    spec.update(overrides)
+    return spec
+
+
+def review_done_except(*open_tasks):
+    """RV-A, RV-B and RV-C done except the named tasks, which stay open."""
+    spec = {}
+    for phase, n in (("RV-A", 6), ("RV-B", 4), ("RV-C", 4)):
+        spec[phase] = ["todo" if f"{phase}.{i}" in open_tasks else "done" for i in range(1, n + 1)]
+    return review_track(**spec)
+
+
 def without_phase(markdown, phase_id):
     """Remove one phase section: its heading and everything up to the next anchor or heading."""
     heading = re.search(rf"^### {re.escape(phase_id)} — .*$", markdown, re.M)
@@ -135,7 +152,8 @@ class PageModelTest(unittest.TestCase):
     def model(self, en_text, ru_text):
         merged = roadmap_map.merge(roadmap_map.parse(en_text, "en"), roadmap_map.parse(ru_text, "ru"))
         template = (ROOT / roadmap_map.TEMPLATE_PATH).read_text(encoding="utf-8")
-        page = roadmap_map.render(template, merged, "test", "now")
+        deps = roadmap_map.task_deps(WORLD_TEMPLATE.read_text(encoding="utf-8"))
+        page = roadmap_map.render(template, merged, "test", "now", deps)
         code = page[page.index("// @model-begin"):page.index("// @model-end")]
         script = code + """
 process.stdout.write(JSON.stringify({
@@ -198,6 +216,20 @@ process.stdout.write(JSON.stringify({
         self.assertEqual(m["phases"]["R1"]["cls"], "done")
         self.assertEqual(m["phases"]["g05"]["cls"], "done")
         self.assertIn(["R1.3", "Впереди"], [list(t) for t in m["phases"]["R1"]["tasks"]])
+
+    def test_review_fixes_come_before_r25_and_r25_before_optional_work(self):
+        self.assertEqual(self.fixture(review_track())["summary"]["task"], "RV-A.1")
+        self.assertEqual(self.fixture(review_done_except())["summary"]["task"], "R2.5")
+
+    def test_open_rv_c3_keeps_r25_out_of_the_headline(self):
+        m = self.fixture(review_done_except("RV-C.3"))
+        self.assertEqual(m["summary"]["task"], "RV-C.3")
+
+    def test_phase_of_only_optional_tasks_is_done_only_when_they_are(self):
+        open_ = self.fixture({"R0": ["done"], "RV-A": ["done"], "RV-D": ["opt", "opt"]})
+        self.assertEqual(open_["phases"]["RV-D"]["cls"], "next")
+        done = self.fixture({"R0": ["done"], "RV-A": ["done"], "RV-D": ["done", "done"]})
+        self.assertEqual(done["phases"]["RV-D"]["cls"], "done")
 
     def test_every_listed_dependency_has_an_arrow(self):
         m = self.fixture({"R0": ["cur"]})["phases"]
@@ -393,6 +425,17 @@ process.stdout.write(JSON.stringify({
         states = dict(after["provs"])
         self.assertEqual((states["R1.7"], states["R2.3"]), ("front", "front"))
 
+    def test_review_fixes_are_the_next_move_not_an_optional_task(self):
+        m = self.fixture(review_track())
+        states = dict(m["provs"])
+        self.assertEqual((m["focus"], states["R1.2"], states["R2.5"]), ("RV-A.1", "next", "next"))
+        m = self.fixture(review_done_except())
+        self.assertEqual((m["focus"], dict(m["provs"])["RV-D.1"]), ("R2.5", "next"))
+
+    def test_r25_waits_for_rv_c3_but_not_for_rv_b4(self):
+        self.assertEqual(dict(self.fixture(review_done_except("RV-C.3"))["provs"])["R2.5"], "next")
+        self.assertEqual(dict(self.fixture(review_done_except("RV-B.4"))["provs"])["R2.5"], "front")
+
     def test_missing_required_task_never_unlocks_the_waiting_one(self):
         """Safety net behind the build error: the model keeps R2.3 blocked while R1.6 is absent."""
         m = self.fixture({"R0": ["done"], "R1": ["done"] * 5, "R2": ["done", "done", "todo", "todo"]})
@@ -404,8 +447,13 @@ process.stdout.write(JSON.stringify({
         self.assertTrue(model["taskDeps"])
         for task, deps in model["taskDeps"].items():
             phase = task.split(".")[0]
+            # "R2.3 also on R1.6" names the task; "R2.5 also on RV-A and RV-B" names whole phases
+            # "all of R6 also on RV-C.4" covers every task of the phase
+            found = re.search(rf"^### {re.escape(phase)} — .*(?:{re.escape(task)}|{re.escape(phase)}) also on ([^;]+)", en, re.M)
+            self.assertTrue(found, f"{task} has no 'also on' note in its phase heading")
             for dep in deps:
-                self.assertTrue(re.search(rf"^### {phase} — .*{re.escape(task)} also on {re.escape(dep)}", en, re.M), f"{task} needs {dep}")
+                self.assertTrue(re.search(rf"(?<![\w.-]){re.escape(dep)}(?![\w-])|(?<![\w.-]){re.escape(dep.rsplit('.', 1)[0])}(?![\w.-])", found[1]),
+                                f"{task} needs {dep}")
 
     def test_card_gets_the_full_acceptance_text(self):
         criteria = "Textures: 1 000 unique ones; no floor flicker on S4. Custom passes keep working."
@@ -453,6 +501,62 @@ process.stdout.write(JSON.stringify({
         out = json.loads(subprocess.run(["node", "-"], input=script, capture_output=True, text=True,
                                         encoding="utf-8", check=True).stdout)
         self.assertEqual(out["world"], out["table"])
+
+
+@unittest.skipUnless(shutil.which("node"), "Node.js is needed to run the page model")
+class NextMovePriorityTest(unittest.TestCase):
+    """Both views must choose the same eligible task without skipping an R2 predecessor."""
+
+    def full_track(self, open_tasks=(), markdown_order=False):
+        spec = review_done_except(*open_tasks)
+        spec["R1"] = ["done"] * 8 + ["opt"]
+        spec["R2"] = ["done"] * 4 + ["todo"] * 3
+        if markdown_order:
+            en, _ru = live()
+            spec = {phase.id: spec[phase.id] for phase in roadmap_map.parse(en, "en") if phase.id in spec}
+        return spec
+
+    def assert_next_move(self, spec, expected):
+        for view, model in (("page", PageModelTest()), ("world", WorldModelTest())):
+            with self.subTest(view=view):
+                result = model.fixture(spec)
+                actual = result["summary"]["task"] if view == "page" else result["focus"]
+                self.assertEqual(actual, expected)
+
+    def test_full_r2_chain_waits_for_r25_prerequisites_in_both_orders(self):
+        for markdown_order in (False, True):
+            for prerequisite in ("RV-A.1", "RV-B.1", "RV-B.2", "RV-B.3", "RV-C.3"):
+                with self.subTest(markdown_order=markdown_order, prerequisite=prerequisite):
+                    self.assert_next_move(self.full_track((prerequisite,), markdown_order), prerequisite)
+
+    def test_unstarted_review_phases_take_precedence_over_r26_and_r27(self):
+        spec = review_track(R2=["done"] * 4 + ["todo"] * 3)
+        self.assert_next_move(spec, "RV-A.1")
+
+    def test_only_phases_with_satisfied_entry_conditions_can_start(self):
+        # R2.3 waits for an unfinished R1.6. R3 only needs R2.1, but R5 needs all of R2.
+        spec = {"R0": ["done"], "R2": ["done", "done", "todo"], "R5": ["todo"], "R3": ["todo"]}
+        self.assert_next_move(spec, "R3.1")
+        del spec["R3"]
+        self.assert_next_move(spec, None)
+        self.assertEqual(PageModelTest().fixture(spec)["summary"]["waits"], ["R1.6"])
+
+    def test_r25_precedes_nonblocking_review_work_in_both_orders(self):
+        for markdown_order in (False, True):
+            for open_tasks in ((), ("RV-B.4",), ("RV-C.4",), ("RV-B.4", "RV-C.4")):
+                with self.subTest(markdown_order=markdown_order, open_tasks=open_tasks):
+                    self.assert_next_move(self.full_track(open_tasks, markdown_order), "R2.5")
+
+    def test_r24_cannot_bypass_blocked_r23_and_completion_unlocks_r23(self):
+        for markdown_order in (False, True):
+            spec = self.full_track(markdown_order=markdown_order)
+            spec["R1"][5] = "todo"
+            spec["R2"] = ["done"] * 2 + ["todo"] * 5
+            with self.subTest(markdown_order=markdown_order, prerequisite="open"):
+                self.assert_next_move(spec, "R1.6")
+            spec["R1"][5] = "done"
+            with self.subTest(markdown_order=markdown_order, prerequisite="done"):
+                self.assert_next_move(spec, "R2.3")
 
 
 if __name__ == "__main__":

@@ -19,7 +19,7 @@ The last column of every phase task table in the roadmap is the status:
 | `Done` | `Сделано` (also `Выполнено` or `Готово`) | Task done |
 | `In progress`, optionally `In progress (2–3 d)` | `В работе`, optionally `В работе (2–3 д)` | Task in progress |
 | An estimate such as `2–3 d` or `1.5 w` | An estimate such as `2–3 д` or `1,5 н` | Not started |
-| `Optional · 2–3 d` (before the estimate) | `Необязательно · 2–3 д` | Tracked like any task, but its phase and the checkpoints that depend on it finish without it. Both tables must carry the prefix |
+| `Optional · 2–3 d` (before the estimate) | `Необязательно · 2–3 д` | Tracked like any task, but its phase and the checkpoints that depend on it finish without it. A phase made only of optional tasks, such as RV-D, finishes when all of them are done. Both tables must carry the prefix |
 
 The dedicated roadmap chat records status transitions. Implementation chats pass along accepted results and verification evidence and update technical contracts in their own pull requests. When a transition is ready, the planning chat compares `main` with the working chats and proposes one status pull request for the confirmed completions and work that has actually started. Apply the proposal from the dedicated roadmap chat and edit both language tables together. Keep the original estimate in parentheses when marking a task in progress if the estimate still applies.
 
@@ -42,7 +42,7 @@ The page template [scripts/roadmap_map.html](../scripts/roadmap_map.html) holds 
 
 ## Campaign map
 
-The campaign map is the same roadmap as a game-style pixel-art map, built from the same tables. Every phase (R0–R10) is a region with its own theme, every task is a province inside it, and arrows show which phase opens which. Checkpoints and version milestones are lighthouse islands, the AI branch is a set of wizard towers.
+The campaign map is the same roadmap as a game-style pixel-art map, built from the same tables. Every phase (R0–R10 and the review fixes RV-A–RV-D) is a region with its own theme, every task is a province inside it, and arrows show which phase opens which. Checkpoints and version milestones are lighthouse islands, the AI branch is a set of wizard towers.
 
 | Task status | On the map |
 | --- | --- |
@@ -51,7 +51,9 @@ The campaign map is the same roadmap as a game-style pixel-art map, built from t
 | Not started, the first one of a phase that has been started | The next move: yellow pennant and tent. Shown only while nothing in that phase is in progress |
 | Not started, anything else | Fog of war: the farther from the front, the thicker the fog |
 
-Hover a province for its title and status; click it for the acceptance criterion and the estimate, click a region ribbon for the phase goal and the list of its provinces. Task titles and criteria come from the Russian roadmap, the card shows the full text of the task and acceptance cells; the English table only supplies statuses. A task that waits for a task of another phase (R2.3 needs R1.6) is not offered as the next move until that task is done. These dependencies are declared in `TASK_DEPS` of the template; if the waiting task is in the roadmap but the task it waits for is not, the build (including `--check`) fails and names both tasks.
+Hover a province for its title and status; click it for the acceptance criterion and the estimate, click a region ribbon for the phase goal and the list of its provinces. Task titles and criteria come from the Russian roadmap, the card shows the full text of the task and acceptance cells; the English table only supplies statuses. A task that waits for a task of another phase (R2.3 needs R1.6; R2.5 needs RV-A, RV-B.1–RV-B.3 and RV-C.3; every R6 task needs RV-C.4) is not offered as the next move until that task is done. These dependencies are declared in `TASK_DEPS` of the template; if the waiting task is in the roadmap but the task it waits for is not, the build (including `--check`) fails and names both tasks.
+
+Both maps put work in progress first. Within a phase, only the first unfinished required task can be the next move. If it is blocked, later tasks in the same phase wait too. When a cross-phase prerequisite is met, the waiting task of a started phase takes priority over other ready work. The campaign map can flag several started phases. Its first flag and the table headline follow the same roadmap order within each priority. A new phase comes next when its prerequisites are met. Optional tasks are offered once there is no eligible required work.
 
 The page is a static file with no network access: a Content-Security-Policy blocks every request. All art is drawn in code on a canvas, with no external assets. Animation stops with `prefers-reduced-motion`.
 

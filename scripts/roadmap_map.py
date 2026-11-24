@@ -215,7 +215,8 @@ def source_commit(root: Path) -> str:
     return sha[:7]
 
 
-def render(template: str, phases: list[Phase], commit: str, generated: str) -> str:
+def render(template: str, phases: list[Phase], commit: str, generated: str,
+           task_dependencies: dict[str, list[str]] | None = None) -> str:
     if template.count(PLACEHOLDER) != 1:
         raise ValueError(f"{TEMPLATE_PATH} must contain {PLACEHOLDER} exactly once")
     data = {
@@ -223,8 +224,12 @@ def render(template: str, phases: list[Phase], commit: str, generated: str) -> s
         "commit": commit,
         "generated": generated,
         "phases": [asdict(p) for p in phases],
+        "taskDeps": task_dependencies or {},
     }
     blob = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+    if "/*@ROADMAP_MOVES@*/" in template:
+        moves = Path(__file__).with_name("roadmap_moves.js").read_text(encoding="utf-8")
+        template = template.replace("/*@ROADMAP_MOVES@*/", moves)
     return template.replace(PLACEHOLDER, blob)
 
 
@@ -242,7 +247,8 @@ def build(root: Path) -> tuple[str, list[str], list[str]]:
     warnings = [f"phase {pid} has no node on the map in {TEMPLATE_PATH}; its tasks are not shown"
                 for pid in unplaced(template, en)]
     generated = dt.datetime.now(dt.timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
-    page = render(template, merge(en, ru), source_commit(root), generated)
+    world = (root / WORLD_TEMPLATE_PATH).read_text(encoding="utf-8")
+    page = render(template, merge(en, ru), source_commit(root), generated, task_deps(world))
     return page, errors, warnings
 
 
