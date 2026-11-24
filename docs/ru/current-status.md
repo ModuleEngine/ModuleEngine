@@ -2,6 +2,14 @@
 
 [English](../current-status.md) | [Русский](current-status.md) | [Документация](README.md)
 
+**24 ноября 2026 — Scene, Play и история Inspector следуют контрактам проекта.**
+Scene и Play используют подключённый [провайдер мира](shared-game-host.md#world-and-renderer-selection).
+Undo, Redo и Restore сохраняют непрозрачные авторские данные и проверяют
+[необходимые файлы](asset-workspace-api.md#history-resource-check).
+[Черновики связанных шаблонов](editor-game.md#linked-template-drafts) переживают
+смену выделения. Objects и ECS разделяют [правило ненулевого ID](ecs-world.md#saved-compatibility).
+Четыре случая покрыты обычными тестами workspace через редактор и Core.
+
 **24 ноября 2026 — полный маршрут CI проверяет весь workspace.**
 Windows и Linux запускают тесты workspace и отдельные сборку и тесты минимального
 Player. Linux выполняет сценарии миграции и отката Vulkan с дополнительной

@@ -10,7 +10,7 @@ use module_engine_project::AssetManifest;
 use std::path::PathBuf;
 
 impl Editor {
-    pub(super) fn game_context(&mut self) -> (PathBuf, Option<PathBuf>, WorldKind) {
+    pub(super) fn configure_game_roots(&mut self) -> (PathBuf, Option<PathBuf>) {
         let root = self.project_asset_root();
         let backend = self
             .distribution
@@ -23,18 +23,13 @@ impl Editor {
             .and_then(|package| package.compile_root().ok());
         self.game_workbench
             .set_engine_context(compile.as_deref(), &backend);
-        let kind = if self
-            .document
-            .root
-            .nodes
-            .iter()
-            .any(|node| node.module == "world.ecs")
-        {
-            WorldKind::Ecs
-        } else {
-            WorldKind::Objects
-        };
-        (root, compile, kind)
+        (root, compile)
+    }
+
+    pub(super) fn game_context(&mut self) -> Result<(PathBuf, Option<PathBuf>, WorldKind), String> {
+        let (root, compile) = self.configure_game_roots();
+        let kind = crate::game_host::selected_world_kind(&self.document, &self.registry)?;
+        Ok((root, compile, kind))
     }
     pub(super) fn scene_selection(&self) -> Option<(String, u64)> {
         self.game_workbench
@@ -137,7 +132,7 @@ impl Editor {
         }
     }
     pub(super) fn scene_inspector_panel(&mut self, ui: &mut egui::Ui) {
-        self.game_context();
+        self.configure_game_roots();
         let mut candidate = self.document.clone();
         if self.game_workbench.inspector_ui(ui, &mut candidate)
             && let Err(error) = self.commit_scene_document(candidate, "Scene object changed")
@@ -156,11 +151,10 @@ impl Editor {
             return;
         }
         self.game_workbench.mark_scene_view_visible(owner);
-        let (root, compile, kind) = self.game_context();
-        if let Err(error) =
+        if let Err(error) = self.game_context().and_then(|(root, compile, kind)| {
             self.game_workbench
                 .ensure_preview(&self.document, &root, compile.as_deref(), kind)
-        {
+        }) {
             ui.colored_label(egui::Color32::LIGHT_RED, error);
             if self.game_workbench.preview_host.is_none() {
                 return;
@@ -723,7 +717,7 @@ mod tests {
         module_engine_script::requires_offline_sdk!();
         crate::requires_editor_vulkan!();
         let mut editor = editor();
-        let (root, compile, kind) = editor.game_context();
+        let (root, compile, kind) = editor.game_context().unwrap();
         editor
             .game_workbench
             .ensure_preview(&editor.document, &root, compile.as_deref(), kind)
@@ -826,7 +820,7 @@ mod tests {
         module_engine_script::requires_offline_sdk!();
         crate::requires_editor_vulkan!();
         let mut editor = editor();
-        let (root, compile, kind) = editor.game_context();
+        let (root, compile, kind) = editor.game_context().unwrap();
         editor
             .game_workbench
             .ensure_preview(&editor.document, &root, compile.as_deref(), kind)

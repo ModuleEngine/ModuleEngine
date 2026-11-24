@@ -200,6 +200,8 @@ materials, including multiple writes before a render.
 
 See the [renderer synchronization contract and S3 verification](shared-game-host.md#r16-scene-updates).
 
+<a id="saved-compatibility"></a>
+
 ## Saved compatibility
 
 The `GameState` wire representation still uses the `entities` map of stable IDs
@@ -209,6 +211,11 @@ targets before returning a world. Authored scene files, prefab instances and
 sealed Player data keep their existing formats. GameHost sends IDs, parents
 and, where present, [named references](custom-rust.md#named-object-references)
 through Rust IPC as exact `u64` values. The portable data omits Bevy handles.
+
+Objects and ECS require nonzero stable IDs in their constructors, in portable
+command validation and in `Spawn` application. A `Spawn` with ID 0 rejects the
+whole batch, even if a later command would remove that object. The prior world
+remains available unchanged.
 
 <a id="r14-verification"></a>
 

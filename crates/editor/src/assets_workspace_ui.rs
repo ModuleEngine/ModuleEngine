@@ -595,7 +595,15 @@ impl super::Editor {
     /// Reject stale resource maps instead of installing references to moved files.
     /// The same check also accepts file Undo after its explicit filesystem replay.
     pub(super) fn validate_asset_restore(&self, candidate: &GraphDocument) -> Result<(), String> {
-        verify_restore_resources(candidate, &self.project_asset_root()).map_err(|error| {
+        let backend = self
+            .distribution
+            .as_ref()
+            .map(|distribution| distribution.package_root.clone())
+            .unwrap_or_else(crate::project::source_root);
+        CatalogContext::selected(&backend, self.asset_property_object_ids_for(candidate))
+            .and_then(|context| context.service(&self.project_asset_root(), vec![]))
+            .and_then(|workspace| workspace.verify_restore_resources(candidate))
+            .map_err(|error| {
             format!(
                 "Version not restored: {error}. First undo the file operation with Undo or restore the required asset from trash."
             )
@@ -753,67 +761,6 @@ impl super::Editor {
             }
         }
     }
-}
-
-fn verify_restore_resources(candidate: &GraphDocument, root: &Path) -> Result<(), String> {
-    let manifest = AssetManifest::from_value(&candidate.asset_manifest)?;
-    manifest.verify(root)?;
-    fn walk(
-        value: &serde_json::Value,
-        field: &str,
-        manifest: &AssetManifest,
-        root: &Path,
-    ) -> Result<(), String> {
-        match value {
-            serde_json::Value::String(reference)
-                if reference.starts_with("asset://")
-                    || reference.starts_with("assets/")
-                    || reference.starts_with("assets\\")
-                    || matches!(field, "path" | "base_color_texture" | "audio_cues") =>
-            {
-                let path = manifest.resolve_reference(reference)?;
-                resolve_relative(root, &path)?;
-            }
-            serde_json::Value::Array(values) => {
-                for value in values {
-                    walk(value, field, manifest, root)?;
-                }
-            }
-            serde_json::Value::Object(values) => {
-                for (key, value) in values {
-                    if !matches!(
-                        key.as_str(),
-                        "name" | "label" | "id" | "source_id" | "source" | "code"
-                    ) {
-                        walk(
-                            value,
-                            if field == "audio_cues" { field } else { key },
-                            manifest,
-                            root,
-                        )?;
-                    }
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-    // Code strings and installed renderer include paths are not game resources.
-    // Legacy manifests may be empty, so active scene references need checking too.
-    if let Some(game) = &candidate.game {
-        walk(
-            &serde_json::to_value(game).map_err(|error| error.to_string())?,
-            "game",
-            &manifest,
-            root,
-        )?;
-    }
-    walk(
-        &serde_json::to_value(&candidate.properties).map_err(|error| error.to_string())?,
-        "properties",
-        &manifest,
-        root,
-    )
 }
 
 fn ui_kind(kind: &module_engine_project::AssetKind) -> AssetKind {
@@ -1550,6 +1497,7 @@ mod tests {
     #[test]
     fn stale_checkpoint_paths_and_deleted_ids_are_rejected_before_restoration() {
         let fixture = Fixture::new();
+        let workspace = AssetWorkspace::new(&fixture.root, vec![]).unwrap();
         fixture.png("before.png", [255, 0, 0, 255]);
         let mut document =
             module_engine_core::demo_document(module_engine_core::WorldKind::Objects);
@@ -1558,16 +1506,16 @@ mod tests {
             .register("image", "assets/before.png", &fixture.root)
             .unwrap();
         document.asset_manifest = serde_json::to_value(manifest).unwrap();
-        assert!(verify_restore_resources(&document, &fixture.root).is_ok());
+        assert!(workspace.verify_restore_resources(&document).is_ok());
         fs::rename(
             fixture.root.join("assets/before.png"),
             fixture.root.join("assets/after.png"),
         )
         .unwrap();
-        assert!(verify_restore_resources(&document, &fixture.root).is_err());
+        assert!(workspace.verify_restore_resources(&document).is_err());
         document.asset_manifest["assets"]["image"]["path"] = "assets/after.png".into();
         assert!(
-            verify_restore_resources(&document, &fixture.root).is_ok(),
+            workspace.verify_restore_resources(&document).is_ok(),
             "physical file replay/restored path is accepted"
         );
         document.asset_manifest = serde_json::Value::Null;
@@ -1579,13 +1527,13 @@ mod tests {
             .unwrap()
             .audio_cues
             .insert("hit".into(), "asset://deleted".into());
-        assert!(verify_restore_resources(&document, &fixture.root).is_err());
+        assert!(workspace.verify_restore_resources(&document).is_err());
         document.game.as_mut().unwrap().audio_cues.clear();
         document
             .custom_sources
             .insert("example".into(), "let s = \"assets/missing.png\";".into());
         assert!(
-            verify_restore_resources(&document, &fixture.root).is_ok(),
+            workspace.verify_restore_resources(&document).is_ok(),
             "opaque Rust source is not rewritten or interpreted as an asset field"
         );
     }

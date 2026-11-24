@@ -19,6 +19,10 @@ pub fn registry_at(resource_root: &std::path::Path) -> Result<ModuleRegistry, St
 /// runtime preparation and exporters. Host-bound adapters only replace factories
 /// of these same contracts; they do not construct a separate builtin catalog.
 pub fn composition_at(resource_root: &std::path::Path) -> Result<CompositionContext, String> {
+    #[cfg(test)]
+    if let Some(composition) = world_fixture::composition_at(resource_root) {
+        return Ok(composition);
+    }
     module_engine_player::composition_at(resource_root)
 }
 
@@ -243,4 +247,47 @@ pub fn settings_demo_document(kind: WorldKind) -> GraphDocument {
     )
     .expect("Valid explicit neutral settings template");
     document
+}
+
+#[cfg(test)]
+pub(crate) mod world_fixture {
+    use module_engine_core::{CompositionContext, ObjectsWorld, world_descriptor};
+    use std::{
+        path::{Path, PathBuf},
+        sync::Mutex,
+    };
+
+    pub const ID: &str = "world.editor_fixture";
+    static INSTALLATION: Mutex<Option<(PathBuf, CompositionContext)>> = Mutex::new(None);
+
+    pub struct Installation;
+
+    impl Installation {
+        pub fn at(root: &Path) -> Self {
+            let composition = module_engine_player::composition_with(root, |modules, _| {
+                modules.register_world(
+                    world_descriptor(ID, "Editor fixture", "Native test provider"),
+                    |_| Ok(Box::new(ObjectsWorld::from_objects(vec![])?)),
+                )
+            })
+            .unwrap();
+            let mut installed = INSTALLATION.lock().unwrap();
+            assert!(installed.is_none());
+            *installed = Some((root.canonicalize().unwrap(), composition));
+            Self
+        }
+    }
+
+    impl Drop for Installation {
+        fn drop(&mut self) {
+            INSTALLATION.lock().unwrap().take();
+        }
+    }
+
+    pub(super) fn composition_at(root: &Path) -> Option<CompositionContext> {
+        let installed = INSTALLATION.lock().unwrap();
+        let (fixture, composition) = installed.as_ref()?;
+        (root == fixture || root.canonicalize().ok().as_ref() == Some(fixture))
+            .then(|| composition.clone())
+    }
 }

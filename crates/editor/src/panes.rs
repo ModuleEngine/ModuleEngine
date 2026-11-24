@@ -549,7 +549,7 @@ impl Editor {
             }
         }
         if self.game_workbench.has_inspector_drafts() {
-            ui.label("Inspector drafts need component Apply or explicit Discard. Cancel to return to Inspector.");
+            ui.label("Apply or discard the drafts in Inspector. Cancel to return to Inspector.");
             if ui.button("Discard all Inspector drafts").clicked() {
                 self.game_workbench.discard_inspector_drafts();
             }

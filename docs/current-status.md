@@ -4,6 +4,13 @@
 
 [English](current-status.md) | [Русский](ru/current-status.md) | [Documentation](README.md)
 
+**24 November 2026 — Scene, Play and Inspector history follow their source contracts.**
+Scene and Play use the connected [world provider](shared-game-host.md#world-and-renderer-selection).
+Undo, Redo and Restore keep opaque author data and still check [required files](asset-workspace-api.md#history-resource-check).
+[Linked template drafts](editor-game.md#linked-template-drafts) survive
+selection changes. Objects and ECS share the [nonzero ID rule](ecs-world.md#saved-compatibility).
+Ordinary workspace tests cover the four cases through Editor and Core.
+
 **24 November 2026 — the full CI route exercises the whole workspace.**
 Windows and Linux run workspace tests and a separate minimal Player build and
 test. Linux runs the migration and Vulkan rollback cases, with an extra DXC

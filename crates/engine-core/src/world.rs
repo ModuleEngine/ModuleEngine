@@ -902,9 +902,6 @@ impl EcsWorld {
 
     /// Construct authored rows without demo motion.
     pub fn from_objects(objects: Vec<WorldObject>) -> Result<Self, String> {
-        if objects.iter().any(|object| object.id == 0) {
-            return Err("Entity IDs must be nonzero".into());
-        }
         crate::validate_world_commands(&objects, &[])?;
         let mut world = Self {
             rows: Arc::new(EcsRows::default()),
@@ -918,9 +915,6 @@ impl EcsWorld {
     }
 
     pub fn from_entities(entities: Vec<crate::GameEntity>) -> Result<Self, String> {
-        if entities.iter().any(|entity| entity.object.id == 0) {
-            return Err("Entity IDs must be nonzero".into());
-        }
         let mut world = Self::from_objects(
             entities
                 .iter()
@@ -1339,11 +1333,11 @@ impl EcsWorld {
     }
 
     pub(crate) fn validate_objects(&self) -> Result<(), String> {
-        let objects = self
+        let mut objects = self
             .entity_ids()
             .map(|id| (id, self.object(id).unwrap()))
             .collect();
-        crate::control::validate_object_map(&objects)
+        crate::control::edit_object_map(&mut objects, &[])
     }
 
     fn remove_rows(&mut self, ids: impl IntoIterator<Item = u64>) {
@@ -1463,12 +1457,6 @@ impl EcsWorld {
             check_world_packet_size, edit_object_map, edit_object_values, validate_object_transform,
         };
 
-        if commands
-            .iter()
-            .any(|command| matches!(command, WorldCommand::Spawn { object } if object.id == 0))
-        {
-            return Err("Entity IDs must be nonzero".into());
-        }
         check_world_packet_size(commands)?;
         if let Some(staged) = &self.staged
             && staged.validated_base
@@ -2143,6 +2131,118 @@ mod tests {
         ];
         assert!(ObjectsWorld::from_objects(duplicate.clone()).is_err());
         assert!(EcsWorld::from_objects(duplicate).is_err());
+    }
+
+    #[test]
+    fn constructors_and_spawn_reject_zero_ids_without_publishing_changes() {
+        let rejected = "Entity IDs must be nonzero";
+        let parent = WorldObject {
+            id: 1,
+            parent: None,
+            transform: Transform::default(),
+            color: [255; 4],
+        };
+        let valid = WorldObject {
+            id: u64::MAX,
+            parent: Some(parent.id),
+            color: [42; 4],
+            ..parent.clone()
+        };
+        let zero = WorldObject {
+            id: 0,
+            ..valid.clone()
+        };
+        let entity = |object| crate::GameEntity {
+            object,
+            components: Default::default(),
+            references: Default::default(),
+        };
+        assert_eq!(
+            EcsWorld::from_entities(vec![entity(parent.clone())])
+                .unwrap()
+                .objects()
+                .unwrap(),
+            vec![parent.clone()]
+        );
+        let results = [
+            (
+                "Objects constructor",
+                ObjectsWorld::from_objects(vec![parent.clone(), zero.clone()]).err(),
+            ),
+            (
+                "ECS objects constructor",
+                EcsWorld::from_objects(vec![parent.clone(), zero.clone()]).err(),
+            ),
+            (
+                "ECS entities constructor",
+                EcsWorld::from_entities(vec![entity(zero.clone())]).err(),
+            ),
+            (
+                "portable validation of a zero input row",
+                crate::validate_world_commands(
+                    &[zero.clone(), parent.clone()],
+                    &[WorldCommand::Remove { id: 0 }],
+                )
+                .err(),
+            ),
+        ];
+        let invalid = [
+            WorldCommand::SetColor {
+                id: parent.id,
+                color: [0; 4],
+            },
+            WorldCommand::Spawn { object: zero },
+        ];
+        let mut transient = invalid.to_vec();
+        transient.push(WorldCommand::Remove { id: 0 });
+        let mut unchanged = Vec::new();
+        for (scenario, batch) in [
+            ("Spawn", invalid.as_slice()),
+            ("Spawn then Remove", transient.as_slice()),
+        ] {
+            for (name, mut world) in [
+                (
+                    "Objects",
+                    Box::new(ObjectsWorld::from_objects(vec![parent.clone()]).unwrap())
+                        as Box<dyn WorldProvider>,
+                ),
+                (
+                    "ECS",
+                    Box::new(EcsWorld::from_objects(vec![parent.clone()]).unwrap()),
+                ),
+            ] {
+                let good = [WorldCommand::Spawn {
+                    object: valid.clone(),
+                }];
+                world.validate_commands(&good).unwrap();
+                world.apply_commands(&good).unwrap();
+                let before = world.objects().unwrap();
+                assert_eq!(before, vec![parent.clone(), valid.clone()], "{name}");
+                let snapshot = world.snapshot();
+                let validation = world.validate_commands(batch);
+                let application = world.apply_commands(batch);
+                unchanged.push((
+                    name,
+                    scenario,
+                    validation,
+                    application,
+                    world.objects().unwrap() == before && world.snapshot() == snapshot,
+                ));
+            }
+        }
+        assert!(
+            results
+                .iter()
+                .all(|(_, result)| result.as_deref() == Some(rejected))
+                && unchanged
+                    .iter()
+                    .all(|(_, _, validation, application, preserved)| {
+                        validation.as_ref().is_err_and(|error| error == rejected)
+                            && application.as_ref().is_err_and(|error| error == rejected)
+                            && *preserved
+                    }),
+            "Constructors and input validation: {results:?}\nPer provider: {unchanged:?}",
+        );
     }
 
     #[test]

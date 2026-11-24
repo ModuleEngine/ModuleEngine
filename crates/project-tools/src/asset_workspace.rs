@@ -986,6 +986,32 @@ impl AssetWorkspace {
             .ok_or_else(|| format!("Unknown asset ID: {id}"))
     }
 
+    /// Check the files a history snapshot expects without mutating its data or
+    /// the filesystem. Use the same reference types and activity as Assets.
+    pub fn verify_restore_resources(&self, document: &GraphDocument) -> Result<(), String> {
+        let manifest = AssetManifest::from_value(&document.asset_manifest)?;
+        manifest.verify(&self.root)?;
+        let fields = AssetFields::collect(
+            document,
+            self.composition.as_ref(),
+            self.property_objects.as_ref(),
+        )?;
+        let value = serde_json::to_value(document).map_err(|error| error.to_string())?;
+        let references = fields
+            .references
+            .iter()
+            .filter_map(|location| value.pointer(location).and_then(Value::as_str));
+        for reference in references.chain(fields.default_references.values().map(String::as_str)) {
+            resolve_relative(&self.root, &manifest.resolve_reference(reference)?)?;
+        }
+        if let Some(game) = &document.game {
+            for scene in game.scene_assets.values() {
+                resolve_relative(&self.root, &scene.path)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Build the complete reverse-reference index with one document walk and
     /// one include traversal per inline shader. Browser refreshes must use this
     /// batch instead of serializing the document independently for every tile.
