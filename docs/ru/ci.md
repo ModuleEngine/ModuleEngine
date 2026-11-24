@@ -74,6 +74,9 @@ Rust version/native target берутся из существующих Windows/
 `cargo fetch --locked`. Linux-матрица устанавливает системные библиотеки для
 линковки и Mesa, затем восстанавливает DXC по хешам архива и файлов из
 `scripts/linux-toolchain.json`.
+Единственная запись в `LD_LIBRARY_PATH` для тестов указывает на каталог
+библиотек закреплённого DXC. Так проверки переиспользования Custom SDK могут
+проверить его содержимое.
 Сбой установки, fetch, компиляции или теста — отказ CI, без fallback версии.
 
 Launcher использует короткий checkout-local `.work/v/<run-token>` и записывает

@@ -74,6 +74,8 @@ Rust version/native target come from the existing Windows/Linux manifests.
 Before the offline launcher, CI explicitly installs pinned Rust with the `rustfmt` and `clippy` components and runs
 `cargo fetch --locked`. The Linux matrix installs system link libraries and Mesa,
 then restores DXC using the archive and file hashes in `scripts/linux-toolchain.json`.
+The test environment uses the pinned DXC library directory as its sole
+`LD_LIBRARY_PATH` entry so the Custom SDK reuse checks can verify its contents.
 An installation, fetch, compilation, or test failure fails CI, without a fallback version.
 
 The launcher uses a short checkout-local `.work/v/<run-token>` and records

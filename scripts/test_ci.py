@@ -80,6 +80,7 @@ class PolicyTests(unittest.TestCase):
         self.assertIn("  merge_group:", text)
         self.assertNotIn("CARGO_PROFILE_TEST_DEBUG:", text)
         self.assertNotIn("CARGO_PROFILE_DEV_DEBUG:", text)
+        self.assertIn('echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/.tools/ci-dxc/lib" >> "$GITHUB_ENV"', text)
         self.assertIn("--component rustfmt --component clippy", text)
         self.assertIn("run: python scripts/verify.py --profile clippy --plan", text)
         self.assertIn("run: python scripts/verify.py --profile clippy --timeout 1800", text)

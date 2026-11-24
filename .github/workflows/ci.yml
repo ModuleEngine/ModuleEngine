@@ -109,6 +109,7 @@ jobs:
         run: |
           python scripts/ci_linux_dxc.py
           echo "MODULE_ENGINE_DXC=$GITHUB_WORKSPACE/.tools/ci-dxc/bin/dxc" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/.tools/ci-dxc/lib" >> "$GITHUB_ENV"
           LD_LIBRARY_PATH="$GITHUB_WORKSPACE/.tools/ci-dxc/lib" .tools/ci-dxc/bin/dxc --version
       - name: Run all workspace tests and report package counts
         run: python scripts/ci_workspace_tests.py

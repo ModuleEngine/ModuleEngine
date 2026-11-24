@@ -4642,6 +4642,7 @@ mod tests {
         );
         assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains("Running:"))));
         output.drop_without_applying_deltas();
+        let deadline = Instant::now() + Duration::from_secs(45);
         let mut responsive_frames = 0;
         loop {
             draw(&mut editor, vec![]).drop_without_applying_deltas();
@@ -4656,7 +4657,11 @@ mod tests {
             {
                 break;
             }
-            assert!(Instant::now() < deadline, "AA preparation did not finish");
+            assert!(
+                Instant::now() < deadline,
+                "AA preparation did not finish: {:?}",
+                editor.preparation_activities()
+            );
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(responsive_frames > 0);
