@@ -15,11 +15,30 @@ from verify import VerificationError, test_skips
 MIGRATION_TEST = "workspace_files::tests::migration_copy_accepts_case_distinct_filename_and_preserves_legacy_source"
 ALLOCATION_TEST = "vulkan::tests::failed_partial_native_allocations_release_owned_handles_and_device_recovers"
 SUMMARY = re.compile(r"^test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;")
-PASSED = re.compile(r"^test (.+) \.\.\. ok$")
+CASE = re.compile(r"^test (.+?) \.\.\. (.*)$")
 FORBIDDEN_PLAYER_PACKAGES = {
     "module-engine-arpg", "module-engine-project-puzzle", "module-engine-g1",
     "module-engine-two-arenas", "module-engine-vulkan", "ash",
 }
+
+
+def passed_cases(suite):
+    names = set()
+    running = None
+    for line in suite:
+        if line in ("successes:", "failures:"):
+            break
+        if match := CASE.fullmatch(line):
+            running, status = match.groups()
+        else:
+            status = line
+        # Native Vulkan diagnostics can write to stderr between libtest's
+        # test name and verdict, even with --show-output.
+        if status == "ok" and running is not None:
+            names.add(running)
+        if status in ("ok", "FAILED", "ignored") or status.startswith("ignored, "):
+            running = None
+    return names
 
 
 def report(lines, package_names):
@@ -39,12 +58,7 @@ def report(lines, package_names):
         if package is None:
             raise VerificationError(f"No Cargo package for test summary: {summary[0]}")
         passed, failed, ignored = map(int, summary.groups())
-        names = set()
-        for line in suite:
-            if line in ("successes:", "failures:"):
-                break
-            if match := PASSED.fullmatch(line):
-                names.add(match[1])
+        names = passed_cases(suite)
         skipped = test_skips("\n".join(suite), names)
         row = counts[package]
         row["passed"] += passed - len(skipped)
@@ -122,7 +136,7 @@ def workspace(output):
     if not executed:
         raise VerificationError("The workspace run did not report any executed tests")
     with log.open(encoding="utf-8") as stream:
-        if any(line.startswith("Vulkan validation ERROR:") for line in stream):
+        if any("Vulkan validation ERROR:" in line for line in stream):
             raise VerificationError("Workspace tests reported Vulkan validation errors")
     if any(reason.startswith("Custom SDK:") for row in counts.values()
            for reason in row["capability_skips"].values()):

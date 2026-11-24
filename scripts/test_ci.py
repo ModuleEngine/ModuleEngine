@@ -151,16 +151,18 @@ class WorkspaceReportingTests(unittest.TestCase):
                     "profile": {"test": True}, "target": {"kind": ["lib"], "name": "test"}}
         log = [
             json.dumps(artifact), "     Running unittests src/lib.rs (/target/debug/deps/test-123)",
-            "test works ... ok", "test needs_gpu ... ok", "test ignored ... ignored",
+            "test works ... Vulkan debug: validation layer unavailable",
+            "Vulkan debug named DEVICE: fixture", "ok",
+            "test needs_gpu ... ok", "test failed_again ... FAILED", "test ignored ... ignored",
             "successes:", "---- works stdout ----", "running 1 test", "test child_case ... ok",
             "test result: ok. 1 passed; 0 failed; 0 ignored;", "---- needs_gpu stdout ----",
             "MODULEENGINE_TEST_SKIP\tneeds_gpu\tVulkan: no loader",
-            "test result: ok. 2 passed; 0 failed; 1 ignored;",
+            "test result: FAILED. 2 passed; 1 failed; 1 ignored;",
             "   Doc-tests test", "test doc_example ... ok",
             "test result: FAILED. 1 passed; 1 failed; 0 ignored;",
         ]
         counts, executed = ci_workspace_tests.report(log, {"crate#test": "crate"})
-        self.assertEqual(counts["crate"], {"passed": 2, "failed": 1, "ignored": 1,
+        self.assertEqual(counts["crate"], {"passed": 2, "failed": 2, "ignored": 1,
                                           "capability_skips": {"needs_gpu": "Vulkan: no loader"}})
         self.assertEqual(executed, {("crate", "works"), ("crate", "doc_example")})
 
