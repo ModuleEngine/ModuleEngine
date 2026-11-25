@@ -153,6 +153,7 @@ pub(super) fn compare_image(root: &Path, output: &Path) -> Result<(), String> {
 
     let same_device = reference_device.vendor_id == candidate_device.vendor_id
         && reference_device.device_id == candidate_device.device_id
+        && reference_device.device_uuid == candidate_device.device_uuid
         && reference_device.driver_version_raw == candidate_device.driver_version_raw;
     let valid_frames = reference.is_valid()
         && candidate.is_valid()

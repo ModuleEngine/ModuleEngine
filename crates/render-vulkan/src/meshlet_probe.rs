@@ -20,6 +20,7 @@ pub struct MeshletDeviceReport {
     pub name: String,
     pub vendor_id: u32,
     pub device_id: u32,
+    pub device_uuid: [u8; vk::UUID_SIZE],
     pub driver_version_raw: u32,
     pub api_version: u32,
     pub max_storage_buffer_range: u32,
@@ -56,7 +57,10 @@ impl MeshletDeviceReport {
     pub(super) fn query(renderer: &VulkanRenderer) -> Result<Self, VulkanError> {
         let instance = &renderer.instance;
         let physical = renderer.physical;
-        let base = unsafe { instance.get_physical_device_properties(physical) };
+        let mut identity = vk::PhysicalDeviceIDProperties::default();
+        let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut identity);
+        unsafe { instance.get_physical_device_properties2(physical, &mut properties) };
+        let base = properties.properties;
         let extensions = unsafe { instance.enumerate_device_extension_properties(physical) }
             .map_err(VulkanError::api("read mesh shader device extensions"))?;
         let ext = extensions
@@ -104,6 +108,7 @@ impl MeshletDeviceReport {
             name: renderer.name.clone(),
             vendor_id: base.vendor_id,
             device_id: base.device_id,
+            device_uuid: identity.device_uuid,
             driver_version_raw: base.driver_version,
             api_version: base.api_version,
             max_storage_buffer_range: base.limits.max_storage_buffer_range,
@@ -344,7 +349,7 @@ impl MeshletScene {
                         );
                         offset += bytes.len();
                     }
-                });
+                })?;
         }
         let build = MeshletBuildReport {
             max_vertices_per_meshlet: VERTICES,

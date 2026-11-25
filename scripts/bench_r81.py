@@ -28,7 +28,8 @@ def scene_result(exe, path, folder, env, parity):
             parity["fixture"], parity["camera"], parity["render_pixels"]):
         raise ValueError(f"Native input differs from the matched image check in {folder}")
     proof = parity["r81" if path == "candidate" else "r24"]["device"]
-    if any(device[key] != proof[key] for key in ("vendor_id", "device_id", "driver_version_raw")):
+    if any(device[key] != proof[key]
+           for key in ("vendor_id", "device_id", "device_uuid", "driver_version_raw")):
         raise ValueError(f"Native GPU differs from the matched image check in {folder}")
     if (case["signature"]["effective_present_mode"] != "Immediate"
             or raw["cpu_pixel_readback_bytes"] != 0
