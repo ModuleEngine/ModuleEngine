@@ -122,10 +122,13 @@ jobs:
             if [ "$code" = "404" ]; then
               reason="$workflow does not exist on the base branch yet"
             elif [ "$code" = "200" ]; then
-              if cmp -s "$base_copy" "$workflow"; then
-                fail "Expected a review in $file, but it is missing or empty, and this PR does not change the workflow."
-              fi
-              reason="$workflow differs from the base branch"
+              cmp_status=0
+              cmp -s "$base_copy" "$workflow" || cmp_status=$?
+              case "$cmp_status" in
+                0) fail "Expected a review in $file, but it is missing or empty, and this PR does not change the workflow." ;;
+                1) reason="$workflow differs from the base branch" ;;
+                *) fail "Could not compare $workflow with the base copy (cmp exit $cmp_status)." ;;
+              esac
             else
               fail "Expected a review in $file, and the check whether this PR changes the workflow failed with HTTP $code."
             fi
