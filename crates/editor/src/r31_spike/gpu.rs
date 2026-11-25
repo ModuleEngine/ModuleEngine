@@ -128,7 +128,7 @@ impl Gpu {
             let mut pixels = vec![0; pixel_bytes()];
             buffer.read(&mut pixels)?;
             if self.frames.format == vk::Format::B8G8R8A8_UNORM {
-                for pixel in pixels.chunks_exact_mut(4) {
+                for pixel in pixels.as_chunks_mut::<4>().0 {
                     pixel.swap(0, 2);
                 }
             }

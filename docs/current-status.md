@@ -4,6 +4,13 @@
 
 [English](current-status.md) | [Русский](ru/current-status.md) | [Documentation](README.md)
 
+**25 November 2026 — native R3.1 comparison on Windows.**
+Both Vulkan painters draw the current editor root on devices created
+by R2 and meet the timing and text criteria at native 100% and 150%
+DPI. The synchronization-validation pair reported zero errors.
+`egui-ash-renderer` is the starting point for the R3.2 shell.
+See the [measurements and captures](editor-vulkan-spike.md#r31-results).
+
 **24 November 2026 — R2.4 evidence, the S4 baseline and the ARPG tick trial are available.**
 The [R2.4 receipt](evidence/r24/README.md) records the Windows and combined
 review. [CI](ci.md#что-выполняется) checks new documentation links for local

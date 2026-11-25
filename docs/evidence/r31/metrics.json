@@ -1,0 +1,215 @@
+{
+  "schema_version": 1,
+  "head": "25cfddf4c3abb545b749985ae2f9e6f65b803e57",
+  "source_digest": "ad2d4f9cfda8a19f1b0951ddc8597b0a8c21e0b5faddf6e90318882b27563fdd",
+  "release_exe_sha256": "c711ec8fc788c5e70a8b81eaa913f007ccfbf45f8d7e3cd95b6830a53c57de90",
+  "validation_exe_sha256": "c0ca3f19894a3e230a0decdcaf6b67fa5fad954bae96243027c3ffbd937094a3",
+  "fixture_sha256": "c5e6f33f4fd12f883a24c5167c957e9ba6f19dd60fc11b24bc2837351ffd114d",
+  "target": "x86_64-pc-windows-msvc",
+  "rustc": "1.99.0",
+  "features": [
+    "r31-spike"
+  ],
+  "windows_build": "26300.10075",
+  "adapter": "NVIDIA GeForce RTX 4080 SUPER",
+  "driver": "617.42",
+  "vulkan_device_api": "1.4.351",
+  "client_pixels": [
+    1580,
+    940
+  ],
+  "refresh_millihertz": 144000,
+  "swapchain_format": "B8G8R8A8_UNORM",
+  "present_mode": "IMMEDIATE",
+  "producer_slots": 2,
+  "ui_frames_in_flight": 1,
+  "egui_zoom": 1.0,
+  "warmup_frames": 30,
+  "measured_intervals_per_run": 240,
+  "capture_frame": 271,
+  "scored_intervals": 2880,
+  "interval_budget_ms": 16.666666666666668,
+  "validation": {
+    "native_scale": 1.0,
+    "layer": "VK_LAYER_KHRONOS_validation",
+    "synchronization_validation": true,
+    "runs": [
+      {
+        "painter": "ash",
+        "warnings": 0,
+        "errors": 0
+      },
+      {
+        "painter": "thin",
+        "warnings": 0,
+        "errors": 0
+      }
+    ]
+  },
+  "timing": [
+    {
+      "native_scale": 1.0,
+      "pixels_per_point": 1.0,
+      "painter": "ash",
+      "median_mean_interval_ms": 1.791972916666667,
+      "fps_from_median_interval": 558.0441482676797,
+      "median_p95_interval_ms": 2.4955,
+      "worst_interval_ms": 3.2967,
+      "scored_sample_count": 720,
+      "meshes_vertices_indices_texture_updates_per_sample": [
+        14,
+        24246,
+        48393,
+        0
+      ],
+      "runs": [
+        {
+          "run": "run-1-ash",
+          "mean_interval_ms": 1.6269433333333327,
+          "p95_interval_ms": 2.1224999999999996,
+          "max_interval_ms": 2.839,
+          "intervals_over_budget": 0
+        },
+        {
+          "run": "run-2-ash",
+          "mean_interval_ms": 1.9124908333333328,
+          "p95_interval_ms": 2.6687999999999996,
+          "max_interval_ms": 3.1973000000000003,
+          "intervals_over_budget": 0
+        },
+        {
+          "run": "run-3-ash",
+          "mean_interval_ms": 1.791972916666667,
+          "p95_interval_ms": 2.4955,
+          "max_interval_ms": 3.2967,
+          "intervals_over_budget": 0
+        }
+      ],
+      "png": "dpi100-ash.png",
+      "png_sha256": "237a3738dbda5cf2586cd2b3abce68c7125152d68c61ae4e7aa04c1060a4061f"
+    },
+    {
+      "native_scale": 1.0,
+      "pixels_per_point": 1.0,
+      "painter": "thin",
+      "median_mean_interval_ms": 2.0085358333333336,
+      "fps_from_median_interval": 497.87511051790204,
+      "median_p95_interval_ms": 2.9539,
+      "worst_interval_ms": 7.3014,
+      "scored_sample_count": 720,
+      "meshes_vertices_indices_texture_updates_per_sample": [
+        14,
+        24246,
+        48393,
+        0
+      ],
+      "runs": [
+        {
+          "run": "run-1-thin",
+          "mean_interval_ms": 1.901004166666666,
+          "p95_interval_ms": 2.5023,
+          "max_interval_ms": 3.1594,
+          "intervals_over_budget": 0
+        },
+        {
+          "run": "run-2-thin",
+          "mean_interval_ms": 2.0242912499999997,
+          "p95_interval_ms": 3.2739000000000003,
+          "max_interval_ms": 6.3447,
+          "intervals_over_budget": 0
+        },
+        {
+          "run": "run-3-thin",
+          "mean_interval_ms": 2.0085358333333336,
+          "p95_interval_ms": 2.9539,
+          "max_interval_ms": 7.3014,
+          "intervals_over_budget": 0
+        }
+      ],
+      "png": "dpi100-thin.png",
+      "png_sha256": "e567f6c03b2484099d533343034f2394288a2a8e48af347c6125b913cbddfb8c"
+    },
+    {
+      "native_scale": 1.5,
+      "pixels_per_point": 1.5,
+      "painter": "ash",
+      "median_mean_interval_ms": 1.6816912499999996,
+      "fps_from_median_interval": 594.6394738035298,
+      "median_p95_interval_ms": 2.3278000000000003,
+      "worst_interval_ms": 3.3463,
+      "scored_sample_count": 720,
+      "meshes_vertices_indices_texture_updates_per_sample": [
+        14,
+        13476,
+        32892,
+        0
+      ],
+      "runs": [
+        {
+          "run": "run-1-ash",
+          "mean_interval_ms": 1.7124475000000003,
+          "p95_interval_ms": 2.5566999999999998,
+          "max_interval_ms": 3.2867,
+          "intervals_over_budget": 0
+        },
+        {
+          "run": "run-2-ash",
+          "mean_interval_ms": 1.4811716666666677,
+          "p95_interval_ms": 2.0798,
+          "max_interval_ms": 3.1669,
+          "intervals_over_budget": 0
+        },
+        {
+          "run": "run-3-ash",
+          "mean_interval_ms": 1.6816912499999996,
+          "p95_interval_ms": 2.3278000000000003,
+          "max_interval_ms": 3.3463,
+          "intervals_over_budget": 0
+        }
+      ],
+      "png": "dpi150-ash.png",
+      "png_sha256": "d6f74a34ef6129fb3212302e2ac8ff48ec6fe5c756195200944b51a0288cfdd1"
+    },
+    {
+      "native_scale": 1.5,
+      "pixels_per_point": 1.5,
+      "painter": "thin",
+      "median_mean_interval_ms": 1.4457525,
+      "fps_from_median_interval": 691.6813216646694,
+      "median_p95_interval_ms": 2.1733,
+      "worst_interval_ms": 3.2538,
+      "scored_sample_count": 720,
+      "meshes_vertices_indices_texture_updates_per_sample": [
+        14,
+        13476,
+        32892,
+        0
+      ],
+      "runs": [
+        {
+          "run": "run-1-thin",
+          "mean_interval_ms": 1.4457525,
+          "p95_interval_ms": 2.2363999999999997,
+          "max_interval_ms": 3.1289,
+          "intervals_over_budget": 0
+        },
+        {
+          "run": "run-2-thin",
+          "mean_interval_ms": 1.4266245833333329,
+          "p95_interval_ms": 2.0465,
+          "max_interval_ms": 3.2123999999999997,
+          "intervals_over_budget": 0
+        },
+        {
+          "run": "run-3-thin",
+          "mean_interval_ms": 1.4457599999999997,
+          "p95_interval_ms": 2.1733,
+          "max_interval_ms": 3.2538,
+          "intervals_over_budget": 0
+        }
+      ],
+      "png": "dpi150-thin.png",
+      "png_sha256": "6e18e37544d68c468dba0a7c4a7eaff330f6997af87aecdbc62d8f79eb8ff8a9"
+    }
+  ]
+}
