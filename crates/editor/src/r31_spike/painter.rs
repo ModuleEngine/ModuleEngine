@@ -47,7 +47,11 @@ impl Painter {
         })
     }
 
-    pub fn update_textures(&mut self, frames: &Frames, delta: TexturesDelta) -> Result<(), String> {
+    pub fn update_textures(
+        &mut self,
+        frames: &Frames,
+        mut delta: TexturesDelta,
+    ) -> Result<(), String> {
         // The shared frame fence already retired every prior draw that sampled these textures.
         match &mut self.backend {
             Backend::Library(painter) => {
@@ -56,7 +60,7 @@ impl Painter {
                         .free_texture(id)
                         .map_err(|e| format!("egui-ash-renderer free: {e}"))?;
                 }
-                for (id, changes) in delta.set {
+                for (id, changes) in delta.set.drain() {
                     for change in changes {
                         painter
                             .set_texture(frames.queue, frames.pool, id, &change)
@@ -68,14 +72,14 @@ impl Painter {
                 for id in self.pending_free.drain(..) {
                     painter.free_texture(id);
                 }
-                for (id, changes) in delta.set {
+                for (id, changes) in delta.set.drain() {
                     for change in changes {
                         painter.set_texture(frames, id, &change)?;
                     }
                 }
             }
         }
-        self.pending_free = delta.free;
+        self.pending_free.extend(delta.free.drain());
         Ok(())
     }
 
