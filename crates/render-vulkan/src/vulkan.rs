@@ -2244,7 +2244,7 @@ impl VulkanRenderer {
                         "R8.1 meshlet geometry belongs to another device".into(),
                     ));
                 }
-                let mut passes = active_passes().filter(Pass::geometry);
+                let mut passes = active_passes().filter(|pass| pass.geometry());
                 let pass = passes
                     .next()
                     .filter(|pass| pass.module == "gpu.forward" && passes.next().is_none())
