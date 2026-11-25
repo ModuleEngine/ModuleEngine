@@ -90,6 +90,7 @@ fn host(root: &Path, project: &Path, path: &str) -> (GameHost, String) {
     )
     .unwrap();
     host.camera = fixed_camera(&host.author_snapshot().unwrap());
+    host.set_detailed_stats(true);
     (host, reference)
 }
 
@@ -123,7 +124,8 @@ fn moving_vertices(a: &[[f32; 3]], b: &[[f32; 3]]) -> usize {
         .count()
 }
 
-fn png(path: &Path, frame: &Frame) {
+fn capture_visible_frame(path: &Path, frame: &Frame) {
+    assert!(frame.is_valid(), "Invalid frame for {}", path.display());
     let mut encoder = png::Encoder::new(
         fs::File::create_new(path).unwrap(),
         frame.width as u32,
@@ -135,6 +137,12 @@ fn png(path: &Path, frame: &Frame) {
         .unwrap()
         .write_image_data(&frame.rgba)
         .unwrap();
+    assert!(
+        frame.stats.visible_objects > 0 && frame.stats.shaded_pixels > 0,
+        "No visible geometry in {}: {:?}",
+        path.display(),
+        frame.stats
+    );
 }
 
 #[test]
@@ -208,8 +216,7 @@ fn khronos_glb_import_and_play() {
             .unwrap()
             .unwrap()
             .frame;
-        assert!(base_frame.is_valid() && base_frame.stats.visible_objects > 0);
-        png(&project.join("t000.png"), &base_frame);
+        capture_visible_frame(&project.join("t000.png"), &base_frame);
         let mut tick = 0;
         for goal in [27, 54] {
             for _ in tick..goal {
@@ -230,7 +237,8 @@ fn khronos_glb_import_and_play() {
             assert_eq!(presented.provenance.current_tick, goal);
             assert_eq!(presented.camera, camera);
             let frame = presented.frame;
-            assert!(frame.is_valid() && frame.stats.visible_objects > 0);
+            let name = format!("t{goal:03}.png");
+            capture_visible_frame(&project.join(&name), &frame);
             let different_pixels = base_frame
                 .rgba
                 .chunks_exact(4)
@@ -256,8 +264,6 @@ fn khronos_glb_import_and_play() {
                     "{label} tick {goal} must show motion"
                 );
             }
-            let name = format!("t{goal:03}.png");
-            png(&project.join(&name), &frame);
             println!(
                 "{label} tick {goal} via {}: {moved} moving vertices, {different_pixels} changed pixels, image {name}",
                 host.device
