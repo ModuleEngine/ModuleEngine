@@ -102,18 +102,42 @@ pub struct SystemContext<'a> {
     pub dt: f32,
     pub input: &'a GameInput,
     pub bindings: &'a BTreeMap<String, String>,
-    physics: &'a mut Option<Arc<dyn PhysicsQueries>>,
+    physics: Option<&'a mut Option<Arc<dyn PhysicsQueries>>>,
 }
 
-impl SystemContext<'_> {
+impl<'a> SystemContext<'a> {
+    /// Build a context for an isolated system call. A running schedule provides
+    /// its own tick-scoped physics view.
+    pub fn new(
+        game: &'a mut GameState,
+        resources: &'a mut ResourceStore,
+        events: &'a mut Vec<GameEvent>,
+        dt: f32,
+        input: &'a GameInput,
+        bindings: &'a BTreeMap<String, String>,
+    ) -> Self {
+        Self {
+            game,
+            resources,
+            events,
+            dt,
+            input,
+            bindings,
+            physics: None,
+        }
+    }
+
+    fn physics_queries(&self) -> Option<&dyn PhysicsQueries> {
+        self.physics.as_deref().and_then(Option::as_deref)
+    }
+
     pub fn physics_queries_available(&self) -> bool {
-        self.physics.is_some()
+        self.physics_queries().is_some()
     }
 
     pub fn query_physics(&self, query: &PhysicsQuery) -> PhysicsQueryResponse {
         let physics = self
-            .physics
-            .as_deref()
+            .physics_queries()
             .ok_or(PhysicsQueryError::Unavailable)?;
         query.validate_wire()?;
         physics.query(&self.game.world, query)
@@ -124,10 +148,14 @@ impl SystemContext<'_> {
         &mut self,
         queries: Arc<dyn PhysicsQueries>,
     ) -> Result<(), String> {
-        if self.physics.is_some() {
+        let physics = self
+            .physics
+            .as_deref_mut()
+            .ok_or("Physics queries require an authored tick")?;
+        if physics.is_some() {
             return Err("Multiple physics steps in one fixed tick".into());
         }
-        *self.physics = Some(queries);
+        *physics = Some(queries);
         Ok(())
     }
 
@@ -769,7 +797,7 @@ impl ScheduledTick {
             dt: self.dt,
             input: &self.input,
             bindings: &system.node.bindings,
-            physics: &mut self.physics,
+            physics: Some(&mut self.physics),
         };
         if !system.initialized {
             let retained = system.preserve_on_initialize.then(|| system.state.clone());
@@ -1028,21 +1056,20 @@ impl SystemExecutor {
                 dt,
                 input,
                 bindings: &system.node.bindings,
-                physics,
+                physics: Some(physics),
             };
             candidate
                 .implementation
                 .initialize(&mut ctx, &mut candidate_state)
         };
-        let mut teardown = SystemContext {
-            game: &mut old_game,
-            resources: &mut old_resources,
-            events: &mut old_events,
-            dt: 0.,
+        let mut teardown = SystemContext::new(
+            &mut old_game,
+            &mut old_resources,
+            &mut old_events,
+            0.,
             input,
-            bindings: &system.node.bindings,
-            physics: &mut None,
-        };
+            &system.node.bindings,
+        );
         if let Err(error) = initialization {
             let cleanup = candidate.cleanup(&mut teardown, &mut candidate_state);
             let detail = if cleanup.is_empty() {
@@ -1156,15 +1183,14 @@ impl SystemExecutor {
                 // Mark first so a later best-effort shutdown cannot invoke a
                 // failing stop hook twice; other instances still receive stop.
                 system.initialized = false;
-                let mut ctx = SystemContext {
+                let mut ctx = SystemContext::new(
                     game,
-                    resources: &mut self.resources,
+                    &mut self.resources,
                     events,
-                    dt: 0.,
-                    input: &input,
-                    bindings: &system.node.bindings,
-                    physics: &mut None,
-                };
+                    0.,
+                    &input,
+                    &system.node.bindings,
+                );
                 if let Err(error) = system.implementation.stop(&mut ctx, &mut system.state) {
                     errors.push(format!("System '{}': {error}", system.node.id));
                 }

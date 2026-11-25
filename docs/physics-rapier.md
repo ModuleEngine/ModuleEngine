@@ -73,7 +73,8 @@ The available geometry is the completed physics step in the current tick.
 ECS operations after that step enter the solver on the next tick. An object
 removed or replaced between physics and a consumer cannot be hit as its old
 incarnation. Without a preceding physics step, queries return `Unavailable`.
-Use `physics_queries_available()` to check. Custom queries go through the
+Use `physics_queries_available()` to check. Native tests that call a system
+directly can construct the context with `SystemContext::new`. Custom queries go through the
 current invocation's worker exchange and share its deadline, up to 64 calls
 per update.
 
