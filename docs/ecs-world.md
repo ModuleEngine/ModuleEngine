@@ -122,7 +122,8 @@ on 2,000 ECS entities. Updating the existing `offset` member borrows its key
 and writes the same JSON number. The Release probe times the full tick and
 the isolated operations. Each operation reports 240 raw samples after 30
 warmup batches. Isolated timings include their own loop and memory access
-costs and cannot be added to get the total tick time.
+costs and cannot be added to get the total tick time. Run this probe
+explicitly outside the automatic verification profiles.
 
 ```sh
 cargo test --offline --locked --release -p module-engine-core --lib world::s3_cost::s3_motion_update_cost -- --exact --ignored --nocapture --test-threads=1
