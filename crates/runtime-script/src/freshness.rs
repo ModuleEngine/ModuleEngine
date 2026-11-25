@@ -834,8 +834,6 @@ pub(crate) fn prepare(
 }
 fn prepare_inner(prepared: &mut PreparedInputs, cancel: &AtomicBool) -> Result<(), MissReason> {
     let context = &prepared.context;
-    #[cfg(test)]
-    crate::program_store::pr61_phase(format_args!("prepare SDK root"));
     let mut sdk = Sha256::new_with_prefix(b"ModuleEngine SDK proof v1\0");
     let root = context
         .sdk_root
@@ -856,8 +854,6 @@ fn prepare_inner(prepared: &mut PreparedInputs, cancel: &AtomicBool) -> Result<(
     {
         return Err(MissReason::ContentChanged);
     }
-    #[cfg(test)]
-    crate::program_store::pr61_phase(format_args!("prepare Core source tree"));
     let (digest, _, _, files) = tree_hash(&root.join("crates/engine-core"), false, cancel)?;
     text(&mut sdk, &digest);
     prepared.sdk_files.extend(files);
@@ -876,8 +872,6 @@ fn prepare_inner(prepared: &mut PreparedInputs, cancel: &AtomicBool) -> Result<(
     }
     audit_native_tokens(&prepared.source)?;
     audit_sdk_macros(&root.join("crates/engine-core"), cancel)?;
-    #[cfg(test)]
-    crate::program_store::pr61_phase(format_args!("prepare registry dependency closure"));
     let (packages, closure, files) = dependencies(context, cancel)?;
     text(&mut sdk, &closure);
     prepared.packages = packages;
@@ -918,15 +912,8 @@ fn prepare_inner(prepared: &mut PreparedInputs, cancel: &AtomicBool) -> Result<(
         .iter()
         .chain([&context.tool.cargo, &context.tool.rustc])
         .collect::<BTreeSet<_>>();
-    #[cfg(test)]
-    crate::program_store::pr61_phase(format_args!("prepare hash bundled and native tool inputs"));
     for path in tools {
         let path = regular(path)?;
-        #[cfg(test)]
-        crate::program_store::pr61_phase(format_args!(
-            "prepare hashing {}",
-            path.file_name().unwrap_or_default().to_string_lossy()
-        ));
         let hash = file_hash(&path, MAX_TOOL_BYTES, cancel)?;
         path_part(&mut sdk, &path);
         text(&mut sdk, &hash);
@@ -943,8 +930,6 @@ fn prepare_inner(prepared: &mut PreparedInputs, cancel: &AtomicBool) -> Result<(
             sdk.update([0]);
         }
     }
-    #[cfg(test)]
-    crate::program_store::pr61_phase(format_args!("prepare native directory snapshot"));
     prepared.native_inventory = crate::native_tools::snapshot(&context.tool.native_searches)
         .map_err(|_| MissReason::UnprovenToolchain)?;
     check(cancel)?;
