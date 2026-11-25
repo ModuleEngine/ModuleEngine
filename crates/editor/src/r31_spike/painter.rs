@@ -50,7 +50,7 @@ impl Painter {
     pub fn update_textures(
         &mut self,
         frames: &Frames,
-        mut delta: TexturesDelta,
+        delta: &mut TexturesDelta,
     ) -> Result<(), String> {
         // The shared frame fence already retired every prior draw that sampled these textures.
         match &mut self.backend {

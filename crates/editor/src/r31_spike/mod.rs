@@ -209,6 +209,18 @@ impl ApplicationHandler for Benchmark<'_> {
     }
 }
 
+struct FrameTextures(egui::TexturesDelta);
+
+impl Drop for FrameTextures {
+    fn drop(&mut self) {
+        // An unsuccessful frame exits the benchmark. Discard unprocessed
+        // updates so egui's debug Drop check preserves the original error.
+        if !self.0.is_empty() {
+            self.0.clear();
+        }
+    }
+}
+
 struct Session {
     gpu: Gpu,
     window: Window,
@@ -289,6 +301,7 @@ impl Session {
         input.hovered_files.clear();
         input.dropped_files.clear();
         let output = self.context.run_ui(input, |ui| self.editor.draw(ui));
+        let mut textures = FrameTextures(output.textures_delta);
         let pixels_per_point = output.pixels_per_point;
         if pixels_per_point != scale as f32 || self.context.zoom_factor() != 1. {
             return Err("Native DPI did not propagate to egui at unit zoom".into());
@@ -321,17 +334,12 @@ impl Session {
         if indices == 0 {
             return Err("The R3.1 fixture produced no editor triangles".into());
         }
-        let updates = output
-            .textures_delta
-            .set
-            .values()
-            .map(|deltas| deltas.len())
-            .sum();
+        let updates = textures.0.set.values().map(|deltas| deltas.len()).sum();
         let prepared = Instant::now();
         let (presented, image) = self.gpu.paint(
             &self.window,
             &primitives,
-            output.textures_delta,
+            &mut textures.0,
             pixels_per_point,
             capture,
         )?;

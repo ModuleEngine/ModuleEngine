@@ -103,7 +103,7 @@ impl Gpu {
         &mut self,
         window: &Window,
         primitives: &[ClippedPrimitive],
-        delta: TexturesDelta,
+        delta: &mut TexturesDelta,
         pixels_per_point: f32,
         capture: bool,
     ) -> Result<(Instant, Option<Vec<u8>>), String> {
