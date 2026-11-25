@@ -1,0 +1,192 @@
+name: Claude PR review
+
+# Reviews a PR when it is opened / reopened / ready for review and again after every new push.
+# Claude only READS the PR and writes the review text to claude-review.md (no permission to post anything).
+# A separate deterministic step then publishes it as ONE comment authored by github-actions[bot],
+# found by an exact marker on its first line and updated by ID (created if absent).
+# A green job means a complete review of the current commit was published. If a review was expected but
+# claude-review.md is missing, empty, names another commit or lacks the required sections, the job FAILS.
+# The only exception is a PR that itself adds or changes this workflow: the action refuses to run a workflow
+# that differs from the one on the base branch, so the step reports an explicit "review skipped".
+# That skip is allowed only when the base copy is confirmed absent (HTTP 404) or confirmed different.
+# Any other failure to compare (API error, timeout) fails the job.
+# Requires the repository secret CLAUDE_CODE_OAUTH_TOKEN (generate with `claude setup-token`).
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: claude-pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Skip drafts (ready_for_review triggers the review later) and PRs from forks (no access to secrets).
+    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      # Pinned to the commit that the moving tag v1 pointed to on 2026-11-25. Update deliberately.
+      - id: review
+        uses: anthropics/claude-code-action@4411a9e9b0283becf4b924f7bce360fd7756c78c # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: |
+            --model claude-sonnet-5-5
+            --max-turns 30
+            --allowedTools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*),Edit(./claude-review.md),Read,Grep,Glob"
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+            REVIEWED COMMIT SHA: ${{ github.event.pull_request.head.sha }}
+
+            Review this pull request. Do not push commits and do not modify any repository files.
+            The checkout is a detached HEAD, so ALWAYS pass the PR number and repo explicitly:
+            `gh pr view ${{ github.event.pull_request.number }} --repo ${{ github.repository }}`,
+            `gh pr diff ${{ github.event.pull_request.number }} --repo ${{ github.repository }}`,
+            `gh pr checks ${{ github.event.pull_request.number }} --repo ${{ github.repository }}`.
+
+            Do NOT post comments yourself. Write the final review, in Russian, to the file `claude-review.md`
+            in the workspace root (create it with the Write tool; this is the only file you may write). A later
+            workflow step validates and publishes it, so the format is strict. Be concise. The file must be:
+
+            Ревью коммита <first 7 chars of REVIEWED COMMIT SHA>
+            Вердикт: <exactly one of: ok | ok with remarks | needs changes>, optionally followed by a short reason
+            CI: <status from `gh pr checks`; say if checks are still running>
+            Что проверено: <what you actually checked, specifically>
+            Замечания: <minor remarks all together, real bugs first; write "нет" if none>
+
+            Each of the four headings (`Вердикт:`, `CI:`, `Что проверено:`, `Замечания:`) must start a line, appear
+            exactly once, in this order, and have non-empty content (it may continue on the following lines).
+
+            Project conventions to verify:
+            - Every real Rust `#[ignore]` test needs a matching step in scripts/verification.json
+              (`ignored: true`, `filter` ending in the test function name) that is either part of a profile
+              or marked `excluded` with a reason. scripts/test_verify.py discovers the real `#[ignore]` tests
+              automatically and compares them with the registry, so do NOT ask for manual edits of
+              scripts/verify.py or for a hand-maintained counter. Only if the PR adds or moves such a step,
+              check that the explicit expectations in test_verify.py (set of excluded ids, per-profile step
+              counts) were updated to match.
+            - CI does not fully run all editor tests. List explicitly which changes need local Windows
+              verification (GPU/editor/bench behaviour that CI cannot cover).
+            - Flag changed docs without the matching docs/ru translation if the English doc changed.
+            Report only what you actually checked; do not claim tests passed that were not run.
+
+      - name: Publish the review comment
+        if: always() && steps.review.conclusion == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          file=claude-review.md
+          workflow=.github/workflows/claude-pr-review.yml
+          marker='<!-- claude-pr-review -->'
+          short="${HEAD_SHA:0:7}"
+
+          fail() {
+            echo "::error title=Claude review not published::$1"
+            {
+              echo "### Claude review: FAILED"
+              echo "$1"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
+
+          if [ ! -s "$file" ]; then
+            # No review was written. This is acceptable only when the action refused to run because this PR
+            # adds or changes this workflow. Confirm that with an explicit HTTP status; anything unexpected fails.
+            base_copy="$(mktemp)"
+            code="$(curl -sS --max-time 30 --retry 2 -o "$base_copy" -w '%{http_code}' \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'Accept: application/vnd.github.raw' \
+              "https://api.github.com/repos/$REPO/contents/$workflow?ref=$BASE_SHA")" \
+              || fail "Expected a review in $file, and the check whether this PR changes the workflow could not be completed (request to GitHub failed)."
+            reason=""
+            if [ "$code" = "404" ]; then
+              reason="$workflow does not exist on the base branch yet"
+            elif [ "$code" = "200" ]; then
+              cmp_status=0
+              cmp -s "$base_copy" "$workflow" || cmp_status=$?
+              case "$cmp_status" in
+                0) fail "Expected a review in $file, but it is missing or empty, and this PR does not change the workflow." ;;
+                1) reason="$workflow differs from the base branch" ;;
+                *) fail "Could not compare $workflow with the base copy (cmp exit $cmp_status)." ;;
+              esac
+            else
+              fail "Expected a review in $file, and the check whether this PR changes the workflow failed with HTTP $code."
+            fi
+            echo "::notice title=Claude review skipped::$reason; the action does not run such a workflow. No review was produced."
+            {
+              echo "### Claude review: SKIPPED"
+              echo "$reason, and the action does not run a workflow that differs from the base branch. No review was produced for \`$short\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # A review exists: it must name the current commit and contain every required section with content.
+          if ! problem="$(python3 - "$file" "$short" 2>&1 <<'PY'
+          import re, sys
+          path, short = sys.argv[1], sys.argv[2]
+          lines = open(path, encoding="utf-8").read().replace("\r", "").split("\n")
+          if lines[0].strip() != "Ревью коммита " + short:
+              sys.exit("the first line must be 'Ревью коммита " + short + "'")
+          heads = ["Вердикт:", "CI:", "Что проверено:", "Замечания:"]
+          found = {}
+          for i, line in enumerate(lines[1:], 1):
+              for h in heads:
+                  if line.startswith(h):
+                      if h in found:
+                          sys.exit("section '" + h + "' appears more than once")
+                      found[h] = i
+          missing = [h for h in heads if h not in found]
+          if missing:
+              sys.exit("missing sections: " + ", ".join(missing))
+          pos = [found[h] for h in heads]
+          if pos != sorted(pos):
+              sys.exit("sections are out of order")
+          for n, h in enumerate(heads):
+              end = pos[n + 1] if n + 1 < len(pos) else len(lines)
+              content = (lines[pos[n]][len(h):] + "\n" + "\n".join(lines[pos[n] + 1:end])).strip()
+              if not content:
+                  sys.exit("section '" + h + "' is empty")
+              if h == "Вердикт:" and not re.match(r"(ok with remarks|ok|needs changes)\b", content):
+                  sys.exit("the verdict must start with: ok | ok with remarks | needs changes")
+              if h == "Что проверено:" and len(content) < 40:
+                  sys.exit("section 'Что проверено:' is too short to be a real description")
+          PY
+          )"; then
+            fail "The review file is invalid: $problem"
+          fi
+
+          # The marker is always added here; any marker line in the text is dropped, and the size is capped.
+          text="$(grep -vxF "$marker" "$file" | head -c 60000 || true)"
+          body="$(printf '%s\n%s\n' "$marker" "$text")"
+          # Only a comment authored by github-actions[bot] whose FIRST line is exactly the marker is ours.
+          id="$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]") | select((.body | split("\n")[0] | rtrimstr("\r")) == "<!-- claude-pr-review -->") | .id' \
+            | sed -n '1p')"
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$id" -f body="$body" > /dev/null
+            echo "Updated comment $id"
+          else
+            gh api -X POST "repos/$REPO/issues/$PR/comments" -f body="$body" > /dev/null
+            echo "Created comment"
+          fi
+          echo "### Claude review: published for \`$short\`" >> "$GITHUB_STEP_SUMMARY"
