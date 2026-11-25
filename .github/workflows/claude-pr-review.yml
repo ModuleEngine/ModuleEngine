@@ -1,7 +1,7 @@
 name: Claude PR review
 
 # Reviews a PR when it is opened / reopened / ready for review and again after every new push.
-# The result is ONE sticky comment that is edited in place; it names the reviewed commit SHA.
+# The result is ONE comment that is found by a hidden marker and edited in place; it names the reviewed commit SHA.
 # Requires the repository secret CLAUDE_CODE_OAUTH_TOKEN (generate with `claude setup-token`).
 # The workflow is only picked up by GitHub once it exists on main.
 on:
@@ -36,26 +36,36 @@ jobs:
       - uses: anthropics/claude-code-action@4411a9e9b0283becf4b924f7bce360fd7756c78c # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          use_sticky_comment: true
           claude_args: |
             --model claude-sonnet-5-5
             --max-turns 30
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*),Bash(git diff:*),Bash(git log:*),Read,Grep,Glob"
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*),Bash(gh api repos/${{ github.repository }}/issues:*),Bash(git diff:*),Bash(git log:*),Read,Grep,Glob"
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
             REVIEWED COMMIT SHA: ${{ github.event.pull_request.head.sha }}
 
             Review this pull request. Do not push commits and do not modify any files.
-            Be concise. Write the final result as ONE PR comment, in Russian. Keep a single review comment
-            per PR: publish it with `gh pr comment --edit-last --create-if-none --body ...` so that a new
-            push updates the existing comment instead of adding another one.
-            The comment must start with the line "Ревью коммита <first 7 chars of REVIEWED COMMIT SHA>" and contain:
+            The checkout is a detached HEAD, so ALWAYS pass the PR number and repo explicitly:
+            `gh pr view ${{ github.event.pull_request.number }} --repo ${{ github.repository }}`,
+            `gh pr diff ${{ github.event.pull_request.number }} --repo ${{ github.repository }}`,
+            `gh pr checks ${{ github.event.pull_request.number }} --repo ${{ github.repository }}`.
+
+            Be concise. Write the final result as ONE PR comment, in Russian. The comment body must begin with
+            the hidden marker line `<!-- claude-pr-review -->`, then the line
+            "Ревью коммита <first 7 chars of REVIEWED COMMIT SHA>", then:
             1. Verdict: one line (ok / ok with remarks / needs changes).
             2. CI status (`gh pr checks`); say if checks are still running.
             3. What was checked.
             4. Minor remarks, all together in this one comment (no separate comments per remark; use inline
                comments only for real bugs).
+
+            Publishing (keep exactly one review comment per PR, never use `gh pr comment`):
+            - List the PR comments: `gh api repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments --paginate`.
+            - Find the comment whose body contains `<!-- claude-pr-review -->` (any author). If found, update it by ID:
+              `gh api -X PATCH repos/${{ github.repository }}/issues/comments/<id> -f body=<new body>`.
+            - If none contains the marker, create it:
+              `gh api -X POST repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments -f body=<new body>`.
 
             Project conventions to verify:
             - Every real Rust `#[ignore]` test needs a matching step in scripts/verification.json
