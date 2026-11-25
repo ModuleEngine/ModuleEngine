@@ -1619,6 +1619,10 @@ fn transform(translation: [f32; 3], scale: [f32; 3]) -> Transform {
     }
 }
 
+#[cfg(all(test, not(debug_assertions)))]
+#[path = "world_s3_cost.rs"]
+mod s3_cost;
+
 #[cfg(test)]
 mod tests {
     use super::*;

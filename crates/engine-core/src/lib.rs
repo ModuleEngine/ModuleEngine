@@ -5,6 +5,9 @@
 //! connected to the selected world's speed pin to [`Runtime::step`]. This crate
 //! does not interpret arbitrary Rust or silently approximate unsupported routes.
 
+#[cfg(all(test, not(debug_assertions)))]
+extern crate self as module_engine_core;
+
 mod backend;
 mod capabilities;
 mod component_schema;
