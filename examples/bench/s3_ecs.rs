@@ -72,11 +72,20 @@ pub fn tick(world: &mut EcsWorld, frame: usize, query_ms: Option<&mut f64>) -> V
         *query_ms = started.elapsed().as_secs_f64() * 1000.;
     }
     let time = time(frame);
-    for &id in &entities[..MOVING] {
-        let motion = world.component_mut(id, COMPONENTS[0]).unwrap();
-        let offset = offset(time, id);
-        motion["offset"] = json!(offset);
-        world.transform_mut(id).unwrap().translation[1] = offset;
-    }
+    let updated = world.edit_transforms_with_component(
+        &entities[..MOVING],
+        COMPONENTS[0],
+        |id, transform, motion| {
+            let offset = offset(time, id);
+            let value = Value::from(offset);
+            if let Some(current) = motion.get_mut("offset") {
+                *current = value;
+            } else {
+                motion["offset"] = value;
+            }
+            transform.translation[1] = offset;
+        },
+    );
+    assert_eq!(updated, MOVING);
     entities
 }

@@ -1,7 +1,7 @@
 //! Release-only measurements of the operations used by the S3 motion loop.
 
 use super::{EcsWorld, Transform};
-use serde_json::json;
+use serde_json::{Value, json};
 use std::{hint::black_box, sync::Arc, time::Instant};
 
 #[path = "../../../examples/bench/s3_ecs.rs"]
@@ -46,6 +46,7 @@ fn s3_motion_update_cost() {
     measure("fixture_tick", |frame| {
         black_box(s3::tick(&mut world, frame, None));
     });
+    let after_fixture = world.clone();
 
     let entities = world.entities_with(&s3::COMPONENTS);
     assert_eq!(entities.len(), s3::ENTITIES);
@@ -59,6 +60,10 @@ fn s3_motion_update_cost() {
             world.transform_mut(id).unwrap().translation[1] = offset;
         }
     });
+    assert!(
+        world == after_fixture,
+        "S3 batch changed the final motion values"
+    );
 
     // Isolated operations use the same IDs, handles and JSON layout. Their
     // warm caches and black-box overhead differ from the mixed loop above.
@@ -113,6 +118,11 @@ fn s3_motion_update_cost() {
     measure("json_number_and_payload_key", |_| {
         for (motion, &offset) in black_box(&mut payloads).iter_mut().zip(&offsets) {
             motion["offset"] = json!(black_box(offset));
+        }
+    });
+    measure("json_number_and_existing_payload_key", |_| {
+        for (motion, &offset) in black_box(&mut payloads).iter_mut().zip(&offsets) {
+            *motion.get_mut("offset").unwrap() = Value::from(black_box(offset));
         }
     });
 }
