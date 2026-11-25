@@ -1691,8 +1691,9 @@ fn transform(translation: [f32; 3], scale: [f32; 3]) -> Transform {
     }
 }
 
-#[cfg(all(test, not(debug_assertions)))]
-#[path = "world_s3_cost.rs"]
+#[cfg(test)]
+#[cfg(not(debug_assertions))]
+#[path = "../../../examples/bench/s3_ecs_cost.rs"]
 mod s3_cost;
 
 #[cfg(test)]

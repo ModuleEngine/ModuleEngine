@@ -1,4 +1,4 @@
-//! S3 inputs and the Core tick shared by the native benchmark and R1.1.
+// S3 inputs and the Core tick shared by the native benchmark and R1.1.
 use module_engine_core::{EcsWorld, GameEntity, Transform, WorldObject};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
