@@ -10,7 +10,7 @@
 
 ## Goals and boundaries
 
-- **World.** R1.8 completed the Bevy-backed ECS storage change within its accepted performance bounds. Core owns stable IDs, the fixed-tick schedule and rollback. Object remains a compatibility provider. GameHost extracts the retained render scene from the accepted world. See the [R1 record](product-roadmap.md#rebuild-r1) and [ECS contract](ecs-world.md).
+- **World.** R1.8 completed the Bevy-backed ECS storage change within its accepted performance bounds. Core owns stable IDs, the fixed-tick schedule and rollback. Object remains a compatibility provider. GameHost extracts the retained render scene from the accepted world. R1.9 supports [batch edits of transforms and one named JSON component](ecs-world.md#r19-batch-motion). See the [R1 record](product-roadmap.md#rebuild-r1) and [ECS contract](ecs-world.md).
 - **Renderer.** R2.4 is accepted on the recorded reference. The stock path uses retained GPU scene data, frustum culling and indirect draws on qualifying Vulkan devices. With a sampled D32 attachment, a current-frame depth seed also enables Hi-Z rejection. The measurements and their limits are in the [R2.4 receipt](evidence/r24/README.md). R2.5 remains paused, with the [S4 reference](evidence/r25-s4/README.md) saved for it.
 - **Review follow-up.** RV-A, RV-B and RV-C are complete in the roadmap. Scene and Play follow the connected provider. History retains opaque authored data while checking required files. Linked-template drafts survive selection changes. The [ARPG tick trial](evidence/rv-c-arpg/README.md) with 20 live enemies supports the recorded [R6 decision](decisions.md#rv-c-arpg-tick). [RV-D scope](product-roadmap.md#rebuild-rv-d) records separate maintenance criteria.
 
@@ -19,6 +19,7 @@
 ## Implemented
 
 - **Editor.** Full with verified sources can change Engine and Project. Team freezes the architecture and allows only the exposed Project changes. Scene, Hierarchy, Inspector and Assets edit the authored project. Game runs a separate Play copy. See [editor workflow](editor-workflow.md) and [distribution](distribution.md).
+- **glTF animation.** The importer loads joint hierarchies, inverse binds, skin weights and TRS tracks. GameHost loops the first applicable clip and deforms vertex positions on the CPU. The Khronos playback check covers CesiumMan and Fox alongside the static crystal. See [content and verification](content.md#gltf-animation).
 - **Delivery.** Player uses built game logic and SPIR-V. Crate Garden has ten levels and a Windows acceptance record on the reference machine. Two Arenas is the technical ARPG example. See the [Crate Garden receipt](g1-verification-20261101.md), [game authoring](editor-game.md) and [Player](player.md).
 
 <a id="открыто-и-не-подтверждено"></a>

@@ -15,6 +15,7 @@ serde_json.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+png.workspace = true
 module-engine-game-kit = { path = "../game-kit", features = ["grid", "history", "campaign", "actions"] }
 module-engine-arpg = { path = "../gameplay-arpg", features = ["ui"] }
 module-engine-two-arenas = { path = "../example-two-arenas" }

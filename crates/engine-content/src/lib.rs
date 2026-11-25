@@ -1,5 +1,9 @@
-//! Static glTF content import with explicit package ownership and a neutral scene.
+//! glTF content import with explicit package ownership and a neutral scene.
 //! No glTF document or GPU handle is required by either world implementation.
+mod animation;
+
+pub use animation::AnimationClip;
+use animation::{Matrix, PrimitiveNode, PrimitiveSkin, Rig, SceneNode, Skin, row_major};
 use base64::Engine;
 use module_engine_core::{
     Material, Mesh, RenderItem, SceneSnapshot, TextureImage, identity_matrix, multiply_matrices,
@@ -20,8 +24,29 @@ pub struct ModelPrimitive {
 /// Import result. Dependencies are relative to the selected package, for export.
 #[derive(Clone, Debug)]
 pub struct LoadedModel {
+    /// Primitives in their rest pose, with material and topology in scene order.
     pub primitives: Vec<ModelPrimitive>,
     pub dependencies: BTreeSet<String>,
+    rig: Option<Rig>,
+}
+impl LoadedModel {
+    pub fn animation_clips(&self) -> &[AnimationClip] {
+        self.rig.as_ref().map_or(&[], |rig| &rig.clips)
+    }
+
+    /// Evaluate a single glTF clip by its zero-based file index. Seconds wrap
+    /// at the clip duration. The cached rest pose and other instances are immutable.
+    pub fn sample_clip(&self, index: usize, seconds: f32) -> Result<Vec<ModelPrimitive>, String> {
+        let rig = self
+            .rig
+            .as_ref()
+            .ok_or("glTF model has no animation clips")?;
+        let clip = rig
+            .clips
+            .get(index)
+            .ok_or_else(|| format!("glTF animation clip {index} does not exist"))?;
+        rig.sample(&self.primitives, clip, seconds)
+    }
 }
 /// A package-scoped decoded asset cache. Call invalidate after changing source files.
 pub struct ContentLibrary {
@@ -128,25 +153,43 @@ impl ContentLibrary {
         snapshot: &mut SceneSnapshot,
         binding: impl Fn(u64) -> Option<&'a str>,
     ) -> Result<(), String> {
+        self.enrich_animated_items(snapshot, binding).map(|_| ())
+    }
+
+    /// Attach the first applicable clip at snapshot time. The returned owners
+    /// need a fresh pose when a later snapshot advances; other meshes can be retained.
+    pub fn enrich_animated_items<'a>(
+        &mut self,
+        snapshot: &mut SceneSnapshot,
+        binding: impl Fn(u64) -> Option<&'a str>,
+    ) -> Result<BTreeSet<u64>, String> {
+        let mut animated = BTreeSet::new();
         let mut result = vec![];
         for item in &snapshot.items {
             if let Some(path) = binding(item.id) {
                 let model = self.load_model(path)?;
-                for primitive in &model.primitives {
-                    result.push(RenderItem {
-                        id: item.id,
-                        mesh: primitive.mesh.clone(),
-                        model: multiply_matrices(item.model, primitive.transform),
-                        color: item.color,
-                        material: primitive.material.clone(),
-                    });
+                let attach = |primitive: ModelPrimitive| RenderItem {
+                    id: item.id,
+                    mesh: primitive.mesh,
+                    model: multiply_matrices(item.model, primitive.transform),
+                    color: item.color,
+                    material: primitive.material,
+                };
+                if let Some(clip) = model.rig.as_ref().and_then(Rig::default_clip) {
+                    let sampled = model
+                        .sample_clip(clip, snapshot.time)
+                        .map_err(|error| format!("Model {path}: {error}"))?;
+                    animated.insert(item.id);
+                    result.extend(sampled.into_iter().map(attach));
+                } else {
+                    result.extend(model.primitives.iter().cloned().map(attach));
                 }
             } else {
                 result.push(item.clone());
             }
         }
         snapshot.items = result;
-        Ok(())
+        Ok(animated)
     }
     /// Validated transitive files needed for copying a model to a Player package.
     pub fn dependencies(
@@ -335,10 +378,7 @@ fn load_model(root: &Path, path: &Path) -> Result<LoadedModel, String> {
     let gltf =
         gltf::Gltf::from_slice(&bytes).map_err(|e| format!("glTF {}: {e}", path.display()))?;
     if gltf.extensions_required().next().is_some() {
-        return Err("Required glTF extensions are not supported by static importer".into());
-    }
-    if gltf.skins().next().is_some() || gltf.animations().next().is_some() {
-        return Err("Static importer does not support skins or animations".into());
+        return Err("Required glTF extensions are not supported by the importer".into());
     }
     let mut dependencies = BTreeSet::from([relative(root, path)?]);
     let parent = path.parent().unwrap();
@@ -370,16 +410,17 @@ fn load_model(root: &Path, path: &Path) -> Result<LoadedModel, String> {
     }
     for accessor in gltf.accessors() {
         if accessor.sparse().is_some() {
-            return Err("Sparse glTF accessors are not supported by static importer".into());
+            return Err("Sparse glTF accessors are not supported by the importer".into());
         }
-        if accessor.count() > 3_000_000 {
-            return Err("glTF accessor exceeds three million elements".into());
+        if !(1..=3_000_000).contains(&accessor.count()) {
+            return Err("glTF accessor must have between one and three million elements".into());
         }
         let view = accessor.view().ok_or("glTF accessor has no bufferView")?;
         let stride = view.stride().unwrap_or(accessor.size());
-        let bytes = accessor
-            .count()
-            .saturating_sub(1)
+        if stride < accessor.size() {
+            return Err("glTF bufferView stride is smaller than its accessor element".into());
+        }
+        let bytes = (accessor.count() - 1)
             .checked_mul(stride)
             .and_then(|n| n.checked_add(accessor.size()))
             .and_then(|n| n.checked_add(accessor.offset()))
@@ -404,126 +445,178 @@ fn load_model(root: &Path, path: &Path) -> Result<LoadedModel, String> {
             decode_texture(bytes)
         })
         .collect::<Result<Vec<_>, String>>()?;
-    let mut result = LoadedModel {
-        primitives: vec![],
-        dependencies,
-    };
     let scene = gltf
         .default_scene()
         .or_else(|| gltf.scenes().next())
         .ok_or("glTF has no scene")?;
-    let mut seen = BTreeSet::new();
+    let has_rig = gltf.skins().next().is_some() || gltf.animations().next().is_some();
+    let mut import = SceneImport {
+        buffers: &buffers,
+        images: &images,
+        indices: BTreeMap::new(),
+        primitives: Vec::new(),
+        rig: has_rig.then(Rig::default),
+        joint_budget: 32_768,
+        influence_budget: 8_000_000,
+    };
     for node in scene.nodes() {
-        extract_node(
-            node,
-            identity_matrix(),
-            &buffers,
-            &images,
-            &mut seen,
-            &mut result,
-            0,
-        )?;
+        import.extract_node(node, None, identity_matrix(), 0)?;
     }
-    if result.primitives.is_empty() {
+    if import.primitives.is_empty() {
         return Err("glTF scene has no triangle geometry".into());
     }
-    Ok(result)
+    if let Some(rig) = &mut import.rig {
+        rig.resolve(&gltf.document, &import.indices, &buffers)?;
+        rig.bake_rest(&mut import.primitives)?;
+    }
+    Ok(LoadedModel {
+        primitives: import.primitives,
+        dependencies,
+        rig: import.rig,
+    })
 }
-fn extract_node(
-    node: gltf::Node<'_>,
-    parent: [[f32; 4]; 4],
-    buffers: &[Vec<u8>],
-    images: &[Arc<TextureImage>],
-    seen: &mut BTreeSet<usize>,
-    result: &mut LoadedModel,
-    depth: usize,
-) -> Result<(), String> {
-    if depth > 128 {
-        return Err("glTF hierarchy exceeds 128 levels".into());
-    }
-    if !seen.insert(node.index()) {
-        return Err("glTF node graph contains a cycle or shared child".into());
-    }
-    if seen.len() > 4096 {
-        return Err("glTF scene exceeds 4096 nodes".into());
-    }
-    // glTF stores column-major; engine's neutral transform is row-major.
-    let source = node.transform().matrix();
-    let local = std::array::from_fn(|r| std::array::from_fn(|c| source[c][r]));
-    let transform = multiply_matrices(parent, local);
-    if !transform.iter().flatten().all(|v| v.is_finite()) {
-        return Err("glTF node has nonfinite transform".into());
-    }
-    if let Some(mesh) = node.mesh() {
-        for primitive in mesh.primitives() {
-            if primitive.mode() != gltf::mesh::Mode::Triangles {
-                return Err("Static importer supports triangle lists only".into());
-            }
-            if primitive.morph_targets().next().is_some() {
-                return Err("Morph targets are not supported by static importer".into());
-            }
-            let reader = primitive.reader(|b| buffers.get(b.index()).map(Vec::as_slice));
-            let vertices = reader
-                .read_positions()
-                .ok_or("Primitive POSITION missing or invalid")?
-                .collect::<Vec<_>>();
-            if vertices.len() > 1_000_000 || !vertices.iter().flatten().all(|v| v.is_finite()) {
-                return Err("Invalid or excessive model vertices".into());
-            }
-            let indices = reader
-                .read_indices()
-                .map(|v| v.into_u32().map(|i| i as usize).collect::<Vec<_>>())
-                .unwrap_or_else(|| (0..vertices.len()).collect());
-            if indices.len() % 3 != 0 || indices.iter().any(|i| *i >= vertices.len()) {
-                return Err("Primitive triangle index out of range".into());
-            }
-            let triangles = indices.as_chunks::<3>().0.to_vec();
-            let texcoords = reader
-                .read_tex_coords(0)
-                .map(|v| v.into_f32().collect::<Vec<_>>())
-                .unwrap_or_default();
-            if (!texcoords.is_empty() && texcoords.len() != vertices.len())
-                || !texcoords.iter().flatten().all(|v| v.is_finite())
-            {
-                return Err("Primitive UVs invalid".into());
-            }
-            let material = primitive.material();
-            if material.alpha_mode() != gltf::material::AlphaMode::Opaque {
-                return Err("Static importer currently requires opaque materials".into());
-            }
-            let pbr = material.pbr_metallic_roughness();
-            let base_color = pbr.base_color_factor();
-            let base_color_texture = if let Some(info) = pbr.base_color_texture() {
-                if info.tex_coord() != 0 {
-                    return Err("Only material UV set zero is supported".into());
+struct SceneImport<'a> {
+    buffers: &'a [Vec<u8>],
+    images: &'a [Arc<TextureImage>],
+    indices: BTreeMap<usize, usize>,
+    primitives: Vec<ModelPrimitive>,
+    rig: Option<Rig>,
+    joint_budget: usize,
+    influence_budget: usize,
+}
+
+impl SceneImport<'_> {
+    fn extract_node(
+        &mut self,
+        node: gltf::Node<'_>,
+        parent: Option<usize>,
+        parent_matrix: Matrix,
+        depth: usize,
+    ) -> Result<(), String> {
+        if depth > 128 {
+            return Err("glTF hierarchy exceeds 128 levels".into());
+        }
+        let slot = self.indices.len();
+        if self.indices.insert(node.index(), slot).is_some() {
+            return Err("glTF node graph contains a cycle or shared child".into());
+        }
+        if self.indices.len() > 4096 {
+            return Err("glTF scene exceeds 4096 nodes".into());
+        }
+        let local = node.transform();
+        let transform = multiply_matrices(parent_matrix, row_major(local.clone().matrix()));
+        if !transform.iter().flatten().all(|v| v.is_finite()) {
+            return Err("glTF node has nonfinite transform".into());
+        }
+        if let Some(rig) = &mut self.rig {
+            rig.nodes.push(SceneNode { parent, local });
+        }
+        if let Some(mesh) = node.mesh() {
+            let skin = if let (Some(rig), Some(skin)) = (&mut self.rig, node.skin()) {
+                let index = skin.index();
+                if let std::collections::btree_map::Entry::Vacant(entry) = rig.skins.entry(index) {
+                    entry.insert(Skin::read(skin, self.buffers, &mut self.joint_budget)?);
                 }
-                Some(
-                    images
-                        .get(info.texture().source().index())
-                        .ok_or("Material image missing")?
-                        .clone(),
-                )
+                Some(index)
             } else {
                 None
             };
-            result.primitives.push(ModelPrimitive {
-                mesh: Mesh {
-                    vertices,
-                    triangles,
-                    texcoords,
-                },
-                material: Material {
-                    base_color,
-                    base_color_texture,
-                },
-                transform,
-            });
+            for primitive in mesh.primitives() {
+                self.extract_primitive(primitive, slot, transform, skin)?;
+            }
         }
+        for child in node.children() {
+            self.extract_node(child, Some(slot), transform, depth + 1)?;
+        }
+        Ok(())
     }
-    for child in node.children() {
-        extract_node(child, transform, buffers, images, seen, result, depth + 1)?;
+
+    fn extract_primitive(
+        &mut self,
+        primitive: gltf::Primitive<'_>,
+        node: usize,
+        transform: Matrix,
+        skin: Option<usize>,
+    ) -> Result<(), String> {
+        if primitive.mode() != gltf::mesh::Mode::Triangles {
+            return Err("glTF importer supports triangle lists only".into());
+        }
+        if primitive.morph_targets().next().is_some() {
+            return Err("Morph targets are not supported by the glTF importer".into());
+        }
+        let reader = primitive.reader(|b| self.buffers.get(b.index()).map(Vec::as_slice));
+        let vertices = reader
+            .read_positions()
+            .ok_or("Primitive POSITION missing or invalid")?
+            .collect::<Vec<_>>();
+        if vertices.len() > 1_000_000 || !vertices.iter().flatten().all(|v| v.is_finite()) {
+            return Err("Invalid or excessive model vertices".into());
+        }
+        let indices = reader
+            .read_indices()
+            .map(|v| v.into_u32().map(|i| i as usize).collect::<Vec<_>>())
+            .unwrap_or_else(|| (0..vertices.len()).collect());
+        if !indices.len().is_multiple_of(3) || indices.iter().any(|i| *i >= vertices.len()) {
+            return Err("Primitive triangle index out of range".into());
+        }
+        let triangles = indices.as_chunks::<3>().0.to_vec();
+        let texcoords = reader
+            .read_tex_coords(0)
+            .map(|v| v.into_f32().collect::<Vec<_>>())
+            .unwrap_or_default();
+        if (!texcoords.is_empty() && texcoords.len() != vertices.len())
+            || !texcoords.iter().flatten().all(|v| v.is_finite())
+        {
+            return Err("Primitive UVs invalid".into());
+        }
+        let material = primitive.material();
+        if material.alpha_mode() != gltf::material::AlphaMode::Opaque {
+            return Err("glTF importer currently requires opaque materials".into());
+        }
+        let pbr = material.pbr_metallic_roughness();
+        let base_color = pbr.base_color_factor();
+        let base_color_texture = if let Some(info) = pbr.base_color_texture() {
+            if info.tex_coord() != 0 {
+                return Err("Only material UV set zero is supported".into());
+            }
+            Some(
+                self.images
+                    .get(info.texture().source().index())
+                    .ok_or("Material image missing")?
+                    .clone(),
+            )
+        } else {
+            None
+        };
+        if let Some(rig) = &mut self.rig {
+            let skin = skin
+                .map(|id| {
+                    PrimitiveSkin::read(
+                        id,
+                        rig.skins[&id].joint_count(),
+                        &primitive,
+                        &vertices,
+                        self.buffers,
+                        &mut self.influence_budget,
+                    )
+                })
+                .transpose()?;
+            rig.primitives.push(PrimitiveNode { node, skin });
+        }
+        self.primitives.push(ModelPrimitive {
+            mesh: Mesh {
+                vertices,
+                triangles,
+                texcoords,
+            },
+            material: Material {
+                base_color,
+                base_color_texture,
+            },
+            transform,
+        });
+        Ok(())
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -600,6 +693,103 @@ mod tests {
         assert_ne!(scene.items[0].mesh, Mesh::cube());
         snapshot.step(0., 0.);
     }
+
+    #[test]
+    fn gltf_skin_uses_joint_ancestry_bind_matrices_and_normalized_weights() {
+        use serde_json::json;
+
+        fn f32_bytes(values: &[f32]) -> Vec<u8> {
+            values
+                .iter()
+                .flat_map(|value| value.to_le_bytes())
+                .collect()
+        }
+        let mut binary = Vec::new();
+        let mut views = Vec::new();
+        let mut push = |bytes: &[u8]| {
+            views.push(json!({"buffer": 0, "byteOffset": binary.len(), "byteLength": bytes.len()}));
+            binary.extend(bytes);
+        };
+        push(&f32_bytes(&[0., 0., 0., 1., 0., 0., 0., 0., 1.]));
+        push(&[0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0]);
+        push(&[255, 0, 0, 0, 128, 127, 0, 0, 255, 0, 0, 0]);
+        let inverse_binds = [
+            [
+                1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., -5., 0., 0., 1.,
+            ],
+            [
+                1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., -5., -2., 0., 1.,
+            ],
+        ];
+        push(&f32_bytes(inverse_binds.as_flattened()));
+        push(&f32_bytes(&[0., 2.]));
+        push(&f32_bytes(&[0., 2., 0., 0., 6., 0.]));
+        let mut document = json!({
+            "asset": {"version": "2.0"},
+            "scene": 0,
+            "scenes": [{"nodes": [0, 3]}],
+            "nodes": [
+                {"children": [1], "translation": [2, 0, 0]},
+                {"children": [2], "translation": [3, 0, 0]},
+                {"translation": [0, 2, 0]},
+                {"mesh": 0, "skin": 0, "translation": [100, 0, 0]}
+            ],
+            "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "JOINTS_0": 1, "WEIGHTS_0": 2}}]}],
+            "skins": [{"skeleton": 1, "joints": [1, 2], "inverseBindMatrices": 3}],
+            "animations": [{
+                "name": "lift",
+                "channels": [{"sampler": 0, "target": {"node": 2, "path": "translation"}}],
+                "samplers": [{"input": 4, "output": 5}]
+            }],
+            "buffers": [{
+                "byteLength": binary.len(),
+                "uri": format!("data:application/octet-stream;base64,{}", base64::engine::general_purpose::STANDARD.encode(binary))
+            }],
+            "bufferViews": views,
+            "accessors": [
+                {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0, 0, 0], "max": [1, 0, 1]},
+                {"bufferView": 1, "componentType": 5121, "count": 3, "type": "VEC4"},
+                {"bufferView": 2, "componentType": 5121, "count": 3, "type": "VEC4", "normalized": true},
+                {"bufferView": 3, "componentType": 5126, "count": 2, "type": "MAT4"},
+                {"bufferView": 4, "componentType": 5126, "count": 2, "type": "SCALAR", "min": [0], "max": [2]},
+                {"bufferView": 5, "componentType": 5126, "count": 2, "type": "VEC3"}
+            ]
+        });
+        let root = std::env::temp_dir().join(format!("module-content-rig-{}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        let asset = root.join("rig.gltf");
+        std::fs::write(&asset, serde_json::to_vec(&document).unwrap()).unwrap();
+        let mut library = ContentLibrary::new(&root).unwrap();
+        let model = library.load_model("rig.gltf").unwrap();
+        let rest = vec![[0., 0., 0.], [1., 0., 0.], [0., 0., 1.]];
+        assert_eq!(model.primitives[0].transform, identity_matrix());
+        assert_eq!(model.primitives[0].mesh.vertices, rest);
+        assert_eq!(model.animation_clips()[0].name.as_deref(), Some("lift"));
+        assert_eq!(model.animation_clips()[0].duration, 2.);
+        let midpoint = model.sample_clip(0, 1.).unwrap();
+        let vertices = &midpoint[0].mesh.vertices;
+        assert_eq!(vertices[0], [0., 0., 0.]);
+        assert_eq!(vertices[2], [0., 2., 1.]);
+        assert!((vertices[1][1] - 2. * 127. / 255.).abs() < 0.000_01);
+        assert_eq!(
+            model.sample_clip(0, 3.).unwrap()[0].mesh.vertices,
+            *vertices
+        );
+        assert_eq!(model.primitives[0].mesh.vertices, rest);
+
+        // Shape mismatch must be rejected before gltf's typed binary iterator
+        // or import can consume it, even if its raw buffer range is in bounds.
+        document["accessors"][2]["type"] = json!("VEC3");
+        std::fs::write(&asset, serde_json::to_vec(&document).unwrap()).unwrap();
+        let project = root.join("project");
+        std::fs::create_dir(&project).unwrap();
+        let mut target = ContentLibrary::new(&project).unwrap();
+        let error = target.import_model(&asset, "assets").unwrap_err();
+        assert!(error.contains("WEIGHTS_0"), "{error}");
+        assert!(!project.join("assets").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn external_model_import_copies_dependency_closure_and_standalone_png_jpeg_are_real_images() {
         let temp =

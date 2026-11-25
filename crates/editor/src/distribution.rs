@@ -1012,8 +1012,10 @@ const NATIVE_FILES: &[&str] = &[
     "crates/engine-core/src/scenes.rs",
     "crates/engine-core/src/systems.rs",
     "crates/engine-content/Cargo.toml",
+    "crates/engine-content/src/animation.rs",
     "crates/engine-content/src/lib.rs",
     "crates/runtime-script/src/persistent.rs",
+    "crates/runtime-script/src/worker_stdio.rs",
     "Cargo.toml",
     "Cargo.lock",
     "crates/editor/Cargo.toml",
@@ -1023,6 +1025,8 @@ const NATIVE_FILES: &[&str] = &[
     "crates/editor/src/host.rs",
     "crates/editor/src/project.rs",
     "crates/editor/src/distribution.rs",
+    "crates/editor/src/team_custom_consent.rs",
+    "crates/editor/tests/verification_cli.rs",
     "crates/editor/src/authoring.rs",
     "crates/editor/src/activity.rs",
     "crates/editor/src/editor_benchmark.rs",
@@ -1315,6 +1319,42 @@ mod delivery_tests {
         let doc = crate::host::settings_demo_document(WorldKind::Objects);
         let m = write_full_manifest(&root, &doc).unwrap();
         assert!(inspect_full_sources(&root, &m, &doc).available);
+        let full = detect(
+            &root.join("project.json"),
+            &doc,
+            Some(DistributionProfile::Full),
+        )
+        .unwrap();
+        assert!(full.can_author_engine(), "{:?}", full.source_status);
+        assert_eq!(full.compile_root().unwrap(), root);
+        let mapped_sources = m.files.keys().filter(|path| {
+            path.starts_with("crates/") && (path.ends_with(".rs") || path.ends_with("Cargo.toml"))
+        });
+        assert!(!m.module_sources.is_empty());
+        assert!(
+            m.module_sources
+                .values()
+                .all(|paths| paths.iter().eq(mapped_sources.clone()))
+        );
+        for required in [
+            "crates/engine-content/src/animation.rs",
+            "crates/runtime-script/src/worker_stdio.rs",
+            "crates/editor/src/team_custom_consent.rs",
+            "crates/editor/tests/verification_cli.rs",
+        ] {
+            assert_eq!(m.files[required], hash_file(&root.join(required)).unwrap());
+            let mut omitted = m.clone();
+            omitted.files.remove(required);
+            let status = inspect_full_sources(&root, &omitted, &doc);
+            assert!(!status.available, "omitted required source: {required}");
+            let diagnostic = format!("Source inventory omits {required}");
+            assert!(
+                status
+                    .diagnostics
+                    .iter()
+                    .any(|line| line.contains(&diagnostic))
+            );
+        }
         let icon = "crates/editor/assets/editor.ico";
         assert!(m.files.contains_key(icon));
         assert!(!native_source_path("crates/editor/assets/unrelated.ico"));

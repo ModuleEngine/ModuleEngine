@@ -268,9 +268,8 @@ or a successful small test change without a new reason is unnecessary.
 
 ## Ignored Test Inventory
 
-All 23 `#[ignore]` entries are listed in the registry with their purpose. Seven are included in
-`native`/`package`. The other 16 have separate execution instructions in the
-[registry](../scripts/verification.json). Examples include:
+The registry gives each `#[ignore]` test a purpose and either a profile or
+manual execution instructions. [Verification registry](../scripts/verification.json).
 
 - `runtime_delivery::tests::emit_stage4_software_inactive_vulkan_fixture` — only
   fixture preparation; requires a new absolute `MODULE_ENGINE_STAGE4_FIXTURE_PATH`.
@@ -289,6 +288,9 @@ All 23 `#[ignore]` entries are listed in the registry with their purpose. Seven 
 - The two [R1.2 integration cases](ecs-world.md#r12-verification) run sequentially
   from the Full checkout. They compile Rust workers for the migrated game
   round trip and the standalone Player export.
+- The manual R7.1 Vulkan integration test checks GameHost playback and static
+  import with pinned external Khronos GLBs and a new evidence directory.
+  [R7.1 playback procedure](content.md#gltf-animation).
 
 These six G1 checks retain their separately recorded execution and scope in the
 [G1 delivery](g1-delivery-20261027.md) and [continuation](g1-verification-20261101.md).

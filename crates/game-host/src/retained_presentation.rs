@@ -36,6 +36,8 @@ pub(super) struct RetainedPresentation {
     dirty: BTreeSet<u64>,
     last_interpolated: BTreeMap<u64, Model>,
     appearance: BTreeSet<u64>,
+    animated: BTreeSet<u64>,
+    projected_time: Option<f32>,
     drawables: BTreeMap<u64, Drawables>,
     revision: u64,
     base: u64,
@@ -261,10 +263,13 @@ impl RetainedPresentation {
         &mut self,
         models: &BTreeMap<u64, Model>,
         time: f32,
-        enrich: impl FnOnce(SceneSnapshot) -> Result<SceneSnapshot, String>,
+        enrich: impl FnOnce(SceneSnapshot) -> Result<(SceneSnapshot, BTreeSet<u64>), String>,
     ) -> Result<(), String> {
         let mut dirty = self.dirty.clone();
         dirty.extend(self.appearance.iter().copied());
+        if self.projected_time != Some(time) {
+            dirty.extend(self.animated.iter().copied());
+        }
         for id in self.last_interpolated.keys().chain(models.keys()) {
             if self.last_interpolated.get(id) != models.get(id) {
                 dirty.insert(*id);
@@ -273,7 +278,7 @@ impl RetainedPresentation {
         if dirty.is_empty() {
             return Ok(());
         }
-        let snapshot = enrich(SceneSnapshot {
+        let (snapshot, animated) = enrich(SceneSnapshot {
             time,
             items: dirty
                 .iter()
@@ -286,6 +291,9 @@ impl RetainedPresentation {
                 })
                 .collect(),
         })?;
+        self.animated.retain(|id| !dirty.contains(id));
+        self.animated.extend(animated);
+        self.projected_time = Some(time);
         let mut items = snapshot.items.into_iter().peekable();
         let mut delta = BTreeMap::new();
         for id in dirty {
@@ -348,6 +356,23 @@ impl RetainedPresentation {
         Ok(())
     }
 
+    pub fn expanded_snapshot(&self, time: f32) -> Option<SceneSnapshot> {
+        // Deformed positions change with each pose. The expanded draw stream
+        // owns them per frame and avoids interning them in the resident pool.
+        (!self.animated.is_empty()).then(|| self.snapshot(time))
+    }
+
+    fn snapshot(&self, time: f32) -> SceneSnapshot {
+        SceneSnapshot {
+            time,
+            items: self
+                .drawables
+                .values()
+                .flat_map(|object| object.items.iter().cloned())
+                .collect(),
+        }
+    }
+
     pub fn sync(&self, renderer: &mut dyn FrameRenderer, time: f32) -> Result<(), String> {
         let ready = renderer.scene_sync();
         let changes;
@@ -380,14 +405,7 @@ impl RetainedPresentation {
         } else {
             SceneUpdate::Reset {
                 revision: self.revision,
-                snapshot: SceneSnapshot {
-                    time,
-                    items: self
-                        .drawables
-                        .values()
-                        .flat_map(|object| object.items.iter().cloned())
-                        .collect(),
-                },
+                snapshot: self.snapshot(time),
             }
         };
         renderer.update_scene(update)?;

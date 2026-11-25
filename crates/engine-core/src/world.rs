@@ -1236,6 +1236,78 @@ impl EcsWorld {
         rows.components.get_mut(name)?.get_mut(&id)
     }
 
+    /// Edit the local transform and an existing named component together.
+    /// Calls `edit` in input order, including repeated IDs, and skips rows
+    /// without that component. Returns the number of calls to `edit`.
+    pub fn edit_transforms_with_component(
+        &mut self,
+        ids: &[u64],
+        name: &str,
+        mut edit: impl FnMut(u64, &mut Transform, &mut serde_json::Value),
+    ) -> usize {
+        let mut count = 0;
+        if self.staged.is_some() {
+            for &id in ids {
+                if self.component(id, name).is_none() {
+                    continue;
+                }
+                self.staged
+                    .as_mut()
+                    .unwrap()
+                    .unchecked_transforms
+                    .insert(id);
+                let row = self.stage_row(id).unwrap();
+                edit(
+                    id,
+                    &mut row.transform,
+                    row.components.get_mut(name).unwrap(),
+                );
+                count += 1;
+            }
+            return count;
+        }
+
+        if ids.is_empty()
+            || (Arc::strong_count(&self.rows) != 1
+                && !self
+                    .rows
+                    .components
+                    .get(name)
+                    .is_some_and(|column| ids.iter().any(|id| column.contains_key(id))))
+        {
+            return 0;
+        }
+        let rows = Arc::make_mut(&mut self.rows);
+        let Some(column) = rows.components.get_mut(name) else {
+            return 0;
+        };
+        let render_binding = matches!(name, "mesh" | "material");
+        for &id in ids {
+            let Some(component) = column.get_mut(&id) else {
+                continue;
+            };
+            let handle = rows.index[&id];
+            if count == 0 {
+                // Record the batch before exposing its first mutable values.
+                rows.render_writes += 1;
+            }
+            if render_binding {
+                rows.world
+                    .get_mut::<RenderBindings>(handle)
+                    .unwrap()
+                    .set_changed();
+            }
+            let transform = rows
+                .world
+                .get_mut::<Transform>(handle)
+                .unwrap()
+                .into_inner();
+            edit(id, transform, component);
+            count += 1;
+        }
+        count
+    }
+
     pub fn insert_component(
         &mut self,
         id: u64,
@@ -1672,6 +1744,11 @@ fn transform(translation: [f32; 3], scale: [f32; 3]) -> Transform {
 }
 
 #[cfg(test)]
+#[cfg(not(debug_assertions))]
+#[path = "../../../examples/bench/s3_ecs_cost.rs"]
+mod s3_cost;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     fn entity(
@@ -1729,10 +1806,18 @@ mod tests {
 
     #[test]
     fn unchecked_transforms_survive_dropped_packets_and_clear_after_validated_apply() {
-        let mut world =
-            EcsWorld::from_entities(vec![entity(1, None, &[]), entity(2, None, &[])]).unwrap();
+        let mut world = EcsWorld::from_entities(vec![
+            entity(1, None, &[("motion", serde_json::Value::Null)]),
+            entity(2, None, &[]),
+        ])
+        .unwrap();
         let committed = world.checkpoint_tick(true);
-        world.transform_mut(1).unwrap().translation[0] = f32::NAN;
+        assert_eq!(
+            world.edit_transforms_with_component(&[2, 1], "motion", |_, transform, _| {
+                transform.translation[0] = f32::NAN;
+            }),
+            1
+        );
         let repair = [WorldCommand::SetPosition {
             id: 1,
             position: [0.; 3],
@@ -2019,6 +2104,64 @@ mod tests {
         assert_eq!(checkpoint.transform(1), Some(&before));
         assert!(world.component_mut(2, "motion").is_none());
         assert!(world.edit(2).is_none());
+    }
+
+    #[test]
+    fn batch_edits_preserve_input_order_and_track_each_committed_transform() {
+        use serde_json::{Value, json};
+
+        let mut world = EcsWorld::from_entities(vec![
+            entity(1, None, &[("motion", json!({"literal.key": null}))]),
+            entity(2, None, &[("mesh", Value::Null)]),
+            entity(3, None, &[("motion", Value::Null)]),
+        ])
+        .unwrap();
+        let shared = world.rows.clone();
+        assert_eq!(
+            world.edit_transforms_with_component(&[2, 99], "motion", |_, _, _| unreachable!()),
+            0
+        );
+        assert!(Arc::ptr_eq(&world.rows, &shared));
+        drop(shared);
+
+        let mut cursor = RenderChangeCursor::default();
+        world.read_render_changes(&mut cursor);
+        let writes = world.rows.render_writes;
+        let mut ids = Vec::new();
+        let count = world.edit_transforms_with_component(
+            &[3, 2, 1, 3, 99],
+            "motion",
+            |id, transform, value| {
+                ids.push(id);
+                transform.translation[1] += 1.;
+                value["offset"] = Value::from(transform.translation[1]);
+            },
+        );
+        assert_eq!(count, 3);
+        assert_eq!(ids, [3, 1, 3]);
+        assert_eq!(world.rows.render_writes, writes + 1);
+        assert_eq!(world.transform(1).unwrap().translation[1], 1.);
+        assert_eq!(world.transform(2).unwrap().translation[1], 0.);
+        assert_eq!(world.transform(3).unwrap().translation[1], 2.);
+        assert_eq!(
+            world.component(1, "motion"),
+            Some(&json!({"literal.key": null, "offset": 1.}))
+        );
+        assert_eq!(world.component(3, "motion"), Some(&json!({"offset": 2.})));
+        let mut changed = world.read_render_changes(&mut cursor).changed;
+        changed.sort_unstable();
+        assert_eq!(changed, [1, 3]);
+
+        let previous_tick = cursor.position.unwrap().tick;
+        world.edit_transforms_with_component(&[2], "mesh", |_, _, value| {
+            *value = json!({"path": "mesh"});
+        });
+        let rows = Arc::get_mut(&mut world.rows).unwrap();
+        let changed_bindings = rows.world.last_change_tick_scope(previous_tick, |world| {
+            let mut query = world.query_filtered::<&StableId, Changed<RenderBindings>>();
+            query.iter(world).map(|id| id.0).collect::<Vec<_>>()
+        });
+        assert_eq!(changed_bindings, [2]);
     }
 
     #[test]

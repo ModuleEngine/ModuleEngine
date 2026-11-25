@@ -259,9 +259,8 @@ picker error, same-path publication failure, copy и invalid JSON.
 
 ## Инвентаризация тестов ignored
 
-Все 23 теста с `#[ignore]` перечислены в реестре с назначением. Семь включены в
-`native`/`package`. Для остальных 16 в [реестре](../../scripts/verification.json)
-указаны условия отдельного запуска. Некоторые из них:
+Для каждого теста с `#[ignore]` в реестре указаны назначение и профиль либо
+условия ручного запуска. [Реестр проверок](../../scripts/verification.json).
 
 - `runtime_delivery::tests::emit_stage4_software_inactive_vulkan_fixture` - только
   подготовка fixture; требует нового абсолютного `MODULE_ENGINE_STAGE4_FIXTURE_PATH`.
@@ -281,6 +280,9 @@ picker error, same-path publication failure, copy и invalid JSON.
 - Две [сквозные проверки R1.2](ecs-world.md#r12-verification) запускаются
   последовательно из checkout с полными исходниками. Они компилируют Rust-воркеры
   для повторного сохранения мигрированной игры и экспорта самостоятельного Player.
+- Ручной интеграционный тест R7.1 на Vulkan проверяет проигрывание в GameHost
+  и статический импорт с закреплёнными внешними GLB Khronos и новым каталогом
+  свидетельств. [Процедура проверки R7.1](content.md#gltf-animation).
 
 Эти шесть проверок G1 сохраняют отдельные результаты выполнения и границы в
 [отчёте о поставке G1](g1-delivery-20261027.md) и

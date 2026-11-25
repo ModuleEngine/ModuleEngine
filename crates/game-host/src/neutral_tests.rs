@@ -2113,8 +2113,19 @@ fn r14_tick_rejection_discards_visible_writes_and_retry_starts_at_last_commit() 
             ctx.game.world.insert_component(
                 1,
                 "fixture.payload",
-                json!({"literal.key": next, "null": null}),
+                json!({"literal.key": next - 1, "null": null}),
             )?;
+            assert_eq!(
+                ctx.game.world.edit_transforms_with_component(
+                    &[1],
+                    "fixture.payload",
+                    |_, transform, payload| {
+                        transform.translation[1] += 1.;
+                        payload["literal.key"] = json!(next);
+                    },
+                ),
+                1
+            );
             ctx.game.world.transform_mut(2).unwrap().translation[1] += 1.;
             ctx.game
                 .world
@@ -2142,8 +2153,8 @@ fn r14_tick_rejection_discards_visible_writes_and_retry_starts_at_last_commit() 
                 [GameEvent::new("fixture.write", json!(next))]
             );
             assert_eq!(
-                ctx.game.world.object(1).unwrap().transform.translation[0],
-                next as f32
+                ctx.game.world.object(1).unwrap().transform.translation,
+                [next as f32, next as f32, 0.]
             );
             assert_eq!(
                 ctx.game.world.object(2).unwrap().transform.translation[1],
@@ -2248,6 +2259,12 @@ fn r14_tick_rejection_discards_visible_writes_and_retry_starts_at_last_commit() 
     reject.store(false, Ordering::SeqCst);
     assert_eq!(host.step(0., &input).unwrap(), 1);
     assert_eq!(host.session.state().tick, 2);
+    let world = &host.session.state().world;
+    assert_eq!(world.transform(1).unwrap().translation, [2., 2., 0.]);
+    assert_eq!(
+        world.component(1, "fixture.payload"),
+        Some(&json!({"literal.key": 2, "null": null}))
+    );
     assert_eq!(host.session.state().module_data["fixture.tick"], json!(2));
     assert_eq!(
         host.session.events(),

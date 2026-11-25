@@ -75,7 +75,7 @@
 - [Custom Rust 0.4](custom-rust.md)
 - [Состояние Rust Custom и самостоятельные workers](custom-state.md)
 - [Повторное использование Custom Rust](custom-program-store.md)
-- [Статические модели, текстуры и материалы](content.md)
+- [Модели, анимация, текстуры и материалы](content.md)
 - [Vulkan и Custom HLSL](gpu-hlsl.md)
 - [Аппаратные уровни Vulkan и кандидат в минимальную карту для Player](hardware-tiers.md)
 - [Добавление модуля](extending.md)
