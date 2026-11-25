@@ -1186,16 +1186,19 @@ mod tests {
         let cancelled = Arc::new(AtomicBool::new(false));
         let (claimed_sender, claimed_receiver) = std::sync::mpsc::sync_channel(1);
         let (enrolled_sender, enrolled_receiver) = std::sync::mpsc::sync_channel(1);
-        let enrolled_receiver = Mutex::new(enrolled_receiver);
+        let first_claim = Mutex::new(Some((claimed_sender, enrolled_receiver)));
         let hook_cancel = cancelled.clone();
         *store.handoff_test_hook.lock().unwrap() = Some(Arc::new(move |point| match point {
             HandoffTestPoint::OwnerClaimed => {
-                claimed_sender.try_send(()).unwrap();
-                enrolled_receiver
-                    .lock()
-                    .unwrap()
-                    .recv_timeout(Duration::from_secs(120))
-                    .unwrap();
+                let first_claim = first_claim.lock().unwrap().take();
+                if let Some((claimed, enrolled)) = first_claim {
+                    claimed
+                        .try_send(())
+                        .expect("waiter must observe the owner's claim");
+                    enrolled
+                        .recv_timeout(Duration::from_secs(120))
+                        .expect("waiter must enroll before the owner builds");
+                }
             }
             HandoffTestPoint::WaiterEnrolled => enrolled_sender.try_send(()).unwrap(),
             HandoffTestPoint::BeforeSuccessWitness => hook_cancel.store(true, Ordering::Release),
@@ -1207,15 +1210,21 @@ mod tests {
         let owner = thread::spawn(move || {
             owner_store.compile(&owner_compiler, source, ScriptKind::Speed, &owner_cancel)
         });
-        claimed_receiver
-            .recv_timeout(Duration::from_secs(120))
-            .unwrap();
-        let waiter = thread::spawn(move || compiler.compile(source));
-        let owner_result = owner.join().unwrap();
-        let waiter_result = waiter.join().unwrap();
+        let waiter =
+            thread::spawn(move || claimed_receiver.recv().map(|()| compiler.compile(source)));
+        // Input preparation belongs to the owner. If it returns before the
+        // claim, dropping the hook disconnects the waiting thread.
+        let owner_result = owner.join();
         store.handoff_test_hook.lock().unwrap().take();
-        assert!(owner_result.unwrap_err().to_string().contains("cancelled"));
-        let _independent = waiter_result.unwrap();
+        let waiter_result = waiter.join().unwrap();
+        let error = owner_result.unwrap().unwrap_err();
+        assert!(
+            matches!(&error, ScriptError::Worker(message) if message == "compilation cancelled"),
+            "expected owner cancellation at publication, got {error:?}"
+        );
+        let _independent = waiter_result
+            .expect("owner must claim the flight")
+            .expect("waiter must compile after owner cancellation");
         assert_eq!(store.stats().coalesced_waits, 1);
         assert_eq!(
             store.stats().cargo_build_invocations,
