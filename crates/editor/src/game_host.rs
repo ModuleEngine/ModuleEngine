@@ -8,8 +8,9 @@ use module_engine_host::ScriptSlot;
 pub use module_engine_host::{GameHost, script_ids};
 use module_engine_host::{HostOptions, RenderMode};
 use module_engine_script::CompiledProgramStore;
+#[cfg(feature = "verification")]
+use std::{collections::BTreeMap, sync::Mutex};
 use std::{
-    collections::BTreeMap,
     path::{Path, PathBuf},
     sync::{Arc, atomic::AtomicBool},
 };
@@ -251,8 +252,6 @@ pub fn render_graph(document: &GraphDocument) -> Graph {
         .cloned()
         .unwrap_or_default()
 }
-#[cfg(feature = "verification")]
-use std::sync::Mutex;
 #[cfg(feature = "verification")]
 pub fn game_registry_at(
     document: &GraphDocument,
