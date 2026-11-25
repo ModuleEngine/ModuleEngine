@@ -1,0 +1,54 @@
+name: Claude PR review
+
+# Reviews every new / reopened / ready-for-review PR once and posts the result as a PR comment.
+# Requires the repository secret CLAUDE_CODE_OAUTH_TOKEN (generate with `claude setup-token`).
+on:
+  pull_request:
+    types: [opened, ready_for_review, reopened]
+
+concurrency:
+  group: claude-pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Skip drafts (ready_for_review triggers the review later) and PRs from forks (no access to secrets).
+    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: |
+            --model claude-sonnet-5-5
+            --max-turns 30
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*),Bash(git diff:*),Bash(git log:*),Read,Grep,Glob"
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            Review this pull request. Do not push commits and do not modify any files.
+            Be concise. Write the final result as ONE PR comment (`gh pr comment`), in Russian, with:
+            1. Verdict: one line (ok / ok with remarks / needs changes).
+            2. CI status (`gh pr checks`).
+            3. What was checked.
+            4. Minor remarks, all together in this one comment (no separate comments per remark; use inline
+               comments only for real bugs).
+
+            Project conventions to verify:
+            - Every new `#[ignore]` test must be registered in verification.json and scripts/verify.py,
+              and the expected-count in test_verify.py must be updated accordingly.
+            - CI does not fully run all editor tests. List explicitly which changes need local Windows
+              verification (GPU/editor/bench behaviour that CI cannot cover).
+            - Flag changed docs without the matching docs/ru translation if the English doc changed.
+            Report only what you actually checked; do not claim tests passed that were not run.
