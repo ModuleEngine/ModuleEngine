@@ -97,7 +97,7 @@ class RegistryTests(Fixture):
             "render-settings-history", "custom-player-settings", "custom-player-settings-rollback", "custom-player-settings-stale",
             "native-window-icons", "native-window-z-order",
             "r12-existing-game-roundtrip", "r12-player-stable-id-ipc", "r14-s3-tick-cost", "r15-event-replay",
-            "r16-s3-vulkan",
+            "r16-s3-vulkan", "r71-gltf-playback",
         })
         self.assertEqual(len(verify.plan(self.data, self.steps, "native")["steps"]), 5)
         self.assertEqual(len(verify.plan(self.data, self.steps, "package")["steps"]), 2)
