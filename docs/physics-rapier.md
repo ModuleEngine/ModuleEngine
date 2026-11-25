@@ -12,10 +12,11 @@ queries and collisions after physics, with an `after` instance dependency
 where the graph must enforce that order.
 
 The Player export selects the `rapier-physics` native feature from the active
-composition and verifies its module and schema pins. Team uses its frozen
-graph. A compiled-in capability alone never advances physics. The minimal
-Player does not depend on Rapier. G1 and Two Arenas use their existing
-gameplay collision rules. Migration of those rules belongs to R6.2.
+composition and verifies its module and schema pins. Full source inventories
+include the installed physics implementation so the project can enable it later.
+Team uses its frozen graph. A compiled-in capability alone never advances
+physics. The minimal Player does not depend on Rapier. G1 and Two Arenas use
+their existing gameplay collision rules. Migration of those rules belongs to R6.2.
 
 ## Authoring
 

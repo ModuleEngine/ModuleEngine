@@ -1594,6 +1594,13 @@ mod tests {
             &backend,
         )
         .unwrap();
+        let policy = crate::distribution::detect(
+            &backend.join("r61-physics-fixture.json"),
+            &document,
+            Some(crate::distribution::DistributionProfile::Full),
+        )
+        .unwrap();
+        assert!(policy.can_author_engine(), "{:?}", policy.source_status);
         let active = crate::runtime_delivery::prepare(&document, &backend).unwrap();
         assert!(
             selected_features(&active, &backend)
