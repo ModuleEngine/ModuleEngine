@@ -1,7 +1,10 @@
 name: Claude PR review
 
 # Reviews a PR when it is opened / reopened / ready for review and again after every new push.
-# The result is ONE comment that is found by a hidden marker and edited in place; it names the reviewed commit SHA.
+# Claude only READS the PR and writes the review text to claude-review.md (no permission to post anything).
+# A separate deterministic step then publishes it as ONE comment authored by github-actions[bot],
+# found by an exact marker on its first line and updated by ID (created if absent).
+# The comment names the reviewed commit SHA.
 # Requires the repository secret CLAUDE_CODE_OAUTH_TOKEN (generate with `claude setup-token`).
 # The workflow is only picked up by GitHub once it exists on main.
 on:
@@ -33,39 +36,33 @@ jobs:
           persist-credentials: false
 
       # Pinned to the commit that the moving tag v1 pointed to on 2026-11-25. Update deliberately.
-      - uses: anthropics/claude-code-action@4411a9e9b0283becf4b924f7bce360fd7756c78c # v1
+      - id: review
+        uses: anthropics/claude-code-action@4411a9e9b0283becf4b924f7bce360fd7756c78c # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: |
             --model claude-sonnet-5-5
             --max-turns 30
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*),Bash(gh api repos/${{ github.repository }}/issues:*),Bash(git diff:*),Bash(git log:*),Read,Grep,Glob"
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*),Write(claude-review.md),Read,Grep,Glob"
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
             REVIEWED COMMIT SHA: ${{ github.event.pull_request.head.sha }}
 
-            Review this pull request. Do not push commits and do not modify any files.
+            Review this pull request. Do not push commits and do not modify any repository files.
             The checkout is a detached HEAD, so ALWAYS pass the PR number and repo explicitly:
             `gh pr view ${{ github.event.pull_request.number }} --repo ${{ github.repository }}`,
             `gh pr diff ${{ github.event.pull_request.number }} --repo ${{ github.repository }}`,
             `gh pr checks ${{ github.event.pull_request.number }} --repo ${{ github.repository }}`.
 
-            Be concise. Write the final result as ONE PR comment, in Russian. The comment body must begin with
-            the hidden marker line `<!-- claude-pr-review -->`, then the line
-            "Ревью коммита <first 7 chars of REVIEWED COMMIT SHA>", then:
+            Do NOT post comments yourself. Write the final review, in Russian, to the file `claude-review.md`
+            in the workspace root (use the Write tool; this is the only file you may write). A later workflow step
+            publishes it. Be concise. The file must start with the line
+            "Ревью коммита <first 7 chars of REVIEWED COMMIT SHA>" and contain:
             1. Verdict: one line (ok / ok with remarks / needs changes).
             2. CI status (`gh pr checks`); say if checks are still running.
             3. What was checked.
-            4. Minor remarks, all together in this one comment (no separate comments per remark; use inline
-               comments only for real bugs).
-
-            Publishing (keep exactly one review comment per PR, never use `gh pr comment`):
-            - List the PR comments: `gh api repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments --paginate`.
-            - Find the comment whose body contains `<!-- claude-pr-review -->` (any author). If found, update it by ID:
-              `gh api -X PATCH repos/${{ github.repository }}/issues/comments/<id> -f body=<new body>`.
-            - If none contains the marker, create it:
-              `gh api -X POST repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments -f body=<new body>`.
+            4. Minor remarks, all together (use inline comments only for real bugs).
 
             Project conventions to verify:
             - Every real Rust `#[ignore]` test needs a matching step in scripts/verification.json
@@ -79,3 +76,32 @@ jobs:
               verification (GPU/editor/bench behaviour that CI cannot cover).
             - Flag changed docs without the matching docs/ru translation if the English doc changed.
             Report only what you actually checked; do not claim tests passed that were not run.
+
+      - name: Publish the review comment
+        if: always() && steps.review.conclusion == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          file=claude-review.md
+          if [ ! -s "$file" ]; then
+            echo "Claude wrote no review file; nothing to publish."
+            exit 0
+          fi
+          marker='<!-- claude-pr-review -->'
+          # The marker is always added here; any marker line in the text is dropped, and the size is capped.
+          text="$(grep -vxF "$marker" "$file" | head -c 60000 || true)"
+          body="$(printf '%s\n%s\n' "$marker" "$text")"
+          # Only a comment authored by github-actions[bot] whose FIRST line is exactly the marker is ours.
+          id="$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]") | select((.body | split("\n")[0] | rtrimstr("\r")) == "<!-- claude-pr-review -->") | .id' \
+            | sed -n '1p')"
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$id" -f body="$body" > /dev/null
+            echo "Updated comment $id"
+          else
+            gh api -X POST "repos/$REPO/issues/$PR/comments" -f body="$body" > /dev/null
+            echo "Created comment"
+          fi
