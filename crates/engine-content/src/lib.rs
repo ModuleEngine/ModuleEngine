@@ -556,7 +556,7 @@ impl SceneImport<'_> {
             .read_indices()
             .map(|v| v.into_u32().map(|i| i as usize).collect::<Vec<_>>())
             .unwrap_or_else(|| (0..vertices.len()).collect());
-        if indices.len() % 3 != 0 || indices.iter().any(|i| *i >= vertices.len()) {
+        if !indices.len().is_multiple_of(3) || indices.iter().any(|i| *i >= vertices.len()) {
             return Err("Primitive triangle index out of range".into());
         }
         let triangles = indices.as_chunks::<3>().0.to_vec();
