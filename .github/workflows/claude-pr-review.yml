@@ -1,15 +1,22 @@
 name: Claude PR review
 
 # Reviews a PR when it is opened / reopened / ready for review and again after every new push.
-# Claude only READS the PR and writes the review text to claude-review.md (no permission to post anything).
-# A separate deterministic step then publishes it as ONE comment authored by github-actions[bot],
-# found by an exact marker on its first line and updated by ID (created if absent).
-# A green job means a complete review of the current commit was published. If a review was expected but
-# claude-review.md is missing, empty, names another commit or lacks the required sections, the job FAILS.
-# The only exception is a PR that itself adds or changes this workflow: the action refuses to run a workflow
-# that differs from the one on the base branch, so the step reports an explicit "review skipped".
-# That skip is allowed only when the base copy is confirmed absent (HTTP 404) or confirmed different.
-# Any other failure to compare (API error, timeout) fails the job.
+#
+# Design (the review must be provably file-by-file, and Claude can only READ):
+# 1. A prepare step writes one diff file per changed file into .review-diffs/ plus a manifest. Every diff file
+#    contains random chunk tokens (a few per file); only the SHA-256 hashes of the tokens are in the manifest.
+# 2. Claude gets read-only tools (Read/Grep/Glob, gh pr view/checks) and may write only claude-review.md.
+#    It must quote the tokens of every file it read, so it cannot report a file it never opened to the end.
+# 3. A publish step validates the report: first line names the commit, required sections, exactly one counter,
+#    one line for EVERY changed file (matched against the manifest), correct tokens for files marked "read",
+#    a note for every file, and no plain verdict "ok" if a file was skipped. Binary changes need separate inspection.
+# 4. Publish one bot-owned comment. Long reviews link to the complete artifact, with the verdict and findings
+#    also in the comment when they fit. The publisher updates its existing comment by marker and author.
+# A green job therefore means a validated report for the current commit was published. A missing, empty or
+# invalid report fails the job. The only exception is a PR that itself adds or changes this workflow: the
+# action refuses to run a workflow that differs from the one on the base branch, so the step reports an
+# explicit "review skipped" (allowed only when the base copy is confirmed absent (HTTP 404) or different).
+# Known limit: the tokens prove that every chunk of every diff was seen, not that it was understood.
 # Requires the repository secret CLAUDE_CODE_OAUTH_TOKEN (generate with `claude setup-token`).
 on:
   pull_request:
@@ -27,17 +34,76 @@ jobs:
     # Skip drafts (ready_for_review triggers the review later) and PRs from forks (no access to secrets).
     if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     permissions:
       contents: read
       pull-requests: write
       issues: write
       id-token: write
     steps:
+      # Depth 2 keeps both parents of the PR merge commit, so HEAD^1 (base) .. HEAD (merged PR) is the PR diff.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          fetch-depth: 1
+          fetch-depth: 2
           persist-credentials: false
+
+      - name: Prepare per-file diffs for the reviewer
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, pathlib, re, secrets, subprocess
+          CHUNK = 400  # diff lines per chunk token
+          out = pathlib.Path(".review-diffs")
+          out.mkdir()
+          def git_diff(*options):
+              cmd = ["git", "diff", "--find-renames", "--no-ext-diff", "--no-textconv",
+                     "--no-color", "--submodule=short", *options, "HEAD^1", "HEAD", "--"]
+              return subprocess.run(cmd, capture_output=True, check=True).stdout
+
+          # Both views use the complete comparison. Filtering on the destination
+          # alone turns a rename into an addition and loses the removed lines.
+          stats = git_diff("--numstat", "-z")
+          fields = iter(stats.removesuffix(b"\0").split(b"\0") if stats else [])
+          files = []
+          for stat in fields:
+              added, deleted, path = stat.split(b"\t", 2)
+              old = None
+              if not path:  # -z represents a rename as an empty field, old path, new path.
+                  old, path = next(fields), next(fields)
+              files.append((old, path, added == b"-" and deleted == b"-"))
+          # Hunk content has a diff prefix, so only a file header starts with bare "diff --git ".
+          patches = re.split(rb"(?m)(?=^diff --git )", git_diff("--patch"))
+          if patches[0] or len(patches) - 1 != len(files):
+              raise ValueError("Git patch headers do not match the file inventory")
+          manifest = []
+          for number, ((old, path, binary), patch) in enumerate(zip(files, patches[1:]), 1):
+              fid = "%04d" % number
+              diff_lines = patch.decode("utf-8", "replace").split("\n")
+              if diff_lines and diff_lines[-1] == "":
+                  diff_lines.pop()
+              chunks = max(1, -(-len(diff_lines) // CHUNK))
+              tokens, text = [], []
+              for k in range(chunks):
+                  text.extend(diff_lines[k * CHUNK:(k + 1) * CHUNK])
+                  token = secrets.token_hex(5)
+                  tokens.append(token)
+                  text.append("#REVIEW-CHUNK %s.%d/%d token=%s" % (fid, k + 1, chunks, token))
+              name = fid + ".diff"
+              (out / name).write_text("\n".join(text) + "\n", encoding="utf-8")
+              manifest.append({
+                  "id": fid,
+                  "path": path.decode("utf-8", "replace"),
+                  "old_path": old.decode("utf-8", "replace") if old is not None else None,
+                  "binary": binary,
+                  "diff_file": ".review-diffs/" + name,
+                  "diff_lines": len(diff_lines),
+                  "file_lines_with_markers": len(text),
+                  "chunk_tokens_expected": chunks,
+                  "token_sha256": [hashlib.sha256(t.encode()).hexdigest() for t in tokens],
+              })
+          (out / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
+          print("Prepared %d per-file diffs" % len(manifest))
+          PY
 
       # Pinned to the commit that the moving tag v1 pointed to on 2026-11-25. Update deliberately.
       - id: review
@@ -46,8 +112,8 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: |
             --model claude-sonnet-5-5
-            --max-turns 30
-            --allowedTools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*),Edit(./claude-review.md),Read,Grep,Glob"
+            --max-turns 250
+            --allowedTools "Bash(gh pr view:*),Bash(gh pr checks:*),Edit(./claude-review.md),Read,Grep,Glob"
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
@@ -56,21 +122,42 @@ jobs:
             Review this pull request. Do not push commits and do not modify any repository files.
             The checkout is a detached HEAD, so ALWAYS pass the PR number and repo explicitly:
             `gh pr view ${{ github.event.pull_request.number }} --repo ${{ github.repository }}`,
-            `gh pr diff ${{ github.event.pull_request.number }} --repo ${{ github.repository }}`,
             `gh pr checks ${{ github.event.pull_request.number }} --repo ${{ github.repository }}`.
+
+            HOW TO READ THE CHANGES (mandatory, no shortcuts):
+            1. Read `.review-diffs/manifest.json`. It has one entry per changed file: `id`, `path`, `diff_file`,
+               `chunk_tokens_expected` and `token_sha256`. M is the number of entries.
+            2. For EVERY entry read the whole `diff_file` with the Read tool. If it is longer than the Read limit,
+               read it in several parts (offset and limit) until the end. Each diff file contains marker lines
+               `#REVIEW-CHUNK <id>.<k>/<n> token=<token>`. Collect all `n` tokens of the file, in order.
+               Do not sample, do not use Grep to skim, do not judge a file by its name, size or status of CI.
+               Never skip a file because the PR is large or because the file looks generated.
+            3. Mark every entry with `binary: true` as `skipped` and state what needs separate inspection.
+               Its diff describes metadata only. Also mark unreadable text (e.g. tool limits) with the reason.
+            4. You may not give the verdict `ok` if any file is `skipped`.
 
             Do NOT post comments yourself. Write the final review, in Russian, to the file `claude-review.md`
             in the workspace root (create it with the Write tool; this is the only file you may write). A later
-            workflow step validates and publishes it, so the format is strict. Be concise. The file must be:
+            workflow step validates and publishes it, so the format is strict. The file must be exactly:
 
             Ревью коммита <first 7 chars of REVIEWED COMMIT SHA>
             Вердикт: <exactly one of: ok | ok with remarks | needs changes>, optionally followed by a short reason
             CI: <status from `gh pr checks`; say if checks are still running>
-            Что проверено: <what you actually checked, specifically>
-            Замечания: <minor remarks all together, real bugs first; write "нет" if none>
+            Что проверено: <specific description of what you checked and how, at least a few sentences; it must
+            contain exactly one counter line, and no other "N из M" anywhere in this section>
+            Прочитано файлов: <N> из <M>
+            Файлы:
+            - <id> | read | <token1>.<token2>.<...all tokens of that file, in order, joined by dots> | <note>
+            - <id> | skipped | - | <reason>
+            Замечания: <minor remarks all together, real bugs first; write "нет" if none; if files were skipped,
+            say so here again>
 
-            Each of the four headings (`Вердикт:`, `CI:`, `Что проверено:`, `Замечания:`) must start a line, appear
-            exactly once, in this order, and have non-empty content (it may continue on the following lines).
+            Rules for the section `Файлы:`: put the heading alone on its line, then exactly one line for EVERY id in
+            the manifest, each id exactly once, in the manifest order. `<note>` is what this file's change does and
+            whether you found a problem in it (at least 12 characters, specific to that file). `N` is the number of
+            `read` lines and must equal the counter; M must equal the number of manifest entries.
+            Each of the five headings (`Вердикт:`, `CI:`, `Что проверено:`, `Файлы:`, `Замечания:`) must start a line,
+            appear exactly once, in this order. There must be no text between the first line and `Вердикт:`.
 
             Project conventions to verify:
             - Every real Rust `#[ignore]` test needs a matching step in scripts/verification.json
@@ -85,19 +172,19 @@ jobs:
             - Flag changed docs without the matching docs/ru translation if the English doc changed.
             Report only what you actually checked; do not claim tests passed that were not run.
 
-      - name: Publish the review comment
+      - name: Validate and render the review
+        id: validate
         if: always() && steps.review.conclusion == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           file=claude-review.md
+          manifest=.review-diffs/manifest.json
           workflow=.github/workflows/claude-pr-review.yml
-          marker='<!-- claude-pr-review -->'
           short="${HEAD_SHA:0:7}"
 
           fail() {
@@ -140,14 +227,20 @@ jobs:
             exit 0
           fi
 
-          # A review exists: it must name the current commit and contain every required section with content.
-          if ! problem="$(python3 - "$file" "$short" 2>&1 <<'PY'
-          import re, sys
-          path, short = sys.argv[1], sys.argv[2]
-          lines = open(path, encoding="utf-8").read().replace("\r", "").split("\n")
+          [ -s "$manifest" ] || fail "The per-file diff manifest $manifest is missing, so the review coverage cannot be verified."
+          report_dir="$(mktemp -d "$RUNNER_TEMP/claude-review.XXXXXX")"
+
+          # A review exists: validate structure, per-file coverage and tokens, and render the final comment text.
+          if ! problem="$(python3 - "$file" "$short" "$manifest" "$report_dir" 2>&1 <<'PY'
+          import hashlib, json, pathlib, re, sys
+          review_path, short, manifest_path, directory = sys.argv[1:5]
+          out_dir = pathlib.Path(directory)
+          manifest = json.load(open(manifest_path, encoding="utf-8"))
+          by_id = {m["id"]: m for m in manifest}
+          lines = open(review_path, encoding="utf-8").read().replace("\r", "").split("\n")
           if lines[0].strip() != "Ревью коммита " + short:
               sys.exit("the first line must be 'Ревью коммита " + short + "'")
-          heads = ["Вердикт:", "CI:", "Что проверено:", "Замечания:"]
+          heads = ["Вердикт:", "CI:", "Что проверено:", "Файлы:", "Замечания:"]
           found = {}
           for i, line in enumerate(lines[1:], 1):
               for h in heads:
@@ -161,32 +254,154 @@ jobs:
           pos = [found[h] for h in heads]
           if pos != sorted(pos):
               sys.exit("sections are out of order")
+          if any(l.strip() for l in lines[1:pos[0]]):
+              sys.exit("there must be no text between the first line and 'Вердикт:'")
+          sections = {}
           for n, h in enumerate(heads):
               end = pos[n + 1] if n + 1 < len(pos) else len(lines)
-              content = (lines[pos[n]][len(h):] + "\n" + "\n".join(lines[pos[n] + 1:end])).strip()
-              if not content:
+              sections[h] = [lines[pos[n]][len(h):]] + lines[pos[n] + 1:end]
+              if not "\n".join(sections[h]).strip():
                   sys.exit("section '" + h + "' is empty")
-              if h == "Вердикт:" and not re.match(r"(ok with remarks|ok|needs changes)\b", content):
-                  sys.exit("the verdict must start with: ok | ok with remarks | needs changes")
-              if h == "Что проверено:" and len(content) < 40:
-                  sys.exit("section 'Что проверено:' is too short to be a real description")
+          verdict = "\n".join(sections["Вердикт:"]).strip()
+          if not re.match(r"(ok with remarks|ok|needs changes)\b", verdict):
+              sys.exit("the verdict must start with: ok | ok with remarks | needs changes")
+          # 'Что проверено:' = real prose plus exactly one counter line.
+          checked = [l for l in sections["Что проверено:"] if l.strip()]
+          counters = [l for l in checked if l.startswith("Прочитано файлов")]
+          if len(counters) != 1:
+              sys.exit("'Что проверено:' must contain exactly one line 'Прочитано файлов: N из M' (found " + str(len(counters)) + ")")
+          counter = re.fullmatch(r"Прочитано файлов:\s*(\d+)\s+из\s+(\d+)\s*", counters[0])
+          if not counter:
+              sys.exit("the counter line must look like 'Прочитано файлов: N из M'")
+          claimed_read, claimed_total = int(counter.group(1)), int(counter.group(2))
+          prose = [l for l in checked if not l.startswith("Прочитано файлов")]
+          extra = [l for l in prose if re.search(r"\d+\s+из\s+\d+", l)]
+          if extra:
+              sys.exit("only one counter is allowed in 'Что проверено:', found another: " + extra[0].strip()[:80])
+          if sum(len(l.strip()) for l in prose) < 60:
+              sys.exit("'Что проверено:' needs a specific description of at least 60 characters besides the counter line")
+          # 'Файлы:' = exactly one line per manifest entry.
+          entries, read_ids, skipped_ids, rendered = {}, [], [], {}
+          files_body = sections["Файлы:"]
+          if not manifest:
+              if files_body[0].strip().rstrip(". ").lower() != "нет" or any(l.strip() for l in files_body[1:]):
+                  sys.exit("the PR changes no files, so 'Файлы:' must be 'Файлы: нет'")
+          else:
+              if files_body[0].strip():
+                  sys.exit("put the heading 'Файлы:' alone on its line and every file on its own line below it")
+              pattern = re.compile(r"- (\d{4}) \| (read|skipped) \| (\S+) \| (.+)")
+              for line in files_body[1:]:
+                  if not line.strip():
+                      continue
+                  match = pattern.fullmatch(line.rstrip())
+                  if not match:
+                      sys.exit("invalid line in 'Файлы:' (expected '- <id> | read | <tokens> | <note>'): " + line.strip()[:100])
+                  fid, status, tokens, note = match.groups()
+                  note = note.strip()
+                  if fid in entries:
+                      sys.exit("file " + fid + " appears more than once in 'Файлы:'")
+                  if fid not in by_id:
+                      sys.exit("unknown file id " + fid + " in 'Файлы:'")
+                  entry = by_id[fid]
+                  display = entry["path"]
+                  if entry["old_path"] is not None:
+                      display = entry["old_path"] + " → " + display
+                  display = display.replace("`", "'")
+                  if status == "read":
+                      if entry["binary"]:
+                          sys.exit("file " + fid + " (" + display + "): binary content requires separate inspection; mark it skipped")
+                      expected, got = entry["token_sha256"], tokens.split(".")
+                      if len(got) != len(expected) or any(hashlib.sha256(t.encode()).hexdigest() != e for t, e in zip(got, expected)):
+                          sys.exit("file " + fid + " (" + entry["path"] + "): the chunk tokens are wrong or incomplete; read the whole diff file to its last '#REVIEW-CHUNK' line")
+                      if len(note) < 12:
+                          sys.exit("file " + fid + " (" + entry["path"] + "): the note is too short (at least 12 characters about this file)")
+                      read_ids.append(fid)
+                      rendered[line] = "- `" + display + "` — " + note
+                  else:
+                      if tokens != "-":
+                          sys.exit("file " + fid + ": a skipped file must have '-' instead of tokens")
+                      if len(note) < 5:
+                          sys.exit("file " + fid + " (" + entry["path"] + "): give the reason why it was skipped")
+                      skipped_ids.append(fid)
+                      rendered[line] = "- `" + display + "` — **НЕ ПРОЧИТАН**: " + note
+                  entries[fid] = status
+              absent = [i for i in by_id if i not in entries]
+              if absent:
+                  sys.exit(str(len(absent)) + " changed files have no line in 'Файлы:', first ones: " + ", ".join(absent[:10]))
+          if claimed_total != len(manifest):
+              sys.exit("the counter says the PR changes " + str(claimed_total) + " files, but it changes " + str(len(manifest)))
+          if claimed_read != len(read_ids):
+              sys.exit("the counter says " + str(claimed_read) + " files were read, but 'Файлы:' marks " + str(len(read_ids)) + " as read")
+          if skipped_ids and re.match(r"ok\b(?! with remarks)", verdict):
+              sys.exit("a review that skipped files cannot have the plain verdict 'ok'")
+          marker = "<!-- claude-pr-review -->"
+          full = "\n".join(rendered.get(l, l) for l in lines if l != marker).rstrip("\n") + "\n"
+          (out_dir / "review.md").write_text(full, encoding="utf-8")
+          # Reserve room for the marker and the artifact link added by the publisher.
+          limit = 60000
+          if len(full.encode("utf-8")) > limit:
+              remarks = "\n".join(l for l in sections["Замечания:"] if l != marker).strip()
+              summary = (lines[0] + "\nВердикт: " + verdict + "\n" + counters[0]
+                         + "\nЗамечания: " + remarks + "\n")
+              if len(summary.encode("utf-8")) > limit:
+                  label = re.match(r"(ok with remarks|ok|needs changes)\b", verdict).group(1)
+                  summary = (lines[0] + "\nВердикт: " + label + "\n" + counters[0]
+                             + "\nПолный текст вердикта и всех замечаний — в приложенном отчёте.\n")
+              (out_dir / "summary.md").write_text(summary, encoding="utf-8")
           PY
           )"; then
             fail "The review file is invalid: $problem"
           fi
 
-          # The marker is always added here; any marker line in the text is dropped, and the size is capped.
-          text="$(grep -vxF "$marker" "$file" | head -c 60000 || true)"
-          body="$(printf '%s\n%s\n' "$marker" "$text")"
+          echo "directory=$report_dir" >> "$GITHUB_OUTPUT"
+          if [ -f "$report_dir/summary.md" ]; then
+            echo 'long=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Attach the complete long review
+        id: artifact
+        if: steps.validate.outputs.long == 'true'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: claude-review-pr-${{ github.event.pull_request.number }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.validate.outputs.directory }}/review.md
+          if-no-files-found: error
+
+      - name: Publish the review comment
+        if: >-
+          !cancelled() && steps.validate.outcome == 'success' && steps.validate.outputs.directory != '' &&
+          (steps.validate.outputs.long != 'true' || steps.artifact.outcome == 'success')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPORT_DIR: ${{ steps.validate.outputs.directory }}
+          LONG_REVIEW: ${{ steps.validate.outputs.long }}
+          ARTIFACT_URL: ${{ steps.artifact.outputs.artifact-url }}
+        run: |
+          set -euo pipefail
+          marker='<!-- claude-pr-review -->'
+          short="${HEAD_SHA:0:7}"
+          {
+            echo "$marker"
+            if [ "$LONG_REVIEW" = true ]; then
+              : "${ARTIFACT_URL:?Missing URL for the uploaded review}"
+              cat "$REPORT_DIR/summary.md"
+              printf '\n[Скачать полный отчёт](%s)\n' "$ARTIFACT_URL"
+            else
+              cat "$REPORT_DIR/review.md"
+            fi
+          } > "$REPORT_DIR/comment.md"
           # Only a comment authored by github-actions[bot] whose FIRST line is exactly the marker is ours.
           id="$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
             --jq '.[] | select(.user.login == "github-actions[bot]") | select((.body | split("\n")[0] | rtrimstr("\r")) == "<!-- claude-pr-review -->") | .id' \
             | sed -n '1p')"
           if [ -n "$id" ]; then
-            gh api -X PATCH "repos/$REPO/issues/comments/$id" -f body="$body" > /dev/null
+            gh api -X PATCH "repos/$REPO/issues/comments/$id" -F "body=@$REPORT_DIR/comment.md" > /dev/null
             echo "Updated comment $id"
           else
-            gh api -X POST "repos/$REPO/issues/$PR/comments" -f body="$body" > /dev/null
+            gh api -X POST "repos/$REPO/issues/$PR/comments" -F "body=@$REPORT_DIR/comment.md" > /dev/null
             echo "Created comment"
           fi
           echo "### Claude review: published for \`$short\`" >> "$GITHUB_STEP_SUMMARY"
