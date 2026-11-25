@@ -37,12 +37,17 @@ python -B scripts/bench_r81.py --exe <bench-exe> --output outputs/r81/series
 ```
 
 The comparison first reads back both 1080p images. It checks the device,
-dimensions, all RenderStats counts, nonzero geometry coverage and a maximum
-absolute output delta of 2 on every RGBA8 channel. It retains both PNGs and
-the image report with Forward depth, normal, color and source IDs at the
-worst differing pixel. `R81-visibility-no-fxaa` bypasses FXAA in both
-paths for diagnosis. The full Forward graph is required for the scored
-comparison, which runs five pairs of native
+dimensions, all RenderStats counts, nonzero geometry coverage and object
+ownership at every pixel. A changed Forward triangle ID requires two
+triangles of that object with one shared source edge and positive depths
+within one representable f32 step. This check requires triangle IDs that
+are unambiguous in the Forward attachment. The maximum absolute output
+delta at all other pixels is 2 on every RGBA8 channel. The report records
+the overall maximum, the number of shared-edge changes and the depth,
+normal, color and source IDs at the worst differing pixel. It retains
+both PNGs. `R81-visibility-no-fxaa` bypasses FXAA in both paths for
+diagnosis. The full Forward graph is required for the scored comparison,
+which runs five pairs of native
 processes, switching which path starts each pair. Each process warms up
 for five frames and records 30 GPU-only native frames with GPU timestamps,
 vsync off and Immediate presentation. Both paths must report the same

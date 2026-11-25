@@ -374,6 +374,10 @@ impl MeshletScene {
         &self.build
     }
 
+    pub fn into_snapshot(self) -> SceneSnapshot {
+        self.snapshot
+    }
+
     pub(super) fn work(&self) -> MeshletWork {
         MeshletWork {
             task_groups: self.build.meshlets.div_ceil(MESHLETS_PER_TASK),

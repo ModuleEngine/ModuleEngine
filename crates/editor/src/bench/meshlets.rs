@@ -9,6 +9,8 @@ use module_engine_vulkan::{
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::Path};
 
+const MAX_CHANNEL_DELTA: u8 = 2;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum PathUnderTest {
@@ -111,13 +113,44 @@ fn forward_readbacks(renderer: &VulkanRenderer) -> Result<[Vec<u8>; 3], String> 
     ])
 }
 
-fn changed_ownership(a: &[u8], b: &[u8]) -> usize {
-    a.as_chunks::<16>()
-        .0
+fn read_float(bytes: &[u8], offset: usize) -> f32 {
+    f32::from_ne_bytes(bytes[offset..offset + 4].try_into().unwrap())
+}
+
+fn shared_edge(scene: &SceneSnapshot, object: f32, before: f32, after: f32) -> bool {
+    let Some(object) = (object as usize).checked_sub(1) else {
+        return false;
+    };
+    let Some(item) = scene.items.get(object) else {
+        return false;
+    };
+    let first = 1 + scene.items[..object]
         .iter()
-        .zip(b.as_chunks::<16>().0)
-        .filter(|(a, b)| a[12..] != b[12..])
-        .count()
+        .map(|item| item.mesh.triangles.len())
+        .sum::<usize>();
+    let triangle = |id: f32| {
+        // Above this point f32 Forward IDs cannot identify every adjacent integer.
+        (id > 0. && id < (1 << 24) as f32 && id.fract() == 0.)
+            .then_some(id as usize)
+            .and_then(|id| id.checked_sub(first))
+            .and_then(|index| item.mesh.triangles.get(index))
+    };
+    let (Some(before), Some(after)) = (triangle(before), triangle(after)) else {
+        return false;
+    };
+    let common: Vec<_> = before
+        .iter()
+        .filter(|vertex| after.contains(vertex))
+        .collect();
+    matches!(common.as_slice(), [a, b] if a != b)
+}
+
+fn same_edge_depth(before: f32, after: f32) -> bool {
+    before.is_finite()
+        && after.is_finite()
+        && before > 0.
+        && after > 0.
+        && before.to_bits().abs_diff(after.to_bits()) <= 1
 }
 
 fn forward_pixel(planes: &[Vec<u8>; 3], index: usize) -> Value {
@@ -177,7 +210,7 @@ pub(super) fn compare_image(root: &Path, output: &Path, fxaa: bool) -> Result<()
         (frame, device, work, forward_readbacks(&renderer)?)
     };
 
-    let (candidate, candidate_device, candidate_work, candidate_planes) = {
+    let (candidate, candidate_device, candidate_work, candidate_planes, source) = {
         let mut renderer = VulkanRenderer::new_meshlet_benchmark(root.to_owned(), None, true)
             .map_err(|error| error.to_string())?;
         let device = renderer
@@ -191,7 +224,13 @@ pub(super) fn compare_image(root: &Path, output: &Path, fxaa: bool) -> Result<()
             .last_frame_work()
             .ok_or("Missing R8.1 work counters")?;
         PathUnderTest::Mesh.check_work(&work, reference.stats.submitted_triangles, true)?;
-        (frame, device, work, forward_readbacks(&renderer)?)
+        (
+            frame,
+            device,
+            work,
+            forward_readbacks(&renderer)?,
+            scene.into_snapshot(),
+        )
     };
 
     let same_device = reference_device.vendor_id == candidate_device.vendor_id
@@ -211,6 +250,10 @@ pub(super) fn compare_image(root: &Path, output: &Path, fxaa: bool) -> Result<()
     }
     let mut changed_pixels = 0;
     let mut max_delta = 0;
+    let mut max_non_edge_delta = 0;
+    let mut changed_objects = 0;
+    let mut changed_triangles = 0;
+    let mut shared_edge_changes = 0;
     let mut worst = None;
     for (index, (a, b)) in reference
         .rgba
@@ -222,6 +265,26 @@ pub(super) fn compare_image(root: &Path, output: &Path, fxaa: bool) -> Result<()
     {
         changed_pixels += usize::from(a != b);
         let delta = a.iter().zip(b).map(|(&a, &b)| a.abs_diff(b)).max().unwrap();
+        let object_offset = index * 16 + 12;
+        let object = read_float(&reference_planes[1], object_offset);
+        let same_object = object == read_float(&candidate_planes[1], object_offset);
+        changed_objects += usize::from(!same_object);
+        let before = read_float(&reference_planes[2], object_offset);
+        let after = read_float(&candidate_planes[2], object_offset);
+        let mut edge_change = false;
+        if before != after {
+            changed_triangles += 1;
+            edge_change = same_object
+                && same_edge_depth(
+                    read_float(&reference_planes[0], index * 4),
+                    read_float(&candidate_planes[0], index * 4),
+                )
+                && shared_edge(&source, object, before, after);
+            shared_edge_changes += usize::from(edge_change);
+        }
+        if !edge_change {
+            max_non_edge_delta = max_non_edge_delta.max(delta);
+        }
         if delta > max_delta {
             max_delta = delta;
             worst = Some(index);
@@ -237,7 +300,9 @@ pub(super) fn compare_image(root: &Path, output: &Path, fxaa: bool) -> Result<()
     let reference_counts = json!(reference.stats);
     let candidate_counts = json!(candidate.stats);
     let expected_triangles = fixture.inventory["source_triangles"].as_u64().unwrap();
-    let passed = max_delta <= 2
+    let passed = max_non_edge_delta <= MAX_CHANNEL_DELTA
+        && changed_objects == 0
+        && changed_triangles == shared_edge_changes
         && reference_counts == candidate_counts
         && reference.stats.submitted_triangles as u64 == expected_triangles
         && reference.stats.shaded_pixels > 0;
@@ -251,12 +316,14 @@ pub(super) fn compare_image(root: &Path, output: &Path, fxaa: bool) -> Result<()
             "camera": camera,
             "render_pixels": SIZE,
             "fixture": fixture.inventory,
-            "max_channel_error_allowed": 2,
+            "max_channel_error_allowed": MAX_CHANNEL_DELTA,
             "max_channel_error": max_delta,
             "changed_pixels": changed_pixels,
+            "max_channel_error_outside_shared_edges": max_non_edge_delta,
             "forward_readback": {
-                "changed_object_id_pixels": changed_ownership(&reference_planes[1], &candidate_planes[1]),
-                "changed_triangle_id_pixels": changed_ownership(&reference_planes[2], &candidate_planes[2]),
+                "changed_object_id_pixels": changed_objects,
+                "changed_triangle_id_pixels": changed_triangles,
+                "shared_edge_ownership_changes": shared_edge_changes,
                 "worst_final_pixel": worst_pixel,
             },
             "r24": {"device": reference_device, "stats": reference_counts, "work": reference_work},
@@ -265,8 +332,38 @@ pub(super) fn compare_image(root: &Path, output: &Path, fxaa: bool) -> Result<()
     )?;
     if !passed {
         return Err(format!(
-            "S5 image or geometry counts differ: max channel delta {max_delta}, {changed_pixels} changed pixels"
+            "S5 image differs: max RGBA8 delta {max_non_edge_delta} outside verified shared edges, \
+             {changed_objects} object-ID and {} non-edge triangle-ID changes",
+            changed_triangles - shared_edge_changes
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use module_engine_core::{Mesh, RenderItem, Transform};
+
+    #[test]
+    fn edge_equivalence_checks_topology_and_adjacent_depth_values() {
+        let scene = SceneSnapshot {
+            items: vec![RenderItem {
+                id: 1,
+                mesh: Mesh::cube(),
+                model: Transform::default().matrix(),
+                color: [255; 4],
+                material: Default::default(),
+            }],
+            ..Default::default()
+        };
+        assert!(shared_edge(&scene, 1., 1., 2.));
+        assert!(!shared_edge(&scene, 1., 1., 3.));
+        assert!(!shared_edge(&scene, 0., 1., 2.));
+        assert!(!shared_edge(&scene, 1., 1., (1 << 24) as f32));
+        let depth = 87_f32;
+        assert!(same_edge_depth(depth, depth.next_up()));
+        assert!(!same_edge_depth(depth, depth.next_up().next_up()));
+        assert!(!same_edge_depth(0., 0.));
+    }
 }
