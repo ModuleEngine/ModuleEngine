@@ -53,7 +53,8 @@ pub fn run(id: &str, folder: &Path) -> Result<(), String> {
         "R2-textures" => materials::check(&root, &folder),
         "R23-structure" => structure::run(&root, &folder),
         "R24-visibility" => visibility::run(&root, &folder),
-        "R81-visibility" => meshlets::compare_image(&root, &folder),
+        "R81-visibility" => meshlets::compare_image(&root, &folder, true),
+        "R81-visibility-no-fxaa" => meshlets::compare_image(&root, &folder, false),
         _ => Err(format!("Unknown benchmark scene {id}")),
     }
 }

@@ -39,7 +39,10 @@ python -B scripts/bench_r81.py --exe <bench-exe> --output outputs/r81/series
 The comparison first reads back both 1080p images. It checks the device,
 dimensions, all RenderStats counts, nonzero geometry coverage and a maximum
 absolute output delta of 2 on every RGBA8 channel. It retains both PNGs and
-the image report. The scored comparison then runs five pairs of native
+the image report with Forward depth, normal, color and source IDs at the
+worst differing pixel. `R81-visibility-no-fxaa` bypasses FXAA in both
+paths for diagnosis. The full Forward graph is required for the scored
+comparison, which runs five pairs of native
 processes, switching which path starts each pair. Each process warms up
 for five frames and records 30 GPU-only native frames with GPU timestamps,
 vsync off and Immediate presentation. Both paths must report the same

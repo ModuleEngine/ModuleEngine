@@ -152,7 +152,7 @@ struct PackedGeometry {
     headers: Vec<[u32; 5]>,
     vertex_indices: Vec<u32>,
     primitives: Vec<[u32; 2]>,
-    objects: Vec<[f32; 16]>,
+    objects: Vec<[[f32; 4]; 4]>,
 }
 
 fn resource(message: &str) -> VulkanError {
@@ -219,8 +219,7 @@ impl PackedGeometry {
                 packed
                     .vertex_indices
                     .extend(cluster.vertices.iter().map(|&vertex| base_vertex + vertex));
-                for tri in cluster.triangles.chunks_exact(3) {
-                    let corners = [tri[0], tri[1], tri[2]];
+                for &corners in cluster.triangles.as_chunks::<3>().0 {
                     let source = corners.map(|i| cluster.vertices[i as usize]);
                     let i = faces.remove(&canonical(source)).ok_or_else(|| {
                         resource("meshopt output changed triangle identity or winding")
@@ -248,14 +247,10 @@ impl PackedGeometry {
                     let uv = mesh.texcoords.get(i).copied().unwrap_or_default();
                     [p[0], p[1], p[2], uv[0], uv[1]]
                 }));
-            let mut object = [0.; 16];
-            for (row, model) in object.chunks_exact_mut(4).zip(&item.model[..3]) {
-                row.copy_from_slice(model);
-            }
-            object[12..].copy_from_slice(&std::array::from_fn::<_, 4, _>(|i| {
-                item.color[i] as f32 / 255. * item.material.base_color[i]
-            }));
-            packed.objects.push(object);
+            let [x, y, z, _] = item.model;
+            let color =
+                std::array::from_fn(|i| item.color[i] as f32 / 255. * item.material.base_color[i]);
+            packed.objects.push([x, y, z, color]);
         }
         Ok(packed)
     }

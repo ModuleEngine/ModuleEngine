@@ -415,7 +415,9 @@ struct ProducerFlight {
     _material_upload: Option<Buffer>,
     _scene_buffers: Option<(resident::Buffers, Option<resident::Buffers>)>,
     #[cfg(feature = "bench")]
-    _meshlet_buffers: Option<(Arc<[Buffer; 5]>, Option<Arc<Buffer>>)>,
+    _meshlet_geometry: Option<Arc<[Buffer; 5]>>,
+    #[cfg(feature = "bench")]
+    _meshlet_staging: Option<Arc<Buffer>>,
     _transfer_timeline: Option<Arc<Timeline>>,
     _pipelines: Vec<Arc<Pipeline>>,
     _culling_pipelines: Option<Arc<culling::Pipelines>>,
@@ -957,6 +959,40 @@ impl VulkanRenderer {
                 })
                 .collect(),
         )
+    }
+
+    /// Reuse the detailed capture of the completed synchronous frame.
+    #[cfg(feature = "bench")]
+    pub fn synchronous_graph_readback(&self, resource: &str) -> Result<Vec<u8>, VulkanError> {
+        let slot = &self.slots[0];
+        let resources = slot
+            .resources
+            .as_ref()
+            .filter(|_| slot.pending.is_none())
+            .ok_or(VulkanError::NoReadback)?;
+        let staging = resources.staging.as_ref().ok_or(VulkanError::NoReadback)?;
+        let plane = resources
+            .key
+            .readback
+            .iter()
+            .find(|plane| plane.resource == resource)
+            .ok_or(VulkanError::NoReadback)?;
+        let mut bytes = vec![0; plane.size];
+        // The synchronous slot has already completed its transfer-to-host barrier.
+        unsafe {
+            staging
+                .memory
+                .as_ref()
+                .unwrap()
+                .access(staging.size, |mapped| {
+                    std::ptr::copy_nonoverlapping(
+                        mapped.add(plane.offset),
+                        bytes.as_mut_ptr(),
+                        bytes.len(),
+                    );
+                })?;
+        }
+        Ok(bytes)
     }
 
     pub fn set_scene_culling(&mut self, mode: SceneCulling) {
@@ -3186,7 +3222,9 @@ impl VulkanRenderer {
                 .as_ref()
                 .map(|r| (r.buffers.clone(), self.gpu_scene.prior_buffers())),
             #[cfg(feature = "bench")]
-            _meshlet_buffers: meshlets.map(|scene| (scene.buffers.clone(), scene.staging.clone())),
+            _meshlet_geometry: meshlets.map(|scene| scene.buffers.clone()),
+            #[cfg(feature = "bench")]
+            _meshlet_staging: meshlets.and_then(|scene| scene.staging.clone()),
             _transfer_timeline: transfer.map(|queue| queue.timeline.clone()),
             _pipelines: self.pipelines.values().cloned().collect(),
             _culling_pipelines: self.culling_pipelines.clone(),

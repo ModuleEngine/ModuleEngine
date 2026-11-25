@@ -81,7 +81,7 @@ def run(exe, output, rounds):
                        cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT,
                        timeout=360, check=True)
     parity = read_json(output / "visibility" / "comparison.json")
-    if parity.get("status") != "complete":
+    if parity.get("status") != "complete" or parity.get("fxaa") is not True:
         raise ValueError("S5 image check is missing or failed")
     runs = {"baseline": [], "candidate": []}
     signature = None

@@ -40,12 +40,12 @@ struct Object {
 
 struct VertexOutput {
     float4 position : SV_Position;
+    [[vk::location(1)]] float4 color : COLOR0;
     [[vk::location(2)]] float depth : TEXCOORD1;
     [[vk::location(4)]] float2 uv : TEXCOORD3;
 };
 struct PrimitiveOutput {
     [[vk::location(0)]] float3 normal : TEXCOORD0;
-    [[vk::location(1)]] float4 color : COLOR0;
     [[vk::location(3)]] float2 ids : TEXCOORD2;
 };
 
@@ -60,7 +60,7 @@ float3 worldPosition(uint vertex, Object object) {
     return result;
 }
 
-VertexOutput cameraVertex(float3 worldPosition, float2 uv) {
+VertexOutput cameraVertex(float3 worldPosition, float2 uv, float4 color) {
     float3 local = worldPosition - config.eyeNear.xyz;
     float3 p = float3(dot(local, config.rightAspect.xyz), dot(local, config.upFar.xyz),
                       dot(local, config.forwardFocal.xyz));
@@ -70,6 +70,8 @@ VertexOutput cameraVertex(float3 worldPosition, float2 uv) {
     o.position = float4(p.x * config.forwardFocal.w / config.rightAspect.w,
                         -p.y * config.forwardFocal.w,
                         p.z * farZ / (farZ - nearZ) - farZ * nearZ / (farZ - nearZ), p.z);
+    // Match the stock Forward color interpolant for each object.
+    o.color = color;
     o.depth = p.z;
     o.uv = uv;
     return o;
@@ -89,7 +91,7 @@ void mainMesh(uint3 group : SV_GroupID, uint lane : SV_GroupIndex, in payload Pa
         uint vertex = vertexIndices[m.firstVertex + i];
         float3 p = worldPosition(vertex, object);
         world[i] = p;
-        vertexOut[i] = cameraVertex(p, asfloat(vertices.Load2(vertex * 20 + 12)));
+        vertexOut[i] = cameraVertex(p, asfloat(vertices.Load2(vertex * 20 + 12)), object.color);
     }
     GroupMemoryBarrierWithGroupSync();
 
@@ -102,7 +104,6 @@ void mainMesh(uint3 group : SV_GroupID, uint lane : SV_GroupIndex, in payload Pa
         float length = sqrt(dot(face, face));
         PrimitiveOutput o;
         o.normal = length > 0.00001 ? face / length : float3(0, 1, 0);
-        o.color = object.color;
         o.ids = float2(record.y, m.object + 1);
         primitiveOut[i] = o;
     }
@@ -112,7 +113,7 @@ void mainMesh(uint3 group : SV_GroupID, uint lane : SV_GroupIndex, in payload Pa
 // primitive array. DXC accepts the SPIR-V decoration through this attribute.
 struct PixelInput {
     [[vk::location(0), vk::ext_decorate(5271)]] float3 normal : TEXCOORD0;
-    [[vk::location(1), vk::ext_decorate(5271)]] float4 color : COLOR0;
+    [[vk::location(1)]] float4 color : COLOR0;
     [[vk::location(2)]] float depth : TEXCOORD1;
     [[vk::location(3), vk::ext_decorate(5271)]] float2 ids : TEXCOORD2;
     [[vk::location(4)]] float2 uv : TEXCOORD3;

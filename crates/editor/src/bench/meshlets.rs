@@ -98,10 +98,53 @@ pub(super) fn check_indirect_support(
     Ok(())
 }
 
-pub(super) fn compare_image(root: &Path, output: &Path) -> Result<(), String> {
+fn forward_readbacks(renderer: &VulkanRenderer) -> Result<[Vec<u8>; 3], String> {
+    let capture = |name| {
+        renderer
+            .synchronous_graph_readback(name)
+            .map_err(|error| error.to_string())
+    };
+    Ok([
+        capture("geometry.depth")?,
+        capture("geometry.normals")?,
+        capture("geometry.color")?,
+    ])
+}
+
+fn changed_ownership(a: &[u8], b: &[u8]) -> usize {
+    a.as_chunks::<16>()
+        .0
+        .iter()
+        .zip(b.as_chunks::<16>().0)
+        .filter(|(a, b)| a[12..] != b[12..])
+        .count()
+}
+
+fn forward_pixel(planes: &[Vec<u8>; 3], index: usize) -> Value {
+    let floats = |plane: &[u8], components| {
+        let first = index * components * 4;
+        plane[first..first + components * 4]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|&bytes| f32::from_ne_bytes(bytes))
+            .collect::<Vec<_>>()
+    };
+    json!({
+        "depth": floats(&planes[0], 1)[0],
+        "normal_and_object_id": floats(&planes[1], 4),
+        "color_and_triangle_id": floats(&planes[2], 4),
+    })
+}
+
+pub(super) fn compare_image(root: &Path, output: &Path, fxaa: bool) -> Result<(), String> {
     let fixture = Fixture::load("S5", root)?;
     let camera = fixture.camera;
     let graph = default_graph(RenderPath::Forward);
+    let mut overrides = RenderOverrides::default();
+    if !fxaa {
+        overrides.enabled.insert("aa".into(), false);
+    }
     let render = |renderer: &mut VulkanRenderer, scene: SceneInput<'_>| {
         renderer
             .render_scene(
@@ -111,12 +154,12 @@ pub(super) fn compare_image(root: &Path, output: &Path) -> Result<(), String> {
                 SIZE[1],
                 &graph,
                 &BTreeMap::new(),
-                &RenderOverrides::default(),
+                &overrides,
             )
             .map_err(|error| error.to_string())
     };
 
-    let (reference, reference_device, reference_work) = {
+    let (reference, reference_device, reference_work, reference_planes) = {
         let mut renderer =
             VulkanRenderer::new_at(root.to_owned()).map_err(|error| error.to_string())?;
         let device = renderer
@@ -131,10 +174,10 @@ pub(super) fn compare_image(root: &Path, output: &Path) -> Result<(), String> {
             .last_frame_work()
             .ok_or("Missing R2.4 work counters")?;
         PathUnderTest::Indirect.check_work(&work, frame.stats.submitted_triangles, true)?;
-        (frame, device, work)
+        (frame, device, work, forward_readbacks(&renderer)?)
     };
 
-    let (candidate, candidate_device, candidate_work) = {
+    let (candidate, candidate_device, candidate_work, candidate_planes) = {
         let mut renderer = VulkanRenderer::new_meshlet_benchmark(root.to_owned(), None, true)
             .map_err(|error| error.to_string())?;
         let device = renderer
@@ -148,7 +191,7 @@ pub(super) fn compare_image(root: &Path, output: &Path) -> Result<(), String> {
             .last_frame_work()
             .ok_or("Missing R8.1 work counters")?;
         PathUnderTest::Mesh.check_work(&work, reference.stats.submitted_triangles, true)?;
-        (frame, device, work)
+        (frame, device, work, forward_readbacks(&renderer)?)
     };
 
     let same_device = reference_device.vendor_id == candidate_device.vendor_id
@@ -168,16 +211,29 @@ pub(super) fn compare_image(root: &Path, output: &Path) -> Result<(), String> {
     }
     let mut changed_pixels = 0;
     let mut max_delta = 0;
-    for (a, b) in reference
+    let mut worst = None;
+    for (index, (a, b)) in reference
         .rgba
-        .chunks_exact(4)
-        .zip(candidate.rgba.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(candidate.rgba.as_chunks::<4>().0)
+        .enumerate()
     {
         changed_pixels += usize::from(a != b);
-        for (&a, &b) in a.iter().zip(b) {
-            max_delta = max_delta.max(a.abs_diff(b));
+        let delta = a.iter().zip(b).map(|(&a, &b)| a.abs_diff(b)).max().unwrap();
+        if delta > max_delta {
+            max_delta = delta;
+            worst = Some(index);
         }
     }
+    let worst_pixel = worst.map(|index| {
+        json!({
+            "xy": [index % SIZE[0], index / SIZE[0]],
+            "r24": forward_pixel(&reference_planes, index),
+            "r81": forward_pixel(&candidate_planes, index),
+        })
+    });
     let reference_counts = json!(reference.stats);
     let candidate_counts = json!(candidate.stats);
     let expected_triangles = fixture.inventory["source_triangles"].as_u64().unwrap();
@@ -191,12 +247,18 @@ pub(super) fn compare_image(root: &Path, output: &Path) -> Result<(), String> {
         &output.join("comparison.json"),
         &json!({
             "status": if passed { "complete" } else { "failed" },
+        "fxaa": fxaa,
             "camera": camera,
             "render_pixels": SIZE,
             "fixture": fixture.inventory,
             "max_channel_error_allowed": 2,
             "max_channel_error": max_delta,
             "changed_pixels": changed_pixels,
+            "forward_readback": {
+                "changed_object_id_pixels": changed_ownership(&reference_planes[1], &candidate_planes[1]),
+                "changed_triangle_id_pixels": changed_ownership(&reference_planes[2], &candidate_planes[2]),
+                "worst_final_pixel": worst_pixel,
+            },
             "r24": {"device": reference_device, "stats": reference_counts, "work": reference_work},
             "r81": {"device": candidate_device, "stats": candidate_counts, "work": candidate_work},
         }),
