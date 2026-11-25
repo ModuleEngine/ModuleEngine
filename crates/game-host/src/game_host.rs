@@ -149,6 +149,7 @@ impl RendererDependencyWatch {
             .renderer_adapter(&route.renderer.module)
             .ok_or("Missing renderer adapter")?
             .dependency_revision(route.renderer, document)
+            .map_err(String::from)
     }
     pub fn changed(&mut self, document: &GraphDocument, modules: &ModuleRegistry) -> bool {
         if self.checked.elapsed() < Duration::from_millis(250) {
@@ -294,6 +295,7 @@ fn validate_candidate_controls(
             document,
             &effective_render_controls(document, time, controls)?,
         )
+        .map_err(String::from)
 }
 fn service_requests(
     contributions: &[GameContribution],
@@ -352,7 +354,11 @@ fn build_session(
                 game,
                 metadata.kind,
                 registry,
-                move |objects| modules.create_game_world(&world, objects),
+                move |objects| {
+                    modules
+                        .create_game_world(&world, objects)
+                        .map_err(String::from)
+                },
                 context,
             )
         }
@@ -483,6 +489,7 @@ impl ExecutableSystem for RustSystem {
                     .renderer_adapter(&route.renderer.module)
                     .ok_or("Missing renderer adapter")?
                     .validate_controls(route.renderer, &document, effective)
+                    .map_err(String::from)
             },
         );
         let (mut candidate_settings, preference_event) = match requested {
@@ -1302,6 +1309,7 @@ impl GameHost {
                     .renderer_adapter(&route.renderer.module)
                     .ok_or("Missing renderer adapter")?
                     .validate_controls(route.renderer, &document, controls)
+                    .map_err(String::from)
             })?;
         session.seed_module_data(services.initial_module_data()?)?;
         Ok(Self {
@@ -1539,6 +1547,7 @@ impl GameHost {
                     .renderer_adapter(&route.renderer.module)
                     .ok_or("Missing renderer adapter")?
                     .validate_controls(route.renderer, document, controls)
+                    .map_err(String::from)
             })?;
         }
         preference_state.reconcile(document);
@@ -2045,7 +2054,7 @@ impl GameHost {
                 if let PendingPresentationKind::Authored { owner, .. } = &pending.kind {
                     self.authored_presentation_requests.remove(owner);
                 }
-                return Err(error);
+                return Err(error.into());
             }
         };
         if let Some(timings) = pending.host_timings {

@@ -104,6 +104,9 @@ class RegistryTests(Fixture):
         tools = verify.plan(self.data, self.steps, "native-tools")["steps"]
         self.assertEqual([step["id"] for step in tools], ["native-linker", "native-context", "native-exe-spellings"])
         self.assertFalse(any("sharedGPU" in step.get("resources", []) for step in tools))
+        editor_tests = [s for s in self.data["steps"] if s.get("package") == "module-engine-editor"]
+        self.assertTrue(editor_tests)
+        self.assertTrue(all("verification" in s.get("features", []) for s in editor_tests))
 
     def test_windows_only_is_an_explicit_linux_skip(self):
         chosen = verify.plan(self.data, self.steps, "native", "linux")["steps"]
@@ -288,11 +291,15 @@ class ExecutionTests(Fixture):
         self.assertIn("--ignored", seen[0][0])
         self.assertIn("--exact", seen[1][0])
         self.assertEqual(os.environ.get("PATH"), original_path)
-        runner.products[("p", "lib", False)] = {"path": str(self.binary), "sha256": "stale"}
-        # Test the real cached-artifact integrity check, bypassing compilation.
+        cached = {"path": str(self.binary), "sha256": verify.digest(self.binary)}
+        runner.products[("p", "lib", False, ())] = cached
+        runner.products[("p", "lib", False, ("verification",))] = {**cached, "sha256": "stale"}
+        # Test feature selection and integrity on the actual cache path.
         del runner.artifact
-        with self.assertRaises(verify.VerificationError):
-            runner.artifact({"package": "p", "target_kind": "lib"})
+        target = {"package": "p", "target_kind": "lib"}
+        self.assertEqual(runner.artifact(target), cached)
+        with self.assertRaisesRegex(verify.VerificationError, "changed after its Cargo build"):
+            runner.artifact({**target, "features": ["verification"]})
 
     def test_zero_discovery_and_false_summary_never_pass(self):
         for discovered in [False, True]:

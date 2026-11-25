@@ -40,19 +40,52 @@ pub struct RenderControlTargets {
     pub resources: BTreeSet<String>,
 }
 
+#[derive(Clone, Debug, thiserror::Error)]
+pub enum RendererError {
+    #[error("No renderer registered for '{0}'")]
+    MissingRenderer(String),
+    #[error("{0}")]
+    Unsupported(&'static str),
+    #[error("{0}")]
+    Unavailable(&'static str),
+    #[error("GPU is preparing a new configuration; showing the last frame")]
+    Preparing,
+    #[error("{0}")]
+    Scene(String),
+    #[error("{0}")]
+    Backend(#[source] Arc<dyn std::error::Error + Send + Sync>),
+}
+
+impl RendererError {
+    pub fn backend(error: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::Backend(Arc::new(error))
+    }
+}
+
+// Existing application and report APIs format errors at their text boundary.
+impl From<RendererError> for String {
+    fn from(error: RendererError) -> Self {
+        error.to_string()
+    }
+}
+
 /// Cheap installation metadata available even when device preparation fails.
 pub trait RendererAdapter: Send + Sync {
     fn configuration_key(&self, node: &Node, document: &GraphDocument) -> Value {
         json!({"node":renderer_node_configuration(node),"shader_sources":document.shader_sources})
     }
-    fn dependency_revision(&self, _node: &Node, _document: &GraphDocument) -> Result<u64, String> {
+    fn dependency_revision(
+        &self,
+        _node: &Node,
+        _document: &GraphDocument,
+    ) -> Result<u64, RendererError> {
         Ok(0)
     }
     fn control_targets(
         &self,
         _node: &Node,
         _document: &GraphDocument,
-    ) -> Result<Option<RenderControlTargets>, String> {
+    ) -> Result<Option<RenderControlTargets>, RendererError> {
         Ok(None)
     }
     /// No device creation, shader compilation or live configuration mutation.
@@ -61,7 +94,7 @@ pub trait RendererAdapter: Send + Sync {
         _node: &Node,
         _document: &GraphDocument,
         controls: &RenderOverrides,
-    ) -> Result<(), String> {
+    ) -> Result<(), RendererError> {
         reject_unsupported_controls(controls)
     }
 }
@@ -93,14 +126,16 @@ pub fn renderer_node_configuration(node: &Node) -> Value {
     serde_json::to_value(node).expect("Node contains portable JSON")
 }
 
-fn reject_unsupported_controls(controls: &RenderOverrides) -> Result<(), String> {
+fn reject_unsupported_controls(controls: &RenderOverrides) -> Result<(), RendererError> {
     if controls.parameters.is_empty()
         && controls.enabled.is_empty()
         && controls.resource_commands.is_empty()
     {
         Ok(())
     } else {
-        Err("This renderer does not implement portable render controls".into())
+        Err(RendererError::Unsupported(
+            "This renderer does not implement portable render controls",
+        ))
     }
 }
 
@@ -127,7 +162,7 @@ pub trait FrameRenderer: Send {
         width: usize,
         height: usize,
         overrides: &RenderOverrides,
-    ) -> Result<Frame, String>;
+    ) -> Result<Frame, RendererError>;
 
     /// Optional retained scene input; synchronization is independent of GPU
     /// submission. Busy, cancellation and polling do not acknowledge a delta.
@@ -135,8 +170,10 @@ pub trait FrameRenderer: Send {
         crate::SceneSync::SnapshotOnly
     }
 
-    fn update_scene(&mut self, _update: crate::SceneUpdate<'_>) -> Result<(), String> {
-        Err("Renderer does not support retained scene input".into())
+    fn update_scene(&mut self, _update: crate::SceneUpdate<'_>) -> Result<(), RendererError> {
+        Err(RendererError::Unsupported(
+            "Renderer does not support retained scene input",
+        ))
     }
 
     fn render_retained(
@@ -145,8 +182,10 @@ pub trait FrameRenderer: Send {
         _width: usize,
         _height: usize,
         _overrides: &RenderOverrides,
-    ) -> Result<Frame, String> {
-        Err("Renderer does not support retained scene input".into())
+    ) -> Result<Frame, RendererError> {
+        Err(RendererError::Unsupported(
+            "Renderer does not support retained scene input",
+        ))
     }
 
     fn render_retained_presented(
@@ -155,7 +194,7 @@ pub trait FrameRenderer: Send {
         width: usize,
         height: usize,
         overrides: &RenderOverrides,
-    ) -> Result<RenderSubmission, String> {
+    ) -> Result<RenderSubmission, RendererError> {
         self.render_retained(camera, width, height, overrides)
             .map(RenderSubmission::Ready)
     }
@@ -165,7 +204,7 @@ pub trait FrameRenderer: Send {
     fn set_presentation_target(
         &mut self,
         _target: Option<Arc<dyn crate::PresentationTarget>>,
-    ) -> Result<(), String> {
+    ) -> Result<(), RendererError> {
         Ok(())
     }
 
@@ -179,20 +218,22 @@ pub trait FrameRenderer: Send {
         width: usize,
         height: usize,
         overrides: &RenderOverrides,
-    ) -> Result<RenderSubmission, String> {
+    ) -> Result<RenderSubmission, RendererError> {
         self.render(scene, camera, width, height, overrides)
             .map(RenderSubmission::Ready)
     }
 
     /// Check one accepted request without waiting or admitting new GPU work.
     /// A completed frame is returned once and belongs to the ticket's inputs.
-    fn poll_presented(&mut self, _ticket: u64) -> Result<Option<Frame>, String> {
-        Err("This renderer has no pending presentation ticket".into())
+    fn poll_presented(&mut self, _ticket: u64) -> Result<Option<Frame>, RendererError> {
+        Err(RendererError::Unsupported(
+            "This renderer has no pending presentation ticket",
+        ))
     }
 
     /// Abandon publication without waiting. Native resources remain owned by
     /// the backend until actual GPU completion; discard is never completion.
-    fn discard_presented(&mut self, _ticket: u64) -> Result<(), String> {
+    fn discard_presented(&mut self, _ticket: u64) -> Result<(), RendererError> {
         Ok(())
     }
 
@@ -211,10 +252,10 @@ pub trait FrameRenderer: Send {
         &mut self,
         _node: &Node,
         _document: &GraphDocument,
-    ) -> Result<Option<Box<dyn FrameRenderer>>, String> {
+    ) -> Result<Option<Box<dyn FrameRenderer>>, RendererError> {
         Ok(None)
     }
-    fn validate_overrides(&self, overrides: &RenderOverrides) -> Result<(), String> {
+    fn validate_overrides(&self, overrides: &RenderOverrides) -> Result<(), RendererError> {
         reject_unsupported_controls(overrides)
     }
 }
@@ -228,8 +269,8 @@ impl RendererAdapter for SoftwareRendererAdapter {
         node: &Node,
         _document: &GraphDocument,
         controls: &RenderOverrides,
-    ) -> Result<(), String> {
-        crate::runtime::validate_software_renderer(node).map_err(|error| error.to_string())?;
+    ) -> Result<(), RendererError> {
+        crate::runtime::validate_software_renderer(node).map_err(RendererError::backend)?;
         reject_unsupported_controls(controls)
     }
 }
@@ -242,7 +283,7 @@ impl FrameRenderer for SoftwareRenderer {
         width: usize,
         height: usize,
         _overrides: &RenderOverrides,
-    ) -> Result<Frame, String> {
+    ) -> Result<Frame, RendererError> {
         Ok(render_scene(scene, width, height, camera))
     }
 

@@ -79,6 +79,23 @@ python3 scripts/verify.py --profile native --plan
 и native host из `rustc -vV` с `toolchain-manifest.json` на Windows или
 `scripts/linux-toolchain.json` на Linux до Cargo metadata; несовпадение — отказ.
 
+`module-engine-vulkan` запрещает `clippy::undocumented_unsafe_blocks` для всех
+целей сборки. То же правило действует в модулях нативного вывода, диалогов
+Windows и ожиданий Host. Комментарии безопасности объясняют требования к
+времени жизни, владению и синхронизации в месте вызова.
+
+Команды проверок Editor и нативный захват входят в сборку с
+`--features verification`. Launcher выбирает эту возможность для тестов
+Editor, а обе legacy-обёртки включают её для своих команд Editor. Обычные
+пакеты Editor собираются без неё. Отдельный маршрут нативных бенчмарков
+S1–S5 по-прежнему включает `bench`.
+
+25 ноября 2026 года две Release-сборки Windows x64 на Rust 1.99.0 заняли
+37 123 584 байта со стандартными features и 38 485 504 байта с
+`verification`. Разница — 1 361 920 байт (3,54% от сборки с feature).
+У обеих один дайджест рабочего снимка исходников
+`ec5bc2b26b2a8e620d4bc684e75c7a2ac1641dd3dd75e13fbd200fd895f530ec`.
+
 Проверки выполняются последовательно. Для Rust tests launcher сначала получает
 `cargo metadata`, затем `cargo test --no-run --message-format=json` для выбранного
 package/target. `contracts` использует обычную test-сборку; `native` и `package` -

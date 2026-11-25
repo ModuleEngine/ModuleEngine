@@ -126,8 +126,10 @@ pub struct Workflow {
     new_engine_choice: crate::engine_profiles::EngineChoice,
     report: String,
     show_report: bool,
+    review_custom_permission: bool,
     pub(super) command_targets: BTreeMap<String, egui::Rect>,
     menu_rects: BTreeMap<String, egui::Rect>,
+    #[cfg(feature = "verification")]
     capture_menu: Option<String>,
     asset_history: BTreeMap<u64, AssetOperationRecord>,
     #[cfg(test)]
@@ -149,8 +151,10 @@ impl Workflow {
             new_engine_choice: Default::default(),
             report: String::new(),
             show_report: false,
+            review_custom_permission: false,
             command_targets: BTreeMap::new(),
             menu_rects: BTreeMap::new(),
+            #[cfg(feature = "verification")]
             capture_menu: if std::env::var_os("EFRAME_SCREENSHOT_TO").is_some()
                 || std::env::var_os("MODULE_ENGINE_UI_SCREENSHOT_TO").is_some()
             {
@@ -169,6 +173,7 @@ impl Workflow {
         self.job.is_some()
             || self.guard.is_some()
             || self.show_report
+            || self.review_custom_permission
             || self.workspace_dialog.is_some()
     }
     pub(super) fn has_asset_history(&self) -> bool {
@@ -192,6 +197,7 @@ impl Workflow {
 
 impl Editor {
     pub(super) fn initialize_workflow(&mut self) {
+        self.prompt_for_new_team_custom();
         if let Some(root) = &self.diagnostic_personal_root {
             self.workflow.recent_path = Some(root.join("editor-recent-projects.json"));
         } else {
@@ -282,11 +288,36 @@ impl Editor {
             self.path = original_path;
             return false;
         }
+        self.prompt_for_new_team_custom();
         self.workflow.saved = self.document.clone();
         self.workflow.asset_history.clear();
         self.assets.reset();
         self.remember_project();
         true
+    }
+
+    fn prompt_for_new_team_custom(&mut self) {
+        self.workflow.review_custom_permission = self
+            .distribution
+            .as_ref()
+            .and_then(|distribution| distribution.custom_consent())
+            .is_some_and(|consent| consent.choice().is_none());
+    }
+
+    fn can_review_custom_permission(&self) -> bool {
+        self.distribution
+            .as_ref()
+            .and_then(|distribution| distribution.custom_consent())
+            .is_some_and(|consent| {
+                consent.choice() != Some(crate::team_custom_consent::Choice::Allow)
+            })
+    }
+
+    fn finish_custom_permission(&mut self, choice: crate::team_custom_consent::Choice) {
+        self.workflow.review_custom_permission = false;
+        if let Err(error) = self.set_custom_permission(choice) {
+            self.report_error(error);
+        }
     }
     fn request_action(&mut self, action: Action, ctx: &egui::Context) {
         if self.workflow.job.is_some() || self.workflow.guard.is_some() {
@@ -901,21 +932,24 @@ impl Editor {
         self.workflow.show_report = true;
     }
     pub(super) fn workflow_frame(&mut self, ctx: &egui::Context) {
-        let capture_ready = (std::env::var_os("MODULE_ENGINE_CAPTURE_WAIT_READY").is_none()
-            || !self.game_workbench.has_pending_preparation())
-            && (!self.ui_capture.requires_game_timings()
-                || self.game_workbench.has_displayed_play_timings());
-        match self.ui_capture.tick(ctx, capture_ready) {
-            Ok(true) => {
-                self.workflow.allow_close = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        #[cfg(feature = "verification")]
+        {
+            let capture_ready = (std::env::var_os("MODULE_ENGINE_CAPTURE_WAIT_READY").is_none()
+                || !self.game_workbench.has_pending_preparation())
+                && (!self.ui_capture.requires_game_timings()
+                    || self.game_workbench.has_displayed_play_timings());
+            match self.ui_capture.tick(ctx, capture_ready) {
+                Ok(true) => {
+                    self.workflow.allow_close = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                Err(error) => {
+                    eprintln!("{error}");
+                    self.workflow.allow_close = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                Ok(false) => {}
             }
-            Err(error) => {
-                eprintln!("{error}");
-                self.workflow.allow_close = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-            Ok(false) => {}
         }
         let outcome = self
             .workflow
@@ -1324,6 +1358,17 @@ impl Editor {
                         }
                     }
                 });
+                if self.can_review_custom_permission()
+                    && ui
+                        .add_enabled(
+                            !self.workflow.blocks_document_edits(),
+                            egui::Button::new("Review Custom Rust permission…"),
+                        )
+                        .clicked()
+                {
+                    self.workflow.review_custom_permission = true;
+                    ui.close();
+                }
                 ui.separator();
                 for (command, label, shortcut) in [
                     (Command::Save, "Save Project", "Ctrl+S"),
@@ -1606,6 +1651,7 @@ impl Editor {
     /// Explicit screenshot diagnostics click a real menu after its first layout.
     /// Ordinary input is untouched; only the calling application's egui stream
     /// receives these events, never other desktop windows.
+    #[cfg(feature = "verification")]
     pub(super) fn workflow_capture_input(&mut self, input: &mut egui::RawInput) {
         let Some(menu) = &self.workflow.capture_menu else {
             return;
@@ -1633,6 +1679,34 @@ impl Editor {
         self.workflow.capture_menu = None;
     }
     pub(super) fn draw_workflow_modals(&mut self, ctx: &egui::Context) {
+        use crate::team_custom_consent::Choice;
+        if self.workflow.review_custom_permission {
+            let prompt = egui::Modal::new(egui::Id::new("team-custom-rust-permission")).show(ctx, |ui| {
+                ui.set_width((ctx.content_rect().width() - 32.).clamp(160., 560.));
+                ui.heading("Allow Custom Rust compilation?");
+                egui::ScrollArea::vertical()
+                    .max_height((ctx.content_rect().height() - 144.).clamp(40., 260.))
+                    .show(ui, |ui| {
+                        ui.label("Compiling Custom Rust can run build scripts and procedural macros with your account's permissions. The editor remembers this choice for the project below.");
+                        ui.add(egui::Label::new(&self.path).wrap().selectable(true));
+                    });
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("Open without compiling").clicked() {
+                        Some(Choice::Deny)
+                    } else if ui.button("Allow compilation").clicked() {
+                        Some(Choice::Allow)
+                    } else {
+                        None
+                    }
+                }).inner
+            });
+            if let Some(choice) = prompt.inner {
+                self.finish_custom_permission(choice);
+            } else if prompt.should_close() {
+                self.workflow.review_custom_permission = false;
+            }
+            return;
+        }
         self.draw_workspace_dialog(ctx);
         if !self.workflow.blocks_document_edits() {
             self.draw_scene_source_dialog(ctx);
@@ -1714,9 +1788,11 @@ fn read_tail(path: &Path) -> String {
         Err(e) => e.to_string(),
     }
 }
+#[cfg(feature = "verification")]
 pub(super) fn import_resource(root: &Path, source: &Path) -> Result<String, String> {
     import_resource_into(root, source, "assets/imported/files")
 }
+#[cfg(feature = "verification")]
 fn import_resource_into(root: &Path, source: &Path, folder: &str) -> Result<String, String> {
     import_resource_transaction(root, source, folder, Ok)
 }
@@ -1819,6 +1895,7 @@ fn import_resource_transaction<T>(
 /// Reproduce the editor's project/file services and real menu interaction, then
 /// render/export the relocated imported model. Native dialog cancellation/ABI
 /// and guarded command transitions have independent unit tests.
+#[cfg(feature = "verification")]
 pub(crate) fn verify_workflow(source: &Path, output: &Path) -> Result<serde_json::Value, String> {
     use module_engine_core::{AuthoredObject, Transform, WorldObject};
     use workspace_files::ProjectTemplate;

@@ -541,7 +541,7 @@ pub fn integration_self_check(output: &Path) -> Result<Value, String> {
         "changed_pixels": {"forward_deferred":deferred_pixels,"tone_modes":tone_pixels,"custom_compute":compute_pixels,
             "custom_vertex":vertex_pixels,"custom_fragment":fragment_pixels,"rust_exposure":exposure_pixels},
         "worker":worker, "worker_dependencies":dependency_versions, "gpu_stats":forward.stats,
-        "persistence":persistence, "shader_rejection":shader_error, "mixed_batch_rejection":invalid_batch_error,
+        "persistence":persistence, "shader_rejection":shader_error, "mixed_batch_rejection":invalid_batch_error.to_string(),
         "examples":["gpu-forward.json","gpu-deferred.json","gpu-controller.json","gpu-controller-ecs.json",
             "gpu-custom-compute.json","gpu-custom-raster.json","gpu-custom-raster-edited.json"]
     });
@@ -569,7 +569,9 @@ fn advance(runtime: &mut Runtime) {
     }
 }
 fn render(runtime: &Runtime) -> Result<Frame, String> {
-    runtime.render(WIDTH, HEIGHT, Camera::default())
+    runtime
+        .render(WIDTH, HEIGHT, Camera::default())
+        .map_err(String::from)
 }
 fn changed_pixels(a: &Frame, b: &Frame) -> Result<usize, String> {
     check(

@@ -73,10 +73,10 @@ impl FrameRenderer for Receiver {
             .map_or_else(|| self.inner.scene_sync(), RenderScene::sync)
     }
 
-    fn update_scene(&mut self, update: SceneUpdate<'_>) -> Result<(), String> {
+    fn update_scene(&mut self, update: SceneUpdate<'_>) -> Result<(), RendererError> {
         let mut trace = self.trace.lock().unwrap();
         if trace.decline {
-            return Err("fixture did not receive update".into());
+            return Err(RendererError::Unavailable("fixture did not receive update"));
         }
         trace.packets.push_back(match &update {
             SceneUpdate::Reset { snapshot, .. } => Packet::Reset(snapshot.items.len()),
@@ -88,8 +88,8 @@ impl FrameRenderer for Receiver {
             ),
         });
         if let Some(scene) = &mut self.cpu {
-            scene.apply(update)?;
-            trace.snapshot = Some(scene.snapshot()?.clone());
+            scene.apply(update).map_err(RendererError::Scene)?;
+            trace.snapshot = Some(scene.snapshot().map_err(RendererError::Scene)?.clone());
             Ok(())
         } else {
             self.inner.update_scene(update)
@@ -103,7 +103,7 @@ impl FrameRenderer for Receiver {
         _: usize,
         _: usize,
         _: &RenderOverrides,
-    ) -> Result<Frame, String> {
+    ) -> Result<Frame, RendererError> {
         panic!("the host bypassed the retained receiver")
     }
 
@@ -113,10 +113,15 @@ impl FrameRenderer for Receiver {
         width: usize,
         height: usize,
         controls: &RenderOverrides,
-    ) -> Result<Frame, String> {
+    ) -> Result<Frame, RendererError> {
         if let Some(scene) = &self.cpu {
-            self.inner
-                .render(scene.snapshot()?, camera, width, height, controls)
+            self.inner.render(
+                scene.snapshot().map_err(RendererError::Scene)?,
+                camera,
+                width,
+                height,
+                controls,
+            )
         } else {
             self.inner.render_retained(camera, width, height, controls)
         }
@@ -128,10 +133,15 @@ impl FrameRenderer for Receiver {
         width: usize,
         height: usize,
         controls: &RenderOverrides,
-    ) -> Result<RenderSubmission, String> {
+    ) -> Result<RenderSubmission, RendererError> {
         if let Some(scene) = &self.cpu {
-            self.inner
-                .render_presented(scene.snapshot()?, camera, width, height, controls)
+            self.inner.render_presented(
+                scene.snapshot().map_err(RendererError::Scene)?,
+                camera,
+                width,
+                height,
+                controls,
+            )
         } else {
             self.inner
                 .render_retained_presented(camera, width, height, controls)

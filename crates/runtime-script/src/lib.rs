@@ -112,9 +112,9 @@ pub use cleanup::{
 mod jobs;
 pub use jobs::{JobLease, finish_background_jobs, spawn_job};
 
-const PACKET_MARKER: &str = "__MODULE_ENGINE_SCRIPT_PACKET__";
 const MAX_PACKET: usize = 1024 * 1024;
 const SDK_IDENTITY_ARGUMENT: &str = "--module-engine-sdk-identity";
+const WORKER_ARGUMENT: &str = "--module-engine-json-worker";
 static NEXT_WORKER: AtomicU64 = AtomicU64::new(1);
 
 /// Supported compiled entry-point signatures. Other Rust in the source remains
@@ -1121,6 +1121,7 @@ fn verify_worker_lock(
 }
 
 fn worker_source(kind: ScriptKind) -> String {
+    let stdio = include_str!("worker_stdio.rs");
     let invoke = match kind {
         ScriptKind::Update => "user_program::invoke(&mut context); let speed: Option<f64> = None;",
         ScriptKind::Speed => {
@@ -1131,18 +1132,26 @@ fn worker_source(kind: ScriptKind) -> String {
         r#"use std::io::{{BufRead, Write}};
 use module_engine_core::{{ScriptContext, SdkIdentity}};
 mod user_program;
+{stdio}
 fn run() -> Result<(), Box<dyn std::error::Error>> {{
-    if std::env::args().nth(1).as_deref() == Some("{SDK_IDENTITY_ARGUMENT}") {{
-        println!("{{}}", serde_json::to_string(&SdkIdentity::current())?);
-        return Ok(());
+    match std::env::args().nth(1).as_deref() {{
+        Some("{SDK_IDENTITY_ARGUMENT}") => {{
+            println!("{{}}", serde_json::to_string(&SdkIdentity::current())?);
+            return Ok(());
+        }}
+        Some("{WORKER_ARGUMENT}") => {{}}
+        _ => return Err("expected ModuleEngine worker mode".into()),
     }}
+    const MAX_PACKET: usize = {MAX_PACKET};
+    let mut response = response_pipe()?;
     let stdin = std::io::stdin();
     let mut reader = stdin.lock();
     loop {{
         let mut bytes = Vec::new();
-        let count = std::io::Read::take(&mut reader, 1048577).read_until(b'\n', &mut bytes)?;
+        let count = std::io::Read::take(&mut reader, (MAX_PACKET + 2) as u64).read_until(b'\n', &mut bytes)?;
         if count == 0 {{ break; }}
-        if bytes.len() > 1048576 {{ return Err("input too large".into()); }}
+        if bytes.len() > MAX_PACKET + 1 {{ return Err("input too large".into()); }}
+        if bytes.last() != Some(&b'\n') {{ return Err("unterminated input packet".into()); }}
         let input: serde_json::Value = serde_json::from_slice(&bytes)?;
         let request_id = input.get("request_id").and_then(serde_json::Value::as_u64).ok_or("missing request_id")?;
         let sdk: SdkIdentity = serde_json::from_value(input.get("sdk").cloned().ok_or("missing SDK identity")?)?;
@@ -1163,10 +1172,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {{
             }}
             Err(error) => serde_json::json!({{"request_id":request_id,"sdk":SdkIdentity::current(),"error":error.to_string()}}),
         }};
-        let output = serde_json::to_string(&packet)?;
-        if output.len() > 1048576 {{ return Err("output too large".into()); }}
-        println!("\n{PACKET_MARKER}{{}}", output);
-        std::io::stdout().flush()?;
+        let mut output = serde_json::to_vec(&packet)?;
+        if output.len() > MAX_PACKET {{ return Err("output too large".into()); }}
+        output.push(b'\n');
+        response.write_all(&output)?;
     }}
     Ok(())
 }}
@@ -2313,14 +2322,6 @@ fn update(ctx: &mut ScriptContext) {
             .unwrap();
         assert!(panic.tick(&context, Duration::from_secs(2)).is_err());
         assert!(panic.worker_process_id().unwrap().is_none());
-        let noisy = compiler
-            .compile("fn update(_: &mut ScriptContext) { print!(\"{}\", \"x\".repeat(1048577)); }")
-            .unwrap();
-        assert!(matches!(
-            noisy.tick(&context, Duration::from_secs(2)),
-            Err(ScriptError::Packet(_))
-        ));
-        assert!(noisy.worker_process_id().unwrap().is_none());
         let mut oversized = context.clone();
         oversized.events = vec![serde_json::json!("x".repeat(MAX_PACKET))];
         assert!(matches!(

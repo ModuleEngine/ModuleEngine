@@ -1,13 +1,17 @@
 //! Application policy and checked roots for the shared host.
-pub use crate::game_templates::{demo_document, puzzle_document};
+pub use crate::game_templates::demo_document;
+#[cfg(any(test, feature = "verification"))]
+pub use crate::game_templates::puzzle_document;
 use module_engine_core::*;
-pub use module_engine_host::{GameHost, ScriptSlot, script_ids};
+#[cfg(feature = "verification")]
+use module_engine_host::ScriptSlot;
+pub use module_engine_host::{GameHost, script_ids};
 use module_engine_host::{HostOptions, RenderMode};
 use module_engine_script::CompiledProgramStore;
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, atomic::AtomicBool},
+    sync::{Arc, atomic::AtomicBool},
 };
 
 pub fn new(
@@ -247,6 +251,9 @@ pub fn render_graph(document: &GraphDocument) -> Graph {
         .cloned()
         .unwrap_or_default()
 }
+#[cfg(feature = "verification")]
+use std::sync::Mutex;
+#[cfg(feature = "verification")]
 pub fn game_registry_at(
     document: &GraphDocument,
     root: &Path,
@@ -309,7 +316,11 @@ mod world_selection_tests {
                     "Native fixture",
                     "Not a built-in store",
                 ),
-                |_| Err("Selection must not construct a world".into()),
+                |_| {
+                    Err(WorldError::Configuration(
+                        "Selection must not construct a world".into(),
+                    ))
+                },
             )
             .unwrap();
         let mut document = module_engine_core::demo_document(WorldKind::Objects);

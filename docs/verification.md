@@ -82,6 +82,23 @@ exactly once, and it adds no steps to the legacy suite. Run
 native host against `toolchain-manifest.json` on Windows or
 `scripts/linux-toolchain.json` on Linux before Cargo metadata; a mismatch fails.
 
+`module-engine-vulkan` denies `clippy::undocumented_unsafe_blocks` for every
+target. The native presentation bridge, Windows file dialogs, and Host wait
+modules enforce it as well. Each safety comment identifies the lifetime,
+ownership, and synchronization requirements that apply at the call site.
+
+The Editor's verification commands and native capture support are built with
+`--features verification`. The launcher selects this feature for Editor tests,
+and both legacy wrappers enable it for their Editor commands. Build ordinary
+Editor packages without it. The `bench` feature still enables the separate
+native S1–S5 benchmark route.
+
+On 25 November 2026, matched Windows x64 Release builds using Rust 1.99.0
+measured 37,123,584 bytes with default features and 38,485,504 bytes with
+`verification`, a difference of 1,361,920 bytes (3.54% of the feature build).
+Both use the same development source digest
+`ec5bc2b26b2a8e620d4bc684e75c7a2ac1641dd3dd75e13fbd200fd895f530ec`.
+
 Checks run sequentially. For Rust tests, the launcher first obtains
 `cargo metadata`, then `cargo test --no-run --message-format=json` for the selected
 package/target. `contracts` uses a normal test build; `native` and `package` use

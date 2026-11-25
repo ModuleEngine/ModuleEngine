@@ -33,6 +33,7 @@ pub fn run(
 ) -> Result<Value, String> {
     fs::create_dir_all(folder).map_err(|e| e.to_string())?;
     let original = document.clone();
+    let component_reads = module_engine_arpg::verify_health_component_reads()?;
     let parity = parity(document, root, compile_root, folder)?;
     let custom_transaction = custom_transaction(document, root, compile_root)?;
     let progression = progression(document, root, compile_root, folder)?;
@@ -41,7 +42,7 @@ pub fn run(
     if document != &original {
         return Err("Verification mutated the supplied authored document".into());
     }
-    let report = json!({"functional_checks_passed":true,"parity":parity,"custom_transaction":custom_transaction,"progression":progression,"defeat":defeat,"performance":performance,
+    let report = json!({"functional_checks_passed":true,"component_reads":component_reads,"parity":parity,"custom_transaction":custom_transaction,"progression":progression,"defeat":defeat,"performance":performance,
         "scope":"Real GameHost simulation, Vulkan rendering, imported content, configured Rust and audio. Presentation/vsync and editor HUD drawing are outside processing timings.",
         "script_loading":if compile_root.is_some(){"author source compilation"}else{"packaged precompiled workers; no compiler invoked"},
         "authored_document_unchanged":true});

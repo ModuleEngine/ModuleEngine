@@ -78,6 +78,13 @@ pass/HLSL/format checks. `FrameRenderer` provides CPU pixels or an opaque GPU le
 optional counters and optional synchronous candidate preparation. A factory can
 also implement an independent CPU renderer with no Vulkan dependency.
 
+`WorldProvider` returns `WorldError`, with distinct errors for provider selection,
+world storage and invalid command batches. The renderer adapter and frame
+renderer return `RendererError`. The Vulkan adapter preserves its concrete
+`VulkanError` as the error source. Core Runtime propagates the source so callers
+can inspect the kind, including unsupported controls and failed preparation.
+Existing application text and report boundaries format the errors for display.
+
 ## Native frame ownership
 
 Core `Frame` has exactly one complete representation: CPU `rgba`, or `gpu: Some(Arc<dyn GpuFrame>)` with empty `rgba`. Core interprets no native handles. The application supplies a `PresentationTarget` through `FrameRenderer::set_presentation_target`. `render_presented` returns `RenderSubmission::Ready(Frame)`, `Pending(ticket)` or `Busy`. Ready is immediate output; Pending accepts one frozen request and publishes nothing yet; Busy accepts no work. Native Vulkan permits one producer submission at a time and four output leases. The explicit `render` contract remains CPU-readable and may synchronously wait for diagnostic readback; it rejects a conflicting pending native submission. Rejected targets cannot silently enable CPU transfer. Reaccepting the same endpoint is idempotent; a different endpoint cannot replace pending work or a live source lease. Renderer candidates retain the accepted endpoint.

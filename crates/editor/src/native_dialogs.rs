@@ -6,6 +6,8 @@
 //! `MAX_PATH` buffer. No process current directory is changed and no helper
 //! process or console is started.
 
+#![deny(clippy::undocumented_unsafe_blocks)]
+
 use std::path::{Path, PathBuf};
 
 /// Choose an existing ModuleEngine project JSON file.
@@ -241,6 +243,8 @@ mod platform {
             // A fresh editor worker has no COM apartment yet. S_FALSE also
             // increments the COM initialization count and needs balancing.
             check(
+                // SAFETY: This worker initializes COM on its own thread. The reserved argument must
+                // be null.
                 unsafe { CoInitializeEx(ptr::null(), APARTMENT_THREADED) },
                 "Initialize dialog worker",
             )?;
@@ -249,6 +253,8 @@ mod platform {
     }
     impl Drop for Apartment {
         fn drop(&mut self) {
+            // SAFETY: This thread owns the successful CoInitializeEx call balanced by this
+            // apartment guard.
             unsafe { CoUninitialize() };
         }
     }
@@ -268,6 +274,8 @@ mod platform {
         fn drop(&mut self) {
             // Every interface has the IUnknown vtable prefix. All guards are
             // dropped on this same worker before its apartment is released.
+            // SAFETY: The guard exclusively owns a COM reference with the IUnknown vtable prefix.
+            // Its worker and apartment still own that reference.
             unsafe {
                 let unknown = self.pointer().cast::<Unknown>();
                 ((*(*unknown).vtable).release)(unknown);
@@ -371,6 +379,8 @@ mod platform {
             return Ok(None);
         };
         let mut item = ptr::null_mut();
+        // SAFETY: encoded is terminated and lives through the call. The requested IShellItem IID
+        // and writable output pointer match the Shell API.
         let result = unsafe {
             SHCreateItemFromParsingName(encoded.as_ptr(), ptr::null_mut(), &SHELL_ITEM, &mut item)
         };
@@ -393,15 +403,20 @@ mod platform {
 
     fn apply_initial_folder(dialog: &OwnedCom<FileDialog>, path: &Path) {
         if let Ok(Some(folder)) = initial_folder(path) {
+            // SAFETY: The guard retains a live IFileDialog on this thread with its matching vtable.
             let vtable = unsafe { &*(*dialog.pointer()).vtable };
             // SetFolder is another optional hint. Even a valid shell item may
             // be unavailable to this particular dialog or its current policy.
+            // SAFETY: Both guards keep the dialog and filesystem shell item alive in the same
+            // apartment for SetFolder.
             let _ = unsafe { (vtable.set_folder)(dialog.pointer(), folder.pointer()) };
         }
     }
 
     fn show_configured_dialog(dialog: &OwnedCom<FileDialog>) -> Result<Option<PathBuf>, String> {
+        // SAFETY: The IFileDialog guard holds the object and its vtable in this apartment.
         let vtable = unsafe { &*(*dialog.pointer()).vtable };
+        // SAFETY: The dialog is configured and live. A null owner is allowed for the modal call.
         let result = unsafe { (vtable.show)(dialog.pointer(), ptr::null_mut()) };
         if result == CANCELLED {
             return Ok(None);
@@ -412,8 +427,11 @@ mod platform {
 
     fn selected_path(dialog: &OwnedCom<FileDialog>) -> Result<PathBuf, String> {
         let mut item = ptr::null_mut();
+        // SAFETY: The successful Show call leaves a live IFileDialog with its original vtable.
         let vtable = unsafe { &*(*dialog.pointer()).vtable };
         check(
+            // SAFETY: The live dialog writes an owned IShellItem reference into the writable local
+            // output.
             unsafe { (vtable.get_result)(dialog.pointer(), &mut item) },
             "Read selected item",
         )?;
@@ -423,8 +441,11 @@ mod platform {
 
     fn shell_path(item: &OwnedCom<ShellItem>) -> Result<PathBuf, String> {
         let mut path = ptr::null_mut();
+        // SAFETY: The guard retains a live IShellItem and its vtable in this apartment.
         let item_vtable = unsafe { &*(*item.pointer()).vtable };
         check(
+            // SAFETY: The writable pointer receives the task-allocated filesystem path from this
+            // live shell item.
             unsafe { (item_vtable.get_display_name)(item.pointer(), FILESYSTEM_PATH, &mut path) },
             "Read selected filesystem path",
         )?;
@@ -432,6 +453,8 @@ mod platform {
         // The Shell allocates this null-terminated string; always free it after
         // copying. Unlike the old common dialogs, no fixed path buffer is used.
         let mut length = 0;
+        // SAFETY: The successful Shell call returned a readable terminated UTF-16 allocation. Copy
+        // it while live, then release it once with the matching allocator.
         unsafe {
             while *path.as_ptr().add(length) != 0 {
                 length += 1;
@@ -497,6 +520,8 @@ mod platform {
         };
         let mut dialog = ptr::null_mut();
         check(
+            // SAFETY: COM is initialized on this thread. The class and interface GUIDs match the
+            // file dialog vtable, and the nonaggregating call writes to a live pointer.
             unsafe {
                 CoCreateInstance(
                     class,
@@ -530,9 +555,11 @@ mod platform {
         filter_specs: &[FilterSpec],
         extension: &[u16],
     ) -> Result<(), String> {
+        // SAFETY: The IFileDialog guard owns a live reference with this interface layout.
         let vtable = unsafe { &*(*dialog.pointer()).vtable };
         let mut options = 0;
         check(
+            // SAFETY: The live dialog writes its flags to an initialized writable u32.
             unsafe { (vtable.get_options)(dialog.pointer(), &mut options) },
             "Read native dialog options",
         )?;
@@ -543,22 +570,30 @@ mod platform {
             DialogKind::OpenProject | DialogKind::ImportAsset => FILE_MUST_EXIST,
         };
         check(
+            // SAFETY: The live dialog accepts this combination of documented file-open or file-save
+            // flags.
             unsafe { (vtable.set_options)(dialog.pointer(), options) },
             "Set native dialog options",
         )?;
         check(
+            // SAFETY: title was built by wide as terminated UTF-16 and lives until the call
+            // returns.
             unsafe { (vtable.set_title)(dialog.pointer(), title.as_ptr()) },
             "Set native dialog title",
         )?;
         apply_initial_folder(dialog, initial_dir);
         if let Some(file_name) = file_name {
             check(
+                // SAFETY: The optional filename is a wide-encoded terminated string borrowed for
+                // this call.
                 unsafe { (vtable.set_file_name)(dialog.pointer(), file_name.as_ptr()) },
                 "Set initial dialog filename",
             )?;
         }
         if !filter_specs.is_empty() {
             check(
+                // SAFETY: The nonempty filter array and each terminated string it points to are
+                // retained across configuration and Show.
                 unsafe {
                     (vtable.set_file_types)(
                         dialog.pointer(),
@@ -571,6 +606,8 @@ mod platform {
         }
         if matches!(kind, DialogKind::SaveProject) {
             check(
+                // SAFETY: The save dialog is live and the wide-encoded default extension is
+                // terminated.
                 unsafe { (vtable.set_default_extension)(dialog.pointer(), extension.as_ptr()) },
                 "Set project extension",
             )?;
@@ -622,6 +659,8 @@ mod platform {
         }
 
         unsafe fn fake_call(dialog: *mut FileDialog, name: &'static str) -> Hresult {
+            // SAFETY: All fake vtable entries receive the first repr(C) field of a live, uniquely
+            // accessed FakeDialog.
             let dialog = unsafe { &mut *dialog.cast::<FakeDialog>() };
             dialog.calls.borrow_mut().push(name);
             if dialog.reject == Some(name) {
@@ -632,6 +671,8 @@ mod platform {
         }
 
         unsafe extern "system" fn fake_release(unknown: *mut Unknown) -> u32 {
+            // SAFETY: This sole fake COM reference was transferred from Box::into_raw, and Unknown
+            // shares the address of the repr(C) first interface field.
             let dialog = unsafe { Box::from_raw(unknown.cast::<FakeDialog>()) };
             dialog.calls.borrow_mut().push("release");
             drop(dialog);
@@ -642,7 +683,10 @@ mod platform {
             dialog: *mut FileDialog,
             _owner: *mut c_void,
         ) -> Hresult {
+            // SAFETY: The fake vtable belongs to the live FakeDialog used by this test.
             unsafe { fake_call(dialog, "show") };
+            // SAFETY: The fake call does not release the dialog. Its FakeDialog allocation still
+            // holds the injected Show result.
             unsafe { (*dialog.cast::<FakeDialog>()).show_result }
         }
 
@@ -650,7 +694,9 @@ mod platform {
             dialog: *mut FileDialog,
             options: *mut u32,
         ) -> Hresult {
+            // SAFETY: The fake vtable supplies the live FakeDialog as the first argument.
             let result = unsafe { fake_call(dialog, "get_options") };
+            // SAFETY: The production get_options caller passes a writable u32.
             unsafe { *options = 0 };
             result
         }
@@ -659,6 +705,7 @@ mod platform {
             dialog: *mut FileDialog,
             _options: u32,
         ) -> Hresult {
+            // SAFETY: The fake vtable supplies the live FakeDialog as the first argument.
             unsafe { fake_call(dialog, "set_options") }
         }
 
@@ -666,6 +713,8 @@ mod platform {
             dialog: *mut FileDialog,
             _folder: *mut ShellItem,
         ) -> Hresult {
+            // SAFETY: The fake vtable supplies the live FakeDialog as the first argument. The
+            // unused ShellItem is not dereferenced.
             unsafe { fake_call(dialog, "set_folder") };
             0x8007_0057_u32 as i32 // A valid initial hint can still be rejected.
         }
@@ -674,6 +723,7 @@ mod platform {
             dialog: *mut FileDialog,
             _title: *const u16,
         ) -> Hresult {
+            // SAFETY: The fake vtable supplies the live FakeDialog. Only the call is recorded.
             unsafe { fake_call(dialog, "set_title") }
         }
 
@@ -681,6 +731,7 @@ mod platform {
             dialog: *mut FileDialog,
             _file_name: *const u16,
         ) -> Hresult {
+            // SAFETY: The fake vtable supplies the live FakeDialog. Only the call is recorded.
             unsafe { fake_call(dialog, "set_file_name") }
         }
 
@@ -689,6 +740,8 @@ mod platform {
             _count: u32,
             _filters: *const FilterSpec,
         ) -> Hresult {
+            // SAFETY: The fake vtable supplies the live FakeDialog. No filter pointer is
+            // dereferenced.
             unsafe { fake_call(dialog, "set_file_types") }
         }
 
@@ -696,6 +749,8 @@ mod platform {
             dialog: *mut FileDialog,
             _extension: *const u16,
         ) -> Hresult {
+            // SAFETY: The fake vtable supplies the live FakeDialog. No extension pointer is
+            // dereferenced.
             unsafe { fake_call(dialog, "set_default_extension") }
         }
 
@@ -703,13 +758,19 @@ mod platform {
             dialog: *mut FileDialog,
             result: *mut *mut ShellItem,
         ) -> Hresult {
+            // SAFETY: The fake vtable supplies the live FakeDialog as the first argument.
             let status = unsafe { fake_call(dialog, "get_result") };
+            // SAFETY: selected_path supplies a writable IShellItem output pointer.
             unsafe { *result = ptr::null_mut() };
             if status < 0 {
                 return status;
             }
+            // SAFETY: The fake_call borrow ended and this fake COM reference still owns the test
+            // allocation.
             let dialog = unsafe { &mut *dialog.cast::<FakeDialog>() };
             if let Some(item) = dialog.selection.take() {
+                // SAFETY: The writable output is still live. The test transfers its owned
+                // IShellItem reference to selected_path.
                 unsafe { *result = item.pointer() };
                 // GetResult transfers this reference to production selected_path.
                 std::mem::forget(item);

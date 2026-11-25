@@ -709,7 +709,7 @@ mod tests {
             width: usize,
             height: usize,
             _: &module_engine_core::RenderOverrides,
-        ) -> Result<module_engine_core::Frame, String> {
+        ) -> Result<module_engine_core::Frame, module_engine_core::RendererError> {
             Ok(module_engine_core::render_scene(
                 scene, width, height, camera,
             ))
@@ -720,10 +720,12 @@ mod tests {
         fn set_presentation_target(
             &mut self,
             target: Option<Arc<dyn PresentationTarget>>,
-        ) -> Result<(), String> {
+        ) -> Result<(), module_engine_core::RendererError> {
             let current = thread::current().id();
             if current == self.ui_thread {
-                return Err("presentation setup ran on the UI thread".into());
+                return Err(module_engine_core::RendererError::Unavailable(
+                    "presentation setup ran on the UI thread",
+                ));
             }
             let value = target
                 .as_ref()
@@ -734,7 +736,9 @@ mod tests {
                 .0;
             self.calls.lock().unwrap().push((current, value));
             if value == 8 {
-                Err("injected background endpoint rejection".into())
+                Err(module_engine_core::RendererError::Unavailable(
+                    "injected background endpoint rejection",
+                ))
             } else {
                 Ok(())
             }

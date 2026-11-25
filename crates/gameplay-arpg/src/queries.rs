@@ -83,7 +83,7 @@ pub(crate) fn world_component<T: for<'de> Deserialize<'de>>(
     id: u64,
     name: &str,
 ) -> Option<T> {
-    T::deserialize(world.component(id, name)?).ok()
+    world.decode_component(id, name).unwrap_or_default()
 }
 pub(crate) fn normalized(v: [f32; 2]) -> [f32; 2] {
     let length = (v[0] * v[0] + v[1] * v[1]).sqrt();

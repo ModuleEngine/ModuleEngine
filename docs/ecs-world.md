@@ -56,6 +56,14 @@ and read individual values. The public ARPG player DTO is still available for
 callers that need the complete entity. Two Arenas supplies authored scenes and
 prefabs to Core and delegates live game rules to ARPG.
 
+Live typed reads can use `EcsWorld::decode_component`. An absent component gives
+`Ok(None)`. A malformed stored value gives a decode error and increments the
+world's `malformed_component_reads` counter. Debug builds print the first eight
+failures per world with the component name and object ID. ARPG and Crate Garden
+use the existing gameplay fallback after recording the failure. The ARPG
+`--game-check` report includes `component_reads` for an absent and a malformed
+`health`. The counter is diagnostic state and stays out of saves.
+
 GameWorker steps and renders through GameHost. The Host uses the R1.6 retained
 scene path and asks Core to project the current tick's world into
 `ScriptContext` for scheduled Rust. The projection includes stable-ID ordered

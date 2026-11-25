@@ -267,7 +267,12 @@ pub(crate) mod world_fixture {
             let composition = module_engine_player::composition_with(root, |modules, _| {
                 modules.register_world(
                     world_descriptor(ID, "Editor fixture", "Native test provider"),
-                    |_| Ok(Box::new(ObjectsWorld::from_objects(vec![])?)),
+                    |_| {
+                        Ok(Box::new(
+                            ObjectsWorld::from_objects(vec![])
+                                .map_err(module_engine_core::WorldError::Configuration)?,
+                        ))
+                    },
                 )
             })
             .unwrap();

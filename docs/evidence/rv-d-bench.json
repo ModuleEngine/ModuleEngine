@@ -1,0 +1,1585 @@
+{
+  "date": "2026-11-25",
+  "input": "Saved Windows bench.py paired-series comparison reports. Paths are relative to the original bench report directory.",
+  "formula": {
+    "range": "max(floor, 2 * 100 * (max(baseline) - min(baseline)) / median(baseline))",
+    "mad": "max(floor, 2 * 1.4826 * 100 * median(|baseline - median(baseline)|) / median(baseline))",
+    "floor_percent": {
+      "timing": 5,
+      "memory": 1
+    }
+  },
+  "count": {
+    "blocking_rows": 58,
+    "tighter_mad": 38,
+    "changed_worse": 2,
+    "five_run_rows": 37,
+    "five_run_tighter_mad": 24,
+    "five_run_changed_worse": 0
+  },
+  "published_reports": [
+    {
+      "report": "2026-11-22/015307-566365-compare/compare.json",
+      "sha256": "e908835f0d36f5bf227b3f18b478454ec66718b750e4482df299b510c1c1d383",
+      "baseline_head": "731661c47e181847450e00480e60c0645abd4753",
+      "candidate_head": "3cc21936ee6d92ebbf5df9c1db297be3e5175b27",
+      "scenes": [
+        {
+          "scene": "S3",
+          "runs": {
+            "baseline": 3,
+            "candidate": 3
+          },
+          "metrics": [
+            {
+              "metric": "frame_interval_ms",
+              "statistic": "mean_ms",
+              "kind": "timing",
+              "baseline": [
+                27.843609999999998,
+                27.3206775,
+                27.667407083333334
+              ],
+              "candidate": [
+                27.06614125,
+                27.588585416666668,
+                26.833632916666666
+              ],
+              "range_tolerance_percent": 5.0,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": -2.1731918409352184,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "frame_interval_ms",
+              "statistic": "p95_ms",
+              "kind": "timing",
+              "baseline": [
+                33.556599999999996,
+                33.2609,
+                33.0841
+              ],
+              "candidate": [
+                30.9559,
+                32.760400000000004,
+                31.244
+              ],
+              "range_tolerance_percent": 5.0,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": -6.063876804295734,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "cpu_submit_ms",
+              "statistic": "mean_ms",
+              "kind": "timing",
+              "baseline": [
+                21.964743333333335,
+                21.72235625,
+                21.622684166666666
+              ],
+              "candidate": [
+                21.296797083333335,
+                21.8488875,
+                21.2749125
+              ],
+              "range_tolerance_percent": 5.0,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": -1.9590838202309016,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "cpu_submit_ms",
+              "statistic": "p95_ms",
+              "kind": "timing",
+              "baseline": [
+                27.1116,
+                25.0978,
+                24.6168
+              ],
+              "candidate": [
+                22.9405,
+                26.6174,
+                23.5352
+              ],
+              "range_tolerance_percent": 19.880626987225956,
+              "mad_tolerance_percent": 5.6828136330674175,
+              "change_percent": -6.226043716979177,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "ecs_tick_ms",
+              "statistic": "mean_ms",
+              "kind": "timing",
+              "baseline": [
+                0.85171875,
+                0.8502479166666667,
+                0.8510058333333334
+              ],
+              "candidate": [
+                0.85024,
+                0.8534820833333333,
+                0.8391116666666667
+              ],
+              "range_tolerance_percent": 5.0,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": -0.08999154921578341,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "ecs_tick_ms",
+              "statistic": "p95_ms",
+              "kind": "timing",
+              "baseline": [
+                1.0698999999999999,
+                1.0545,
+                1.0563
+              ],
+              "candidate": [
+                1.035,
+                1.0906,
+                1.0639
+              ],
+              "range_tolerance_percent": 5.0,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": 0.7194925683991339,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "peak_working_set_bytes",
+              "statistic": null,
+              "kind": "memory",
+              "baseline": [
+                320319488,
+                320233472,
+                320049152
+              ],
+              "candidate": [
+                320229376,
+                320225280,
+                320032768
+              ],
+              "range_tolerance_percent": 1.0,
+              "mad_tolerance_percent": 1.0,
+              "change_percent": -0.002558133585735847,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "report": "2026-11-22/015851-572010-compare/compare.json",
+      "sha256": "7591707670e2d030cd14366d64656c36d85b09da428bc12bde46eed4adcfdbb7",
+      "baseline_head": "731661c47e181847450e00480e60c0645abd4753",
+      "candidate_head": "3cc21936ee6d92ebbf5df9c1db297be3e5175b27",
+      "scenes": [
+        {
+          "scene": "S3",
+          "runs": {
+            "baseline": 3,
+            "candidate": 3
+          },
+          "metrics": [
+            {
+              "metric": "frame_interval_ms",
+              "statistic": "mean_ms",
+              "kind": "timing",
+              "baseline": [
+                27.084938333333334,
+                25.331277916666668,
+                26.151810416666667
+              ],
+              "candidate": [
+                26.19129,
+                26.15807291666667,
+                25.82838041666667
+              ],
+              "range_tolerance_percent": 13.411388265104964,
+              "mad_tolerance_percent": 9.303535511443624,
+              "change_percent": 0.023946716882020207,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "frame_interval_ms",
+              "statistic": "p95_ms",
+              "kind": "timing",
+              "baseline": [
+                35.7355,
+                32.9421,
+                36.2873
+              ],
+              "candidate": [
+                33.2321,
+                36.051899999999996,
+                35.8127
+              ],
+              "range_tolerance_percent": 18.72199913251528,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": 0.21603167718374644,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "cpu_submit_ms",
+              "statistic": "mean_ms",
+              "kind": "timing",
+              "baseline": [
+                21.6793475,
+                20.2275075,
+                20.52322625
+              ],
+              "candidate": [
+                20.611211666666666,
+                20.524805416666666,
+                20.312049583333334
+              ],
+              "range_tolerance_percent": 14.148262873630769,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": 0.007694534219081656,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "cpu_submit_ms",
+              "statistic": "p95_ms",
+              "kind": "timing",
+              "baseline": [
+                28.5037,
+                21.225399999999997,
+                22.0484
+              ],
+              "candidate": [
+                23.2517,
+                21.8727,
+                21.5612
+              ],
+              "range_tolerance_percent": 66.02111717857079,
+              "mad_tolerance_percent": 11.068193610420764,
+              "change_percent": -0.796883220551163,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "ecs_tick_ms",
+              "statistic": "mean_ms",
+              "kind": "timing",
+              "baseline": [
+                0.8033845833333333,
+                0.7650025,
+                0.7595279166666666
+              ],
+              "candidate": [
+                0.8233575,
+                0.8054233333333334,
+                0.790395
+              ],
+              "range_tolerance_percent": 11.465757737175148,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": 5.283751796018098,
+              "range_reports_worse": false,
+              "mad_reports_worse": true
+            },
+            {
+              "metric": "ecs_tick_ms",
+              "statistic": "p95_ms",
+              "kind": "timing",
+              "baseline": [
+                1.0265,
+                0.9282,
+                0.9351999999999999
+              ],
+              "candidate": [
+                1.0007,
+                0.98,
+                0.9652000000000001
+              ],
+              "range_tolerance_percent": 21.02224123182206,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": 4.790419161676653,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "peak_working_set_bytes",
+              "statistic": null,
+              "kind": "memory",
+              "baseline": [
+                320372736,
+                320430080,
+                320454656
+              ],
+              "candidate": [
+                347037696,
+                319942656,
+                346918912
+              ],
+              "range_tolerance_percent": 1.0,
+              "mad_tolerance_percent": 1.0,
+              "change_percent": 8.266649622906813,
+              "range_reports_worse": true,
+              "mad_reports_worse": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "report": "2026-11-22/020800-901704-compare/compare.json",
+      "sha256": "d8f218fd493de89b20c42c9e85a209ee2441252e5c308a9a2219ddb9755fc9eb",
+      "baseline_head": "731661c47e181847450e00480e60c0645abd4753",
+      "candidate_head": "3cc21936ee6d92ebbf5df9c1db297be3e5175b27",
+      "scenes": [
+        {
+          "scene": "S3",
+          "runs": {
+            "baseline": 5,
+            "candidate": 5
+          },
+          "metrics": [
+            {
+              "metric": "frame_interval_ms",
+              "statistic": "mean_ms",
+              "kind": "timing",
+              "baseline": [
+                26.230879166666668,
+                25.984301666666667,
+                26.53944625,
+                25.727089166666666,
+                25.883499583333332
+              ],
+              "candidate": [
+                25.38515375,
+                25.075085416666667,
+                25.403846666666666,
+                25.359379583333332,
+                25.955452916666665
+              ],
+              "range_tolerance_percent": 6.252675894503241,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": -2.305807269145389,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "frame_interval_ms",
+              "statistic": "p95_ms",
+              "kind": "timing",
+              "baseline": [
+                36.194900000000004,
+                31.2821,
+                36.4241,
+                29.7337,
+                30.372
+              ],
+              "candidate": [
+                31.375899999999998,
+                27.8895,
+                30.994600000000002,
+                31.357000000000003,
+                35.7433
+              ],
+              "range_tolerance_percent": 42.77462190837574,
+              "mad_tolerance_percent": 14.677133824135856,
+              "change_percent": 0.23943405334041856,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "cpu_submit_ms",
+              "statistic": "mean_ms",
+              "kind": "timing",
+              "baseline": [
+                20.669635,
+                20.709890416666667,
+                20.966234583333332,
+                20.447141666666667,
+                20.590384583333332
+              ],
+              "candidate": [
+                20.131187916666665,
+                19.86450375,
+                20.130774583333334,
+                20.265441666666668,
+                20.355015833333333
+              ],
+              "range_tolerance_percent": 5.022758424777844,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": -2.6050149571259222,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "cpu_submit_ms",
+              "statistic": "p95_ms",
+              "kind": "timing",
+              "baseline": [
+                21.7959,
+                21.770999999999997,
+                23.6506,
+                21.639100000000003,
+                22.234299999999998
+              ],
+              "candidate": [
+                22.224899999999998,
+                20.8884,
+                21.0194,
+                21.6831,
+                21.4839
+              ],
+              "range_tolerance_percent": 18.457599823820058,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": -1.4314618804454102,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "ecs_tick_ms",
+              "statistic": "mean_ms",
+              "kind": "timing",
+              "baseline": [
+                0.7566225,
+                0.7457829166666666,
+                0.754165,
+                0.7415025,
+                0.7695825
+              ],
+              "candidate": [
+                0.7857958333333334,
+                0.7819095833333334,
+                0.7763779166666667,
+                0.78869375,
+                0.7892608333333333
+              ],
+              "range_tolerance_percent": 7.446646290931028,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": 4.194152915255068,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "ecs_tick_ms",
+              "statistic": "p95_ms",
+              "kind": "timing",
+              "baseline": [
+                0.9399000000000001,
+                0.9420000000000001,
+                0.9722,
+                0.8919,
+                0.9894000000000001
+              ],
+              "candidate": [
+                0.9598,
+                0.924,
+                0.9623999999999999,
+                0.9753000000000001,
+                0.9384
+              ],
+              "range_tolerance_percent": 20.700636942675164,
+              "mad_tolerance_percent": 9.506267515923533,
+              "change_percent": 1.8895966029723912,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "peak_working_set_bytes",
+              "statistic": null,
+              "kind": "memory",
+              "baseline": [
+                320520192,
+                320368640,
+                349126656,
+                320393216,
+                320499712
+              ],
+              "candidate": [
+                319975424,
+                320409600,
+                326135808,
+                320643072,
+                320544768
+              ],
+              "range_tolerance_percent": 17.945735938758034,
+              "mad_tolerance_percent": 1.0,
+              "change_percent": 0.014058046953876826,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "report": "2026-11-22/055533-087815-compare/compare.json",
+      "sha256": "070a44a464cc4ded3a64ff689d11a5139d9f34f1f25b9a31bf5f3e18dce3ebdb",
+      "baseline_head": "077371c464d2c124288c858e10950f212a76c93e",
+      "candidate_head": "077371c464d2c124288c858e10950f212a76c93e",
+      "scenes": [
+        {
+          "scene": "S3",
+          "runs": {
+            "baseline": 10,
+            "candidate": 10
+          },
+          "metrics": [
+            {
+              "metric": "frame_interval_ms",
+              "statistic": "mean_ms",
+              "kind": "timing",
+              "baseline": [
+                25.950977916666666,
+                25.504768333333335,
+                25.14178875,
+                25.33145791666667,
+                25.45661125,
+                25.97712375,
+                26.011378333333333,
+                24.797305416666667,
+                24.434629583333333,
+                25.060590416666667
+              ],
+              "candidate": [
+                26.2909575,
+                27.437426666666667,
+                27.066770833333333,
+                26.574152916666666,
+                26.324935416666666,
+                26.335751666666667,
+                26.174321666666668,
+                25.270834583333333,
+                25.439318333333333,
+                25.330749166666667
+              ],
+              "range_tolerance_percent": 12.418261027610438,
+              "mad_tolerance_percent": 5.198419743692095,
+              "change_percent": 3.598923487328859,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "frame_interval_ms",
+              "statistic": "p95_ms",
+              "kind": "timing",
+              "baseline": [
+                35.8054,
+                29.8839,
+                27.7807,
+                27.907700000000002,
+                31.299899999999997,
+                36.2567,
+                35.142399999999995,
+                26.4835,
+                25.7356,
+                32.4987
+              ],
+              "candidate": [
+                36.3527,
+                37.8602,
+                37.286300000000004,
+                36.6436,
+                33.2632,
+                36.619600000000005,
+                36.31849999999999,
+                32.853500000000004,
+                32.6477,
+                33.0472
+              ],
+              "range_tolerance_percent": 68.78356689188969,
+              "mad_tolerance_percent": 33.53501730850323,
+              "change_percent": 18.775231352089932,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "cpu_submit_ms",
+              "statistic": "mean_ms",
+              "kind": "timing",
+              "baseline": [
+                20.345084166666666,
+                20.141389166666666,
+                19.980085833333334,
+                19.996458333333333,
+                20.08707875,
+                20.22818375,
+                20.259484166666667,
+                19.86849375,
+                19.743375,
+                19.9537475
+              ],
+              "candidate": [
+                20.5799175,
+                21.305895416666665,
+                21.118745416666666,
+                20.83996375,
+                20.960641250000002,
+                20.626622083333334,
+                20.441325833333334,
+                20.1319225,
+                20.53691125,
+                20.152902916666665
+              ],
+              "range_tolerance_percent": 6.00455159848511,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": 2.801655197407586,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "cpu_submit_ms",
+              "statistic": "p95_ms",
+              "kind": "timing",
+              "baseline": [
+                21.755,
+                21.9081,
+                21.421200000000002,
+                21.4919,
+                21.491300000000003,
+                21.352200000000003,
+                22.371100000000002,
+                20.7194,
+                20.836199999999998,
+                20.8315
+              ],
+              "candidate": [
+                22.037399999999998,
+                26.6829,
+                22.7038,
+                21.8405,
+                22.8362,
+                21.8427,
+                21.386100000000003,
+                20.935100000000002,
+                21.4337,
+                20.9628
+              ],
+              "range_tolerance_percent": 15.39598019225169,
+              "mad_tolerance_percent": 5.186551983687677,
+              "change_percent": 1.7959801922516532,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "ecs_tick_ms",
+              "statistic": "mean_ms",
+              "kind": "timing",
+              "baseline": [
+                0.7948520833333333,
+                0.80420125,
+                0.78928125,
+                0.781905,
+                0.7866383333333333,
+                0.7975725,
+                0.8050116666666667,
+                0.7791825,
+                0.7869266666666667,
+                0.7945629166666667
+              ],
+              "candidate": [
+                0.78936875,
+                0.8040308333333334,
+                0.7844187499999999,
+                0.7833970833333334,
+                0.7881054166666667,
+                0.7897208333333333,
+                0.7756354166666667,
+                0.7769183333333334,
+                0.77772125,
+                0.778285
+              ],
+              "range_tolerance_percent": 6.523158580942047,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": -1.0119892897712461,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "ecs_tick_ms",
+              "statistic": "p95_ms",
+              "kind": "timing",
+              "baseline": [
+                1.0102,
+                0.9884,
+                0.9423,
+                0.9509,
+                0.9782000000000001,
+                1.0003,
+                0.9816,
+                0.9329,
+                0.9334,
+                0.9566
+              ],
+              "candidate": [
+                1.0092,
+                1.0292000000000001,
+                0.9893000000000001,
+                0.963,
+                0.9935,
+                0.9889,
+                0.9349000000000001,
+                0.9299,
+                0.9446,
+                0.9411
+              ],
+              "range_tolerance_percent": 15.980979946247682,
+              "mad_tolerance_percent": 7.065108538350204,
+              "change_percent": 0.8838122803390476,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "peak_working_set_bytes",
+              "statistic": null,
+              "kind": "memory",
+              "baseline": [
+                320471040,
+                321036288,
+                321032192,
+                320491520,
+                320970752,
+                320823296,
+                349315072,
+                320860160,
+                321482752,
+                320901120
+              ],
+              "candidate": [
+                349442048,
+                349364224,
+                321200128,
+                320602112,
+                347406336,
+                349442048,
+                347389952,
+                321372160,
+                321110016,
+                321191936
+              ],
+              "range_tolerance_percent": 17.97494687537889,
+              "mad_tolerance_percent": 1.0,
+              "change_percent": 4.18934699790054,
+              "range_reports_worse": false,
+              "mad_reports_worse": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "report": "2026-11-23/001253-975004-compare/compare.json",
+      "sha256": "77687725bca27a79642f8949e3f1cb1041b70d40af20a9cbd5fbe9d971046d2c",
+      "baseline_head": "731661c47e181847450e00480e60c0645abd4753",
+      "candidate_head": "8e3b5bd1990fc00d1889c3389fd17141a95d49eb",
+      "scenes": [
+        {
+          "scene": "S1",
+          "runs": {
+            "baseline": 5,
+            "candidate": 5
+          },
+          "metrics": [
+            {
+              "metric": "frame_interval_ms",
+              "statistic": "mean_ms",
+              "kind": "timing",
+              "baseline": [
+                8.432401673640163,
+                8.3995510460251,
+                8.416427615062762,
+                8.410404184100413,
+                8.398918828451883
+              ],
+              "candidate": [
+                8.47594769874477,
+                8.401170292887029,
+                8.40251255230126,
+                8.404008368200836,
+                8.40672510460251
+              ],
+              "range_tolerance_percent": 5.0,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": -0.07604647481351483,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "frame_interval_ms",
+              "statistic": "p95_ms",
+              "kind": "timing",
+              "baseline": [
+                9.8975,
+                9.519100000000002,
+                9.458400000000001,
+                9.505899999999999,
+                9.4123
+              ],
+              "candidate": [
+                9.7125,
+                9.5723,
+                9.5677,
+                9.358500000000001,
+                9.605300000000002
+              ],
+              "range_tolerance_percent": 10.208396890352324,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": 0.6985135547397046,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "peak_working_set_bytes",
+              "statistic": null,
+              "kind": "memory",
+              "baseline": [
+                271118336,
+                273289216,
+                272883712,
+                271224832,
+                271523840
+              ],
+              "candidate": [
+                346058752,
+                347394048,
+                346030080,
+                346365952,
+                347066368
+              ],
+              "range_tolerance_percent": 1.5990345451802686,
+              "mad_tolerance_percent": 1.0,
+              "change_percent": 27.563735103333837,
+              "range_reports_worse": true,
+              "mad_reports_worse": true
+            }
+          ]
+        },
+        {
+          "scene": "S2",
+          "runs": {
+            "baseline": 5,
+            "candidate": 5
+          },
+          "metrics": [
+            {
+              "metric": "frame_interval_ms",
+              "statistic": "mean_ms",
+              "kind": "timing",
+              "baseline": [
+                8.607717573221759,
+                8.64747489539749,
+                8.645721757322177,
+                8.592500836820077,
+                8.624305857740586
+              ],
+              "candidate": [
+                8.62533556485356,
+                8.598689958158994,
+                8.59220962343096,
+                8.620269874476993,
+                8.637110460251046
+              ],
+              "range_tolerance_percent": 5.0,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": -0.04679777515045807,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "frame_interval_ms",
+              "statistic": "p95_ms",
+              "kind": "timing",
+              "baseline": [
+                9.1738,
+                9.4252,
+                9.123600000000001,
+                9.19,
+                9.0847
+              ],
+              "candidate": [
+                9.424800000000001,
+                9.225999999999999,
+                9.0594,
+                9.206000000000001,
+                9.2766
+              ],
+              "range_tolerance_percent": 7.4233142209335385,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": 0.5690117508556883,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "game_step_ms",
+              "statistic": "mean_ms",
+              "kind": "timing",
+              "baseline": [
+                3.1940898496240804,
+                3.318407969465703,
+                3.0969830362116406,
+                3.1422966997585258,
+                3.226128947368441
+              ],
+              "candidate": [
+                3.0298070520230955,
+                2.9709037928328272,
+                3.0063369446609807,
+                3.092475672823169,
+                2.987400182481766
+              ],
+              "range_tolerance_percent": 13.864665283609495,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": -5.878134736416284,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "game_step_ms",
+              "statistic": "p95_ms",
+              "kind": "timing",
+              "baseline": [
+                3.7228,
+                4.1592,
+                3.3776,
+                3.6552,
+                3.7414
+              ],
+              "candidate": [
+                3.4913000000000003,
+                3.4564,
+                3.4595,
+                3.6465,
+                3.4254
+              ],
+              "range_tolerance_percent": 41.98990007521221,
+              "mad_tolerance_percent": 5.384321478457084,
+              "change_percent": -7.072633501665416,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "peak_working_set_bytes",
+              "statistic": null,
+              "kind": "memory",
+              "baseline": [
+                239583232,
+                238972928,
+                238620672,
+                238788608,
+                239550464
+              ],
+              "candidate": [
+                314802176,
+                314937344,
+                314900480,
+                310824960,
+                311562240
+              ],
+              "range_tolerance_percent": 1.0,
+              "mad_tolerance_percent": 1.0,
+              "change_percent": 31.731313096686836,
+              "range_reports_worse": true,
+              "mad_reports_worse": true
+            }
+          ]
+        },
+        {
+          "scene": "S3",
+          "runs": {
+            "baseline": 5,
+            "candidate": 5
+          },
+          "metrics": [
+            {
+              "metric": "frame_interval_ms",
+              "statistic": "mean_ms",
+              "kind": "timing",
+              "baseline": [
+                27.238034583333334,
+                25.416465833333334,
+                25.403658333333333,
+                25.122676666666667,
+                25.196787083333334
+              ],
+              "candidate": [
+                2.90072625,
+                2.4703979166666667,
+                2.3269704166666667,
+                2.2629866666666665,
+                2.3108108333333335
+              ],
+              "range_tolerance_percent": 16.65396289707618,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": -90.84001844878641,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "frame_interval_ms",
+              "statistic": "p95_ms",
+              "kind": "timing",
+              "baseline": [
+                34.1823,
+                33.7586,
+                33.157399999999996,
+                33.2365,
+                33.027800000000006
+              ],
+              "candidate": [
+                3.3771999999999998,
+                2.8890000000000002,
+                2.8516000000000004,
+                2.6334,
+                2.8487
+              ],
+              "range_tolerance_percent": 6.947181562438835,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": -91.42027590149384,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "cpu_submit_ms",
+              "statistic": "mean_ms",
+              "kind": "timing",
+              "baseline": [
+                22.10331625,
+                20.299757083333333,
+                20.36720625,
+                20.039617916666668,
+                20.06708875
+              ],
+              "candidate": [
+                0.24374,
+                0.204475,
+                0.178155,
+                0.18139541666666667,
+                0.18286375
+              ],
+              "range_tolerance_percent": 20.33224658661246,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": -99.09918257026762,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "cpu_submit_ms",
+              "statistic": "p95_ms",
+              "kind": "timing",
+              "baseline": [
+                26.1195,
+                21.3352,
+                21.0071,
+                20.7715,
+                20.9389
+              ],
+              "candidate": [
+                0.3512,
+                0.2692,
+                0.2415,
+                0.2516,
+                0.26289999999999997
+              ],
+              "range_tolerance_percent": 50.91611883601258,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": -98.74851835807894,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "ecs_tick_ms",
+              "statistic": "mean_ms",
+              "kind": "timing",
+              "baseline": [
+                0.8325391666666667,
+                0.76057375,
+                0.7659758333333333,
+                0.7469591666666666,
+                0.7564475
+              ],
+              "candidate": [
+                1.4037175,
+                1.2565166666666667,
+                1.2205004166666666,
+                1.1871220833333334,
+                1.2168216666666667
+              ],
+              "range_tolerance_percent": 22.50406354413365,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": 60.471015028676256,
+              "range_reports_worse": true,
+              "mad_reports_worse": true
+            },
+            {
+              "metric": "ecs_tick_ms",
+              "statistic": "p95_ms",
+              "kind": "timing",
+              "baseline": [
+                1.0463,
+                0.9029,
+                0.9658,
+                0.8943,
+                0.9176
+              ],
+              "candidate": [
+                1.6369,
+                1.4146,
+                1.4308999999999998,
+                1.3806999999999998,
+                1.4465999999999999
+              ],
+              "range_tolerance_percent": 33.12990409764604,
+              "mad_tolerance_percent": 7.529333042720134,
+              "change_percent": 55.93940714908455,
+              "range_reports_worse": true,
+              "mad_reports_worse": true
+            },
+            {
+              "metric": "peak_working_set_bytes",
+              "statistic": null,
+              "kind": "memory",
+              "baseline": [
+                320331776,
+                320442368,
+                320475136,
+                320176128,
+                320638976
+              ],
+              "candidate": [
+                322662400,
+                322404352,
+                322387968,
+                322244608,
+                322383872
+              ],
+              "range_tolerance_percent": 1.0,
+              "mad_tolerance_percent": 1.0,
+              "change_percent": 0.6071606611020924,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "report": "2026-11-23/052351-870785-compare/compare.json",
+      "sha256": "c9486a315dd5e3502861c0e3c92f46c3bdea6b417a057a1d1e566efc13a9fbf5",
+      "baseline_head": "731661c47e181847450e00480e60c0645abd4753",
+      "candidate_head": "6ba445c2ffa9baef46a51131cf0073610fb34067",
+      "scenes": [
+        {
+          "scene": "S1",
+          "runs": {
+            "baseline": 5,
+            "candidate": 5
+          },
+          "metrics": [
+            {
+              "metric": "frame_interval_ms",
+              "statistic": "mean_ms",
+              "kind": "timing",
+              "baseline": [
+                8.445778242677823,
+                8.406181171548113,
+                8.406261924686188,
+                8.4146179916318,
+                8.402068619246863
+              ],
+              "candidate": [
+                8.40260753138075,
+                8.400927615062763,
+                8.40132259414226,
+                8.402513389121335,
+                8.40504560669456
+              ],
+              "range_tolerance_percent": 5.0,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": -0.044592181381413576,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "frame_interval_ms",
+              "statistic": "p95_ms",
+              "kind": "timing",
+              "baseline": [
+                9.8478,
+                9.625699999999998,
+                9.4771,
+                9.6693,
+                9.769
+              ],
+              "candidate": [
+                9.3501,
+                9.5844,
+                9.339500000000001,
+                9.3379,
+                9.5356
+              ],
+              "range_tolerance_percent": 7.66756642156101,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": -3.3011696813626674,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "peak_working_set_bytes",
+              "statistic": null,
+              "kind": "memory",
+              "baseline": [
+                272093184,
+                272314368,
+                271577088,
+                273088512,
+                273641472
+              ],
+              "candidate": [
+                346140672,
+                345563136,
+                345878528,
+                345272320,
+                346124288
+              ],
+              "range_tolerance_percent": 1.5161770678218491,
+              "mad_tolerance_percent": 1.0,
+              "change_percent": 27.01442474015914,
+              "range_reports_worse": true,
+              "mad_reports_worse": true
+            }
+          ]
+        },
+        {
+          "scene": "S2",
+          "runs": {
+            "baseline": 5,
+            "candidate": 5
+          },
+          "metrics": [
+            {
+              "metric": "frame_interval_ms",
+              "statistic": "mean_ms",
+              "kind": "timing",
+              "baseline": [
+                8.65471548117155,
+                8.649382008368201,
+                8.73604225941423,
+                8.706857322175727,
+                8.686637238493724
+              ],
+              "candidate": [
+                8.71181757322176,
+                8.666184100418407,
+                8.656976150627612,
+                8.689546443514649,
+                8.694145188284518
+              ],
+              "range_tolerance_percent": 5.0,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": 0.03349057801140386,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "frame_interval_ms",
+              "statistic": "p95_ms",
+              "kind": "timing",
+              "baseline": [
+                9.3738,
+                9.3938,
+                9.2342,
+                9.168199999999999,
+                9.2972
+              ],
+              "candidate": [
+                9.3193,
+                9.455,
+                9.3474,
+                9.2401,
+                9.0775
+              ],
+              "range_tolerance_percent": 5.0,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": 0.2377059759927721,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "game_step_ms",
+              "statistic": "mean_ms",
+              "kind": "timing",
+              "baseline": [
+                3.23702679952404,
+                3.229650177935967,
+                3.2835408030705295,
+                3.281662735294124,
+                3.214352263868069
+              ],
+              "candidate": [
+                3.1034369419317023,
+                3.1141634011627413,
+                3.0880974494283038,
+                3.1576378966454643,
+                3.1236511936339424
+              ],
+              "range_tolerance_percent": 5.0,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": -3.7955632118759146,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "game_step_ms",
+              "statistic": "p95_ms",
+              "kind": "timing",
+              "baseline": [
+                3.7091,
+                3.591,
+                3.8127999999999997,
+                3.9135000000000004,
+                3.7197
+              ],
+              "candidate": [
+                3.5307,
+                3.6300999999999997,
+                3.5093,
+                3.5901,
+                3.4894000000000003
+              ],
+              "range_tolerance_percent": 17.340108073231725,
+              "mad_tolerance_percent": 7.42156948140977,
+              "change_percent": -5.081054923784178,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "peak_working_set_bytes",
+              "statistic": null,
+              "kind": "memory",
+              "baseline": [
+                239484928,
+                239562752,
+                238112768,
+                238129152,
+                238972928
+              ],
+              "candidate": [
+                314597376,
+                314720256,
+                314617856,
+                314216448,
+                314122240
+              ],
+              "range_tolerance_percent": 1.2135131892429254,
+              "mad_tolerance_percent": 1.0,
+              "change_percent": 31.645613012700753,
+              "range_reports_worse": true,
+              "mad_reports_worse": true
+            }
+          ]
+        },
+        {
+          "scene": "S3",
+          "runs": {
+            "baseline": 5,
+            "candidate": 5
+          },
+          "metrics": [
+            {
+              "metric": "frame_interval_ms",
+              "statistic": "mean_ms",
+              "kind": "timing",
+              "baseline": [
+                26.1298525,
+                26.06291625,
+                26.26470125,
+                26.025767916666666,
+                26.366425
+              ],
+              "candidate": [
+                1.6147395833333333,
+                1.64989625,
+                1.6081429166666668,
+                1.55932875,
+                1.6812258333333334
+              ],
+              "range_tolerance_percent": 5.0,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": -93.8203264510072,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "frame_interval_ms",
+              "statistic": "p95_ms",
+              "kind": "timing",
+              "baseline": [
+                27.6101,
+                27.3317,
+                29.0532,
+                27.191300000000002,
+                27.8558
+              ],
+              "candidate": [
+                2.1016,
+                2.1667,
+                2.1277000000000004,
+                1.9632999999999998,
+                2.133
+              ],
+              "range_tolerance_percent": 13.487093491149968,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": -92.29376206533117,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "cpu_submit_ms",
+              "statistic": "mean_ms",
+              "kind": "timing",
+              "baseline": [
+                20.9952225,
+                20.9140025,
+                20.878295,
+                20.878970833333334,
+                21.014891666666667
+              ],
+              "candidate": [
+                0.19513625,
+                0.1966525,
+                0.19564125,
+                0.19507125,
+                0.20094916666666668
+              ],
+              "range_tolerance_percent": 5.0,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": -99.06454419712342,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "cpu_submit_ms",
+              "statistic": "p95_ms",
+              "kind": "timing",
+              "baseline": [
+                22.244699999999998,
+                21.864600000000003,
+                22.1636,
+                21.9975,
+                22.2364
+              ],
+              "candidate": [
+                0.28459999999999996,
+                0.2689,
+                0.2703,
+                0.26289999999999997,
+                0.27980000000000005
+              ],
+              "range_tolerance_percent": 5.0,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": -98.78043278167807,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "ecs_tick_ms",
+              "statistic": "mean_ms",
+              "kind": "timing",
+              "baseline": [
+                0.7904683333333333,
+                0.8015116666666666,
+                0.801835,
+                0.7959325,
+                0.7953316666666667
+              ],
+              "candidate": [
+                0.4505679166666667,
+                0.4634345833333333,
+                0.45295291666666665,
+                0.4373545833333333,
+                0.477855
+              ],
+              "range_tolerance_percent": 5.0,
+              "mad_tolerance_percent": 5.0,
+              "change_percent": -43.09154147284266,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "ecs_tick_ms",
+              "statistic": "p95_ms",
+              "kind": "timing",
+              "baseline": [
+                0.8528,
+                0.8802,
+                0.8987999999999999,
+                0.8808,
+                0.8597
+              ],
+              "candidate": [
+                0.6624,
+                0.6855,
+                0.694,
+                0.6476000000000001,
+                0.6853
+              ],
+              "range_tolerance_percent": 10.452169961372398,
+              "mad_tolerance_percent": 6.265930470347632,
+              "change_percent": -22.14269484208134,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            },
+            {
+              "metric": "peak_working_set_bytes",
+              "statistic": null,
+              "kind": "memory",
+              "baseline": [
+                320614400,
+                321323008,
+                320552960,
+                320626688,
+                320278528
+              ],
+              "candidate": [
+                322371584,
+                322306048,
+                322281472,
+                322260992,
+                322318336
+              ],
+              "range_tolerance_percent": 1.0,
+              "mad_tolerance_percent": 1.0,
+              "change_percent": 0.5276269562440115,
+              "range_reports_worse": false,
+              "mad_reports_worse": false
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "excluded": [
+    {
+      "report": "2026-11-23/003323-096967-compare/compare.json",
+      "sha256": "649115be3d8e863b405eee38df50912143f7bd548e6b67f588e8717397e4e86d",
+      "baseline_head": "731661c47e181847450e00480e60c0645abd4753",
+      "candidate_head": "8e3b5bd1990fc00d1889c3389fd17141a95d49eb",
+      "scene": "S2",
+      "reasons": [
+        "Incomplete runs: candidate run 1: incomplete, candidate run 2: incomplete, candidate run 4: incomplete, candidate run 5: incomplete"
+      ]
+    },
+    {
+      "report": "2026-11-23/002953-386109-compare/failure.json",
+      "sha256": "128dfc1d64189dcdefe6687f9708d94cf2f0399743d7c5ca2d6ce9af1af96c5b",
+      "reasons": [
+        "No scored comparison report in the archive"
+      ]
+    }
+  ]
+}
