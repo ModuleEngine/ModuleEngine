@@ -681,10 +681,39 @@ mod tests {
         let artifacts =
             crate::TestArtifactGuard::new(&root.join(".work/test-temp"), "worker-output").unwrap();
         let compiler = crate::ScriptCompiler::new(root, artifacts.path().to_owned());
-        let script = compiler
-            .compile(
-                r#"// module-engine-state: {"schema":"output.v1","initial":{"count":0}}
+        let source = r#"// module-engine-state: {"schema":"output.v1","initial":{"count":0}}
+
+#[cfg(windows)]
+fn write_windows_stdout() {
+    use std::{ffi::{c_char, c_void}, process::{Command, Stdio}};
+    unsafe extern "C" {
+        fn puts(message: *const c_char) -> i32;
+        fn fflush(stream: *mut c_void) -> i32;
+    }
+
+    // Keep an unrelated file open where a stale CRT handle could be reused.
+    let _sentinel = std::fs::OpenOptions::new()
+        .write(true)
+        .open("stdout-sentinel.bin").unwrap();
+    // SAFETY: the message is NUL-terminated. fflush(NULL) flushes CRT output streams.
+    let (put, flush) = unsafe {
+        (puts(c"__MODULE_ENGINE_SCRIPT_PACKET__ CRT stdout".as_ptr()),
+         fflush(std::ptr::null_mut()))
+    };
+    assert!(put >= 0 && flush == 0, "CRT stdout write/flush failed: {put}/{flush}");
+
+    // The generated SDK probe prints its identity to stdout and then exits.
+    let child = Command::new(std::env::current_exe().unwrap())
+        .arg("__SDK_IDENTITY_ARGUMENT__")
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .status().unwrap();
+    assert!(child.success(), "child with inherited stdout: {child}");
+}
+
 fn update(ctx: &mut ScriptContext) {
+    #[cfg(windows)]
+    write_windows_stdout();
     println!("ordinary output");
     println!("__MODULE_ENGINE_SCRIPT_PACKET__ user diagnostic");
     eprintln!("__MODULE_ENGINE_SCRIPT_PACKET__ user stderr");
@@ -694,13 +723,25 @@ fn update(ctx: &mut ScriptContext) {
     ctx.set_color(1, [10, 20, 30, 255]);
     ctx.emit_event(serde_json::json!({"count":count}));
 }
-"#,
-            )
-            .unwrap();
+"#
+        .replace("__SDK_IDENTITY_ARGUMENT__", crate::SDK_IDENTITY_ARGUMENT);
+        let script = compiler.compile(&source).unwrap();
+        #[cfg(windows)]
+        let sentinel = artifacts.path().join("stdout-sentinel.bin");
+        #[cfg(windows)]
+        let untouched = b"ordinary fixture file";
+        #[cfg(windows)]
+        let script = {
+            fs::write(&sentinel, untouched).unwrap();
+            script.with_asset_root(artifacts.path()).unwrap()
+        };
         let context = ScriptContext::new(1.0, 0.016, vec![]);
         let mut previous_pid = None;
         for count in 1..=2 {
-            let tick = script.tick(&context, Duration::from_secs(2)).unwrap();
+            let pending = script.tick(&context, Duration::from_secs(5));
+            #[cfg(windows)]
+            assert_eq!(fs::read(&sentinel).unwrap(), untouched);
+            let tick = pending.unwrap();
             assert_eq!(tick.state, serde_json::json!({"count":count}));
             assert_eq!(tick.events, [serde_json::json!({"count":count})]);
             assert_eq!(
@@ -715,6 +756,28 @@ fn update(ctx: &mut ScriptContext) {
             script.commit_tick(&tick).unwrap();
             let pid = script.worker_process_id().unwrap().unwrap();
             assert_eq!(*previous_pid.get_or_insert(pid), pid);
+        }
+
+        {
+            let mut instance = script.lock_instance().unwrap();
+            let worker = instance.worker.as_mut().unwrap();
+            // Dropping the sender closes the input pipe after the two requests.
+            drop(std::mem::replace(
+                &mut worker.input,
+                mpsc::sync_channel(1).0,
+            ));
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Some(status) = worker.child.try_wait().unwrap() {
+                    assert!(status.success(), "worker exited with {status}");
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "worker did not exit at EOF"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
         }
 
         #[cfg(windows)]

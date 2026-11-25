@@ -65,7 +65,7 @@ python3 scripts/verify.py --profile native --plan
 | --- | --- | --- |
 | `quick` | `cargo fmt --all -- --check`, все lib tests пакетов `module-engine-core` и `module-engine-project`. | Не workspace, Editor, Vulkan runtime, secondary Custom builds или ignored acceptance. Холодная компиляция всё равно может быть долгой. |
 | `contracts` | Quick плюс `cargo_build::tests::`, четыре Inspector-регрессии, 99 сценариев свойств Inspector, четыре прежних Save As tests, 28 сценариев сохранности workflow и два теста `diagnostic_personal` для проверки явного root и изоляции Recent/layout с сохранением source permissions. | Не всё UI, native dialogs или полный authoring suite. |
-| `clippy` | `cargo clippy --offline --locked --target {native_host} --workspace --all-targets --all-features -- -D warnings` на закреплённом native toolchain. | Без formatting, tests или runtime-проверок; не приёмка движка или поставки. |
+| `clippy` | Строгий Clippy для всех целей и features workspace, затем для обычного исполняемого файла Editor в Release. Оба шага используют `-D warnings` и закреплённый нативный toolchain. | Без formatting, tests или runtime-проверок; не приёмка движка или поставки. |
 | `render` | CPU-проверки графа и кеша, компиляция HLSL через DXC и offscreen-регрессии Vulkan, включая обновления сцены GameHost, отклонение тика и смену сцены. | Без окна, доставки и проверки производительности. |
 | `native` | Пять явных ignored tests: Stop/reuse, slow-UI/hot-apply, native linker, cache context и Windows executable spellings. | Не desktop benchmark, screen latency, Full export или строгие 60 FPS. Windows-only test на Linux отмечается `skipped`, а не пройденным. |
 | `native-tools` | Три native linker/cache/executable-spelling проверки из `native`, без GameUI и GPU. | Не полный `native`; на Linux Windows-only test отмечается `skipped`. Используется Windows CI. |
@@ -89,6 +89,12 @@ Windows и ожиданий Host. Комментарии безопасност�
 Editor, а обе legacy-обёртки включают её для своих команд Editor. Обычные
 пакеты Editor собираются без неё. Отдельный маршрут нативных бенчмарков
 S1–S5 по-прежнему включает `bench`.
+
+Интеграционный тест `verification_cli` запускает настоящий Editor. CI
+выполняет его с `verification` в наборе workspace и отдельно в обычной
+Release-сборке. В первом случае `--self-check` должен записать успешный
+отчёт проверки на CPU. Обычный Editor должен завершиться с сообщением о
+требуемом feature и оставить каталог отчёта отсутствующим.
 
 25 ноября 2026 года две Release-сборки Windows x64 на Rust 1.99.0 заняли
 37 123 584 байта со стандартными features и 38 485 504 байта с

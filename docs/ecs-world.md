@@ -56,13 +56,22 @@ and read individual values. The public ARPG player DTO is still available for
 callers that need the complete entity. Two Arenas supplies authored scenes and
 prefabs to Core and delegates live game rules to ARPG.
 
-Live typed reads can use `EcsWorld::decode_component`. An absent component gives
-`Ok(None)`. A malformed stored value gives a decode error and increments the
-world's `malformed_component_reads` counter. Debug builds print the first eight
-failures per world with the component name and object ID. ARPG and Crate Garden
-use the existing gameplay fallback after recording the failure. The ARPG
-`--game-check` report includes `component_reads` for an absent and a malformed
-`health`. The counter is diagnostic state and stays out of saves.
+`EcsWorld::decode_component` returns `Ok(None)` for an absent component and leaves
+the counter unchanged in every build. A malformed value produces a decode
+error and increments `EcsWorld::malformed_component_reads()` in memory, including
+in Release. The ARPG and Crate Garden readers use the same gameplay fallback for
+either outcome. Only builds with `debug_assertions` print the first eight
+failed reads per world to stderr, with the component name, object ID and decode
+error. In a standard Release build, a malformed read only updates the counter
+before the gameplay fallback.
+
+The counter is available through the Core getter. An Editor built with
+`--features verification` publishes it for the controlled missing and malformed
+`health` fixture under `component_reads` in the ARPG `--game-check`
+`game-report.json`. These two values measure the fixture. Tick checkpoints
+share their world's counter through rollback.
+An explicit world clone starts with the current count and tracks later errors
+independently. The counter lives outside saved game data.
 
 GameWorker steps and renders through GameHost. The Host uses the R1.6 retained
 scene path and asks Core to project the current tick's world into

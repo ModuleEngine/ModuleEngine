@@ -2,8 +2,9 @@
 
 [English](../ci.md) | [Русский](ci.md) | [Документация](README.md)
 
-Обычные PR запускают тесты workspace, минимальную конфигурацию Player и
-отдельные проверки `contracts` и `clippy` на Windows и Linux.
+Обычные PR запускают тесты workspace, минимальную конфигурацию Player, проверку
+командной строки обычного Release Editor и отдельные проверки
+`contracts` и `clippy` на Windows и Linux.
 Изменение исполняемых исходников добавляет проверки native и package. Для переходов
 только по статусам дорожной карты предусмотрена отдельная проверка. `CI required`
 успешен после планирования и всех обязательных заданий выбранного маршрута.
@@ -60,8 +61,13 @@ Custom SDK проваливает задание. На Linux тесты мигр
 тестовой fixture Player вне этого графа.
 
 Обычная матрица отдельно планирует и выполняет `clippy` на обеих платформах,
-включая документационные PR вне маршрута только по статусам. Команда:
-`cargo clippy --offline --locked --target {native_host} --workspace --all-targets --all-features -- -D warnings`.
+включая документационные PR вне маршрута только по статусам. На закреплённой
+нативной цели она выполняет `--workspace --all-targets --all-features`, затем
+`--release -p module-engine-editor --bins` со стандартными features. Обе
+офлайн-проверки с закреплёнными зависимостями используют `-D warnings`.
+Тесты workspace включают `verification` и запускают настоящий `--self-check`.
+Отдельный вызов `cargo test --offline --locked --release -p module-engine-editor --test verification_cli`
+проверяет сообщение о требуемом feature в обычной сборке.
 Launcher определяет `{native_host}` по фактическому verbose выводу Rust toolchain
 и отклоняет несовпадение release/target с manifest платформы до Cargo metadata.
 Clippy не выполняет formatting, tests или runtime-сценарии; `contracts` по-прежнему

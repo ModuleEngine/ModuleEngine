@@ -37,4 +37,4 @@ Use the source SHA, artifact hashes, target, features and limits in each receipt
 
 ## Verification routes
 
-[CI](ci.md) runs the full workspace and a separate minimal Player build and test on Windows and Linux, with strict Clippy and extra native/package checks for executable-source changes. For local work, start with the [verification profiles](verification.md#profiles) and inspect the plan for the affected contract.
+[CI](ci.md) runs the full workspace and a separate minimal Player build and test on Windows and Linux. Strict Clippy also covers the default Release Editor, where CI checks that `--self-check` reports the feature requirement. Changes to executable sources add native and package checks. For local work, start with the [verification profiles](verification.md#profiles) and inspect the plan for the affected contract.
