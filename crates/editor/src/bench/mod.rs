@@ -1,6 +1,7 @@
 //! Source-only R0.2 fixtures using the existing native renderer and Player bridge.
 mod fixtures;
 mod materials;
+mod meshlets;
 #[path = "../../../../examples/bench/s3_ecs.rs"]
 mod s3_ecs;
 mod structure;
@@ -18,7 +19,7 @@ use module_engine_player::{
     ui,
 };
 use module_engine_vulkan::{
-    FrameWork, RenderPath, ResidentScene, SceneCulling, SceneInput, VulkanRenderer,
+    FrameWork, MeshletScene, RenderPath, ResidentScene, SceneCulling, SceneInput, VulkanRenderer,
     builtin_hlsl_source, builtin_manifest, default_graph,
 };
 use serde_json::{Value, json};
@@ -44,7 +45,7 @@ pub fn run(id: &str, folder: &Path) -> Result<(), String> {
     let folder = folder.canonicalize().map_err(|e| e.to_string())?;
     match id {
         "S1" | "S2" => game(id, &root, &folder),
-        "S3" | "S3-100k" | "S4" | "S5" => scene(id, &root, &folder),
+        "S3" | "S3-100k" | "S4" | "S5" | "S5-r24" | "S5-r81" => scene(id, &root, &folder),
         "S4-floor" | "S4-floor-atlas" => {
             s4_floor(&root, &folder, RenderPath::Forward, id == "S4-floor-atlas")
         }
@@ -52,6 +53,7 @@ pub fn run(id: &str, folder: &Path) -> Result<(), String> {
         "R2-textures" => materials::check(&root, &folder),
         "R23-structure" => structure::run(&root, &folder),
         "R24-visibility" => visibility::run(&root, &folder),
+        "R81-visibility" => meshlets::compare_image(&root, &folder),
         _ => Err(format!("Unknown benchmark scene {id}")),
     }
 }
@@ -192,14 +194,18 @@ fn write(path: &Path, value: &Value) -> Result<(), String> {
 }
 
 fn scene(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
-    let mut fixture = Fixture::load(id, root)?;
+    let r81 = meshlets::PathUnderTest::from_scene(id);
+    let fixture_started = Instant::now();
+    let mut fixture = Fixture::load(if r81.is_some() { "S5" } else { id }, root)?;
+    let fixture_load_ms = fixture_started.elapsed().as_secs_f64() * 1000.;
+    let objects = fixture.scene.items.len();
     let triangles = fixture
         .scene
         .items
         .iter()
         .map(|i| i.mesh.triangles.len())
         .sum::<usize>();
-    let (warmup, frames) = if id == "S5" {
+    let (warmup, frames) = if id == "S5" || r81.is_some() {
         (DENSE_WARMUP, DENSE_FRAMES)
     } else {
         (WARMUP, FRAMES)
@@ -219,10 +225,15 @@ fn scene(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
                 );
             }
         }
+    } else if r81 == Some(meshlets::PathUnderTest::Indirect) {
+        SceneCulling::HiZ
     } else {
         SceneCulling::Off
     };
-    let retained = if s3 {
+    let retained_started = Instant::now();
+    let retained = if r81 == Some(meshlets::PathUnderTest::Indirect) {
+        Some(meshlets::retained(std::mem::take(&mut fixture.scene))?)
+    } else if s3 {
         let mut scene = ResidentScene::default();
         scene.apply(SceneUpdate::Reset {
             revision: 0,
@@ -232,12 +243,12 @@ fn scene(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
     } else {
         None
     };
-    let report = json!({
+    let mut report = json!({
         "static_s3":static_s3,
         "requested_culling":culling,
         "version":1,"scene":id,"status":"incomplete","fixture":fixture.inventory,"gui_vsync":gui_vsync,
         "frame_profiling":frame_profiling,
-        "loaded_draw_items":fixture.scene.items.len(),"loaded_triangles":triangles,"camera":fixture.camera,
+        "loaded_draw_items":objects,"loaded_triangles":triangles,"camera":fixture.camera,
         "render_pixels":SIZE,"warmup_requested":warmup,"measured_requested":frames,
         "scope":"Current Vulkan Forward graph into a native window using the Player GPU bridge",
         "metrics":{
@@ -250,6 +261,20 @@ fn scene(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
             "image_reference_difference":"No accepted S4 reference image; current Forward cannot bind the fixture's 256 point lights",
         },
     });
+    if let Some(path) = r81 {
+        report["r81_path"] = json!(path);
+        report["fixture_load_ms"] = json!(fixture_load_ms);
+        report["retained_scene_prepare_ms"] = if retained.is_some() {
+            json!(retained_started.elapsed().as_secs_f64() * 1000.)
+        } else {
+            Value::Null
+        };
+        report.as_object_mut().unwrap().remove("metrics");
+        report
+            .as_object_mut()
+            .unwrap()
+            .remove("unavailable_reasons");
+    }
     let path = folder.join("scene.json");
     write(&path, &report)?;
     let preflight_path = path.clone();
@@ -275,13 +300,38 @@ fn scene(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
             let target = target.as_any()
                 .downcast_ref::<module_engine_vulkan::presentation::VulkanPresentationTarget>()
                 .ok_or("Vulkan presentation target is required")?;
-            let mut renderer = VulkanRenderer::new_at(root).map_err(|error| error.to_string())?;
-            renderer.set_presentation_target(Some(Arc::new(
+            let target = Arc::new(
                 module_engine_vulkan::presentation::VulkanPresentationTarget {
                     identity: target.identity.clone(),
                     allocator: Arc::clone(&target.allocator),
                 },
-            )))?;
+            );
+            let mut renderer = if let Some(path) = r81 {
+                VulkanRenderer::new_meshlet_benchmark(
+                    root,
+                    Some(target),
+                    path == meshlets::PathUnderTest::Mesh,
+                )?
+            } else {
+                let mut renderer = VulkanRenderer::new_at(root).map_err(|error| error.to_string())?;
+                renderer.set_presentation_target(Some(target))?;
+                renderer
+            };
+            let mut meshlets = None;
+            if let Some(path) = r81 {
+                let device = renderer.meshlet_device_report()?;
+                let mut report = report.lock().unwrap();
+                report["r81_device"] = json!(device);
+                report["vulkan_capabilities"] = json!(renderer.capabilities());
+                write(&preflight_path, &report)?;
+                if path == meshlets::PathUnderTest::Mesh {
+                    let source = renderer.build_meshlet_probe(std::mem::take(&mut fixture.scene))?;
+                    report["meshlet_build"] = json!(source.build_report());
+                    meshlets = Some(source);
+                } else {
+                    meshlets::check_indirect_support(&renderer, &device, &report["fixture"])?;
+                }
+            }
             if id == "S4" && !renderer.capabilities().bindless_materials {
                 fixture.use_legacy_s4_textures()?;
                 report.lock().unwrap()["fixture"] = fixture.inventory.clone();
@@ -289,13 +339,14 @@ fn scene(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
             renderer.set_detailed_stats(false);
             renderer.set_frame_profiling(frame_profiling);
             renderer.set_scene_culling(culling);
-            renderer.set_culling_stats(s3);
+            renderer.set_culling_stats(s3 || r81 == Some(meshlets::PathUnderTest::Indirect));
             // S3 measures overlap. S4 and S5 keep the original one-request
             // protocol and S5's single expanded-stream memory preflight.
             let frame_window = if s3 { renderer.frame_capacity() } else { 1 };
-            let probe = renderer.probe_vertex_allocation(triangles);
-            let mut blocked = probe.blocked.clone();
+            let probe = r81.is_none().then(|| renderer.probe_vertex_allocation(triangles));
+            let mut blocked = probe.as_ref().and_then(|probe| probe.blocked.clone());
             if id == "S5" {
+                let probe = probe.as_ref().unwrap();
                 let available = std::env::var("MODULE_ENGINE_BENCH_AVAILABLE_RAM_BYTES")
                     .ok()
                     .and_then(|value| value.parse::<u64>().ok());
@@ -318,7 +369,9 @@ fn scene(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
             {
                 let mut report = report.lock().unwrap();
                 report["gui_graphics"] = json!(graphics);
-                report["legacy_vertex_allocation"] = json!(probe);
+                if let Some(probe) = probe {
+                    report["legacy_vertex_allocation"] = json!(probe);
+                }
                 report["vulkan_capabilities"] = json!(renderer.capabilities());
                 report["monitor"] = json!(window.current_monitor().map(|m| json!({
                     "pixels":<[u32;2]>::from(m.size()),"refresh_millihertz":m.refresh_rate_millihertz(),
@@ -327,7 +380,8 @@ fn scene(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
                 write(&preflight_path, &report)?;
             }
             Ok(Box::new(SceneApp {
-                fixture, retained, static_s3, renderer, bridge, blocked, warmup, frames, triangles, report,
+                fixture, retained, meshlets, r81, static_s3, renderer, bridge, blocked,
+                warmup, frames, objects, triangles, report,
                 window_state: Box::new(move || (window.inner_size().into(), window.is_minimized())),
                 graph: default_graph(RenderPath::Forward), texture: GpuTexture::default(),
                 started: Instant::now(), completed: 0, submitted: 0,
@@ -391,6 +445,8 @@ struct TickWork {
 struct SceneApp {
     fixture: Fixture,
     retained: Option<ResidentScene>,
+    meshlets: Option<MeshletScene>,
+    r81: Option<meshlets::PathUnderTest>,
     static_s3: bool,
     graph: Graph,
     renderer: VulkanRenderer,
@@ -401,6 +457,7 @@ struct SceneApp {
     started: Instant,
     warmup: usize,
     frames: usize,
+    objects: usize,
     triangles: usize,
     completed: usize,
     submitted: usize,
@@ -449,7 +506,7 @@ impl SceneApp {
                 self.in_flight.push_front(flight);
                 return Ok(());
             };
-            if frame.stats.objects != self.fixture.scene.items.len()
+            if frame.stats.objects != self.objects
                 || frame.stats.submitted_triangles != self.triangles
                 || !frame.is_valid()
                 || frame.gpu.is_none()
@@ -464,6 +521,15 @@ impl SceneApp {
                 .renderer
                 .last_frame_work()
                 .ok_or("No workload counters for completed submission")?;
+            if let Some(path) = self.r81 {
+                path.check_work(&work, self.triangles, self.completed == 0)?;
+                if self.completed == 0 {
+                    let mut report = self.report.lock().unwrap();
+                    report["first_submission_ms"] = json!(flight.cpu_submit_ms);
+                    report["first_producer_latency_ms"] =
+                        json!(now.duration_since(flight.started).as_secs_f64() * 1000.);
+                }
+            }
             if self.completed == 0 {
                 self.initial_work = Some(work);
             }
@@ -528,7 +594,7 @@ impl SceneApp {
         {
             let tick = if let Some(retry) = self.retry_tick.take() {
                 retry
-            } else if self.static_s3 {
+            } else if self.static_s3 || self.r81.is_some() {
                 TickWork::default()
             } else {
                 let ecs = self.fixture.tick(self.submitted);
@@ -566,9 +632,10 @@ impl SceneApp {
             let submission = self
                 .renderer
                 .render_scene_presented(
-                    match &mut self.retained {
-                        Some(scene) => SceneInput::Retained(scene),
-                        None => SceneInput::Snapshot(&self.fixture.scene),
+                    match (&mut self.retained, &mut self.meshlets) {
+                        (Some(scene), _) => SceneInput::Retained(scene),
+                        (_, Some(scene)) => SceneInput::Meshlets(scene),
+                        _ => SceneInput::Snapshot(&self.fixture.scene),
                     },
                     self.fixture.camera,
                     SIZE[0],
