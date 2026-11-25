@@ -73,12 +73,14 @@ class Fixture(unittest.TestCase):
 
 class RegistryTests(Fixture):
     def test_registry_covers_the_actual_rust_ignored_inventory(self):
-        source_root = Path(__file__).resolve().parent.parent / "crates"
-        self.assertTrue(source_root.is_dir(), "Run this inventory test in the actual checkout")
+        repo = Path(__file__).resolve().parent.parent
+        source_roots = (repo / "crates", repo / "examples/bench")
         pattern = re.compile(r'#\[ignore[^\]]*\]\s*(?:#\[[^\]]*\]\s*)*fn\s+(\w+)\s*\(')
         actual = []
-        for path in source_root.rglob("*.rs"):
-            actual.extend(pattern.findall(path.read_text(encoding="utf-8")))
+        for source_root in source_roots:
+            self.assertTrue(source_root.is_dir(), "Run this inventory test in the actual checkout")
+            for path in source_root.rglob("*.rs"):
+                actual.extend(pattern.findall(path.read_text(encoding="utf-8")))
         registered = [s["filter"].rsplit("::", 1)[-1] for s in self.data["steps"] if s.get("ignored")]
         self.assertCountEqual(actual, registered, "Every real #[ignore] needs a purpose and profile/exclusion decision")
 
@@ -97,7 +99,7 @@ class RegistryTests(Fixture):
             "render-settings-history", "custom-player-settings", "custom-player-settings-rollback", "custom-player-settings-stale",
             "native-window-icons", "native-window-z-order",
             "r12-existing-game-roundtrip", "r12-player-stable-id-ipc", "r14-s3-tick-cost", "r15-event-replay",
-            "r16-s3-vulkan",
+            "r16-s3-vulkan", "r19-s3-motion-update-cost",
         })
         self.assertEqual(len(verify.plan(self.data, self.steps, "native")["steps"]), 5)
         self.assertEqual(len(verify.plan(self.data, self.steps, "package")["steps"]), 2)
