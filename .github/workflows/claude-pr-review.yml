@@ -4,10 +4,12 @@ name: Claude PR review
 # Claude only READS the PR and writes the review text to claude-review.md (no permission to post anything).
 # A separate deterministic step then publishes it as ONE comment authored by github-actions[bot],
 # found by an exact marker on its first line and updated by ID (created if absent).
-# A green job means the review of the current commit was published. If a review was expected but
-# claude-review.md is missing, empty or names another commit, the job FAILS.
-# The only exception is a PR that itself changes this workflow: the action refuses to run a workflow
+# A green job means a complete review of the current commit was published. If a review was expected but
+# claude-review.md is missing, empty, names another commit or lacks the required sections, the job FAILS.
+# The only exception is a PR that itself adds or changes this workflow: the action refuses to run a workflow
 # that differs from the one on the base branch, so the step reports an explicit "review skipped".
+# That skip is allowed only when the base copy is confirmed absent (HTTP 404) or confirmed different.
+# Any other failure to compare (API error, timeout) fails the job.
 # Requires the repository secret CLAUDE_CODE_OAUTH_TOKEN (generate with `claude setup-token`).
 on:
   pull_request:
@@ -59,12 +61,16 @@ jobs:
 
             Do NOT post comments yourself. Write the final review, in Russian, to the file `claude-review.md`
             in the workspace root (create it with the Write tool; this is the only file you may write). A later
-            workflow step publishes it. Be concise. The file must start with the line
-            "Ревью коммита <first 7 chars of REVIEWED COMMIT SHA>" and contain:
-            1. Verdict: one line (ok / ok with remarks / needs changes).
-            2. CI status (`gh pr checks`); say if checks are still running.
-            3. What was checked.
-            4. Minor remarks, all together; real bugs go first.
+            workflow step validates and publishes it, so the format is strict. Be concise. The file must be:
+
+            Ревью коммита <first 7 chars of REVIEWED COMMIT SHA>
+            Вердикт: <exactly one of: ok | ok with remarks | needs changes>, optionally followed by a short reason
+            CI: <status from `gh pr checks`; say if checks are still running>
+            Что проверено: <what you actually checked, specifically>
+            Замечания: <minor remarks all together, real bugs first; write "нет" if none>
+
+            Each of the four headings (`Вердикт:`, `CI:`, `Что проверено:`, `Замечания:`) must start a line, appear
+            exactly once, in this order, and have non-empty content (it may continue on the following lines).
 
             Project conventions to verify:
             - Every real Rust `#[ignore]` test needs a matching step in scripts/verification.json
@@ -103,20 +109,67 @@ jobs:
             exit 1
           }
 
-          if [ ! -s "$file" ] || [ "$(head -n1 "$file" | tr -d '\r')" != "Ревью коммита $short" ]; then
-            # Expected exception: the action refuses to run when this workflow differs from the base branch's copy
-            # (for example in the PR that adds or changes this very file). Then the review is explicitly skipped.
+          if [ ! -s "$file" ]; then
+            # No review was written. This is acceptable only when the action refused to run because this PR
+            # adds or changes this workflow. Confirm that with an explicit HTTP status; anything unexpected fails.
             base_copy="$(mktemp)"
-            if ! gh api -H 'Accept: application/vnd.github.raw' "repos/$REPO/contents/$workflow?ref=$BASE_SHA" > "$base_copy" 2> /dev/null \
-                || ! cmp -s "$base_copy" "$workflow"; then
-              echo "::notice title=Claude review skipped::This PR changes $workflow; the action does not run a workflow that differs from the base branch. No review was produced."
-              {
-                echo "### Claude review: SKIPPED"
-                echo "This PR adds or changes \`$workflow\`, and the action does not run a workflow that differs from the base branch. No review was produced for \`$short\`."
-              } >> "$GITHUB_STEP_SUMMARY"
-              exit 0
+            code="$(curl -sS --max-time 30 --retry 2 -o "$base_copy" -w '%{http_code}' \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'Accept: application/vnd.github.raw' \
+              "https://api.github.com/repos/$REPO/contents/$workflow?ref=$BASE_SHA")" \
+              || fail "Expected a review in $file, and the check whether this PR changes the workflow could not be completed (request to GitHub failed)."
+            reason=""
+            if [ "$code" = "404" ]; then
+              reason="$workflow does not exist on the base branch yet"
+            elif [ "$code" = "200" ]; then
+              if cmp -s "$base_copy" "$workflow"; then
+                fail "Expected a review in $file, but it is missing or empty, and this PR does not change the workflow."
+              fi
+              reason="$workflow differs from the base branch"
+            else
+              fail "Expected a review in $file, and the check whether this PR changes the workflow failed with HTTP $code."
             fi
-            fail "Expected a fresh non-empty $file whose first line is 'Ревью коммита $short', but it is missing, empty or names another commit."
+            echo "::notice title=Claude review skipped::$reason; the action does not run such a workflow. No review was produced."
+            {
+              echo "### Claude review: SKIPPED"
+              echo "$reason, and the action does not run a workflow that differs from the base branch. No review was produced for \`$short\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # A review exists: it must name the current commit and contain every required section with content.
+          if ! problem="$(python3 - "$file" "$short" 2>&1 <<'PY'
+          import re, sys
+          path, short = sys.argv[1], sys.argv[2]
+          lines = open(path, encoding="utf-8").read().replace("\r", "").split("\n")
+          if lines[0].strip() != "Ревью коммита " + short:
+              sys.exit("the first line must be 'Ревью коммита " + short + "'")
+          heads = ["Вердикт:", "CI:", "Что проверено:", "Замечания:"]
+          found = {}
+          for i, line in enumerate(lines[1:], 1):
+              for h in heads:
+                  if line.startswith(h):
+                      if h in found:
+                          sys.exit("section '" + h + "' appears more than once")
+                      found[h] = i
+          missing = [h for h in heads if h not in found]
+          if missing:
+              sys.exit("missing sections: " + ", ".join(missing))
+          pos = [found[h] for h in heads]
+          if pos != sorted(pos):
+              sys.exit("sections are out of order")
+          for n, h in enumerate(heads):
+              end = pos[n + 1] if n + 1 < len(pos) else len(lines)
+              content = (lines[pos[n]][len(h):] + "\n" + "\n".join(lines[pos[n] + 1:end])).strip()
+              if not content:
+                  sys.exit("section '" + h + "' is empty")
+              if h == "Вердикт:" and not re.match(r"(ok with remarks|ok|needs changes)\b", content):
+                  sys.exit("the verdict must start with: ok | ok with remarks | needs changes")
+              if h == "Что проверено:" and len(content) < 40:
+                  sys.exit("section 'Что проверено:' is too short to be a real description")
+          PY
+          )"; then
+            fail "The review file is invalid: $problem"
           fi
 
           # The marker is always added here; any marker line in the text is dropped, and the size is capped.
