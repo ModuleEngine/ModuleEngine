@@ -198,6 +198,11 @@ the next successful graphics submission publishes those GPU updates. A busy
 request keeps edits pending. A reset or scene switch reconciles the rows
 against the new accepted list and can reuse meshes already in the device pool.
 
+GameHost reprojects owners of playing glTF clips when presentation time
+changes, including joints on an object whose ECS transform is stationary.
+Scenes with those drawables use the expanded snapshot submission, which
+keeps CPU-deformed geometry out of the resident mesh pool. [glTF playback](content.md#gltf-animation).
+
 The software renderer, explicit `author_snapshot()` for picking/diagnostics,
 and compatibility world providers retain the snapshot path. A contribution can
 register a `GamePresentationScope` to select potentially affected pose and

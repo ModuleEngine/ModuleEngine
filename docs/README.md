@@ -75,7 +75,7 @@ English is the primary documentation language. Every document below has a comple
 - [Custom Rust 0.4](custom-rust.md)
 - [Rust Custom State and Standalone Workers](custom-state.md)
 - [Reusing Custom Rust](custom-program-store.md)
-- [Static Models, Textures, and Materials](content.md)
+- [Models, Animation, Textures, and Materials](content.md)
 - [Vulkan and Custom HLSL](gpu-hlsl.md)
 - [Vulkan hardware tiers and the minimum Player hardware candidate](hardware-tiers.md)
 - [Adding a module](extending.md)

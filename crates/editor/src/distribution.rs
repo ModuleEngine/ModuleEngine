@@ -963,6 +963,7 @@ const NATIVE_FILES: &[&str] = &[
     "crates/engine-core/src/scenes.rs",
     "crates/engine-core/src/systems.rs",
     "crates/engine-content/Cargo.toml",
+    "crates/engine-content/src/animation.rs",
     "crates/engine-content/src/lib.rs",
     "crates/runtime-script/src/persistent.rs",
     "Cargo.toml",

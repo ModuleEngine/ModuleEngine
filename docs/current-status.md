@@ -4,6 +4,12 @@
 
 [English](current-status.md) | [Русский](ru/current-status.md) | [Documentation](README.md)
 
+**25 November 2026 — glTF content supports skins and single-clip playback.**
+The importer loads joint hierarchies, inverse binds, vertex influences and TRS
+tracks. GameHost loops the first applicable clip and prepares deformed positions
+on the CPU. The Khronos playback verification covers CesiumMan and Fox alongside
+the static crystal. [Content and verification](content.md#gltf-animation).
+
 **24 November 2026 — R2.4 evidence, the S4 baseline and the ARPG tick trial are available.**
 The [R2.4 receipt](evidence/r24/README.md) records the Windows and combined
 review. [CI](ci.md#что-выполняется) checks new documentation links for local
