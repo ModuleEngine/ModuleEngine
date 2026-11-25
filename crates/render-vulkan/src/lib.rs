@@ -37,7 +37,10 @@ pub use vulkan::{
     VertexAllocation, VulkanRenderer, validate_overrides, validate_overrides_at,
 };
 #[cfg(feature = "bench")]
-pub use vulkan::{GraphImageAllocation, MeshletBuildReport, MeshletDeviceReport, MeshletScene};
+pub use vulkan::{
+    GraphImageAllocation, MeshletBuildReport, MeshletDeviceReport, MeshletScene,
+    project_meshlet_benchmark_vertex,
+};
 
 mod error {
     use ash::vk;

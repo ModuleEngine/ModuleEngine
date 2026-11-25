@@ -3,7 +3,7 @@
 use super::{Buffer, VulkanError, VulkanRenderer};
 use ash::vk;
 use bytemuck::cast_slice;
-use module_engine_core::SceneSnapshot;
+use module_engine_core::{Camera, SceneSnapshot};
 use std::{collections::HashMap, mem::size_of_val, sync::Arc, time::Instant};
 
 pub(super) const SOURCE: &str = include_str!("meshlet_probe.hlsl");
@@ -24,6 +24,7 @@ pub struct MeshletDeviceReport {
     pub driver_version_raw: u32,
     pub api_version: u32,
     pub max_storage_buffer_range: u32,
+    pub sub_pixel_precision_bits: u32,
     pub timestamp_valid_bits: u32,
     pub timestamp_period_ns: f64,
     pub extension_enabled: bool,
@@ -112,12 +113,35 @@ impl MeshletDeviceReport {
             driver_version_raw: base.driver_version,
             api_version: base.api_version,
             max_storage_buffer_range: base.limits.max_storage_buffer_range,
+            sub_pixel_precision_bits: base.limits.sub_pixel_precision_bits,
             timestamp_valid_bits: renderer.timestamp_valid_bits,
             timestamp_period_ns: renderer.timestamp_period_ns,
             extension_enabled: renderer.meshlet_device.is_some(),
             mesh_shader,
         })
     }
+}
+
+/// Project a source vertex using the Forward camera and the positive-height
+/// Vulkan viewport. The S5 edge check uses only vertices inside the depth range.
+pub fn project_meshlet_benchmark_vertex(
+    camera: Camera,
+    size: [usize; 2],
+    point: [f32; 3],
+) -> Option<[f32; 2]> {
+    let c = crate::geometry::camera_constants(camera, size[0], size[1]);
+    let local: [f32; 3] = std::array::from_fn(|i| point[i] - c[i]);
+    let dot = |start| (0..3).map(|i| local[i] * c[start + i]).sum::<f32>();
+    let z = dot(12);
+    if !(c[3]..=c[11]).contains(&z) {
+        return None;
+    }
+    let ndc_x = dot(4) * c[15] / c[7] / z;
+    let ndc_y = -dot(8) * c[15] / z;
+    Some([
+        (ndc_x + 1.) * size[0] as f32 * 0.5,
+        (ndc_y + 1.) * size[1] as f32 * 0.5,
+    ])
 }
 
 #[derive(serde::Serialize)]

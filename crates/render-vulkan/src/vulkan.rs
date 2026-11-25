@@ -55,7 +55,9 @@ pub use culling::{CullingStats, SceneCulling};
 #[path = "meshlet_probe.rs"]
 mod meshlet_probe;
 #[cfg(feature = "bench")]
-pub use meshlet_probe::{MeshletBuildReport, MeshletDeviceReport, MeshletScene};
+pub use meshlet_probe::{
+    MeshletBuildReport, MeshletDeviceReport, MeshletScene, project_meshlet_benchmark_vertex,
+};
 
 pub enum SceneInput<'a> {
     Snapshot(&'a SceneSnapshot),

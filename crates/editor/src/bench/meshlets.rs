@@ -1,15 +1,20 @@
 //! Matched resident R2.4 and task/mesh runs of the original S5 fixture.
 
 use super::{SIZE, fixtures::Fixture, write};
-use module_engine_core::{RenderOverrides, SceneSnapshot, SceneUpdate};
+use module_engine_core::{
+    Camera, RenderItem, RenderOverrides, SceneSnapshot, SceneUpdate, transform_point,
+};
 use module_engine_vulkan::{
     FrameWork, MeshletDeviceReport, RenderPath, ResidentScene, SceneCulling, SceneInput,
-    VulkanRenderer, default_graph,
+    VulkanRenderer, default_graph, project_meshlet_benchmark_vertex,
 };
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::Path};
 
 const MAX_CHANNEL_DELTA: u8 = 2;
+const MAX_EDGE_CHANNEL_DELTA: u8 = 2 * MAX_CHANNEL_DELTA;
+const MAX_EDGE_PIXELS: usize = SIZE[0] * SIZE[1] / 1_000_000;
+const FORWARD_FLOAT_EPSILON: f32 = 1e-5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -117,13 +122,20 @@ fn read_float(bytes: &[u8], offset: usize) -> f32 {
     f32::from_ne_bytes(bytes[offset..offset + 4].try_into().unwrap())
 }
 
-fn shared_edge(scene: &SceneSnapshot, object: f32, before: f32, after: f32) -> bool {
-    let Some(object) = (object as usize).checked_sub(1) else {
-        return false;
-    };
-    let Some(item) = scene.items.get(object) else {
-        return false;
-    };
+struct SharedEdge<'a> {
+    item: &'a RenderItem,
+    faces: [[usize; 3]; 2],
+    edge: [usize; 2],
+}
+
+fn shared_edge(
+    scene: &SceneSnapshot,
+    object: f32,
+    before: f32,
+    after: f32,
+) -> Option<SharedEdge<'_>> {
+    let object = (object as usize).checked_sub(1)?;
+    let item = scene.items.get(object)?;
     let first = 1 + scene.items[..object]
         .iter()
         .map(|item| item.mesh.triangles.len())
@@ -135,14 +147,20 @@ fn shared_edge(scene: &SceneSnapshot, object: f32, before: f32, after: f32) -> b
             .and_then(|id| id.checked_sub(first))
             .and_then(|index| item.mesh.triangles.get(index))
     };
-    let (Some(before), Some(after)) = (triangle(before), triangle(after)) else {
-        return false;
-    };
+    let before = *triangle(before)?;
+    let after = *triangle(after)?;
     let common: Vec<_> = before
-        .iter()
+        .into_iter()
         .filter(|vertex| after.contains(vertex))
         .collect();
-    matches!(common.as_slice(), [a, b] if a != b)
+    let [u, v] = *common.as_slice() else {
+        return None;
+    };
+    (u != v).then_some(SharedEdge {
+        item,
+        faces: [before, after],
+        edge: [u, v],
+    })
 }
 
 fn same_edge_depth(before: f32, after: f32) -> bool {
@@ -153,21 +171,98 @@ fn same_edge_depth(before: f32, after: f32) -> bool {
         && before.to_bits().abs_diff(after.to_bits()) <= 1
 }
 
-fn forward_pixel(planes: &[Vec<u8>; 3], index: usize) -> Value {
-    let floats = |plane: &[u8], components| {
-        let first = index * components * 4;
-        plane[first..first + components * 4]
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|&bytes| f32::from_ne_bytes(bytes))
-            .collect::<Vec<_>>()
-    };
-    json!({
-        "depth": floats(&planes[0], 1)[0],
-        "normal_and_object_id": floats(&planes[1], 4),
-        "color_and_triangle_id": floats(&planes[2], 4),
+#[derive(Clone, Copy, serde::Serialize)]
+struct ForwardPixel {
+    depth: f32,
+    normal_and_object_id: [f32; 4],
+    color_and_triangle_id: [f32; 4],
+}
+
+fn forward_pixel(planes: &[Vec<u8>; 3], index: usize) -> ForwardPixel {
+    ForwardPixel {
+        depth: read_float(&planes[0], index * 4),
+        normal_and_object_id: std::array::from_fn(|i| read_float(&planes[1], index * 16 + 4 * i)),
+        color_and_triangle_id: std::array::from_fn(|i| read_float(&planes[2], index * 16 + 4 * i)),
+    }
+}
+
+fn pixel_center_over_edge(endpoints: [[f32; 2]; 2], pixel: [usize; 2], subpixel: f32) -> bool {
+    let [a, b] = endpoints;
+    let [x, y] = pixel.map(|coord| coord as f32 + 0.5);
+    let [u, v] = [b[0] - a[0], b[1] - a[1]];
+    let [dx, dy] = [x - a[0], y - a[1]];
+    let length = u.hypot(v);
+    let along = (dx * u + dy * v) / length;
+    (0. ..=length).contains(&along) && (dx * v - dy * u).abs() <= subpixel * length
+}
+
+fn normalize(vector: [f32; 3]) -> [f32; 3] {
+    let length = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if length > 0.00001 {
+        vector.map(|x| x / length)
+    } else {
+        [0., 1., 0.]
+    }
+}
+
+fn matches_forward_face(item: &RenderItem, positions: [[f32; 3]; 3], pixel: ForwardPixel) -> bool {
+    if item.material.base_color_texture.is_some() {
+        return false;
+    }
+    let [a, b, c] = positions;
+    let [ux, uy, uz] = std::array::from_fn(|i| b[i] - a[i]);
+    let [vx, vy, vz] = std::array::from_fn(|i| c[i] - a[i]);
+    let normal = normalize([uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx]);
+    let light = normalize([-0.5, 1., 0.7]);
+    let diffuse = 0.20
+        + 1.65
+            * normal
+                .iter()
+                .zip(light)
+                .map(|(n, l)| n * l)
+                .sum::<f32>()
+                .abs();
+    (0..3).all(|i| {
+        let expected_color =
+            f32::from(item.color[i]) / 255. * item.material.base_color[i] * diffuse;
+        (pixel.normal_and_object_id[i] - normal[i]).abs() <= FORWARD_FLOAT_EPSILON
+            && (pixel.color_and_triangle_id[i] - expected_color).abs() <= FORWARD_FLOAT_EPSILON
     })
+}
+
+fn valid_edge_change(
+    scene: &SceneSnapshot,
+    camera: Camera,
+    position: [usize; 2],
+    subpixel: f32,
+    pixels: [ForwardPixel; 2],
+) -> bool {
+    let [a, b] = pixels;
+    let object = a.normal_and_object_id[3];
+    if object != b.normal_and_object_id[3] || !same_edge_depth(a.depth, b.depth) {
+        return false;
+    }
+    let Some(shared) = shared_edge(
+        scene,
+        object,
+        a.color_and_triangle_id[3],
+        b.color_and_triangle_id[3],
+    ) else {
+        return false;
+    };
+    let world = |i: usize| transform_point(shared.item.model, shared.item.mesh.vertices[i]);
+    let [Some(u), Some(v)] = shared
+        .edge
+        .map(|i| project_meshlet_benchmark_vertex(camera, SIZE, world(i)))
+    else {
+        return false;
+    };
+    pixel_center_over_edge([u, v], position, subpixel)
+        && shared
+            .faces
+            .into_iter()
+            .zip(pixels)
+            .all(|(face, pixel)| matches_forward_face(shared.item, face.map(world), pixel))
 }
 
 pub(super) fn compare_image(root: &Path, output: &Path, fxaa: bool) -> Result<(), String> {
@@ -255,6 +350,7 @@ pub(super) fn compare_image(root: &Path, output: &Path, fxaa: bool) -> Result<()
     let mut changed_triangles = 0;
     let mut shared_edge_changes = 0;
     let mut worst = None;
+    let subpixel = 2_f32.powi(-(reference_device.sub_pixel_precision_bits as i32));
     for (index, (a, b)) in reference
         .rgba
         .as_chunks::<4>()
@@ -274,12 +370,16 @@ pub(super) fn compare_image(root: &Path, output: &Path, fxaa: bool) -> Result<()
         let mut edge_change = false;
         if before != after {
             changed_triangles += 1;
-            edge_change = same_object
-                && same_edge_depth(
-                    read_float(&reference_planes[0], index * 4),
-                    read_float(&candidate_planes[0], index * 4),
-                )
-                && shared_edge(&source, object, before, after);
+            edge_change = valid_edge_change(
+                &source,
+                camera,
+                [index % SIZE[0], index / SIZE[0]],
+                subpixel,
+                [
+                    forward_pixel(&reference_planes, index),
+                    forward_pixel(&candidate_planes, index),
+                ],
+            );
             shared_edge_changes += usize::from(edge_change);
         }
         if !edge_change {
@@ -301,6 +401,8 @@ pub(super) fn compare_image(root: &Path, output: &Path, fxaa: bool) -> Result<()
     let candidate_counts = json!(candidate.stats);
     let expected_triangles = fixture.inventory["source_triangles"].as_u64().unwrap();
     let passed = max_non_edge_delta <= MAX_CHANNEL_DELTA
+        && max_delta <= MAX_EDGE_CHANNEL_DELTA
+        && shared_edge_changes <= MAX_EDGE_PIXELS
         && changed_objects == 0
         && changed_triangles == shared_edge_changes
         && reference_counts == candidate_counts
@@ -317,6 +419,9 @@ pub(super) fn compare_image(root: &Path, output: &Path, fxaa: bool) -> Result<()
             "render_pixels": SIZE,
             "fixture": fixture.inventory,
             "max_channel_error_allowed": MAX_CHANNEL_DELTA,
+            "max_shared_edge_channel_error_allowed": MAX_EDGE_CHANNEL_DELTA,
+            "max_shared_edge_pixels_allowed": MAX_EDGE_PIXELS,
+            "edge_distance_pixels_allowed": subpixel,
             "max_channel_error": max_delta,
             "changed_pixels": changed_pixels,
             "max_channel_error_outside_shared_edges": max_non_edge_delta,
@@ -332,8 +437,8 @@ pub(super) fn compare_image(root: &Path, output: &Path, fxaa: bool) -> Result<()
     )?;
     if !passed {
         return Err(format!(
-            "S5 image differs: max RGBA8 delta {max_non_edge_delta} outside verified shared edges, \
-             {changed_objects} object-ID and {} non-edge triangle-ID changes",
+            "S5 image differs: max RGBA8 delta {max_delta} ({max_non_edge_delta} outside verified shared edges), \
+             {shared_edge_changes} shared-edge, {changed_objects} object-ID and {} other triangle-ID changes",
             changed_triangles - shared_edge_changes
         ));
     }
@@ -343,7 +448,7 @@ pub(super) fn compare_image(root: &Path, output: &Path, fxaa: bool) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
-    use module_engine_core::{Mesh, RenderItem, Transform};
+    use module_engine_core::{Mesh, Transform};
 
     #[test]
     fn edge_equivalence_checks_topology_and_adjacent_depth_values() {
@@ -357,13 +462,29 @@ mod tests {
             }],
             ..Default::default()
         };
-        assert!(shared_edge(&scene, 1., 1., 2.));
-        assert!(!shared_edge(&scene, 1., 1., 3.));
-        assert!(!shared_edge(&scene, 0., 1., 2.));
-        assert!(!shared_edge(&scene, 1., 1., (1 << 24) as f32));
+        assert!(shared_edge(&scene, 1., 1., 2.).is_some());
+        assert!(shared_edge(&scene, 1., 1., 3.).is_none());
+        assert!(shared_edge(&scene, 0., 1., 2.).is_none());
+        assert!(shared_edge(&scene, 1., 1., (1 << 24) as f32).is_none());
         let depth = 87_f32;
         assert!(same_edge_depth(depth, depth.next_up()));
         assert!(!same_edge_depth(depth, depth.next_up().next_up()));
         assert!(!same_edge_depth(0., 0.));
+        let edge = [[0., 2.5], [5., 2.5]];
+        let subpixel = 1. / 256.;
+        assert!(pixel_center_over_edge(edge, [2, 2], subpixel));
+        assert!(!pixel_center_over_edge(edge, [2, 3], subpixel));
+        assert!(!pixel_center_over_edge(edge, [5, 2], subpixel));
+        let item = &scene.items[0];
+        let positions = item.mesh.triangles[0].map(|i| item.mesh.vertices[i]);
+        let diffuse = 0.2 + 1.65 * 0.7 / 1.74_f32.sqrt();
+        let mut pixel = ForwardPixel {
+            depth,
+            normal_and_object_id: [0., 0., -1., 1.],
+            color_and_triangle_id: [diffuse, diffuse, diffuse, 1.],
+        };
+        assert!(matches_forward_face(item, positions, pixel));
+        pixel.color_and_triangle_id[0] += 0.1;
+        assert!(!matches_forward_face(item, positions, pixel));
     }
 }

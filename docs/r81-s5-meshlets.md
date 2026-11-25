@@ -40,10 +40,13 @@ The comparison first reads back both 1080p images. It checks the device,
 dimensions, all RenderStats counts, nonzero geometry coverage and object
 ownership at every pixel. A changed Forward triangle ID requires two
 triangles of that object with one shared source edge and positive depths
-within one representable f32 step. This check requires triangle IDs that
-are unambiguous in the Forward attachment. The maximum absolute output
-delta at all other pixels is 2 on every RGBA8 channel. The report records
-the overall maximum, the number of shared-edge changes and the depth,
+within one representable f32 step. The pixel center must be within one
+device subpixel step of the projected edge. Both raw normals and untextured
+Forward colors must agree with their respective source faces within 1e-5.
+The check accepts only unambiguous IDs and up to two changed edge pixels
+at 1080p, with at most 4 absolute RGBA8 units in those pixels. The
+absolute output delta at all other pixels is at most 2 per channel. The
+report records the overall maximum, the number of shared-edge changes and the depth,
 normal, color and source IDs at the worst differing pixel. It retains
 both PNGs. `R81-visibility-no-fxaa` bypasses FXAA in both paths for
 diagnosis. The full Forward graph is required for the scored comparison,
