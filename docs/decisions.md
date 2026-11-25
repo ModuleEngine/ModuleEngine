@@ -116,8 +116,6 @@ and launcher. This decision precedes migration of the default device path.
 The numbers above do not cover dedicated transfer or final validation.
 
 
-<a id="рабочие-допущения"></a>
-
 <a id="r31-editor-painter"></a>
 
 ## R3.1 Vulkan editor painter — 25 November 2026
@@ -134,6 +132,8 @@ opt-in spike for comparison. Direct Scene and Game image sampling
 belongs to the R3.3 resource and synchronization contract.
 See the [Windows results](editor-vulkan-spike.md#r31-results) and
 [library API for caller-owned textures](https://docs.rs/egui-ash-renderer/0.13.0/egui_ash_renderer/struct.Renderer.html#method.add_user_texture).
+
+<a id="рабочие-допущения"></a>
 
 ## Working Assumptions
 
