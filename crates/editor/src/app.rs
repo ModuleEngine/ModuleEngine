@@ -2068,6 +2068,22 @@ impl Editor {
         self.draw_workspaces(ui);
     }
 
+    #[cfg(all(windows, feature = "r31-spike"))]
+    pub(crate) fn r31_spike_layout(&mut self) -> Result<(), String> {
+        self.workspace = WorkspaceKind::Engine;
+        self.engine_layout = DockLayout::single(EditorType::ModuleGraph);
+        let library = self.engine_layout.split(1, dock::Axis::Horizontal)?;
+        self.engine_layout
+            .choose(library, EditorType::ModuleLibrary);
+        if let dock::Area::Split { ratio, .. } = &mut self.engine_layout.root {
+            *ratio = 0.72;
+        }
+        self.engine_panes.clear();
+        self.graph_canvas.zoom = 0.60;
+        self.playing = false;
+        Ok(())
+    }
+
     pub(super) fn project_asset_root(&self) -> std::path::PathBuf {
         std::path::Path::new(&self.path)
             .parent()

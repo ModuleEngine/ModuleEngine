@@ -80,7 +80,7 @@ impl GpuFrame for VulkanGpuFrame {
 }
 
 pub(crate) struct DeviceLifetime {
-    pub instance: InstanceLifetime,
+    pub instance: Arc<InstanceLifetime>,
     pub device: ash::Device,
 }
 impl DeviceLifetime {
@@ -103,7 +103,7 @@ impl Drop for DeviceLifetime {
 pub(crate) mod instance {
     use crate::VulkanError;
     use ash::{Entry, vk};
-    use std::sync::Arc;
+    use std::{ffi::CStr, sync::Arc};
 
     pub(crate) struct InstanceLifetime {
         // Keep the Vulkan loader mapped until after vkDestroyInstance.
@@ -114,18 +114,27 @@ pub(crate) mod instance {
     }
 
     impl InstanceLifetime {
-        pub(crate) fn new() -> Result<Self, VulkanError> {
+        pub(crate) fn new(extensions: &[&CStr]) -> Result<Self, VulkanError> {
+            // The owner retains the dynamically loaded entry until instance destruction.
             let entry =
                 unsafe { Entry::load() }.map_err(|source| VulkanError::Loader(Arc::new(source)))?;
             let app = vk::ApplicationInfo::default()
                 .application_name(c"ModuleEngine GPU graph")
                 .api_version(vk::API_VERSION_1_3);
             #[cfg(debug_assertions)]
-            let (raw, debug) = debug::Diagnostics::create(&entry, &app)?;
+            let (raw, debug) = debug::Diagnostics::create(&entry, &app, extensions)?;
             #[cfg(not(debug_assertions))]
+            let extensions = extensions
+                .iter()
+                .map(|name| name.as_ptr())
+                .collect::<Vec<_>>();
+            #[cfg(not(debug_assertions))]
+            // All application and extension names live through the create call.
             let raw = unsafe {
                 entry.create_instance(
-                    &vk::InstanceCreateInfo::default().application_info(&app),
+                    &vk::InstanceCreateInfo::default()
+                        .application_info(&app)
+                        .enabled_extension_names(&extensions),
                     None,
                 )
             }
@@ -137,6 +146,11 @@ pub(crate) mod instance {
                 #[cfg(debug_assertions)]
                 debug,
             })
+        }
+
+        #[cfg(all(windows, feature = "editor-spike"))]
+        pub(crate) fn entry(&self) -> &Entry {
+            &self._entry
         }
 
         #[cfg(debug_assertions)]
@@ -194,7 +208,7 @@ pub(crate) mod instance {
             if severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR) {
                 counts.errors.fetch_add(1, Relaxed);
                 ERRORS.fetch_add(1, Relaxed);
-            } else {
+            } else if severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::WARNING) {
                 counts.warnings.fetch_add(1, Relaxed);
             }
             let message = unsafe { CStr::from_ptr((*data).p_message) }.to_string_lossy();
@@ -210,6 +224,7 @@ pub(crate) mod instance {
             pub(super) fn create(
                 entry: &Entry,
                 app: &vk::ApplicationInfo<'_>,
+                requested_extensions: &[&CStr],
             ) -> Result<(ash::Instance, Self), VulkanError> {
                 let layers = unsafe { entry.enumerate_instance_layer_properties() }
                     .map_err(VulkanError::api("enumerate instance layers"))?;
@@ -223,32 +238,37 @@ pub(crate) mod instance {
                 });
                 let counts = Box::<Counts>::default();
                 let layer_names = [LAYER.as_ptr()];
-                let extension_names = [ash::ext::debug_utils::NAME.as_ptr()];
+                let mut severity = vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
+                    | vk::DebugUtilsMessageSeverityFlagsEXT::ERROR;
+                // The native spike records the validation layer's create-time status.
+                if requested_extensions.contains(&ash::khr::win32_surface::NAME) {
+                    severity |= vk::DebugUtilsMessageSeverityFlagsEXT::INFO;
+                }
+                let mut extension_names = requested_extensions
+                    .iter()
+                    .map(|name| name.as_ptr())
+                    .collect::<Vec<_>>();
+                if utils {
+                    extension_names.push(ash::ext::debug_utils::NAME.as_ptr());
+                }
                 let callback_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
-                    .message_severity(
-                        vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
-                            | vk::DebugUtilsMessageSeverityFlagsEXT::ERROR,
-                    )
+                    .message_severity(severity)
                     .message_type(
                         vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
                             | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
                     )
                     .pfn_user_callback(Some(callback))
                     .user_data(std::ptr::from_ref(counts.as_ref()).cast_mut().cast());
-                let mut info = vk::InstanceCreateInfo::default().application_info(app);
+                let mut info = vk::InstanceCreateInfo::default()
+                    .application_info(app)
+                    .enabled_extension_names(&extension_names);
                 if validation {
                     info = info.enabled_layer_names(&layer_names);
                 }
                 let instance = if utils {
                     let mut instance_callback = callback_info;
-                    unsafe {
-                        entry.create_instance(
-                            &info
-                                .enabled_extension_names(&extension_names)
-                                .push_next(&mut instance_callback),
-                            None,
-                        )
-                    }
+                    // The callback data, layers and extensions live through creation.
+                    unsafe { entry.create_instance(&info.push_next(&mut instance_callback), None) }
                 } else {
                     unsafe { entry.create_instance(&info, None) }
                 }

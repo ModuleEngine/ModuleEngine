@@ -26,6 +26,8 @@ mod player;
 mod player_settings_verification;
 mod project;
 mod puzzle_verification;
+#[cfg(all(windows, feature = "r31-spike"))]
+mod r31_spike;
 mod render_settings_verification;
 mod runtime_delivery;
 mod scalar;
@@ -168,9 +170,13 @@ fn run() -> Result<(), String> {
             "  module-engine-editor --migrate-copy source.json new-project.json neutral|arpg|puzzle|g1"
         );
         println!("  module-engine-editor --puzzle-check puzzle-project.json output-folder");
+        #[cfg(all(windows, feature = "r31-spike"))]
+        println!("  module-engine-editor --r31-editor-vulkan ash|thin 1.0|1.5 <new output folder>");
         return Ok(());
     }
     match args.first().map(String::as_str) {
+        #[cfg(all(windows, feature = "r31-spike"))]
+        Some("--r31-editor-vulkan") => return r31_spike::run(&args[1..], requested_profile),
         #[cfg(feature = "bench")]
         Some("--bench-scene") => {
             if requested_profile.is_some() || args.len() != 3 {
