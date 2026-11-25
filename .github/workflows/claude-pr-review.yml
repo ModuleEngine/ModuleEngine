@@ -4,9 +4,11 @@ name: Claude PR review
 # Claude only READS the PR and writes the review text to claude-review.md (no permission to post anything).
 # A separate deterministic step then publishes it as ONE comment authored by github-actions[bot],
 # found by an exact marker on its first line and updated by ID (created if absent).
-# The comment names the reviewed commit SHA.
+# A green job means the review of the current commit was published. If a review was expected but
+# claude-review.md is missing, empty or names another commit, the job FAILS.
+# The only exception is a PR that itself changes this workflow: the action refuses to run a workflow
+# that differs from the one on the base branch, so the step reports an explicit "review skipped".
 # Requires the repository secret CLAUDE_CODE_OAUTH_TOKEN (generate with `claude setup-token`).
-# The workflow is only picked up by GitHub once it exists on main.
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
@@ -43,7 +45,7 @@ jobs:
           claude_args: |
             --model claude-sonnet-5-5
             --max-turns 30
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*),Write(claude-review.md),Read,Grep,Glob"
+            --allowedTools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*),Edit(./claude-review.md),Read,Grep,Glob"
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
@@ -56,13 +58,13 @@ jobs:
             `gh pr checks ${{ github.event.pull_request.number }} --repo ${{ github.repository }}`.
 
             Do NOT post comments yourself. Write the final review, in Russian, to the file `claude-review.md`
-            in the workspace root (use the Write tool; this is the only file you may write). A later workflow step
-            publishes it. Be concise. The file must start with the line
+            in the workspace root (create it with the Write tool; this is the only file you may write). A later
+            workflow step publishes it. Be concise. The file must start with the line
             "Ревью коммита <first 7 chars of REVIEWED COMMIT SHA>" and contain:
             1. Verdict: one line (ok / ok with remarks / needs changes).
             2. CI status (`gh pr checks`); say if checks are still running.
             3. What was checked.
-            4. Minor remarks, all together (use inline comments only for real bugs).
+            4. Minor remarks, all together; real bugs go first.
 
             Project conventions to verify:
             - Every real Rust `#[ignore]` test needs a matching step in scripts/verification.json
@@ -83,14 +85,40 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           file=claude-review.md
-          if [ ! -s "$file" ]; then
-            echo "Claude wrote no review file; nothing to publish."
-            exit 0
-          fi
+          workflow=.github/workflows/claude-pr-review.yml
           marker='<!-- claude-pr-review -->'
+          short="${HEAD_SHA:0:7}"
+
+          fail() {
+            echo "::error title=Claude review not published::$1"
+            {
+              echo "### Claude review: FAILED"
+              echo "$1"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
+
+          if [ ! -s "$file" ] || [ "$(head -n1 "$file" | tr -d '\r')" != "Ревью коммита $short" ]; then
+            # Expected exception: the action refuses to run when this workflow differs from the base branch's copy
+            # (for example in the PR that adds or changes this very file). Then the review is explicitly skipped.
+            base_copy="$(mktemp)"
+            if ! gh api -H 'Accept: application/vnd.github.raw' "repos/$REPO/contents/$workflow?ref=$BASE_SHA" > "$base_copy" 2> /dev/null \
+                || ! cmp -s "$base_copy" "$workflow"; then
+              echo "::notice title=Claude review skipped::This PR changes $workflow; the action does not run a workflow that differs from the base branch. No review was produced."
+              {
+                echo "### Claude review: SKIPPED"
+                echo "This PR adds or changes \`$workflow\`, and the action does not run a workflow that differs from the base branch. No review was produced for \`$short\`."
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            fail "Expected a fresh non-empty $file whose first line is 'Ревью коммита $short', but it is missing, empty or names another commit."
+          fi
+
           # The marker is always added here; any marker line in the text is dropped, and the size is capped.
           text="$(grep -vxF "$marker" "$file" | head -c 60000 || true)"
           body="$(printf '%s\n%s\n' "$marker" "$text")"
@@ -105,3 +133,4 @@ jobs:
             gh api -X POST "repos/$REPO/issues/$PR/comments" -f body="$body" > /dev/null
             echo "Created comment"
           fi
+          echo "### Claude review: published for \`$short\`" >> "$GITHUB_STEP_SUMMARY"
