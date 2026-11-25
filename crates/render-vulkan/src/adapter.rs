@@ -553,10 +553,14 @@ mod tests {
         let error = adapter
             .validate_controls(node(&document), &document, &unknown)
             .unwrap_err();
-        assert!(matches!(
-            std::error::Error::source(&error).and_then(|cause| cause.downcast_ref::<VulkanError>()),
-            Some(VulkanError::Overrides(_))
-        ));
+        assert!(
+            matches!(
+                std::error::Error::source(&error)
+                    .and_then(|cause| cause.downcast_ref::<VulkanError>()),
+                Some(VulkanError::Overrides(_))
+            ),
+            "{error:?}"
+        );
         let mut bad_node = node(&document).clone();
         bad_node.params = json!({"unrecognized":1});
         let error = registry
@@ -567,10 +571,14 @@ mod tests {
             error.to_string().contains("outer parameters must be empty"),
             "{error}"
         );
-        assert!(matches!(
-            std::error::Error::source(&error).and_then(|cause| cause.downcast_ref::<VulkanError>()),
-            Some(VulkanError::Graph(_))
-        ));
+        assert!(
+            matches!(
+                std::error::Error::source(&error)
+                    .and_then(|cause| cause.downcast_ref::<VulkanError>()),
+                Some(VulkanError::Graph(_))
+            ),
+            "{error:?}"
+        );
         bad_node.params = json!({});
         bad_node.subgraph = None;
         let error = registry

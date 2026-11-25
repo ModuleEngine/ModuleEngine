@@ -103,7 +103,7 @@ pub struct SceneSnapshot {
     pub time: f32,
 }
 
-#[derive(Clone, Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum WorldError {
     #[error("This World provider does not support portable object editing")]
     ObjectsUnsupported,
@@ -116,7 +116,7 @@ pub enum WorldError {
     #[error("{0}")]
     Commands(String),
     #[error("{0}")]
-    Provider(#[source] Arc<dyn std::error::Error + Send + Sync>),
+    Provider(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl From<WorldError> for String {

@@ -40,7 +40,7 @@ pub struct RenderControlTargets {
     pub resources: BTreeSet<String>,
 }
 
-#[derive(Clone, Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum RendererError {
     #[error("No renderer registered for '{0}'")]
     MissingRenderer(String),
@@ -53,12 +53,12 @@ pub enum RendererError {
     #[error("{0}")]
     Scene(String),
     #[error("{0}")]
-    Backend(#[source] Arc<dyn std::error::Error + Send + Sync>),
+    Backend(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl RendererError {
     pub fn backend(error: impl std::error::Error + Send + Sync + 'static) -> Self {
-        Self::Backend(Arc::new(error))
+        Self::Backend(Box::new(error))
     }
 }
 
