@@ -379,6 +379,7 @@ fn invalid_delta_preserves_the_last_accepted_solver_state() {
 
 #[test]
 fn queries_ignore_a_replaced_entity_with_the_same_stable_id() {
+    use crate::schema::{ColliderKind, ColliderSpec};
     use module_engine_core::WorldCommand;
     struct ReplaceBall;
     impl ExecutableSystem for ReplaceBall {
@@ -392,7 +393,11 @@ fn queries_ignore_a_replaced_entity_with_the_same_stable_id() {
             context.game.world.insert_component(
                 BALL,
                 COLLIDER,
-                json!({"kind":"ball","radius":0.3}),
+                json!(ColliderSpec {
+                    kind: ColliderKind::Ball,
+                    radius: 0.3,
+                    ..Default::default()
+                }),
             )?;
             Ok(())
         }

@@ -1,4 +1,5 @@
 use super::{
+    schema::{BodySpec, ColliderKind, ColliderSpec},
     tests::{
         BALL, FLOOR, authored, captures, fixture, node, physics_node, register, register_reject,
     },
@@ -93,12 +94,14 @@ fn rollback_and_retry(custom: bool) {
             .iter()
             .any(|event| event.name == COLLISION_STARTED);
         if !rejected && collide {
-            let accepted = captures(&candidate.session);
+            let accepted = candidate.session.state().clone();
             let lifetime = candidate.session.state().world.lifetime(BALL);
             reject.store(true, Ordering::Relaxed);
             let error = candidate.step(1. / 60., &input).unwrap_err();
             assert!(error.contains("fixture late physics rejection"), "{error}");
-            assert_eq!(captures(&candidate.session), accepted);
+            assert_eq!(candidate.session.state(), &accepted);
+            // This Host call committed no ticks, so its event batch is empty.
+            assert!(candidate.session.events().is_empty());
             assert_eq!(candidate.session.state().world.lifetime(BALL), lifetime);
             assert_eq!(candidate.step(0., &input).unwrap(), 1);
             rejected = true;
@@ -194,12 +197,13 @@ fn declined_wall_edit_cannot_poison_the_ccd_cache_on_retry() {
         assert_eq!(host.step(1. / 60., &input).unwrap(), 1);
         assert!((-0.6..-0.4).contains(&ball_x(host)));
     }
-    let accepted = captures(&candidate.session);
+    let accepted = candidate.session.state().clone();
     move_wall.store(true, Ordering::Relaxed);
     reject.store(true, Ordering::Relaxed);
     let error = candidate.step(1. / 60., &input).unwrap_err();
     assert!(error.contains("fixture late physics rejection"), "{error}");
-    assert_eq!(captures(&candidate.session), accepted);
+    assert_eq!(candidate.session.state(), &accepted);
+    assert!(candidate.session.events().is_empty());
     assert_eq!(expected.step(1. / 60., &input).unwrap(), 1);
     assert_eq!(candidate.step(0., &input).unwrap(), 1);
     assert!(ball_x(&expected) < 0., "positive control crossed the wall");
@@ -330,12 +334,22 @@ fn projectile(slot: u64) -> module_engine_core::AuthoredObject {
         &[
             (
                 BODY,
-                json!({"kind":"dynamic","gravity_scale":0.0,
-            "linear_velocity":[0.,0.,-28.],"ccd":true,"mass":0.015}),
+                json!(BodySpec {
+                    gravity_scale: 0.0,
+                    linear_velocity: [0., 0., -28.],
+                    ccd: true,
+                    mass: 0.015,
+                    ..Default::default()
+                }),
             ),
             (
                 COLLIDER,
-                json!({"kind":"ball","radius":0.085,"friction":0.0}),
+                json!(ColliderSpec {
+                    kind: ColliderKind::Ball,
+                    radius: 0.085,
+                    friction: 0.0,
+                    ..Default::default()
+                }),
             ),
         ],
     )

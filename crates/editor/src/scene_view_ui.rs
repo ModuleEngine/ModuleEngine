@@ -3692,7 +3692,7 @@ mod tests {
         view.refresh_physics(1, &world);
         let ctx = egui::Context::default();
         let draw = |view: &mut SceneViewportState, time, render| {
-            let revision = view.render_revision.unwrap_or_default();
+            let revision = view.render_revision;
             let output = ctx.run_ui(input(time, vec![]), |ui| {
                 view.paint_presented(
                     ui,

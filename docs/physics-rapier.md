@@ -29,14 +29,16 @@ the rest of Scene.
 
 | Component | Fields and behavior |
 | --- | --- |
-| `physics.rigid_body` | `kind` is `dynamic` (default), `fixed` or position-based `kinematic`. `mass` is additional mass besides the attached collider's density contribution. The default is 1. `linear_velocity` and `angular_velocity` seed a new body, `gravity_scale` defaults to 1, and `ccd` enables continuous collision detection on dynamic bodies. Systems can move kinematic bodies by writing their ECS transform and teleport dynamic bodies through the same transform. Editing a body specification creates a fresh body with its configured velocities. |
+| `physics.rigid_body` | `kind` is `dynamic` (default), `fixed` or position-based `kinematic`. `mass` is additional mass besides the attached collider's density contribution. The default is 1. `linear_velocity` and `angular_velocity` seed a new body, `gravity_scale` defaults to 1, and `ccd` extends the continuous sweep to moving targets. Rapier also sweeps fast ordinary bodies against fixed targets. Systems can move kinematic bodies by writing their ECS transform and teleport dynamic bodies through the same transform. Editing a body specification creates a fresh body with its configured velocities. |
 | `physics.collider` | `kind` is `box` (default), `ball` or `capsule_y`. Use `half_extents` for a box, `radius` for a ball and `half_height` plus `radius` for a capsule. Capsule half height excludes its caps. `offset` is local to the object's pose. `sensor` reports intersections without a contact force. `density`, `friction` and `restitution` configure contact and mass properties. A collider on an object without a body is static. |
 | `physics.joint` | The object must have a body. `target` names another body by its stable scene-local object ID. Null leaves the joint inactive until a target is selected. `kind` is `fixed` (default), `spherical`, `revolute` or `prismatic`. `anchor` and `target_anchor` are local to the two bodies. Revolute and prismatic joints use the normalized `axis` in each body's local frame. `contacts_enabled` defaults to false for the linked pair. |
 
 Scale and offsets should be set on the shapes the system actually simulates.
 Shape dimensions range from 0.001 to 10,000. Invalid components and missing
 joint targets reject the candidate through the shared schema contract.
-Inspect or open authored data with the capability inactive to retain its
+Direct runtime attachments must carry effective values for all schema fields.
+Native code can use `ComponentRegistry::resolve_component` to apply defaults
+before inserting a payload into the ECS. Inspect or open authored data with the capability inactive to retain its
 archived values, including fields unknown to the installed schema.
 
 **Physics** in Scene toggles the authored preview wireframe. In narrow panes
@@ -80,7 +82,9 @@ The named `GameEvent` values `physics.collision_started` and
 IDs are ascending. The physics step emits pair edges in ascending pair order
 and keeps Rapier order within a pair. They are facts about the simulated
 contact and can include a removed collider. The same tick's later systems and
-scripts read these events through the existing event stream.
+scripts read these events through the existing event stream. A rejected step
+publishes no events from the rejected tick. GameHost exposes one-shot events
+from the ticks committed in its current step invocation.
 
 <a id="verify"></a>
 
