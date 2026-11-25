@@ -366,7 +366,7 @@ recording it does not itself close the evidence gates.
 
 | Area | Current contract | Evidence and description |
 | --- | --- | --- |
-| Shared Host and ECS | Shared GameHost outside Editor; Core is neutral to ARPG, and the mutable world belongs to ECS. | [Completed stages 2–8](modular-runtime-progress.md), [Host](shared-game-host.md), [ECS](ecs-world.md). |
+| Shared Host and ECS | Shared GameHost outside Editor; Core is neutral to ARPG, and the mutable world belongs to ECS. ECS can edit transforms and one named JSON component together in a batch. | [Completed stages 2–8](modular-runtime-progress.md), [Host](shared-game-host.md), [ECS](ecs-world.md), [batch edits](ecs-world.md#r19-batch-motion). |
 | Game packages and Player | ARPG is optional; Two Arenas and the independent Puzzle are separate projects. Player has a separate executable and explicitly selected native features. | [Package boundaries](optional-gameplay.md), [Player crate](../crates/player/README.md), stages 5–7 in the [log](modular-runtime-progress.md). |
 | Custom after Stop | With an unchanged supported compile context, ready code is reused; the freshness proof may invoke Cargo without a new root compilation. Instance state and worker PIDs are independent. | [Compiled-program store](custom-program-store.md), [subsequent Windows/Linux verification](remaining-authoring-fixes-20261016.md). |
 | Defaults and Inspector | PropertySchema asset defaults account for actual live IDs; exact JSON keys are preserved; Apply without changes preserves prefab inheritance. | [Fixes and regressions](remaining-authoring-fixes-20261016.md), code snapshot `fb63b3ddae7cad52532761932855b755c61fb2c7`. |

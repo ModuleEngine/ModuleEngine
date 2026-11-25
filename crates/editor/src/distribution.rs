@@ -1267,6 +1267,16 @@ mod delivery_tests {
         let doc = crate::host::settings_demo_document(WorldKind::Objects);
         let m = write_full_manifest(&root, &doc).unwrap();
         assert!(inspect_full_sources(&root, &m, &doc).available);
+        let animation = "crates/engine-content/src/animation.rs";
+        assert_eq!(
+            m.files[animation],
+            hash_file(&root.join(animation)).unwrap()
+        );
+        assert!(
+            m.module_sources
+                .values()
+                .all(|paths| paths.iter().any(|path| path == animation))
+        );
         let icon = "crates/editor/assets/editor.ico";
         assert!(m.files.contains_key(icon));
         assert!(!native_source_path("crates/editor/assets/unrelated.ico"));
@@ -1328,6 +1338,7 @@ mod delivery_tests {
             "crates/player/examples/gpu_presentation_check.rs",
             "crates/render-vulkan/src/presentation.rs",
             "crates/render-vulkan/src/retirement.rs",
+            animation,
         ] {
             let mut incomplete = m.clone();
             incomplete.files.remove(required);

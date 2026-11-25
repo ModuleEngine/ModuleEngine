@@ -367,7 +367,7 @@ Apply/Undo/Redo, Save/повторное открытие и разделени�
 
 | Область | Актуальный контракт | Доказательства и описание |
 | --- | --- | --- |
-| Общий Host и ECS | Shared GameHost вне Editor; Core нейтрален к ARPG, изменяемый мир принадлежит ECS. | [Завершённые этапы 2–8](modular-runtime-progress.md), [Host](shared-game-host.md), [ECS](ecs-world.md). |
+| Общий Host и ECS | Shared GameHost вне Editor; Core нейтрален к ARPG, изменяемый мир принадлежит ECS. ECS поддерживает пакетное обновление трансформаций вместе с одним именованным JSON-компонентом. | [Завершённые этапы 2–8](modular-runtime-progress.md), [Host](shared-game-host.md), [ECS](ecs-world.md), [пакетная запись](ecs-world.md#r19-batch-motion). |
 | Игровые пакеты и Player | ARPG опционален; Two Arenas и независимый Puzzle — отдельные проекты. Player имеет отдельный executable и явно выбранные native features. | [Границы пакетов](optional-gameplay.md), [Player crate](../../crates/player/README.ru.md), этапы 5–7 в [журнале](modular-runtime-progress.md). |
 | Custom после Stop | При неизменённом supported compile context готовый код переиспользуется; freshness proof может вызывать Cargo без новой root compilation. State и worker PID экземпляров независимы. | [Compiled-program store](custom-program-store.md), [последующая Windows/Linux проверка](remaining-authoring-fixes-20261016.md). |
 | Defaults и Inspector | PropertySchema asset defaults учитываются с фактическими live IDs; точные JSON-ключи сохраняются; Apply без изменений сохраняет prefab inheritance. | [Исправления и регрессии](remaining-authoring-fixes-20261016.md), code snapshot `fb63b3ddae7cad52532761932855b755c61fb2c7`. |

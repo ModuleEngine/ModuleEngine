@@ -101,6 +101,43 @@ S3 probe uses `GameHost` and records the actual checkpoint metadata clones
 and the entire fixed transaction separately. The two S3 routes measure
 different scopes.
 
+<a id="r19-batch-motion"></a>
+
+## R1.9 batch motion edits
+
+`EcsWorld::edit_transforms_with_component` edits the local `Transform` and an
+existing named JSON component together. The callback runs in input order once
+per matching ID occurrence. Missing IDs and missing components skip the
+callback. A present `null` is passed through as a value.
+
+On committed storage, the batch borrows the rows and looks up the JSON
+column once. Bevy records each edited transform and each edited `mesh` or
+`material` binding. The render cursor's write counter advances once when
+the batch invokes a callback. Within a fixed tick, the same edits go through
+the row journal and transform validation. Publication and rejection follow
+the fixed-tick contract below.
+
+S3 still queries eight columns and edits 1,000 transforms and motion payloads
+on 2,000 ECS entities. Updating the existing `offset` member borrows its key
+and writes the same JSON number. The Release probe times the full tick and
+the isolated operations. Each operation reports 240 raw samples after 30
+warmup batches. Isolated timings include their own loop and memory access
+costs and cannot be added to get the total tick time. Run this probe
+explicitly outside the automatic verification profiles.
+
+```sh
+cargo test --offline --locked --release -p module-engine-core --lib world::s3_cost::s3_motion_update_cost -- --exact --ignored --nocapture --test-threads=1
+cargo test --offline --locked --release -p module-engine-host --lib r14_tick_rejection -- --test-threads=1
+python scripts/bench.py --no-profiling --compare b6d9baf0a0222d5d4c25141754d1d4a67f822777 --scenes S3
+python scripts/bench.py --no-profiling --compare 731661c47e181847450e00480e60c0645abd4753 --scenes S2
+```
+
+Run sequentially without competing builds or measurements. The S3 comparison
+uses a post-R1.8 `main` that includes PR #38. Compare the run medians of the
+mean and p95 `ecs_tick_ms` and check every scored S3 ECS sample in the raw
+candidate reports against 2 ms. Apply the [paired comparison rule](bench.md#not-worse)
+to S2 `game_step_ms` p95 against the rebuilt R0.6 base.
+
 ## Lifetime and transactions
 
 Subtree removal clears every removed object's columns and outgoing references.
