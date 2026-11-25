@@ -1,10 +1,15 @@
 name: Claude PR review
 
-# Reviews every new / reopened / ready-for-review PR once and posts the result as a PR comment.
+# Reviews a PR when it is opened / reopened / ready for review and again after every new push.
+# The result is ONE sticky comment that is edited in place; it names the reviewed commit SHA.
 # Requires the repository secret CLAUDE_CODE_OAUTH_TOKEN (generate with `claude setup-token`).
+# The workflow is only picked up by GitHub once it exists on main.
 on:
   pull_request:
-    types: [opened, ready_for_review, reopened]
+    types: [opened, synchronize, ready_for_review, reopened]
+
+permissions:
+  contents: read
 
 concurrency:
   group: claude-pr-review-${{ github.event.pull_request.number }}
@@ -22,13 +27,16 @@ jobs:
       issues: write
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 1
+          persist-credentials: false
 
-      - uses: anthropics/claude-code-action@v1
+      # Pinned to the commit that the moving tag v1 pointed to on 2026-11-25. Update deliberately.
+      - uses: anthropics/claude-code-action@4411a9e9b0283becf4b924f7bce360fd7756c78c # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          use_sticky_comment: true
           claude_args: |
             --model claude-sonnet-5-5
             --max-turns 30
@@ -36,18 +44,27 @@ jobs:
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
+            REVIEWED COMMIT SHA: ${{ github.event.pull_request.head.sha }}
 
             Review this pull request. Do not push commits and do not modify any files.
-            Be concise. Write the final result as ONE PR comment (`gh pr comment`), in Russian, with:
+            Be concise. Write the final result as ONE PR comment, in Russian. Keep a single review comment
+            per PR: publish it with `gh pr comment --edit-last --create-if-none --body ...` so that a new
+            push updates the existing comment instead of adding another one.
+            The comment must start with the line "Ревью коммита <first 7 chars of REVIEWED COMMIT SHA>" and contain:
             1. Verdict: one line (ok / ok with remarks / needs changes).
-            2. CI status (`gh pr checks`).
+            2. CI status (`gh pr checks`); say if checks are still running.
             3. What was checked.
             4. Minor remarks, all together in this one comment (no separate comments per remark; use inline
                comments only for real bugs).
 
             Project conventions to verify:
-            - Every new `#[ignore]` test must be registered in verification.json and scripts/verify.py,
-              and the expected-count in test_verify.py must be updated accordingly.
+            - Every real Rust `#[ignore]` test needs a matching step in scripts/verification.json
+              (`ignored: true`, `filter` ending in the test function name) that is either part of a profile
+              or marked `excluded` with a reason. scripts/test_verify.py discovers the real `#[ignore]` tests
+              automatically and compares them with the registry, so do NOT ask for manual edits of
+              scripts/verify.py or for a hand-maintained counter. Only if the PR adds or moves such a step,
+              check that the explicit expectations in test_verify.py (set of excluded ids, per-profile step
+              counts) were updated to match.
             - CI does not fully run all editor tests. List explicitly which changes need local Windows
               verification (GPU/editor/bench behaviour that CI cannot cover).
             - Flag changed docs without the matching docs/ru translation if the English doc changed.
