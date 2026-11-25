@@ -661,7 +661,7 @@ impl Worker {
         loop {
             let remaining = timeout
                 .checked_sub(start.elapsed())
-                .ok_or_else(|| ScriptError::Timeout(timeout.as_millis()))?;
+                .ok_or(ScriptError::Timeout(timeout.as_millis()))?;
             let mut response = self.receive(remaining, timeout)?;
             if response.get("request_id").and_then(Value::as_u64) != Some(self.sequence) {
                 return Err(ScriptError::Packet(

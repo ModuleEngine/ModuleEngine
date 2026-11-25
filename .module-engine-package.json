@@ -217,7 +217,7 @@
     "crates/runtime-script/src/jobs.rs": "14148daaa2b9afd6ead4b625807bc00f50b4a70cacea479b1beb2db13d3b2f5b",
     "crates/runtime-script/src/lib.rs": "dcfe944f88869eb5b014e55dd3f563d7b74e24b37b234f7ddcc1bd9ed7c347c5",
     "crates/runtime-script/src/native_tools.rs": "36a6284b7465be4e584cff1beafce6a67aeb1b98549ba56afb5c8f9616da387b",
-    "crates/runtime-script/src/persistent.rs": "361089d03e27017cad2f53e0827ebd649891a76e875f5daf46d3c9a10b81a251",
+    "crates/runtime-script/src/persistent.rs": "9e0895542c6786f96b9036c0fd3b214ead66e814f21a5e95eee3778bbaa2bd4d",
     "crates/runtime-script/src/program_store.rs": "57585ccf1de61c49195a3d8cae837752dcee0f685156c19f8f9aa3d075291fae",
     "crates/runtime-script/src/sdk_cache.rs": "4417c9d79c9341e13a21bfc07ee77fcacee735315065426da912c1ce3b3818c9",
     "engine-sdk.json": "4bd64f5cc1a61f4528836c46f1c2fca9864e27a0a9ff56e67b9c6f374ebf40f7"
