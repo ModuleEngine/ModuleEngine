@@ -233,6 +233,15 @@ impl Default for CompiledProgramStore {
         Self::new(ProgramStoreLimits::default()).expect("nonzero default program limits")
     }
 }
+#[cfg(test)]
+pub(crate) fn pr61_phase(message: std::fmt::Arguments<'_>) {
+    if thread::current().name() == Some("pr61-owner") {
+        static STARTED: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+        let ms = STARTED.get_or_init(Instant::now).elapsed().as_millis();
+        eprintln!("PR61 owner elapsed_ms={ms} {message}");
+    }
+}
+
 impl CompiledProgramStore {
     pub fn new(limits: ProgramStoreLimits) -> Result<Self, ScriptError> {
         if limits.max_entries == 0
@@ -558,8 +567,12 @@ impl CompiledProgramStore {
         loop {
             // Consume once on the immediate retry; later ordinary hits get no token.
             let handoff = pending_handoff.take();
+            #[cfg(test)]
+            crate::program_store::pr61_phase(format_args!("admission"));
             let admission = self.admit(cancel)?;
             let proof_started = Instant::now();
+            #[cfg(test)]
+            crate::program_store::pr61_phase(format_args!("resolve"));
             let resolved = crate::cache_context::resolve(compiler, cancel)?;
             let hint_key = Self::hint_key(&resolved.context, source, kind);
             let hints = self
@@ -567,11 +580,18 @@ impl CompiledProgramStore {
                 .hints
                 .get(&hint_key)
                 .map(|(hints, _)| hints.clone());
+            #[cfg(test)]
+            crate::program_store::pr61_phase(format_args!("prepare"));
             let prepared =
                 freshness::prepare(&resolved.context, source, kind, hints.as_ref(), cancel)?;
             self.counters
                 .proof_micros
                 .fetch_add(elapsed(proof_started), Ordering::Relaxed);
+            #[cfg(test)]
+            pr61_phase(format_args!(
+                "prepared eligibility={:?}",
+                prepared.eligibility
+            ));
             let key = prepared.root_lookup_key.clone();
             let mut force_fresh_sdk = std::mem::take(&mut force_next_sdk);
             let candidate = {
@@ -1184,13 +1204,17 @@ mod tests {
         let compiler = ScriptCompiler::new(root(), fixture.path().join("work"))
             .with_program_store(store.clone());
         let cancelled = Arc::new(AtomicBool::new(false));
-        let (claimed_sender, claimed_receiver) = std::sync::mpsc::sync_channel(1);
+        let (claimed_sender, claimed_receiver) =
+            std::sync::mpsc::sync_channel::<Result<(), String>>(2);
+        let owner_exit = claimed_sender.clone();
         let (enrolled_sender, enrolled_receiver) = std::sync::mpsc::sync_channel(1);
         let enrolled_receiver = Mutex::new(enrolled_receiver);
+        let release_wait = enrolled_sender.clone();
         let hook_cancel = cancelled.clone();
         *store.handoff_test_hook.lock().unwrap() = Some(Arc::new(move |point| match point {
             HandoffTestPoint::OwnerClaimed => {
-                claimed_sender.try_send(()).unwrap();
+                pr61_phase(format_args!("OwnerClaimed"));
+                claimed_sender.try_send(Ok(())).unwrap();
                 enrolled_receiver
                     .lock()
                     .unwrap()
@@ -1204,12 +1228,42 @@ mod tests {
         let owner_compiler = compiler.clone();
         let owner_cancel = cancelled.clone();
         let source = "fn speed(_:f64,_:f64)->f64{7.0}";
-        let owner = thread::spawn(move || {
-            owner_store.compile(&owner_compiler, source, ScriptKind::Speed, &owner_cancel)
-        });
-        claimed_receiver
-            .recv_timeout(Duration::from_secs(120))
+        let owner = thread::Builder::new()
+            .name("pr61-owner".into())
+            .spawn(move || {
+                pr61_phase(format_args!("owner started"));
+                let result =
+                    owner_store.compile(&owner_compiler, source, ScriptKind::Speed, &owner_cancel);
+                let outcome = match &result {
+                    Ok(_) => "owner returned success".to_owned(),
+                    Err(error) => format!("owner returned {error:?}"),
+                };
+                pr61_phase(format_args!("{outcome}"));
+                let _ = owner_exit.try_send(Err(outcome));
+                result
+            })
             .unwrap();
+        match claimed_receiver.recv_timeout(Duration::from_secs(120)) {
+            Ok(Ok(())) => {}
+            Ok(Err(outcome)) => {
+                let _ = owner.join();
+                panic!("PR61 owner exited before OwnerClaimed: {outcome}");
+            }
+            Err(wait) => {
+                eprintln!(
+                    "PR61 original 120 s OwnerClaimed deadline: {wait:?}, owner finished={}",
+                    owner.is_finished()
+                );
+                // Collect the next event without turning the original failure into a pass.
+                let late = claimed_receiver.recv_timeout(Duration::from_secs(180));
+                cancelled.store(true, Ordering::Release);
+                let _ = release_wait.try_send(());
+                if late.is_ok() {
+                    let _ = owner.join();
+                }
+                panic!("PR61 original OwnerClaimed deadline missed, next observation: {late:?}");
+            }
+        }
         let waiter = thread::spawn(move || compiler.compile(source));
         let owner_result = owner.join().unwrap();
         let waiter_result = waiter.join().unwrap();

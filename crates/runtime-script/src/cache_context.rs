@@ -194,6 +194,8 @@ pub(crate) fn resolve(
     if cancel.load(Ordering::Acquire) {
         return Err(ScriptError::Worker("compilation cancelled".into()));
     }
+    #[cfg(test)]
+    crate::program_store::pr61_phase(format_args!("resolve SDK and work paths"));
     validate_supported_sdk(&compiler.sdk_identity)?;
     let root = compiler.project_root.canonicalize().map_err(setup)?;
     validate_sdk_match(&read_sdk_identity(&root)?, &compiler.sdk_identity)?;
@@ -249,6 +251,8 @@ pub(crate) fn resolve(
             .unwrap_or(Path::new("rustc")),
         &environment,
     )?;
+    #[cfg(test)]
+    crate::program_store::pr61_phase(format_args!("resolve rustc -vV"));
     let rustc_version = query(
         compiler,
         &selected_rustc,
@@ -257,6 +261,8 @@ pub(crate) fn resolve(
         &environment,
         cancel,
     )?;
+    #[cfg(test)]
+    crate::program_store::pr61_phase(format_args!("resolve cargo -vV"));
     let cargo_version = query(
         compiler,
         &selected_cargo,
@@ -266,6 +272,8 @@ pub(crate) fn resolve(
         cancel,
     )?;
     let native_host = cargo_build::native_host(&rustc_version)?;
+    #[cfg(test)]
+    crate::program_store::pr61_phase(format_args!("resolve rustc sysroot"));
     let sysroot = PathBuf::from(query(
         compiler,
         &selected_rustc,
@@ -284,6 +292,8 @@ pub(crate) fn resolve(
         .join(format!("bin/cargo{}", std::env::consts::EXE_SUFFIX))
         .canonicalize()
         .map_err(setup)?;
+    #[cfg(test)]
+    crate::program_store::pr61_phase(format_args!("resolve compiler identity and file inventory"));
     let mut hashes = BTreeMap::new();
     let recognized = recognized_selection(&selected_cargo, &cargo, cancel, &mut hashes)?
         && recognized_selection(&selected_rustc, &rustc, cancel, &mut hashes)?;
@@ -304,6 +314,8 @@ pub(crate) fn resolve(
     environment.insert("RUSTC".into(), rustc.clone().into_os_string());
     let mut native_searches = Vec::new();
     if recognized {
+        #[cfg(test)]
+        crate::program_store::pr61_phase(format_args!("resolve native linker inventory"));
         match crate::native_tools::resolve(&native_host, &environment, cancel) {
             Ok(native) => {
                 inputs.extend(native.files);
@@ -345,6 +357,8 @@ pub(crate) fn resolve(
         ));
     }
     let json = &json[0].version;
+    #[cfg(test)]
+    crate::program_store::pr61_phase(format_args!("resolve create metadata fixture"));
     let metadata = cleanup::OwnedTarget::create(&work, "metadata").map_err(setup)?;
     let directory = &metadata.directory;
     let name = format!(
@@ -382,6 +396,8 @@ pub(crate) fn resolve(
             "--manifest-path",
         ])
         .arg(directory.join("Cargo.toml"));
+    #[cfg(test)]
+    crate::program_store::pr61_phase(format_args!("resolve cargo metadata"));
     let result = run_bounded(command, vec![], compiler.compile_timeout, cancel, None)?;
     if !result.success {
         return Err(ScriptError::Compile(format!(
@@ -389,6 +405,8 @@ pub(crate) fn resolve(
             result.stderr, result.stdout
         )));
     }
+    #[cfg(test)]
+    crate::program_store::pr61_phase(format_args!("resolve metadata returned"));
     let worker_lock = fs::read_to_string(directory.join("Cargo.lock")).map_err(setup)?;
     verify_worker_lock(&root_lock, &worker_lock, &name)?;
     let context = CompileContext {
