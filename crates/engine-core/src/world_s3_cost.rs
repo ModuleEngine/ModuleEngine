@@ -4,6 +4,8 @@ use super::{EcsWorld, Transform};
 use serde_json::{Value, json};
 use std::{hint::black_box, sync::Arc, time::Instant};
 
+// The SDK source audit visits this file independently of its parent module.
+#[cfg(test)]
 #[path = "../../../examples/bench/s3_ecs.rs"]
 mod s3;
 
