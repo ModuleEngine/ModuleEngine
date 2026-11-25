@@ -24,7 +24,11 @@ The application chooses a writable local-user root. Standalone defaults use an a
 
 On load, valid stored option IDs become local choices; unavailable options fall back to current valid Project resolution with a reason, while unknown payload entries are retained. Malformed/incompatible saves use the service's read-only policy and are not silently replaced. Accepted choices stage a persistence event after validation. A write failure keeps the accepted session choice and records `persistence.saved:false` plus an error; it does not turn an accepted choice into a refusal. Retrying the current option can retry that write. The previous saved data and the persistence service's existing atomic-publication/recovery guarantees remain authoritative. Examples and menu/API limits are in [Custom Rust](custom-rust.md#script-settings-menu) and [settings](settings.md#player-menu-preferences).
 
-The new ScriptContext requests/menu/status fields require exact SDK data/API identity `module-engine-data-api/v3` across linked Core, worker probe/packets, prebuilt metadata and Engine/Player locks. The existing strict mismatch rejection is retained; v2 artifacts require an explicit compatible rebuild/contract update rather than implicit acceptance. This changes the data/API boundary, not a promise of Rust ABI compatibility.
+Settings, menus and [synchronous physics queries](physics-rapier.md) use exact
+SDK data/API identity `module-engine-data-api/v4` across linked Core, worker
+probe and packets, prebuilt metadata and Engine/Player locks. Earlier
+artifacts require an explicit compatible rebuild and contract update. SDK
+identity covers the data and API boundary.
 
 ## Authored data and runtime preparation
 

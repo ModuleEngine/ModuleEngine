@@ -4,6 +4,12 @@
 
 [English](current-status.md) | [Русский](ru/current-status.md) | [Documentation](README.md)
 
+**25 November 2026 — optional Rapier physics is available to authored schedules.**
+A scheduled [physics step](physics-rapier.md) adds scene-local bodies,
+colliders, joints, queries and collision events at 60 Hz. Scene can show their
+wireframe, and Player selects the native feature from the authored graph.
+The contract records the replay, rollback and S2 projectile verification routes.
+
 **24 November 2026 — R2.4 evidence, the S4 baseline and the ARPG tick trial are available.**
 The [R2.4 receipt](evidence/r24/README.md) records the Windows and combined
 review. [CI](ci.md#что-выполняется) checks new documentation links for local

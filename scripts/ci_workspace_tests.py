@@ -21,6 +21,7 @@ CASE = re.compile(r"^test (.+?) \.\.\. (.*)$")
 FORBIDDEN_PLAYER_PACKAGES = {
     "module-engine-arpg", "module-engine-project-puzzle", "module-engine-g1",
     "module-engine-two-arenas", "module-engine-vulkan", "ash",
+    "module-engine-physics-rapier", "rapier3d",
 }
 
 
@@ -187,7 +188,7 @@ def check_minimal_player():
     print(tree, end="")
     packages = {line.split()[0] for line in tree.splitlines() if line.strip()}
     if forbidden := packages & FORBIDDEN_PLAYER_PACKAGES:
-        raise VerificationError("Minimal Player includes a game or Vulkan: " + ", ".join(sorted(forbidden)))
+        raise VerificationError("Minimal Player includes an optional game or engine capability: " + ", ".join(sorted(forbidden)))
 
 
 def main():

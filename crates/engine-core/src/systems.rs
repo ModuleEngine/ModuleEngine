@@ -1,6 +1,9 @@
 //! General source-installed executable systems. The graph chooses the schedule;
 //! factories choose behavior. Contracts are validated before any lifecycle hook.
-use crate::{GameEvent, GameInput, GameState};
+use crate::{
+    GameEvent, GameInput, GameState, PhysicsQueries, PhysicsQuery, PhysicsQueryError,
+    PhysicsQueryResponse,
+};
 use bevy_ecs::{
     resource::Resource,
     schedule::{IntoScheduleConfigs, Schedule, SingleThreadedExecutor, SystemSet},
@@ -99,9 +102,35 @@ pub struct SystemContext<'a> {
     pub dt: f32,
     pub input: &'a GameInput,
     pub bindings: &'a BTreeMap<String, String>,
+    physics: &'a mut Option<Arc<dyn PhysicsQueries>>,
 }
 
 impl SystemContext<'_> {
+    pub fn physics_queries_available(&self) -> bool {
+        self.physics.is_some()
+    }
+
+    pub fn query_physics(&self, query: &PhysicsQuery) -> PhysicsQueryResponse {
+        let physics = self
+            .physics
+            .as_deref()
+            .ok_or(PhysicsQueryError::Unavailable)?;
+        query.validate_wire()?;
+        physics.query(&self.game.world, query)
+    }
+
+    /// Publish the read-only view for the remaining systems in this tick.
+    pub fn publish_physics_queries(
+        &mut self,
+        queries: Arc<dyn PhysicsQueries>,
+    ) -> Result<(), String> {
+        if self.physics.is_some() {
+            return Err("Multiple physics steps in one fixed tick".into());
+        }
+        *self.physics = Some(queries);
+        Ok(())
+    }
+
     pub fn resource(&self, port: &str) -> Result<&Value, String> {
         let id = self
             .bindings
@@ -699,6 +728,7 @@ struct ScheduledTick {
     events: Vec<GameEvent>,
     resources: ResourceStore,
     systems: Vec<LiveSystem>,
+    physics: Option<Arc<dyn PhysicsQueries>>,
     states: Vec<(Value, bool)>,
     entered: usize,
     result: Result<(), String>,
@@ -725,10 +755,10 @@ impl ScheduledTick {
         SystemExecutor::activate_replacement(
             system,
             &mut self.game,
-            &self.input,
-            self.dt,
+            (&self.input, self.dt),
             &mut self.events,
             &mut self.resources,
+            &mut self.physics,
             &mut self.states[index],
         )?;
         self.entered = index + 1;
@@ -739,6 +769,7 @@ impl ScheduledTick {
             dt: self.dt,
             input: &self.input,
             bindings: &system.node.bindings,
+            physics: &mut self.physics,
         };
         if !system.initialized {
             let retained = system.preserve_on_initialize.then(|| system.state.clone());
@@ -905,6 +936,7 @@ impl SystemExecutor {
             events: std::mem::take(events),
             resources: std::mem::take(&mut self.resources),
             systems: std::mem::take(&mut self.systems),
+            physics: None,
             states,
             entered: 0,
             result,
@@ -973,12 +1005,13 @@ impl SystemExecutor {
     fn activate_replacement(
         system: &mut LiveSystem,
         game: &mut GameState,
-        input: &GameInput,
-        dt: f32,
+        timing: (&GameInput, f32),
         events: &mut Vec<GameEvent>,
         resources: &mut ResourceStore,
+        physics: &mut Option<Arc<dyn PhysicsQueries>>,
         rollback_state: &mut (Value, bool),
     ) -> Result<(), String> {
+        let (input, dt) = timing;
         let Some(mut candidate) = system.pending.take() else {
             return Ok(());
         };
@@ -995,6 +1028,7 @@ impl SystemExecutor {
                 dt,
                 input,
                 bindings: &system.node.bindings,
+                physics,
             };
             candidate
                 .implementation
@@ -1007,6 +1041,7 @@ impl SystemExecutor {
             dt: 0.,
             input,
             bindings: &system.node.bindings,
+            physics: &mut None,
         };
         if let Err(error) = initialization {
             let cleanup = candidate.cleanup(&mut teardown, &mut candidate_state);
@@ -1128,6 +1163,7 @@ impl SystemExecutor {
                     dt: 0.,
                     input: &input,
                     bindings: &system.node.bindings,
+                    physics: &mut None,
                 };
                 if let Err(error) = system.implementation.stop(&mut ctx, &mut system.state) {
                     errors.push(format!("System '{}': {error}", system.node.id));

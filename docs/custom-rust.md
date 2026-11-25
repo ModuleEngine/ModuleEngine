@@ -130,7 +130,11 @@ fn update(ctx: &mut ScriptContext) {
 
 Menu interaction owns its pointer, popup and keyboard input rather than forwarding a click into the game world. Removed/unbindable settings hide their controls. The menu reports **Applying** when accepted and displayed-frame selections differ, **Refused** for an invalid request, and **Not saved / works until exit** for an accepted choice whose storage failed. Clicking the current option can retry persistence. A malformed menu candidate preserves the previous accepted description; the UI can keep it disabled with its error instead of accepting new input from the rejected packet.
 
-These fields are part of the exact SDK data/API identity **`module-engine-data-api/v3`**. `engine-sdk.json`, linked Core, workers, prebuilt metadata and Engine/Player locks must agree. A v2 worker/package is not silently treated as v3 merely because some JSON fields have defaults; use the explicit compatible rebuild/contract-update route. This identity is not a stable Rust ABI promise.
+These fields and [synchronous physics queries](physics-rapier.md) are part of
+the exact SDK data/API identity **`module-engine-data-api/v4`**.
+`engine-sdk.json`, linked Core, workers, prebuilt metadata and Engine/Player
+locks must agree. For an earlier SDK use the explicit compatible rebuild and
+contract-update route. This identity covers data and API compatibility.
 
 <a id="визуальные-scalar-выражения"></a>
 

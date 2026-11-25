@@ -1214,7 +1214,10 @@ mod tests {
         let old_pin = folder.join("old-sdk-pin.json");
         fs::write(&old_pin, &raw).unwrap();
         let error = crate::project::read(&old_pin).unwrap_err();
-        assert!(error.contains("module-engine-data-api/v3"), "{error}");
+        assert!(
+            error.contains(module_engine_core::SDK_DATA_API_FINGERPRINT),
+            "{error}"
+        );
         assert_eq!(fs::read(old_pin).unwrap(), raw);
     }
 
@@ -1525,6 +1528,82 @@ mod tests {
             &backend_root(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn runtime_delivery_selects_rapier_only_for_the_scheduled_physics_step() {
+        use module_engine_core::{
+            AuthoredObject, SystemNode, SystemResource, SystemStage, Transform, WorldObject,
+        };
+        use module_engine_physics_rapier::{COLLIDER, MODULE_ID};
+        use serde_json::{Value, json};
+
+        let backend = backend_root();
+        let mut document = crate::runtime_delivery::tests::software_with_inactive_vulkan();
+        let game = document.game.as_mut().unwrap();
+        let scene = game.scenes.get_mut(&game.entry_scene).unwrap();
+        scene.objects.push(AuthoredObject {
+            object: WorldObject {
+                id: 7,
+                parent: None,
+                transform: Transform::default(),
+                color: [230, 180, 60, 255],
+            },
+            name: Default::default(),
+            prefab: None,
+            components: [(COLLIDER.into(), json!({"kind":"ball","opaque":null}))].into(),
+            overrides: Default::default(),
+            references: Default::default(),
+        });
+        let archived = serde_json::to_vec(&document).unwrap();
+        let inactive = crate::runtime_delivery::prepare(&document, &backend).unwrap();
+        assert!(
+            !selected_features(&inactive, &backend)
+                .unwrap()
+                .contains("rapier-physics")
+        );
+        assert_eq!(serde_json::to_vec(&document).unwrap(), archived);
+
+        let execution = &mut document.game.as_mut().unwrap().execution;
+        execution.resources = [("world", "GameWorld"), ("events", "GameEvents")]
+            .into_iter()
+            .map(|(name, data_type)| SystemResource {
+                name: name.into(),
+                data_type: data_type.into(),
+                external: true,
+                initial: Value::Null,
+            })
+            .collect();
+        execution.stages.push(SystemStage {
+            name: "Physics".into(),
+            nodes: vec![SystemNode {
+                id: "physics".into(),
+                module: MODULE_ID.into(),
+                params: Value::Null,
+                bindings: [
+                    ("world".into(), "world".into()),
+                    ("events".into(), "events".into()),
+                ]
+                .into(),
+                after: vec![],
+            }],
+        });
+        crate::engine_profiles::finish_template(
+            &mut document,
+            crate::engine_profiles::ProfileKind::Neutral,
+            &backend,
+        )
+        .unwrap();
+        let active = crate::runtime_delivery::prepare(&document, &backend).unwrap();
+        assert!(
+            selected_features(&active, &backend)
+                .unwrap()
+                .contains("rapier-physics")
+        );
+        assert_eq!(
+            active.game.as_ref().unwrap().scenes["empty"].objects[0].components[COLLIDER]["kind"],
+            "ball"
+        );
     }
 
     #[test]

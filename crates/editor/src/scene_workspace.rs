@@ -181,13 +181,11 @@ impl Editor {
                 return;
             }
         };
-        let mut objects = self
-            .game_workbench
-            .preview_host
-            .as_ref()
-            .unwrap()
-            .session
-            .world_objects();
+        let preview = self.game_workbench.preview_host.as_ref().unwrap();
+        let mut objects = preview.session.world_objects();
+        view.set_physics_available(module_engine_physics_rapier::is_scheduled(
+            &preview.session.project().execution,
+        ));
         let selection = self.scene_selection().map(|(_, id)| id);
         view.set_render_revision(
             self.game_workbench
@@ -228,6 +226,7 @@ impl Editor {
                 objects = host.session.world_objects();
             }
             view.set_render_revision(host.presentation_revision());
+            view.refresh_physics(host.presentation_revision(), &host.session.state().world);
             view.set_gpu_presentation(self.gpu_bridge.clone());
             if host.has_pending_authored_presentation_for(owner)
                 || host.has_ready_authored_presentation_for(owner)

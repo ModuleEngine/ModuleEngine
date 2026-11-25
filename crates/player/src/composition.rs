@@ -14,6 +14,7 @@ pub fn compiled_features() -> BTreeSet<String> {
         ("vulkan", cfg!(feature = "vulkan")),
         ("audio", cfg!(feature = "audio")),
         ("persistence", cfg!(feature = "persistence")),
+        ("rapier-physics", cfg!(feature = "rapier-physics")),
     ]
     .into_iter()
     .filter(|(_, enabled)| *enabled)
@@ -75,6 +76,10 @@ fn catalogs_at(
     #[cfg(feature = "g1")]
     if features.contains("g1") {
         module_engine_g1::install(&mut systems)?;
+    }
+    #[cfg(feature = "rapier-physics")]
+    if features.contains("rapier-physics") {
+        module_engine_physics_rapier::install(&mut systems)?;
     }
     systems.register(custom_system_descriptor(), |_| {
         Err("Rust Custom requires a host-bound compiled instance".into())

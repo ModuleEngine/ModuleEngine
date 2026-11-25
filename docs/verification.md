@@ -245,9 +245,9 @@ or a successful small test change without a new reason is unnecessary.
 
 ## Ignored Test Inventory
 
-All 23 `#[ignore]` entries are listed in the registry with their purpose. Seven are included in
-`native`/`package`. The other 16 have separate execution instructions in the
-[registry](../scripts/verification.json). Examples include:
+The [registry](../scripts/verification.json) lists all `#[ignore]` entries
+with their purpose and execution route. The listed profiles run their selected
+entries. Explicitly excluded checks have their own commands and prerequisites.
 
 - `runtime_delivery::tests::emit_stage4_software_inactive_vulkan_fixture` — only
   fixture preparation; requires a new absolute `MODULE_ENGINE_STAGE4_FIXTURE_PATH`.
@@ -270,6 +270,10 @@ All 23 `#[ignore]` entries are listed in the registry with their purpose. Seven 
 These six G1 checks retain their separately recorded execution and scope in the
 [G1 delivery](g1-delivery-20261027.md) and [continuation](g1-verification-20261101.md).
 Registering them does not add them to an automatic profile or establish a new pass.
+
+- The [two R6.1 checks](physics-rapier.md#verify) compile Custom workers and
+  measure the complete Rapier step. Run both separately without competing
+  builds, with the S2 budget scored in Release.
 
 The registry does not provide an arbitrary `--step` that could silently enable the emitter.
 For each new ignored test, record its purpose and select a profile or an explicit exclusion.

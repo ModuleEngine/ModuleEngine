@@ -64,6 +64,7 @@ English is the primary documentation language. Every document below has a comple
 ## Runtime, modules, and rendering
 
 - [Gameplay ECS storage](ecs-world.md)
+- [Optional Rapier physics](physics-rapier.md)
 - [Gameplay storage decision](ecs-storage-decision.md)
 - [Executable systems and the authored schedule](module-execution.md)
 - [Project Format 0.4](graph-format.md)

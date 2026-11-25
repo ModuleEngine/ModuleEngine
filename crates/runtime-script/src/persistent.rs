@@ -4,7 +4,7 @@ use super::{
     CompiledScript, MAX_PACKET, NEXT_WORKER, PACKET_MARKER, ScriptError, ScriptKind, ScriptTick,
     validate_sdk_match, validate_supported_sdk,
 };
-use module_engine_core::{ScriptContext, SdkIdentity};
+use module_engine_core::{PhysicsQuery, PhysicsQueryResponse, ScriptContext, SdkIdentity};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -14,11 +14,13 @@ use std::{
     process::{Command, Stdio},
     sync::{Arc, Mutex, atomic::Ordering, mpsc},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const STATE_PREFIX: &str = "// module-engine-state:";
-const PROTOCOL_VERSION: u32 = 2;
+const PROTOCOL_VERSION: u32 = 3;
+const MAX_PHYSICS_QUERIES: usize = 64;
+pub(super) type QueryPhysics<'a> = &'a dyn Fn(&PhysicsQuery) -> PhysicsQueryResponse;
 const MAX_MANIFEST: u64 = (MAX_PACKET * 8) as u64;
 
 /// Source-declared state schema and defaults. A schema name/version and the
@@ -286,6 +288,7 @@ impl CompiledScript {
         &self,
         context: &ScriptContext,
         timeout: Duration,
+        physics: Option<QueryPhysics<'_>>,
     ) -> Result<ScriptTick, ScriptError> {
         validate_supported_sdk(&self.sdk_identity)?;
         if !context.time.is_finite()
@@ -312,7 +315,7 @@ impl CompiledScript {
             .worker
             .as_mut()
             .unwrap()
-            .exchange(&context, &self.sdk_identity, timeout)
+            .exchange(&context, &self.sdk_identity, timeout, physics)
             .and_then(|value| {
                 validate_packet_sdk(&value, &self.sdk_identity)?;
                 if let Some(error) = value.get("error").and_then(Value::as_str) {
@@ -590,12 +593,18 @@ impl Worker {
                     .windows(PACKET_MARKER.len())
                     .position(|bytes| bytes == PACKET_MARKER.as_bytes())
                 {
-                    let value = serde_json::from_slice(&line[index + PACKET_MARKER.len()..])
-                        .map_err(|e| ScriptError::Packet(e.to_string()));
+                    let value =
+                        serde_json::from_slice::<Value>(&line[index + PACKET_MARKER.len()..])
+                            .map_err(|e| ScriptError::Packet(e.to_string()));
+                    if !value
+                        .as_ref()
+                        .is_ok_and(|packet| packet.get("physics_query").is_some())
+                    {
+                        ignored = 0;
+                    }
                     if responses.send(value).is_err() {
                         break;
                     }
-                    ignored = 0;
                 } else {
                     ignored += line.len();
                     if ignored > MAX_PACKET {
@@ -636,30 +645,76 @@ impl Worker {
         context: &ScriptContext,
         sdk: &SdkIdentity,
         timeout: Duration,
+        physics: Option<QueryPhysics<'_>>,
     ) -> Result<Value, ScriptError> {
+        let start = Instant::now();
         self.sequence = self.sequence.wrapping_add(1);
         let mut packet = serde_json::json!({"request_id":self.sequence,"sdk":sdk});
         packet["context"] = serde_json::to_value(context)
             .map_err(|error| ScriptError::Packet(error.to_string()))?;
+        if physics.is_some() {
+            packet["physics_queries"] = Value::Bool(true);
+        }
+        self.send(&packet)?;
+
+        let mut queries = 0;
+        loop {
+            let remaining = timeout
+                .checked_sub(start.elapsed())
+                .ok_or_else(|| ScriptError::Timeout(timeout.as_millis()))?;
+            let mut response = self.receive(remaining, timeout)?;
+            if response.get("request_id").and_then(Value::as_u64) != Some(self.sequence) {
+                return Err(ScriptError::Packet(
+                    "worker returned a stale request ID".into(),
+                ));
+            }
+            let Some(request) = response
+                .as_object_mut()
+                .and_then(|packet| packet.remove("physics_query"))
+            else {
+                return Ok(response);
+            };
+            validate_packet_sdk(&response, sdk)?;
+            let physics =
+                physics.ok_or_else(|| ScriptError::Packet("physics queries unavailable".into()))?;
+            queries += 1;
+            if queries > MAX_PHYSICS_QUERIES {
+                return Err(ScriptError::Packet(
+                    "worker exceeded 64 physics queries in one update".into(),
+                ));
+            }
+            let query: PhysicsQuery = serde_json::from_value(request)
+                .map_err(|error| ScriptError::Packet(format!("Invalid physics query: {error}")))?;
+            self.send(&serde_json::json!({
+                "request_id": self.sequence,
+                "physics_result": physics(&query),
+            }))?;
+        }
+    }
+
+    fn send(&self, packet: &Value) -> Result<(), ScriptError> {
         let mut bytes =
-            serde_json::to_vec(&packet).map_err(|error| ScriptError::Packet(error.to_string()))?;
-        if bytes.len() > MAX_PACKET {
+            serde_json::to_vec(packet).map_err(|error| ScriptError::Packet(error.to_string()))?;
+        if bytes.len() >= MAX_PACKET {
             return Err(ScriptError::Packet("input exceeds 1 MiB".into()));
         }
         bytes.push(b'\n');
         self.input
             .try_send(bytes)
-            .map_err(|_| ScriptError::Worker("worker input unavailable".into()))?;
+            .map_err(|_| ScriptError::Worker("worker input unavailable".into()))
+    }
+
+    fn receive(&self, remaining: Duration, timeout: Duration) -> Result<Value, ScriptError> {
         let response = self
             .output
-            .recv_timeout(timeout)
+            .recv_timeout(remaining)
             .map_err(|error| match error {
                 mpsc::RecvTimeoutError::Timeout => ScriptError::Timeout(timeout.as_millis()),
                 mpsc::RecvTimeoutError::Disconnected => {
                     ScriptError::Worker("worker output unavailable".into())
                 }
             })?;
-        let value = response.map_err(|error| {
+        response.map_err(|error| {
             let details = self
                 .stderr
                 .lock()
@@ -671,13 +726,7 @@ impl Worker {
             } else {
                 ScriptError::Worker(format!("{error}: {details}"))
             }
-        })?;
-        if value.get("request_id").and_then(Value::as_u64) != Some(self.sequence) {
-            return Err(ScriptError::Packet(
-                "worker returned a stale request ID".into(),
-            ));
-        }
-        Ok(value)
+        })
     }
 }
 

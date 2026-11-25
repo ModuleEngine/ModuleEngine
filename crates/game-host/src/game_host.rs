@@ -442,9 +442,13 @@ impl ExecutableSystem for RustSystem {
             .slot
             .lock()
             .map_err(|_| "Custom script slot poisoned")?;
-        let tick = script
-            .tick(&input, Duration::from_millis(150))
-            .map_err(|e| e.to_string())?;
+        let timeout = Duration::from_millis(150);
+        let tick = if ctx.physics_queries_available() {
+            script.tick_with_physics_queries(&input, timeout, |query| ctx.query_physics(query))
+        } else {
+            script.tick(&input, timeout)
+        }
+        .map_err(|e| e.to_string())?;
         self.pending = Some(tick.clone());
         validate_project_controls(&document, &tick.commands)?;
         let (world, render) = {

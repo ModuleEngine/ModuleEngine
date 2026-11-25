@@ -236,9 +236,9 @@ picker error, same-path publication failure, copy и invalid JSON.
 
 ## Инвентаризация тестов ignored
 
-Все 23 теста с `#[ignore]` перечислены в реестре с назначением. Семь включены в
-`native`/`package`. Для остальных 16 в [реестре](../../scripts/verification.json)
-указаны условия отдельного запуска. Некоторые из них:
+В [реестре](../../scripts/verification.json) перечислены все тесты с
+`#[ignore]`, назначение и маршрут каждого. Профили запускают выбранные
+проверки. У явно исключённых проверок есть свои команды и условия запуска.
 
 - `runtime_delivery::tests::emit_stage4_software_inactive_vulkan_fixture` - только
   подготовка fixture; требует нового абсолютного `MODULE_ENGINE_STAGE4_FIXTURE_PATH`.
@@ -263,6 +263,10 @@ picker error, same-path publication failure, copy и invalid JSON.
 [отчёте о поставке G1](g1-delivery-20261027.md) и
 [продолжении проверки](g1-verification-20261101.md).
 Регистрация не добавляет их в автоматический профиль и не означает нового успешного запуска.
+
+- [Две проверки R6.1](physics-rapier.md#verify) компилируют воркеры Custom и
+  измеряют полный шаг Rapier. Запускайте их отдельно без конкурирующих
+  сборок. Бюджет S2 проверяется в Release.
 
 Registry не даёт произвольного `--step`, который незаметно включал бы emitter.
 Для каждого нового теста с `#[ignore]` укажите назначение и выберите профиль или явное исключение из профилей.
