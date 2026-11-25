@@ -4,6 +4,13 @@
 
 [English](current-status.md) | [Русский](ru/current-status.md) | [Documentation](README.md)
 
+**25 November 2026 — the R8.1 S5 mesh shader experiment was measured.**
+On the reference Windows RTX 4080 SUPER, the median run mean GPU graph
+time went from 4.552 to 2.461 ms. Meshlet preparation took 15.93 seconds.
+The production renderer uses the existing route. See the
+[matched comparison](r81-s5-meshlets.md#r81-result) and
+[R8.1 decision](decisions.md#r81-meshlet-prototype).
+
 **24 November 2026 — R2.4 evidence, the S4 baseline and the ARPG tick trial are available.**
 The [R2.4 receipt](evidence/r24/README.md) records the Windows and combined
 review. [CI](ci.md#что-выполняется) checks new documentation links for local

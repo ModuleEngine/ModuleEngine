@@ -35,6 +35,20 @@ This log separates the accepted product scope from selected implementation detai
 - The 0.1 software renderer is retained as a separate module.
 
 
+<a id="r81-meshlet-prototype"></a>
+
+## R8.1 S5 meshlet choice — 25 November 2026
+
+Keep R2.4 as the production path and retain the task/mesh path as an
+explicit Tier B prototype. On the same S5 scene and RTX 4080 SUPER,
+the median per-run mean GPU graph time fell from 4.552 to 2.461 ms and
+peak process working set fell from 2,391.8 to 1,560.4 MiB. Building and
+packing the meshlets consumed 15.93 seconds. A later Tier B design needs
+precomputed geometry before ordinary scene loading. The same view had
+two slow window intervals on the mesh path, so the experiment supports
+further performance work without establishing an R8.3 cadence guarantee.
+[Conditions, costs and image evidence](r81-s5-meshlets.md#r81-result)
+
 <a id="rv-c-arpg-tick"></a>
 
 ## ARPG typed access and the role of Bevy — 24 November 2026

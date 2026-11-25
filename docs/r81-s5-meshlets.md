@@ -68,3 +68,74 @@ validation layer and synchronization validation active, using
 logs and source and artifact hashes. See [R2.4 checks](bench.md#r24-culling-checks),
 [Vulkan mesh shader features and limits](https://docs.vulkan.org/refpages/latest/refpages/source/VK_EXT_mesh_shader.html),
 and [DXC's SPIR-V attributes](https://github.com/microsoft/DirectXShaderCompiler/blob/main/docs/SPIR-V.rst).
+
+<a id="r81-result"></a>
+
+## Measured result — 25 November 2026
+
+On the fixed S5 view, the task/mesh path reduced mean producer GPU graph
+time by **45.94%** and p95 by **42.56%**. The values below are
+medians of per-run statistics across five pairs, with 150 scored frames
+per path. The renderer used stock Forward and the native WGPU/DX12
+bridge at 1920×1080 with Immediate presentation, vsync off and GPU
+timestamps on every scored frame. The timed runs read back zero pixel bytes.
+
+| Metric | R2.4 Hi-Z + indexed indirect count | R8.1 task/mesh |
+| --- | ---: | ---: |
+| GPU graph mean / p95, ms | 4.552 / 4.977 | 2.461 / 2.858 |
+| GPU geometry pass mean / p95, ms | 2.560 / 3.012 | 2.067 / 2.452 |
+| Observed window interval mean / p95, ms | 6.001 / 6.528 | 3.590 / 4.201 |
+| CPU submission mean / p95, ms | 0.324 / 0.401 | 0.211 / 0.289 |
+| Peak process working set, MiB | 2,391.8 | 1,560.4 |
+| Producer allocator used / reserved, MiB | 725.2 / 896.0 | 593.0 / 832.0 |
+| Initial geometry upload, MiB | 426.1 | 398.9 |
+| First submission start to observed completion, ms | 1,237.0 | 259.7 |
+| Meshlet clustering and packing, ms | — | 15,926.2 |
+| Meshlet allocation and staging, ms | — | 36.4 |
+
+The first completion interval starts after scene and device setup and
+excludes clustering and packing. CPU submission p95 was within the
+measured noise tolerance. Two mesh-path window intervals exceeded
+16.67 ms, at 20.920 and 20.726 ms. All 150 R2.4 intervals were below
+16.67 ms, with a maximum of 7.173 ms.
+
+The R2.4 depth seed drew all 40 patches and Hi-Z retained all 40. Its
+culling scope averaged 1.824 ms. That cost contributes to the whole-graph
+improvement. The Forward geometry pass alone improved by 19.27% on its
+mean. The prototype dispatched 6,510 task groups for 208,305 meshlets
+and all 20 million source triangles. Per-meshlet culling was disabled.
+
+The matching physical adapter was an RTX 4080 SUPER (`10de:2702`,
+16,376 MiB), driver 617.42, Vulkan 1.4.351 on Windows 11 build 26300.
+It reported `VK_EXT_mesh_shader` revision 1, both task/mesh feature bits
+and mesh shader query support. Task and mesh workgroups supported
+128 invocations each and preferred 32. The dispatch X and total-count
+limits were 4,194,304 for both stages. Mesh output limits were
+256 vertices, 256 primitives and 32,768 bytes. The task payload
+limit was 16,384 bytes. The storage buffer range limit was
+4,294,967,295 bytes, and graphics timestamps had 64 valid bits with a
+1 ns period. The logical R2.4 device left the mesh extension disabled.
+
+The Release image check matched every object ID and all RenderStats
+counts. RGBA8 changed in seven pixels. The maximum delta was 3 at one
+verified shared source edge and 1 everywhere else. The earlier strict
+whole-image limit of 2 failed on this edge. The Debug PNGs matched the
+corresponding Release PNGs byte for byte. Both Debug devices reported
+active Khronos synchronization validation and zero validation warnings
+or errors at teardown. The two bounded CPU tests and strict targeted
+Clippy passed on Windows.
+
+The measured source was `e3c742c638412cce9780acae2bd095fe6e9d516c`
+with source digest
+`b4621afd2ee4da956359eca730c54d8d207761d52e1ca4d416ba8cbc4f3ec972`.
+Release and Debug Editor SHA-256 were
+`5a38bfcf1a04b88baaa1d0bec3cba5775b4a84e5744c6099e7c5ee8a71d98291`
+and `c836e56d9ce35ec92ce4ffd3d2db7b91d2c5d9d46c90fbcc695f3dcc5f7af73b`.
+The queue retained both executables, the original logs and samples, and the
+failed comparisons with the previous gate. [Implementation and review](https://github.com/myjname/ModuleEngine/pull/56)
+
+The result supports continued Tier B experiments using precomputed geometry.
+The measured build cost is too high for ordinary scene loading. Keep the
+existing production renderer and the Tier A path. This result covers one
+camera on one Windows GPU. It gives no frame-time guarantee across other
+views, physical Tier A devices or Linux GPUs.
