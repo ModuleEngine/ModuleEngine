@@ -241,8 +241,10 @@ fn khronos_glb_import_and_play() {
             capture_visible_frame(&project.join(&name), &frame);
             let different_pixels = base_frame
                 .rgba
-                .chunks_exact(4)
-                .zip(frame.rgba.chunks_exact(4))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(frame.rgba.as_chunks::<4>().0)
                 .filter(|(a, b)| a != b)
                 .count();
             assert_eq!(snapshot.items.len(), base_scene.items.len());
