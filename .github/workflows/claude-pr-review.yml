@@ -6,6 +6,8 @@ name: Claude PR review
 # found by an exact marker on its first line and updated by ID (created if absent).
 # A green job means a complete review of the current commit was published. If a review was expected but
 # claude-review.md is missing, empty, names another commit or lacks the required sections, the job FAILS.
+# Coverage is enforced too: the review must state "Прочитано файлов: N из M" where M equals the real number
+# of changed files, and a review that skipped files can never have the plain verdict "ok".
 # The only exception is a PR that itself adds or changes this workflow: the action refuses to run a workflow
 # that differs from the one on the base branch, so the step reports an explicit "review skipped".
 # That skip is allowed only when the base copy is confirmed absent (HTTP 404) or confirmed different.
@@ -34,9 +36,10 @@ jobs:
       issues: write
       id-token: write
     steps:
+      # Depth 2 keeps both parents of the PR merge commit, so HEAD^1 (base) .. HEAD (merged PR) is the PR diff.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          fetch-depth: 1
+          fetch-depth: 2
           persist-credentials: false
 
       # Pinned to the commit that the moving tag v1 pointed to on 2026-11-25. Update deliberately.
@@ -46,8 +49,8 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: |
             --model claude-sonnet-5-5
-            --max-turns 30
-            --allowedTools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*),Edit(./claude-review.md),Read,Grep,Glob"
+            --max-turns 60
+            --allowedTools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*),Bash(git diff:*),Edit(./claude-review.md),Read,Grep,Glob"
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
@@ -56,8 +59,18 @@ jobs:
             Review this pull request. Do not push commits and do not modify any repository files.
             The checkout is a detached HEAD, so ALWAYS pass the PR number and repo explicitly:
             `gh pr view ${{ github.event.pull_request.number }} --repo ${{ github.repository }}`,
-            `gh pr diff ${{ github.event.pull_request.number }} --repo ${{ github.repository }}`,
             `gh pr checks ${{ github.event.pull_request.number }} --repo ${{ github.repository }}`.
+
+            HOW TO READ THE CHANGES (mandatory, no shortcuts):
+            1. List every changed file: `git diff --name-only HEAD^1 HEAD`. Remember the count M.
+            2. Read the diff of EACH file separately: `git diff HEAD^1 HEAD -- <path>`. A whole-PR diff or a
+               `--stat` summary is not a substitute. Never skip a file because the PR is large, because the
+               file looks generated, or because CI is green. If one file's diff is too large for a single call,
+               read it in several parts (`git diff -U0 HEAD^1 HEAD -- <path>` plus the Read tool with offset
+               and limit on the checked-out file) until you have seen all of it.
+            3. Only if a file really cannot be read (size, tool limits, binary), count it as NOT read and
+               name it with the reason. Do not pretend to have read it and do not judge it from its name.
+            4. You may not give the verdict `ok` if any file was not read.
 
             Do NOT post comments yourself. Write the final review, in Russian, to the file `claude-review.md`
             in the workspace root (create it with the Write tool; this is the only file you may write). A later
@@ -66,11 +79,18 @@ jobs:
             Ревью коммита <first 7 chars of REVIEWED COMMIT SHA>
             Вердикт: <exactly one of: ok | ok with remarks | needs changes>, optionally followed by a short reason
             CI: <status from `gh pr checks`; say if checks are still running>
-            Что проверено: <what you actually checked, specifically>
-            Замечания: <minor remarks all together, real bugs first; write "нет" if none>
+            Что проверено: <what you actually checked, specifically; it must contain these two lines>
+            Прочитано файлов: <N> из <M>
+            Не прочитано: <нет | comma-separated paths of files you did not read, each with the reason>
+            Замечания: <minor remarks all together, real bugs first; write "нет" if none; if files were not read,
+            say so here again>
 
             Each of the four headings (`Вердикт:`, `CI:`, `Что проверено:`, `Замечания:`) must start a line, appear
             exactly once, in this order, and have non-empty content (it may continue on the following lines).
+            The two lines `Прочитано файлов: N из M` and `Не прочитано: ...` belong to the section `Что проверено:`.
+            M must equal the number of files from step 1. If N is smaller than M, `Не прочитано:` must list the
+            skipped files and the verdict must be `ok with remarks` or `needs changes`; if N equals M, write
+            `Не прочитано: нет`.
 
             Project conventions to verify:
             - Every real Rust `#[ignore]` test needs a matching step in scripts/verification.json
@@ -140,10 +160,16 @@ jobs:
             exit 0
           fi
 
-          # A review exists: it must name the current commit and contain every required section with content.
-          if ! problem="$(python3 - "$file" "$short" 2>&1 <<'PY'
+          # The real number of changed files, computed the same way the reviewer was told to list them.
+          changed="$(git diff --name-only HEAD^1 HEAD)" \
+            || fail "Could not list the changed files with git diff, so the review coverage cannot be verified."
+          total="$(printf '%s\n' "$changed" | grep -c . || true)"
+
+          # A review exists: it must name the current commit, contain every required section with content
+          # and report the real file coverage.
+          if ! problem="$(python3 - "$file" "$short" "$total" 2>&1 <<'PY'
           import re, sys
-          path, short = sys.argv[1], sys.argv[2]
+          path, short, total = sys.argv[1], sys.argv[2], int(sys.argv[3])
           lines = open(path, encoding="utf-8").read().replace("\r", "").split("\n")
           if lines[0].strip() != "Ревью коммита " + short:
               sys.exit("the first line must be 'Ревью коммита " + short + "'")
@@ -161,15 +187,36 @@ jobs:
           pos = [found[h] for h in heads]
           if pos != sorted(pos):
               sys.exit("sections are out of order")
+          contents = {}
           for n, h in enumerate(heads):
               end = pos[n + 1] if n + 1 < len(pos) else len(lines)
               content = (lines[pos[n]][len(h):] + "\n" + "\n".join(lines[pos[n] + 1:end])).strip()
               if not content:
                   sys.exit("section '" + h + "' is empty")
-              if h == "Вердикт:" and not re.match(r"(ok with remarks|ok|needs changes)\b", content):
-                  sys.exit("the verdict must start with: ok | ok with remarks | needs changes")
-              if h == "Что проверено:" and len(content) < 40:
-                  sys.exit("section 'Что проверено:' is too short to be a real description")
+              contents[h] = content
+          verdict, checked = contents["Вердикт:"], contents["Что проверено:"]
+          if not re.match(r"(ok with remarks|ok|needs changes)\b", verdict):
+              sys.exit("the verdict must start with: ok | ok with remarks | needs changes")
+          if len(checked) < 40:
+              sys.exit("section 'Что проверено:' is too short to be a real description")
+          coverage = re.search(r"^Прочитано файлов:\s*(\d+)\s+из\s+(\d+)\s*$", checked, re.M)
+          if not coverage:
+              sys.exit("section 'Что проверено:' must contain the line 'Прочитано файлов: N из M'")
+          read_n, all_m = int(coverage.group(1)), int(coverage.group(2))
+          if all_m != total:
+              sys.exit("the review says the PR changes " + str(all_m) + " files, but it changes " + str(total))
+          if read_n > all_m:
+              sys.exit("the review claims to have read more files than the PR changes")
+          skipped_line = re.search(r"^Не прочитано:\s*(.+)$", checked, re.M)
+          if not skipped_line:
+              sys.exit("section 'Что проверено:' must contain the line 'Не прочитано: нет' or the list of skipped files")
+          skipped = skipped_line.group(1).strip().rstrip(". ").lower() != "нет"
+          if read_n < all_m and not skipped:
+              sys.exit("not all files were read, but 'Не прочитано:' says 'нет'")
+          if read_n == all_m and skipped:
+              sys.exit("all files were read, but 'Не прочитано:' lists skipped files")
+          if (skipped or read_n < all_m) and re.match(r"ok\b(?! with remarks)", verdict):
+              sys.exit("a review that skipped files cannot have the plain verdict 'ok'")
           PY
           )"; then
             fail "The review file is invalid: $problem"
