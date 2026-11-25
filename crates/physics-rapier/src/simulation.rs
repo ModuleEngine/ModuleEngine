@@ -59,10 +59,10 @@ impl RapierStep {
 
 impl ExecutableSystem for RapierStep {
     fn step(&mut self, ctx: &mut SystemContext<'_>, _: &mut Value) -> Result<(), String> {
+        self.before_commit = None;
         if ctx.dt != DT {
             return Err("Rapier requires the 60 Hz game tick".into());
         }
-        self.before_commit = None;
         let mut space = (*self.accepted).clone();
         let removed = space.sync(&ctx.world("world")?.world)?;
         let collisions = Collisions::default();
@@ -108,6 +108,11 @@ impl ExecutableSystem for RapierStep {
         if let Some(previous) = self.before_commit.take() {
             self.accepted = previous;
         }
+        // These workspaces cache collider handles/AABBs and joint selection
+        // from the last attempted world. A fresh pipeline invalidates the
+        // restored joint set's selection memo on its first solve.
+        self.pipeline = PhysicsPipeline::new();
+        self.ccd = CCDSolver::new();
         Ok(())
     }
 }
@@ -138,7 +143,7 @@ struct JointRow {
 }
 
 /// Rapier's derived scene state. Bevy still owns object identity, config and
-/// transforms. Rapier's pipelines are scratch, outside the checkpoint.
+/// transforms. Rapier's derived workspaces are reset on rollback.
 #[derive(Clone, Default)]
 pub(crate) struct Space {
     pub islands: IslandManager,

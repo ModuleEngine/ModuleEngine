@@ -1,5 +1,7 @@
 use super::{
-    tests::{BALL, authored, captures, fixture, node, physics_node, register_reject},
+    tests::{
+        BALL, FLOOR, authored, captures, fixture, node, physics_node, register, register_reject,
+    },
     *,
 };
 use module_engine_arpg::{GameStateExt, GameStatus};
@@ -122,6 +124,91 @@ fn rollback_and_retry(custom: bool) {
                 .any(|event| event.name == "fixture.physics_unavailable")
         );
     }
+}
+
+struct MoveWall(Arc<AtomicBool>);
+
+impl ExecutableSystem for MoveWall {
+    fn step(&mut self, ctx: &mut SystemContext<'_>, _: &mut Value) -> Result<(), String> {
+        if self.0.swap(false, Ordering::Relaxed) {
+            ctx.game.world.transform_mut(FLOOR).unwrap().translation[0] = 5.;
+        }
+        Ok(())
+    }
+}
+
+fn thin_wall_host(move_wall: Arc<AtomicBool>, reject: Arc<AtomicBool>) -> GameHost {
+    let mut registry = SystemRegistry::builtin();
+    install(&mut registry).unwrap();
+    let move_id = "fixture.move_wall";
+    register(&mut registry, move_id, move |_| {
+        Ok(Box::new(MoveWall(move_wall.clone())))
+    });
+    let mut physics = physics_node();
+    physics.params = json!({"gravity":[0.,0.,0.]});
+    let mut project = fixture(vec![
+        node(move_id),
+        physics,
+        register_reject(&mut registry, reject),
+    ]);
+    project.scenes.get_mut("fixture").unwrap().objects = vec![
+        authored(
+            FLOOR,
+            [0., 0., 0.],
+            &[(COLLIDER, json!({"half_extents":[0.05,1.,1.]}))],
+        ),
+        authored(
+            BALL,
+            [-2.5, 0., 0.],
+            &[
+                (BODY, json!({"linear_velocity":[120.,0.,0.],"ccd":false})),
+                (COLLIDER, json!({"kind":"ball","radius":0.1})),
+            ],
+        ),
+    ];
+    let mut document = module_engine_core::demo_document(WorldKind::Ecs);
+    document.custom_sources.clear();
+    document.game = Some(project);
+    headless(document, registry, false)
+}
+
+#[test]
+fn declined_wall_edit_cannot_poison_the_ccd_cache_on_retry() {
+    let move_wall = Arc::new(AtomicBool::new(false));
+    let reject = Arc::new(AtomicBool::new(false));
+    let mut candidate = thin_wall_host(move_wall.clone(), reject.clone());
+    let mut expected = thin_wall_host(
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicBool::new(false)),
+    );
+    let input = GameInput::default();
+    let ball_x = |host: &GameHost| {
+        host.session
+            .state()
+            .world
+            .transform(BALL)
+            .unwrap()
+            .translation[0]
+    };
+    for host in [&mut candidate, &mut expected] {
+        assert_eq!(host.step(1. / 60., &input).unwrap(), 1);
+        assert!((-0.6..-0.4).contains(&ball_x(host)));
+    }
+    let accepted = captures(&candidate.session);
+    move_wall.store(true, Ordering::Relaxed);
+    reject.store(true, Ordering::Relaxed);
+    let error = candidate.step(1. / 60., &input).unwrap_err();
+    assert!(error.contains("fixture late physics rejection"), "{error}");
+    assert_eq!(captures(&candidate.session), accepted);
+    assert_eq!(expected.step(1. / 60., &input).unwrap(), 1);
+    assert_eq!(candidate.step(0., &input).unwrap(), 1);
+    assert!(ball_x(&expected) < 0., "positive control crossed the wall");
+    assert_eq!(
+        ball_x(&candidate),
+        ball_x(&expected),
+        "retry crossed the restored wall"
+    );
+    assert_eq!(captures(&candidate.session), captures(&expected.session));
 }
 
 #[test]

@@ -148,7 +148,7 @@ pub(crate) fn fixture(nodes: Vec<SystemNode>) -> GameProject {
     }
 }
 
-fn register(
+pub(crate) fn register(
     registry: &mut SystemRegistry,
     id: &str,
     factory: impl Fn(&Value) -> Result<Box<dyn ExecutableSystem>, String> + Send + Sync + 'static,
@@ -330,6 +330,51 @@ fn recorded_input_replays_transforms_ordered_contacts_and_queries() {
         "joint did not hold: {}",
         y(SUSPENDED)
     );
+}
+
+#[test]
+fn invalid_delta_preserves_the_last_accepted_solver_state() {
+    use module_engine_core::SystemExecutor;
+    let project = fixture(vec![physics_node()]);
+    let mut registry = SystemRegistry::builtin();
+    install(&mut registry).unwrap();
+    let session =
+        GameSession::new_with_registry(project.clone(), WorldKind::Ecs, registry.clone()).unwrap();
+    let mut candidate = session.state().clone();
+    let mut expected = candidate.clone();
+    let mut candidate_executor = SystemExecutor::new(&project.execution, &registry).unwrap();
+    let mut expected_executor = SystemExecutor::new(&project.execution, &registry).unwrap();
+    let mut candidate_events = vec![];
+    let mut expected_events = vec![];
+    let input = GameInput::default();
+    let fixed_dt = 1. / 60.;
+    for _ in 0..2 {
+        candidate_executor
+            .step(&mut candidate, &input, fixed_dt, &mut candidate_events)
+            .unwrap();
+        expected_executor
+            .step(&mut expected, &input, fixed_dt, &mut expected_events)
+            .unwrap();
+    }
+    let err = candidate_executor
+        .step(&mut candidate, &input, fixed_dt * 2., &mut candidate_events)
+        .unwrap_err();
+    assert!(err.contains("Rapier requires the 60 Hz game tick"), "{err}");
+    assert_eq!(
+        candidate.world.transform(BALL),
+        expected.world.transform(BALL)
+    );
+    candidate_executor
+        .step(&mut candidate, &input, fixed_dt, &mut candidate_events)
+        .unwrap();
+    expected_executor
+        .step(&mut expected, &input, fixed_dt, &mut expected_events)
+        .unwrap();
+    assert_eq!(
+        candidate.world.entities_snapshot(),
+        expected.world.entities_snapshot()
+    );
+    assert_eq!(candidate_events, expected_events);
 }
 
 #[test]
