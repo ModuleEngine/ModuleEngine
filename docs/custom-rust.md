@@ -151,10 +151,16 @@ protocol 2 and 3 exports need the Player and workers they were built with. A
 protocol 3 worker from an earlier SDK v4 physics build also needs a fresh
 export to run with this Player.
 
-To upgrade, open the source project in a compatible Full Editor. Use
-**Tools → Publish Engine profile / update contracts** and save when changing
-the SDK pin. Export a new Team or Player folder with that build so the SDK or
-prebuilt workers and package pins are recreated together.
+For a source project that opens under SDK v4, export a fresh Team or Player
+folder with this Full Editor. Export recreates the SDK or prebuilt workers
+and the package pins together. This also replaces a protocol 3 Player export
+from a v4 source.
+
+Normal Open rejects a saved project with active Custom pinned to SDK v3
+before Full authoring commands become available. Use the previous compatible
+Full with that source and keep its matching Player export. **Tools → Publish
+Engine profile / update contracts** operates on an already opened project.
+The existing explicit copy migration handles document formats 1–3.
 [Engine profiles and migration](engine-profiles.md#миграция-существующего-проекта).
 
 <a id="визуальные-scalar-выражения"></a>

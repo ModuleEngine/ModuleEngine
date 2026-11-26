@@ -1531,6 +1531,61 @@ mod tests {
     }
 
     #[test]
+    fn project_open_preserves_and_rejects_an_earlier_custom_sdk_pin() {
+        use crate::distribution::{
+            DistributionProfile, ProjectEngineBinding, detect, project_binding_path,
+        };
+        use module_engine_core::canonical_contract_hash;
+
+        let backend = backend_root();
+        let mut document = crate::game_templates::demo_document();
+        let full = detect(
+            &backend.join("sdk-pin-source.json"),
+            &document,
+            Some(DistributionProfile::Full),
+        )
+        .unwrap();
+        assert!(full.can_author_engine());
+        let binding = ProjectEngineBinding::from_distribution(&full).unwrap();
+        let folder = fixture();
+        let path = folder.join("project.json");
+        let binding_path = project_binding_path(&path).unwrap();
+        fs::write(&binding_path, serde_json::to_vec(&binding).unwrap()).unwrap();
+        fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+        assert_eq!(
+            crate::project::read(&path).unwrap().engine_lock,
+            document.engine_lock
+        );
+
+        let composition = crate::host::composition_at(&backend).unwrap();
+        assert!(
+            composition
+                .required_contracts(&document)
+                .unwrap()
+                .requires_sdk
+        );
+        let lock = document.engine_lock.as_mut().unwrap();
+        lock.sdk.as_mut().unwrap().data_api_fingerprint = "module-engine-data-api/v3".into();
+        // Build an integrity-valid fixture like the previous SDK would save.
+        let mut payload = serde_json::to_value(&*lock).unwrap();
+        payload.as_object_mut().unwrap().remove("lock_fingerprint");
+        payload["module_versions"] = serde_json::to_value(&document.module_versions).unwrap();
+        lock.lock_fingerprint = canonical_contract_hash(&payload).unwrap();
+        lock.validate_integrity(&document.module_versions).unwrap();
+        let prior = serde_json::to_vec_pretty(&document).unwrap();
+        fs::write(&path, &prior).unwrap();
+        let error = crate::project::read(&path).unwrap_err();
+        assert!(
+            error.contains("SDK requires exact data/API identity 'module-engine-data-api/v4'"),
+            "{error}"
+        );
+        assert_eq!(fs::read(&path).unwrap(), prior);
+        fs::remove_file(binding_path).unwrap();
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(folder).unwrap();
+    }
+
+    #[test]
     fn runtime_delivery_selects_rapier_only_for_the_scheduled_physics_step() {
         use module_engine_core::{
             AuthoredObject, SystemNode, SystemResource, SystemStage, Transform, WorldObject,

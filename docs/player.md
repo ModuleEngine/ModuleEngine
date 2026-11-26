@@ -56,7 +56,7 @@ Feedback is identical in editor Play and Player. Hit data for sparks and numbers
 .\outputs\my-game\Player.exe
 ```
 
-Player builds as a separate package with selected native features; the editor exe is not copied into it. `player.json` v2 pins the exact feature set and SDK API. See [profiles and compatibility](engine-profiles.md). With Custom, prebuilt workers also pin their transport protocol in `script.json`. Re-export the entire game when upgrading an older worker protocol. [Worker protocol and SDK](custom-rust.md#worker-protocol).
+Player builds as a separate package with selected native features; the editor exe is not copied into it. `player.json` v2 pins the exact feature set and SDK API. See [profiles and compatibility](engine-profiles.md). With Custom, prebuilt workers also pin their transport protocol in `script.json`. To replace an older worker protocol, re-export the entire game from a source project that opens with the current SDK. [Worker protocol and SDK](custom-rust.md#worker-protocol).
 
 Player and Team share working-graph preparation. Before selecting native features and dependencies, export validates the authored profile and pins, then retains nodes leading to outputs, recursively processes nested graphs, and retains used Rust/HLSL sources. Scheduled game systems are retained regardless of graphical output. A connected but disabled pass is also retained: the game may enable it through a permitted setting. Unused archived HLSL does not force the distribution to look for its include files.
 

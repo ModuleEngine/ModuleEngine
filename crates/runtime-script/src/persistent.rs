@@ -930,7 +930,7 @@ fn update(ctx: &mut ScriptContext) {
             (
                 WORKER_PROTOCOL_VERSION,
                 prior_sdk,
-                "differs from expected version",
+                "SDK requires exact data/API identity",
             ),
         ] {
             let mut wrong = value.clone();
