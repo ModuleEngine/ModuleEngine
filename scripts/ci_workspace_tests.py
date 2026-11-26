@@ -107,6 +107,8 @@ def nextest_skips(captured, name):
             if not line.startswith(prefix + name):
                 raise VerificationError("Mismatched nextest capability marker")
             reason = line[len(prefix + name):]
+            if not reason.startswith(("Vulkan: ", "DXC: ", "Custom SDK: ")):
+                raise VerificationError("Unknown capability or mismatched nextest testcase")
             line = f"{prefix}\t{name}\t{reason}"
         lines.append(line)
     return test_skips("\n".join(lines), [name])

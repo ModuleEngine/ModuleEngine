@@ -167,7 +167,7 @@ class WorkspaceReportingTests(unittest.TestCase):
         self.assertEqual(executed, {("crate", "ran")})
         self.assertEqual(counts["crate"], {"passed": 1, "failed": 1, "ignored": 1,
                                          "capability_skips": {"no_gpu": "Vulkan: No loader"}})
-        for invalid in [xml.replace("SKIPno_gpu", "SKIPother"), xml.replace("crate::", "unknown::"), "<testsuites/>",
+        for invalid in [xml.replace("SKIPno_gpu", "SKIPno_gpu_child"), xml.replace("SKIPno_gpu", "SKIPother"), xml.replace("crate::", "unknown::"), "<testsuites/>",
                         xml.replace("MODULEENGINE_TEST_SKIP", "Vulkan validation ERROR:")]:
             with self.assertRaises(ci_workspace_tests.VerificationError):
                 ci_workspace_tests.nextest_results(io.StringIO(invalid), counts, executed)
