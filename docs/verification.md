@@ -296,6 +296,10 @@ These six G1 checks retain their separately recorded execution and scope in the
 [G1 delivery](g1-delivery-20261027.md) and [continuation](g1-verification-20261101.md).
 Registering them does not add them to an automatic profile or establish a new pass.
 
+- The [two R6.1 checks](physics-rapier.md#verify) compile Custom workers and
+  measure the complete Rapier step. Run both separately without competing
+  builds, with the S2 budget scored in Release.
+
 The registry does not provide an arbitrary `--step` that could silently enable the emitter.
 For each new ignored test, record its purpose and select a profile or an explicit exclusion.
 

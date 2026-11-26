@@ -114,7 +114,7 @@ pub use jobs::{JobLease, finish_background_jobs, spawn_job};
 
 const MAX_PACKET: usize = 1024 * 1024;
 const SDK_IDENTITY_ARGUMENT: &str = "--module-engine-sdk-identity";
-const WORKER_ARGUMENT: &str = "--module-engine-json-worker";
+const WORKER_PROTOCOL_VERSION: u32 = 4;
 static NEXT_WORKER: AtomicU64 = AtomicU64::new(1);
 
 /// Supported compiled entry-point signatures. Other Rust in the source remains
@@ -969,7 +969,18 @@ impl CompiledScript {
         context: &ScriptContext,
         timeout: Duration,
     ) -> Result<ScriptTick, ScriptError> {
-        self.evaluate(context, timeout)
+        self.evaluate(context, timeout, None)
+    }
+
+    /// The game host supplies a view of the preceding physics step for this
+    /// invocation. Queries share the update deadline and do not stage writes.
+    pub fn tick_with_physics_queries(
+        &self,
+        context: &ScriptContext,
+        timeout: Duration,
+        query: impl Fn(&module_engine_core::PhysicsQuery) -> module_engine_core::PhysicsQueryResponse,
+    ) -> Result<ScriptTick, ScriptError> {
+        self.evaluate(context, timeout, Some(&query))
     }
 }
 
@@ -1120,39 +1131,88 @@ fn verify_worker_lock(
     Ok(versions)
 }
 
+fn worker_argument() -> String {
+    format!("--module-engine-json-worker-v{WORKER_PROTOCOL_VERSION}")
+}
+
 fn worker_source(kind: ScriptKind) -> String {
     let stdio = include_str!("worker_stdio.rs");
+    let worker_argument = worker_argument();
     let invoke = match kind {
-        ScriptKind::Update => "user_program::invoke(&mut context); let speed: Option<f64> = None;",
+        ScriptKind::Update => {
+            r#"
+        if input.get("physics_queries").and_then(serde_json::Value::as_bool) == Some(true) {
+            let response = std::rc::Rc::clone(&response);
+            module_engine_core::with_script_physics_queries(
+                move |query| physics_query(&response, request_id, query),
+                || user_program::invoke(&mut context),
+            );
+        } else {
+            user_program::invoke(&mut context);
+        }
+        let speed: Option<f64> = None;
+        "#
+        }
         ScriptKind::Speed => {
             "let result = user_program::invoke(context.time, context.base); if !result.is_finite() { return Err(\"speed returned a nonfinite value\".into()); } let speed = Some(result);"
         }
     };
     format!(
         r#"use std::io::{{BufRead, Write}};
-use module_engine_core::{{ScriptContext, SdkIdentity}};
+use module_engine_core::{{PhysicsQuery, PhysicsQueryError, PhysicsQueryResponse, ScriptContext, SdkIdentity}};
 mod user_program;
 {stdio}
+const MAX_PACKET: usize = {MAX_PACKET};
+
+fn read_packet() -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {{
+    let stdin = std::io::stdin();
+    let mut reader = stdin.lock();
+    let mut bytes = Vec::new();
+    let count = std::io::Read::take(&mut reader, (MAX_PACKET + 2) as u64).read_until(b'\n', &mut bytes)?;
+    if count == 0 {{ return Ok(None); }}
+    if bytes.len() > MAX_PACKET + 1 {{ return Err("input too large".into()); }}
+    if bytes.last() != Some(&b'\n') {{ return Err("unterminated input packet".into()); }}
+    Ok(Some(serde_json::from_slice(&bytes)?))
+}}
+
+fn write_packet(mut pipe: &std::fs::File, packet: &serde_json::Value) -> Result<(), Box<dyn std::error::Error>> {{
+    let mut output = serde_json::to_vec(packet)?;
+    if output.len() > MAX_PACKET {{ return Err("output too large".into()); }}
+    output.push(b'\n');
+    pipe.write_all(&output)?;
+    Ok(())
+}}
+
+#[allow(dead_code)]
+fn physics_query(pipe: &std::fs::File, request_id: u64, query: &PhysicsQuery) -> PhysicsQueryResponse {{
+    fn exchange(pipe: &std::fs::File, request_id: u64, query: &PhysicsQuery) -> Result<PhysicsQueryResponse, Box<dyn std::error::Error>> {{
+        write_packet(pipe, &serde_json::json!({{
+            "request_id": request_id,
+            "sdk": SdkIdentity::current(),
+            "physics_query": query,
+        }}))?;
+        let mut response = read_packet()?.ok_or("host closed query response")?;
+        if response.get("request_id").and_then(serde_json::Value::as_u64) != Some(request_id) {{
+            return Err("host returned a stale physics query response".into());
+        }}
+        let result = response.as_object_mut().and_then(|packet| packet.remove("physics_result"))
+            .ok_or("host did not return a physics result")?;
+        Ok(serde_json::from_value(result)?)
+    }}
+    exchange(pipe, request_id, query).map_err(|error| PhysicsQueryError::Transport(error.to_string()))?
+}}
+
 fn run() -> Result<(), Box<dyn std::error::Error>> {{
     match std::env::args().nth(1).as_deref() {{
         Some("{SDK_IDENTITY_ARGUMENT}") => {{
             println!("{{}}", serde_json::to_string(&SdkIdentity::current())?);
             return Ok(());
         }}
-        Some("{WORKER_ARGUMENT}") => {{}}
-        _ => return Err("expected ModuleEngine worker mode".into()),
+        Some("{worker_argument}") => {{}}
+        _ => return Err("expected ModuleEngine worker mode {worker_argument}".into()),
     }}
-    const MAX_PACKET: usize = {MAX_PACKET};
-    let mut response = response_pipe()?;
-    let stdin = std::io::stdin();
-    let mut reader = stdin.lock();
-    loop {{
-        let mut bytes = Vec::new();
-        let count = std::io::Read::take(&mut reader, (MAX_PACKET + 2) as u64).read_until(b'\n', &mut bytes)?;
-        if count == 0 {{ break; }}
-        if bytes.len() > MAX_PACKET + 1 {{ return Err("input too large".into()); }}
-        if bytes.last() != Some(&b'\n') {{ return Err("unterminated input packet".into()); }}
-        let input: serde_json::Value = serde_json::from_slice(&bytes)?;
+    let response = std::rc::Rc::new(response_pipe()?);
+    while let Some(input) = read_packet()? {{
         let request_id = input.get("request_id").and_then(serde_json::Value::as_u64).ok_or("missing request_id")?;
         let sdk: SdkIdentity = serde_json::from_value(input.get("sdk").cloned().ok_or("missing SDK identity")?)?;
         if sdk != SdkIdentity::current() {{ return Err("SDK identity differs from linked data API".into()); }}
@@ -1172,10 +1232,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {{
             }}
             Err(error) => serde_json::json!({{"request_id":request_id,"sdk":SdkIdentity::current(),"error":error.to_string()}}),
         }};
-        let mut output = serde_json::to_vec(&packet)?;
-        if output.len() > MAX_PACKET {{ return Err("output too large".into()); }}
-        output.push(b'\n');
-        response.write_all(&output)?;
+        write_packet(&response, &packet)?;
     }}
     Ok(())
 }}
@@ -1963,7 +2020,7 @@ mod tests {
         let mut wrong_version = SdkIdentity::current();
         wrong_version.version.push_str("-different");
         let mut wrong_api = SdkIdentity::current();
-        wrong_api.data_api_fingerprint = "module-engine-data-api/v1".into();
+        wrong_api.data_api_fingerprint = "module-engine-data-api/v3".into();
         for sdk in [wrong_version, wrong_api] {
             let bytes =
                 serde_json::to_vec(&serde_json::json!({"schema_version":1,"sdk":sdk})).unwrap();

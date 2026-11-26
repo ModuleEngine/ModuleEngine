@@ -100,6 +100,7 @@ class RegistryTests(Fixture):
             "native-window-icons", "native-window-z-order",
             "r12-existing-game-roundtrip", "r12-player-stable-id-ipc", "r14-s3-tick-cost", "r15-event-replay",
             "r16-s3-vulkan", "r19-s3-motion-update-cost", "r71-gltf-playback",
+            "r61-custom-physics", "r61-s2-physics",
         })
         self.assertEqual(len(verify.plan(self.data, self.steps, "native")["steps"]), 5)
         self.assertEqual(len(verify.plan(self.data, self.steps, "package")["steps"]), 2)

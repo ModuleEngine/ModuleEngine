@@ -1,10 +1,10 @@
 //! Host-owned transactional state and bounded, reusable JSON-lines workers.
 
 use super::{
-    CompiledScript, MAX_PACKET, NEXT_WORKER, ScriptError, ScriptKind, ScriptTick, WORKER_ARGUMENT,
-    validate_sdk_match, validate_supported_sdk,
+    CompiledScript, MAX_PACKET, NEXT_WORKER, ScriptError, ScriptKind, ScriptTick,
+    WORKER_PROTOCOL_VERSION, validate_sdk_match, validate_supported_sdk, worker_argument,
 };
-use module_engine_core::{ScriptContext, SdkIdentity};
+use module_engine_core::{PhysicsQuery, PhysicsQueryResponse, ScriptContext, SdkIdentity};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -14,11 +14,12 @@ use std::{
     process::{Command, Stdio},
     sync::{Arc, Mutex, atomic::Ordering, mpsc},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const STATE_PREFIX: &str = "// module-engine-state:";
-const PROTOCOL_VERSION: u32 = 3;
+const MAX_PHYSICS_QUERIES: usize = 64;
+pub(super) type QueryPhysics<'a> = &'a dyn Fn(&PhysicsQuery) -> PhysicsQueryResponse;
 const MAX_MANIFEST: u64 = (MAX_PACKET * 8) as u64;
 
 /// Source-declared state schema and defaults. A schema name/version and the
@@ -286,6 +287,7 @@ impl CompiledScript {
         &self,
         context: &ScriptContext,
         timeout: Duration,
+        physics: Option<QueryPhysics<'_>>,
     ) -> Result<ScriptTick, ScriptError> {
         validate_supported_sdk(&self.sdk_identity)?;
         if !context.time.is_finite()
@@ -312,7 +314,7 @@ impl CompiledScript {
             .worker
             .as_mut()
             .unwrap()
-            .exchange(&context, &self.sdk_identity, timeout)
+            .exchange(&context, &self.sdk_identity, timeout, physics)
             .and_then(|value| {
                 validate_packet_sdk(&value, &self.sdk_identity)?;
                 if let Some(error) = value.get("error").and_then(Value::as_str) {
@@ -400,7 +402,7 @@ impl CompiledScript {
         fs::copy(&self.executable, directory.join(&executable))
             .map_err(|e| ScriptError::Setup(e.to_string()))?;
         let manifest = PrecompiledManifest {
-            protocol_version: PROTOCOL_VERSION,
+            protocol_version: WORKER_PROTOCOL_VERSION,
             executable,
             source: self.source.clone(),
             kind: self.kind,
@@ -448,10 +450,10 @@ impl CompiledScript {
         let value: Value = serde_json::from_slice(&bytes)
             .map_err(|error| ScriptError::Setup(error.to_string()))?;
         if value.get("protocol_version").and_then(Value::as_u64)
-            != Some(u64::from(PROTOCOL_VERSION))
+            != Some(u64::from(WORKER_PROTOCOL_VERSION))
         {
             return Err(ScriptError::Setup(format!(
-                "Unsupported precompiled script protocol; export the Player package for protocol {PROTOCOL_VERSION}"
+                "Unsupported precompiled script protocol; export the Player package for protocol {WORKER_PROTOCOL_VERSION}"
             )));
         }
         let manifest: PrecompiledManifest =
@@ -541,7 +543,7 @@ impl Worker {
     fn start(executable: &Path, directory: &Path) -> Result<Self, ScriptError> {
         let mut command = Command::new(executable);
         command
-            .arg(WORKER_ARGUMENT)
+            .arg(worker_argument())
             .current_dir(directory)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -619,30 +621,76 @@ impl Worker {
         context: &ScriptContext,
         sdk: &SdkIdentity,
         timeout: Duration,
+        physics: Option<QueryPhysics<'_>>,
     ) -> Result<Value, ScriptError> {
+        let start = Instant::now();
         self.sequence = self.sequence.wrapping_add(1);
         let mut packet = serde_json::json!({"request_id":self.sequence,"sdk":sdk});
         packet["context"] = serde_json::to_value(context)
             .map_err(|error| ScriptError::Packet(error.to_string()))?;
+        if physics.is_some() {
+            packet["physics_queries"] = Value::Bool(true);
+        }
+        self.send(&packet)?;
+
+        let mut queries = 0;
+        loop {
+            let remaining = timeout
+                .checked_sub(start.elapsed())
+                .ok_or(ScriptError::Timeout(timeout.as_millis()))?;
+            let mut response = self.receive(remaining, timeout)?;
+            if response.get("request_id").and_then(Value::as_u64) != Some(self.sequence) {
+                return Err(ScriptError::Packet(
+                    "worker returned a stale request ID".into(),
+                ));
+            }
+            let Some(request) = response
+                .as_object_mut()
+                .and_then(|packet| packet.remove("physics_query"))
+            else {
+                return Ok(response);
+            };
+            validate_packet_sdk(&response, sdk)?;
+            let physics =
+                physics.ok_or_else(|| ScriptError::Packet("physics queries unavailable".into()))?;
+            queries += 1;
+            if queries > MAX_PHYSICS_QUERIES {
+                return Err(ScriptError::Packet(
+                    "worker exceeded 64 physics queries in one update".into(),
+                ));
+            }
+            let query: PhysicsQuery = serde_json::from_value(request)
+                .map_err(|error| ScriptError::Packet(format!("Invalid physics query: {error}")))?;
+            self.send(&serde_json::json!({
+                "request_id": self.sequence,
+                "physics_result": physics(&query),
+            }))?;
+        }
+    }
+
+    fn send(&self, packet: &Value) -> Result<(), ScriptError> {
         let mut bytes =
-            serde_json::to_vec(&packet).map_err(|error| ScriptError::Packet(error.to_string()))?;
+            serde_json::to_vec(packet).map_err(|error| ScriptError::Packet(error.to_string()))?;
         if bytes.len() > MAX_PACKET {
             return Err(ScriptError::Packet("input exceeds 1 MiB".into()));
         }
         bytes.push(b'\n');
         self.input
             .try_send(bytes)
-            .map_err(|_| ScriptError::Worker("worker input unavailable".into()))?;
+            .map_err(|_| ScriptError::Worker("worker input unavailable".into()))
+    }
+
+    fn receive(&self, remaining: Duration, timeout: Duration) -> Result<Value, ScriptError> {
         let response = self
             .output
-            .recv_timeout(timeout)
+            .recv_timeout(remaining)
             .map_err(|error| match error {
                 mpsc::RecvTimeoutError::Timeout => ScriptError::Timeout(timeout.as_millis()),
                 mpsc::RecvTimeoutError::Disconnected => {
                     ScriptError::Worker("worker output unavailable".into())
                 }
             })?;
-        let value = response.map_err(|error| {
+        response.map_err(|error| {
             let details = self
                 .stderr
                 .lock()
@@ -654,13 +702,7 @@ impl Worker {
             } else {
                 ScriptError::Worker(format!("{error}: {details}"))
             }
-        })?;
-        if value.get("request_id").and_then(Value::as_u64) != Some(self.sequence) {
-            return Err(ScriptError::Packet(
-                "worker returned a stale request ID".into(),
-            ));
-        }
-        Ok(value)
+        })
     }
 }
 
@@ -726,6 +768,13 @@ fn update(ctx: &mut ScriptContext) {
 "#
         .replace("__SDK_IDENTITY_ARGUMENT__", crate::SDK_IDENTITY_ARGUMENT);
         let script = compiler.compile(&source).unwrap();
+        let old_mode = Command::new(&script.executable)
+            .arg("--module-engine-json-worker")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(!old_mode.status.success());
+        assert!(String::from_utf8_lossy(&old_mode.stderr).contains(&worker_argument()));
         #[cfg(windows)]
         let sentinel = artifacts.path().join("stdout-sentinel.bin");
         #[cfg(windows)]
@@ -855,7 +904,7 @@ fn update(ctx: &mut ScriptContext) {
         .unwrap();
         let source = "fn update(_: &mut ScriptContext) {}";
         let manifest = PrecompiledManifest {
-            protocol_version: PROTOCOL_VERSION,
+            protocol_version: WORKER_PROTOCOL_VERSION,
             executable: "not-started.exe".into(),
             source: source.into(),
             kind: ScriptKind::Update,
@@ -871,24 +920,36 @@ fn update(ctx: &mut ScriptContext) {
         assert_eq!(loaded.worker_process_id().unwrap(), None);
         assert_eq!(loaded.state().unwrap(), Value::Null);
         assert!(!root.join("engine-sdk.json").exists());
-        for edit in 0..4 {
+        let prior_sdk = "module-engine-data-api/v3";
+        let current = SdkIdentity::current();
+        let protocol_error = "Unsupported precompiled script protocol";
+        for (protocol, sdk_api, expected_error) in [
+            (2, prior_sdk, protocol_error),
+            (3, prior_sdk, protocol_error),
+            (3, current.data_api_fingerprint.as_str(), protocol_error),
+            (
+                WORKER_PROTOCOL_VERSION,
+                prior_sdk,
+                "SDK requires exact data/API identity",
+            ),
+        ] {
             let mut wrong = value.clone();
-            match edit {
-                0 => wrong["sdk"]["version"] = serde_json::json!("other"),
-                1 => {
-                    wrong["sdk"]["data_api_fingerprint"] =
-                        serde_json::json!("module-engine-data-api/v1")
-                }
-                2 => {
-                    wrong.as_object_mut().unwrap().remove("sdk");
-                }
-                _ => wrong["protocol_version"] = serde_json::json!(PROTOCOL_VERSION - 1),
-            }
+            wrong["protocol_version"] = serde_json::json!(protocol);
+            wrong["sdk"]["data_api_fingerprint"] = serde_json::json!(sdk_api);
+            fs::write(&path, serde_json::to_vec(&wrong).unwrap()).unwrap();
+            let error = CompiledScript::load_precompiled(&path, &root).unwrap_err();
+            assert!(error.to_string().contains(expected_error), "{error}");
+        }
+        let mut wrong_version = value.clone();
+        wrong_version["sdk"]["version"] = serde_json::json!("other");
+        let mut missing_sdk = value;
+        missing_sdk.as_object_mut().unwrap().remove("sdk");
+        for wrong in [wrong_version, missing_sdk] {
             fs::write(&path, serde_json::to_vec(&wrong).unwrap()).unwrap();
             assert!(CompiledScript::load_precompiled(&path, &root).is_err());
-            assert_eq!(loaded.worker_process_id().unwrap(), None);
-            assert_eq!(loaded.state().unwrap(), Value::Null);
         }
+        assert_eq!(loaded.worker_process_id().unwrap(), None);
+        assert_eq!(loaded.state().unwrap(), Value::Null);
     }
 
     #[test]

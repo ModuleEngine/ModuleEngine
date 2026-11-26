@@ -689,6 +689,9 @@ pub fn write_full_manifest(
     for descriptor in crate::host::registry()?.descriptors() {
         ids.insert(descriptor.id.clone());
     }
+    // Full can add the physics node later, including when the sealed project
+    // does not schedule it yet.
+    ids.insert(module_engine_physics_rapier::MODULE_ID.into());
     let module_sources = ids.into_iter().map(|id| (id, sources.clone())).collect();
     let mut sdk_files = BTreeMap::new();
     if root.join(".sdk").is_dir() {
@@ -1046,6 +1049,15 @@ const NATIVE_FILES: &[&str] = &[
     "crates/engine-core/src/settings.rs",
     "crates/engine-core/src/backend.rs",
     "crates/engine-core/src/control.rs",
+    "crates/engine-core/src/physics.rs",
+    "crates/physics-rapier/Cargo.toml",
+    "crates/physics-rapier/src/lib.rs",
+    "crates/physics-rapier/src/schema.rs",
+    "crates/physics-rapier/src/simulation.rs",
+    "crates/physics-rapier/src/queries.rs",
+    "crates/physics-rapier/src/debug_draw.rs",
+    "crates/physics-rapier/src/tests.rs",
+    "crates/physics-rapier/src/acceptance.rs",
     "crates/engine-core/src/graph.rs",
     "crates/engine-core/src/registry.rs",
     "crates/engine-core/src/render.rs",
@@ -1319,6 +1331,11 @@ mod delivery_tests {
         let doc = crate::host::settings_demo_document(WorldKind::Objects);
         let m = write_full_manifest(&root, &doc).unwrap();
         assert!(inspect_full_sources(&root, &m, &doc).available);
+        assert!(
+            m.module_sources[module_engine_physics_rapier::MODULE_ID]
+                .iter()
+                .any(|path| path == "crates/physics-rapier/src/simulation.rs")
+        );
         let full = detect(
             &root.join("project.json"),
             &doc,
@@ -1406,6 +1423,8 @@ mod delivery_tests {
             "crates/editor/src/native_windows.rs",
             "crates/project-tools/src/scene_files.rs",
             "crates/engine-core/src/component_schema.rs",
+            "crates/engine-core/src/physics.rs",
+            "crates/physics-rapier/Cargo.toml",
             "crates/engine-core/src/composition.rs",
             "crates/engine-core/src/capabilities.rs",
             "crates/player/src/capabilities.rs",

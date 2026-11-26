@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 
 pub const ENGINE_LOCK_DOCUMENT_VERSION: u32 = 4;
 /// Shared data/API identity, not a Rust memory ABI or compiler compatibility claim.
-pub const SDK_DATA_API_FINGERPRINT: &str = "module-engine-data-api/v3";
+pub const SDK_DATA_API_FINGERPRINT: &str = "module-engine-data-api/v4";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

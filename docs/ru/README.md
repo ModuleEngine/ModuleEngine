@@ -64,6 +64,7 @@
 ## Runtime, модули и рендеринг
 
 - [ECS-хранилище игрового мира](ecs-world.md)
+- [Опциональная физика Rapier](physics-rapier.md)
 - [Решение о хранилище игрового мира](ecs-storage-decision.md)
 - [Исполняемые системы и авторское расписание](module-execution.md)
 - [Формат проекта 0.4](graph-format.md)

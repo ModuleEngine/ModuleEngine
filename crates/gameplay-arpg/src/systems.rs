@@ -768,14 +768,14 @@ mod tests {
         let mut events = vec![];
         let bindings = BTreeMap::new();
         let input = GameInput::default();
-        let mut context = SystemContext {
+        let mut context = SystemContext::new(
             game,
-            resources: &mut resources,
-            events: &mut events,
-            dt: 1. / 60.,
-            input: &input,
-            bindings: &bindings,
-        };
+            &mut resources,
+            &mut events,
+            1. / 60.,
+            &input,
+            &bindings,
+        );
         let mut frame = context.game.arpg();
         tick(&mut context, &mut frame, state).unwrap();
         context.game.set_arpg(frame).unwrap();
@@ -1033,14 +1033,14 @@ mod tests {
         let mut events = vec![];
         let mut frame = game.arpg();
         collision_system(
-            &mut SystemContext {
-                game: &mut game,
-                resources: &mut resources,
-                events: &mut events,
-                dt: 1. / 60.,
-                input: &input,
-                bindings: &bindings,
-            },
+            &mut SystemContext::new(
+                &mut game,
+                &mut resources,
+                &mut events,
+                1. / 60.,
+                &input,
+                &bindings,
+            ),
             &mut frame,
             &mut Value::Null,
         )
@@ -1055,14 +1055,14 @@ mod tests {
             },
         );
         movement_system(
-            &mut SystemContext {
-                game: &mut game,
-                resources: &mut resources,
-                events: &mut events,
-                dt: 1. / 60.,
-                input: &input,
-                bindings: &bindings,
-            },
+            &mut SystemContext::new(
+                &mut game,
+                &mut resources,
+                &mut events,
+                1. / 60.,
+                &input,
+                &bindings,
+            ),
             &mut frame,
             &mut Value::Null,
         )

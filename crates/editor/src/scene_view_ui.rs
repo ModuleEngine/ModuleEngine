@@ -11,7 +11,10 @@ use crate::{
     scene_tools::{self, Axis, DragGesture, GizmoGeometry, Snap, Space, Tool},
 };
 use eframe::egui::{self, Color32, FontId, Pos2, Rect, Sense, Stroke, Vec2};
-use module_engine_core::{Camera, Frame, SceneSnapshot, Transform, WorldObject, transform_point};
+use module_engine_core::{
+    Camera, EcsWorld, Frame, SceneSnapshot, Transform, WorldObject, transform_point,
+};
+use module_engine_physics_rapier::{DebugLine, DebugLineKind};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SceneAction {
@@ -57,6 +60,14 @@ pub struct SceneViewportState {
     rendered_frame: Option<u64>,
     render_count: u64,
     render_failure: Option<String>,
+    physics: PhysicsOverlay,
+}
+
+#[derive(Default)]
+struct PhysicsOverlay {
+    available: bool,
+    enabled: bool,
+    cached: Option<(u64, Result<Vec<DebugLine>, String>)>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -247,6 +258,7 @@ impl Default for SceneViewportState {
             rendered_frame: None,
             render_count: 0,
             render_failure: None,
+            physics: PhysicsOverlay::default(),
         }
     }
 }
@@ -280,6 +292,29 @@ impl SceneViewportState {
 
     pub fn render_count(&self) -> u64 {
         self.render_count
+    }
+
+    pub fn set_physics_available(&mut self, available: bool) {
+        if available {
+            self.physics.available = true;
+        } else {
+            self.physics = PhysicsOverlay::default();
+        }
+    }
+
+    pub fn refresh_physics(&mut self, revision: u64, world: &EcsWorld) {
+        if !self.physics.enabled {
+            self.physics.cached = None;
+        } else if self
+            .physics
+            .cached
+            .as_ref()
+            .is_none_or(|(previous, _)| *previous != revision)
+        {
+            let lines = module_engine_physics_rapier::debug_lines(world)
+                .map_err(|error| format!("Physics debug draw: {error}"));
+            self.physics.cached = Some((revision, lines));
+        }
     }
 
     pub fn with_camera(camera: Camera) -> Self {
@@ -680,6 +715,26 @@ impl SceneViewportState {
             || self.displayed_key.is_some_and(|displayed| {
                 displayed.revision == self.render_revision && displayed.size == [width, height]
             });
+        if image_current
+            && self.texture_id().is_some()
+            && let Some((_, Ok(lines))) = &self.physics.cached
+        {
+            let camera = self.visible_camera();
+            for line in lines {
+                if let (Some(start), Some(end)) = (
+                    scene_tools::project_point(camera, rect, line.start),
+                    scene_tools::project_point(camera, rect, line.end),
+                ) {
+                    let color = match line.kind {
+                        DebugLineKind::Body => Color32::from_rgb(182, 196, 213),
+                        DebugLineKind::Collider => Color32::from_rgb(102, 214, 196),
+                        DebugLineKind::Sensor => Color32::from_rgb(131, 181, 243),
+                        DebugLineKind::Joint => Color32::from_rgb(241, 196, 119),
+                    };
+                    painter.line_segment([start, end], Stroke::new(1.25, color));
+                }
+            }
+        }
         if image_current && let Some(id) = selected {
             if let Some(bounds) = object_bounds(snapshot, id) {
                 draw_bounds(&painter, self.visible_camera(), rect, bounds);
@@ -771,7 +826,12 @@ impl SceneViewportState {
             FontId::proportional(11.),
             Color32::from_rgb(187, 201, 216),
         );
-        if let Some(error) = &self.error {
+        let physics_error = self
+            .physics
+            .cached
+            .as_ref()
+            .and_then(|(_, lines)| lines.as_ref().err());
+        if let Some(error) = self.error.as_ref().or(physics_error) {
             painter.text(
                 rect.left_top() + Vec2::splat(9.),
                 egui::Align2::LEFT_TOP,
@@ -917,6 +977,21 @@ impl SceneViewportState {
         });
     }
 
+    fn physics_toggle(&mut self, ui: &mut egui::Ui, enabled: bool) {
+        let response = ui
+            .add_enabled(
+                enabled,
+                egui::Button::new("Physics")
+                    .selected(self.physics.enabled)
+                    .min_size(egui::vec2(66., SCENE_TOOL_SIZE)),
+            )
+            .on_hover_text("Show or hide authored rigid bodies, colliders, sensors and joints");
+        self.overlay_targets.insert("Physics".into(), response.rect);
+        if response.clicked() {
+            self.physics.enabled = !self.physics.enabled;
+        }
+    }
+
     fn overlays(
         &mut self,
         ui: &mut egui::Ui,
@@ -933,6 +1008,7 @@ impl SceneViewportState {
         let ctx = ui.ctx().clone();
         let editing = ui.is_enabled() && !locked && self.gesture.is_none() && !self.camera_fly;
         let navigation = ui.is_enabled() && self.gesture.is_none() && !self.camera_fly;
+        let can_toggle_physics = navigation && !self.camera_drag;
         let can_frame =
             ui.is_enabled() && selected.is_some() && self.gesture.is_none() && !self.camera_fly;
         let surface = || {
@@ -979,6 +1055,10 @@ impl SceneViewportState {
                                 ui.separator();
                                 ui.strong("Camera");
                                 ui.add_enabled_ui(navigation, |ui| self.camera_speed_control(ui));
+                                if self.physics.available {
+                                    ui.separator();
+                                    self.physics_toggle(ui, can_toggle_physics);
+                                }
                                 ui.separator();
                                 if ui
                                     .add_enabled(can_frame, egui::Button::new("Frame selected · F"))
@@ -1024,7 +1104,11 @@ impl SceneViewportState {
         self.overlay_rects.push(rail.response.rect);
         let speed_width = SCENE_SPEED_WIDTH + 2. * CHROME_PAD as f32;
         let snap_width = 2. * SCENE_TOOL_SIZE + CHROME_GAP + 2. * CHROME_PAD as f32;
-        let right_width = 2. * SCENE_GROUP_HEIGHT + speed_width + snap_width + 3. * CHROME_GAP;
+        let physics_width = 66. + 2. * CHROME_PAD as f32;
+        let mut right_width = 2. * SCENE_GROUP_HEIGHT + speed_width + snap_width + 3. * CHROME_GAP;
+        if self.physics.available {
+            right_width += physics_width + CHROME_GAP;
+        }
         let right =
             egui::Area::new(ui.make_persistent_id(("scene-options", self.presentation_owner)))
                 .order(egui::Order::Foreground)
@@ -1058,6 +1142,11 @@ impl SceneViewportState {
                             self.overlay_targets.insert("Frame".into(), response.rect);
                             frame |= response.clicked();
                         });
+                        if self.physics.available {
+                            option_group(ui, physics_width, |ui| {
+                                self.physics_toggle(ui, can_toggle_physics);
+                            });
+                        }
                     });
                 });
         self.overlay_rects.push(right.response.rect);
@@ -3580,6 +3669,98 @@ mod tests {
             }
             self.click("SnapSettings");
             assert!(self.view.overlay_targets.contains_key("MoveStep"));
+        }
+    }
+
+    #[test]
+    fn physics_overlay_paints_author_preview_lines_only_for_the_current_image() {
+        let authored = objects();
+        let mut world = EcsWorld::from_objects(authored.clone()).unwrap();
+        world
+            .insert_component(
+                7,
+                module_engine_physics_rapier::COLLIDER,
+                serde_json::json!({}),
+            )
+            .unwrap();
+        let mut view = SceneViewportState {
+            rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(500., 300.))),
+            ..Default::default()
+        };
+        view.set_physics_available(true);
+        view.physics.enabled = true;
+        view.set_render_revision(1);
+        view.refresh_physics(1, &world);
+        let ctx = egui::Context::default();
+        let draw = |view: &mut SceneViewportState, time, render| {
+            let revision = view.render_revision;
+            let output = ctx.run_ui(input(time, vec![]), |ui| {
+                view.paint_presented(
+                    ui,
+                    &authored,
+                    &snapshot(),
+                    None,
+                    &mut |camera, width, height| {
+                        Ok(if render {
+                            Some(PresentedSceneFrame {
+                                frame: Frame {
+                                    width,
+                                    height,
+                                    rgba: vec![128; width * height * 4],
+                                    gpu: None,
+                                    timings: None,
+                                    stats: RenderStats::default(),
+                                },
+                                camera,
+                                revision,
+                                pending: false,
+                            })
+                        } else {
+                            None
+                        })
+                    },
+                );
+            });
+            let lines = output
+                .shapes
+                .iter()
+                .filter(|shape| {
+                    matches!(shape.shape,
+                egui::Shape::LineSegment { stroke, .. }
+                if stroke.color == Color32::from_rgb(102, 214, 196))
+                })
+                .count();
+            output.drop_without_applying_deltas();
+            lines
+        };
+        assert!(draw(&mut view, 0.1, true) > 0);
+        view.set_render_revision(2);
+        assert_eq!(draw(&mut view, 0.2, false), 0);
+        view.refresh_physics(2, &world);
+        assert!(draw(&mut view, 0.3, true) > 0);
+        view.physics.enabled = false;
+        view.refresh_physics(2, &world);
+        assert_eq!(draw(&mut view, 0.4, true), 0);
+    }
+
+    #[test]
+    fn physics_toggle_is_available_in_normal_and_compact_scene_without_picking() {
+        for width in [800., 240.] {
+            let mut harness = OptionsHarness::new(width);
+            assert!(!harness.view.overlay_targets.contains_key("Physics"));
+            harness.view.set_physics_available(true);
+            harness.draw(vec![]);
+            harness.draw(vec![]);
+            if width < 400. {
+                harness.click("Compact");
+            }
+            harness.click("Physics");
+            assert!(harness.view.physics.enabled);
+            harness.click("Physics");
+            assert!(!harness.view.physics.enabled);
+            harness.view.set_physics_available(false);
+            harness.draw(vec![]);
+            assert!(!harness.view.overlay_targets.contains_key("Physics"));
         }
     }
 
