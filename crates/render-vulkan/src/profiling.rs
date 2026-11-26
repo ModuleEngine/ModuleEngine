@@ -11,6 +11,7 @@ pub(crate) struct TimestampPool {
 
 impl Drop for TimestampPool {
     fn drop(&mut self) {
+        // SAFETY: No flight still uses this timestamp pool when the last owner drops it.
         unsafe { self.context.device.destroy_query_pool(self.raw, None) };
     }
 }
@@ -44,6 +45,8 @@ impl TimestampCapture {
                 "Too many graph passes for Vulkan timestamp queries",
             ))?;
         if slot.as_ref().is_none_or(|pool| pool.capacity < count) {
+            // SAFETY: The selected queue supports timestamp queries. The checked positive count
+            // covers the requested scopes and the new pool belongs to this device.
             let raw = unsafe {
                 context.device.create_query_pool(
                     &vk::QueryPoolCreateInfo::default()
@@ -70,6 +73,8 @@ impl TimestampCapture {
     }
 
     pub(crate) fn reset(&self, cmd: vk::CommandBuffer) {
+        // SAFETY: The recording command buffer belongs to this slot's device. Any older flight is
+        // complete, and count is within the pool capacity.
         unsafe {
             self.pool
                 .context
@@ -87,6 +92,8 @@ impl TimestampCapture {
     }
 
     fn write(&self, cmd: vk::CommandBuffer, index: u32, stage: vk::PipelineStageFlags) {
+        // SAFETY: The active command buffer belongs to this device. The query index belongs to the
+        // reset range and the stage matches this scope.
         unsafe {
             self.pool
                 .context
@@ -99,6 +106,8 @@ impl TimestampCapture {
     /// for a query or turns a query failure into a frame failure.
     fn read(&self) -> GpuTimings {
         let mut values = vec![0_u64; self.count as usize];
+        // SAFETY: The flight has completed and the output slice covers exactly the queries in the
+        // retained pool.
         let result = unsafe {
             self.pool.context.device.get_query_pool_results(
                 self.pool.raw,

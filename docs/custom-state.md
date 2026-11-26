@@ -66,9 +66,9 @@ The editor's `Scripts` stores legacy preview results until the shared world/rend
 
 On successful background compilation, `poll` transfers compatible state. An incompatible compiled candidate remains available separately, the previous program continues working, and diagnostics explain the need for reset/migration. `apply_rejected_with_reset(id)` explicitly applies new defaults; `apply_rejected_with_migration(id, json)` is the API for an explicitly prepared transformation. The UI must compare `rejected_source(id)` with the current source before application. New compilation removes the old rejected candidate. `reset_game_states()` is used for a new Play session, but not ordinary code edits.
 
-The host maintains one worker per live Custom instance. Two SystemNodes with the same source_id receive separate fork_instance instances and states; ordinary clones of one CompiledScript share that instance. Input and response are JSON lines with `request_id`; the response has a service marker. Queues are bounded, and pipe writes happen outside the calling thread. Timeout, panic, EOF, excess volume, or an invalid ID stops the worker. The next tick restarts it with the last accepted state. Releasing the last clone of an instance terminates the child process.
+The host maintains one worker per live Custom instance. Two SystemNodes with the same `source_id` receive separate `fork_instance` instances and states. Ordinary clones of one `CompiledScript` share that instance. Requests and responses use separate pipes with JSON lines keyed by `request_id`. Each JSON payload is limited to 1 MiB. Queues are bounded, and pipe writes happen outside the calling thread. A timeout, panic, EOF, oversized packet or invalid request ID stops the worker. The next tick restarts it with the last accepted state. Releasing the last clone of an instance terminates the child process.
 
-stderr diagnostics are limited to 8 KiB; stdout that is not a response is limited to 1 MiB per request. The host does not save every output line. Ordinary Rust has OS access: writing a file or another external effect is not rolled back by the transaction. For reproducible game logic, use declared state and commands.
+The worker switches its standard output to the OS null device before calling Custom code. On Windows it redirects both C runtime stdout and the Win32 standard handle that Rust and child processes use. Its response writer keeps a private, non-inheritable copy of the startup pipe. The host retains up to 8 KiB from stderr for diagnostics. Ordinary Rust has OS access, and external effects such as writing a file are outside the state transaction. Use declared state and commands for reproducible game logic.
 
 <a id="экспорт-без-компилятора"></a>
 
@@ -78,8 +78,10 @@ stderr diagnostics are limited to 8 KiB; stdout that is not a response is limite
 
 Player uses `CompiledScript::load_precompiled(&manifest, &package_root)`. It does not open Cargo.toml, SDK, or Rust compiler and does not build. The worker searches for relative game resources in the supplied package root. The package can be moved to another directory. Player's initial state comes from the declaration, not the editor's current Play session. Saving game progress between launches is a separate contract.
 
+The private response pipe uses protocol 3. Use the Player shipped with an earlier export, or re-export the complete package to run on the updated Player. The SDK identity check still applies to the exported worker.
+
 <a id="проверка"></a>
 
 ## Verification
 
-runtime-script tests check real compiled programs, PID reuse, accumulation and rollback of JSON state, hot apply, incompatibility, explicit reset/migration, timeout/panic, invalid response format, and moving a precompiled package that reads its own asset. For a full game result, the host must also validate the world/render and event transaction: successful worker execution alone does not mean commands were accepted.
+The `module-engine-script` tests exercise compiled programs, PID reuse and termination, state accumulation and rollback, hot apply, explicit reset and migration, timeouts, panics, and relocation of a precompiled package that reads its own asset. The output regression sends the old marker, ordinary text, and over 1 MiB of raw stdout through actual Custom Rust and checks two accepted packets and process exit. On Windows it also checks C `puts` and flush, a child with inherited stdout, and that a separate open fixture file retains its contents. The game host also validates world and render commands and events before accepting the transaction.

@@ -215,7 +215,7 @@ pub fn run(output: &Path) -> Result<Value, String> {
         "disabled_data_archived_and_restored":true,"explicit_detach_preserved":true,
         "team_archive_excluded":true,"project_topology_rejected":true,"gameplay_source_edit_allowed":true,
         "unshipped_dlaa_rejected":true,"compiled_rust_range_rejected_transactionally":true,
-        "range_diagnostic":policy_error,"exposure_changed_pixels":exposure_pixels,
+        "range_diagnostic":policy_error.to_string(),"exposure_changed_pixels":exposure_pixels,
         "conditional_tonemap_changed_pixels":conditional_pixels,"world_state_preserved":true,
         "geometry_pixels":frame.stats.shaded_pixels,"source":"Real Vulkan, compiled Rust workers and shared Project validator"
     });

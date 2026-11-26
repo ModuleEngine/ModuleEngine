@@ -131,8 +131,10 @@ jobs:
         run: python scripts/verify.py --profile contracts --plan
       - name: Inspect Clippy plan
         run: python scripts/verify.py --profile clippy --plan
-      - name: Strict pinned Clippy (all targets and features)
+      - name: Strict pinned Clippy (workspace and default Release Editor)
         run: python scripts/verify.py --profile clippy --timeout 1800
+      - name: Default Release Editor refuses verification commands
+        run: cargo test --offline --locked --release -p module-engine-editor --test verification_cli
       - name: Contracts
         run: python scripts/verify.py --profile contracts --timeout 1800
       - name: Standalone ECS spike contracts (Release)

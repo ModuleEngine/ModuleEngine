@@ -1532,13 +1532,19 @@ mod tests {
                 snapshot.items.push(other);
                 snapshot
             }
-            fn objects(&self) -> Result<Vec<WorldObject>, String> {
+            fn objects(&self) -> Result<Vec<WorldObject>, crate::WorldError> {
                 self.0.objects()
             }
-            fn validate_commands(&self, commands: &[WorldCommand]) -> Result<(), String> {
+            fn validate_commands(
+                &self,
+                commands: &[WorldCommand],
+            ) -> Result<(), crate::WorldError> {
                 self.0.validate_commands(commands)
             }
-            fn apply_commands(&mut self, commands: &[WorldCommand]) -> Result<(), String> {
+            fn apply_commands(
+                &mut self,
+                commands: &[WorldCommand],
+            ) -> Result<(), crate::WorldError> {
                 self.0.apply_commands(commands)
             }
         }
@@ -2443,10 +2449,10 @@ mod tests {
             snapshot.items[0].color[0] = self.packets as u8;
             snapshot
         }
-        fn objects(&self) -> Result<Vec<WorldObject>, String> {
+        fn objects(&self) -> Result<Vec<WorldObject>, crate::WorldError> {
             self.inner.objects()
         }
-        fn validate_commands(&self, commands: &[WorldCommand]) -> Result<(), String> {
+        fn validate_commands(&self, commands: &[WorldCommand]) -> Result<(), crate::WorldError> {
             let mut candidate = self.inner.clone();
             candidate.apply_commands(commands)?;
             if self.max_x.is_some_and(|max| {
@@ -2456,12 +2462,14 @@ mod tests {
                     .iter()
                     .any(|object| object.id == 1 && object.transform.translation[0] > max)
             }) {
-                Err("Third world rejects candidate".into())
+                Err(crate::WorldError::Commands(
+                    "Third world rejects candidate".into(),
+                ))
             } else {
                 Ok(())
             }
         }
-        fn apply_commands(&mut self, commands: &[WorldCommand]) -> Result<(), String> {
+        fn apply_commands(&mut self, commands: &[WorldCommand]) -> Result<(), crate::WorldError> {
             self.validate_commands(commands)?;
             self.inner.apply_commands(commands)?;
             self.packets += 1;

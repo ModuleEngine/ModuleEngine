@@ -1728,6 +1728,7 @@ name = "module-engine-content"
 version = "0.4.0"
 dependencies = [
  "base64",
+ "glam 0.33.12",
  "gltf",
  "image",
  "module-engine-core",
@@ -1816,6 +1817,7 @@ dependencies = [
  "module-engine-script",
  "module-engine-two-arenas",
  "module-engine-vulkan",
+ "png",
  "serde",
  "serde_json",
 ]

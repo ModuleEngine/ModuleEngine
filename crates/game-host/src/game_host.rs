@@ -149,6 +149,7 @@ impl RendererDependencyWatch {
             .renderer_adapter(&route.renderer.module)
             .ok_or("Missing renderer adapter")?
             .dependency_revision(route.renderer, document)
+            .map_err(String::from)
     }
     pub fn changed(&mut self, document: &GraphDocument, modules: &ModuleRegistry) -> bool {
         if self.checked.elapsed() < Duration::from_millis(250) {
@@ -294,6 +295,7 @@ fn validate_candidate_controls(
             document,
             &effective_render_controls(document, time, controls)?,
         )
+        .map_err(String::from)
 }
 fn service_requests(
     contributions: &[GameContribution],
@@ -352,7 +354,11 @@ fn build_session(
                 game,
                 metadata.kind,
                 registry,
-                move |objects| modules.create_game_world(&world, objects),
+                move |objects| {
+                    modules
+                        .create_game_world(&world, objects)
+                        .map_err(String::from)
+                },
                 context,
             )
         }
@@ -487,6 +493,7 @@ impl ExecutableSystem for RustSystem {
                     .renderer_adapter(&route.renderer.module)
                     .ok_or("Missing renderer adapter")?
                     .validate_controls(route.renderer, &document, effective)
+                    .map_err(String::from)
             },
         );
         let (mut candidate_settings, preference_event) = match requested {
@@ -1306,6 +1313,7 @@ impl GameHost {
                     .renderer_adapter(&route.renderer.module)
                     .ok_or("Missing renderer adapter")?
                     .validate_controls(route.renderer, &document, controls)
+                    .map_err(String::from)
             })?;
         session.seed_module_data(services.initial_module_data()?)?;
         Ok(Self {
@@ -1543,6 +1551,7 @@ impl GameHost {
                     .renderer_adapter(&route.renderer.module)
                     .ok_or("Missing renderer adapter")?
                     .validate_controls(route.renderer, document, controls)
+                    .map_err(String::from)
             })?;
         }
         preference_state.reconcile(document);
@@ -1821,6 +1830,7 @@ impl GameHost {
             &self.contributions,
             snapshot,
         )
+        .map(|(snapshot, _)| snapshot)
     }
 
     fn enrich_items(
@@ -1828,8 +1838,8 @@ impl GameHost {
         state: &GameState,
         contributions: &[GameContribution],
         mut snapshot: SceneSnapshot,
-    ) -> Result<SceneSnapshot, String> {
-        content.enrich_items(&mut snapshot, |id| {
+    ) -> Result<(SceneSnapshot, BTreeSet<u64>), String> {
+        let animated = content.enrich_animated_items(&mut snapshot, |id| {
             state.world.component(id, "mesh")?.get("path")?.as_str()
         })?;
         for item in &mut snapshot.items {
@@ -1846,7 +1856,7 @@ impl GameHost {
         for contribution in contributions {
             (contribution.decorate_snapshot)(&mut snapshot, state);
         }
-        Ok(snapshot)
+        Ok((snapshot, animated))
     }
     pub fn render(&mut self, width: usize, height: usize) -> Result<Frame, String> {
         if self.renderer.is_none() {
@@ -1871,8 +1881,12 @@ impl GameHost {
                 renderer.render(&snapshot, self.camera, width, height, &overrides)
             }
             AuthoredSceneKey::Retained { time, .. } => {
-                self.retained.sync(renderer.as_mut(), time)?;
-                renderer.render_retained(self.camera, width, height, &overrides)
+                if let Some(snapshot) = self.retained.expanded_snapshot(time) {
+                    renderer.render(&snapshot, self.camera, width, height, &overrides)
+                } else {
+                    self.retained.sync(renderer.as_mut(), time)?;
+                    renderer.render_retained(self.camera, width, height, &overrides)
+                }
             }
         }?;
         if let Some(timings) = self.accept_frame_timings(extraction_ms) {
@@ -2049,7 +2063,7 @@ impl GameHost {
                 if let PendingPresentationKind::Authored { owner, .. } = &pending.kind {
                     self.authored_presentation_requests.remove(owner);
                 }
-                return Err(error);
+                return Err(error.into());
             }
         };
         if let Some(timings) = pending.host_timings {
@@ -2245,8 +2259,12 @@ impl GameHost {
                 renderer.render_presented(snapshot, self.camera, width, height, &overrides)
             }
             AuthoredSceneKey::Retained { time, .. } => {
-                self.retained.sync(renderer.as_mut(), *time)?;
-                renderer.render_retained_presented(self.camera, width, height, &overrides)
+                if let Some(snapshot) = self.retained.expanded_snapshot(*time) {
+                    renderer.render_presented(&snapshot, self.camera, width, height, &overrides)
+                } else {
+                    self.retained.sync(renderer.as_mut(), *time)?;
+                    renderer.render_retained_presented(self.camera, width, height, &overrides)
+                }
             }
         }?;
         match submission {
@@ -2422,7 +2440,7 @@ impl GameHost {
             }
             InterpolatedInput::Retained(models) => {
                 self.project_retained(&models, visual_time as f32)?;
-                None
+                self.retained.expanded_snapshot(visual_time as f32)
             }
         };
         let extraction_ms = extraction_started.and_then(|started| self.extraction_ms(started));

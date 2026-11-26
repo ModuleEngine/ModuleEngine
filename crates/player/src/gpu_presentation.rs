@@ -2,6 +2,8 @@
 //! platform interop and egui resources. CPU pixels remain an explicit diagnostic
 //! and software-renderer contract, never a fallback for an interop failure.
 
+#![deny(clippy::undocumented_unsafe_blocks)]
+
 #[derive(Clone, Copy, Debug, Default, serde::Serialize)]
 pub struct GpuPresentationCounters {
     pub gpu_presentations: u64,
@@ -691,8 +693,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         };
 
         pub(super) fn identity(render: &RenderState) -> Result<AdapterIdentity, String> {
+            // SAFETY: The HAL guard pins this WGPU device while querying its native identity. The
+            // code neither destroys nor mutates it.
             let hal = unsafe { render.device.as_hal::<wgpu::hal::api::Dx12>() }
                 .ok_or("Native Windows GPU presentation requires the selected WGPU/DX12 device")?;
+            // SAFETY: The HAL guard owns a live DX12 device reference during this synchronous
+            // identity query.
             let luid = unsafe { hal.raw_device().GetAdapterLuid() };
             let mut identity = [0; 8];
             identity[..4].copy_from_slice(&luid.LowPart.to_ne_bytes());
@@ -705,6 +711,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             width: u32,
             height: u32,
         ) -> Result<SharedImageInfo, String> {
+            // SAFETY: The HAL guard pins the WGPU device. Allocation uses the live native device
+            // without destroying it or submitting GUI work.
             let hal = unsafe { render.device.as_hal::<wgpu::hal::api::Dx12>() }
                 .ok_or("WGPU/DX12 device disappeared")?;
             let device = hal.raw_device();
@@ -730,6 +738,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                 ..Default::default()
             };
             let mut resource: Option<ID3D12Resource> = None;
+            // SAFETY: The stack descriptors stay live through creation. The out pointer receives a
+            // committed shared texture owned by the returned COM reference.
             unsafe {
                 device.CreateCommittedResource(
                     &heap,
@@ -743,9 +753,15 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             .map_err(|e| format!("Create native shared DX12 texture: {e}"))?;
             let resource = resource.ok_or("DX12 returned no shared texture")?;
             let handle =
+                // SAFETY: The resource belongs to this live device and was created in a shared
+                // heap. Null security attributes and name request a private kernel handle.
                 unsafe { device.CreateSharedHandle(&resource, None, 0x1000_0000, PCWSTR::null()) }
                     .map_err(|e| format!("Export native shared DX12 texture: {e}"))?;
+            // SAFETY: Successful CreateSharedHandle returned a fresh CloseHandle-owned handle. This
+            // conversion transfers sole ownership.
             let handle = unsafe { OwnedHandle::from_raw_handle(handle.0) };
+            // SAFETY: The live device reads the same texture descriptor synchronously for its
+            // allocation information.
             let allocation = unsafe { device.GetResourceAllocationInfo(0, &[description]) };
             Ok(SharedImageInfo {
                 handle: SharedMemoryHandle::Win32(handle),
@@ -771,6 +787,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                     | wgpu::TextureUsages::COPY_SRC
                     | wgpu::TextureUsages::COPY_DST,
             );
+            // SAFETY: The COM resource was allocated by this GUI device with the exact RGBA8 size,
+            // dimension, one mip and one sample described to HAL.
             let native_texture = unsafe {
                 wgpu::hal::dx12::Device::texture_from_raw(
                     image.native.clone(),
@@ -781,6 +799,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                     1,
                 )
             };
+            // SAFETY: The wrapped resource belongs to the same device. The producer finished
+            // writing before handing back the lease and the resource is in the interop
+            // COMMON/PRESENT state.
             Ok(unsafe {
                 render
                     .device
@@ -841,6 +862,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         }
         impl Drop for NativeImage {
             fn drop(&mut self) {
+                // SAFETY: Submitted readers and the wrapper retain this owner through completion.
+                // The pinned WGPU device stays live while the image and its memory are destroyed in
+                // that order.
                 unsafe {
                     self.device.destroy_image(self.image, None);
                     self.device.free_memory(self.memory, None);
@@ -849,10 +873,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         }
 
         pub(super) fn identity(render: &RenderState) -> Result<AdapterIdentity, String> {
+            // SAFETY: The HAL guard pins the WGPU device and the code only borrows its instance and
+            // physical device.
             let hal = unsafe { render.device.as_hal::<wgpu::hal::api::Vulkan>() }
                 .ok_or("Native Linux GPU presentation requires the selected WGPU/Vulkan device")?;
             let mut ids = vk::PhysicalDeviceIDProperties::default();
             let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut ids);
+            // SAFETY: The physical device belongs to the same retained HAL instance and the chained
+            // ID properties provide initialized writable storage.
             unsafe {
                 hal.shared_instance()
                     .raw_instance()
@@ -869,6 +897,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             width: u32,
             height: u32,
         ) -> Result<SharedImageInfo, String> {
+            // SAFETY: The HAL guard pins the WGPU device. Allocation uses its Vulkan handles while
+            // no ownership of the WGPU device is transferred.
             let hal = unsafe { render.device.as_hal::<wgpu::hal::api::Vulkan>() }
                 .ok_or("WGPU/Vulkan device disappeared")?;
             // Compiled Vulkan must not impose interop requirements on an active
@@ -899,6 +929,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             let max_extent = {
                 let mut format_properties =
                     vk::ImageFormatProperties2::default().push_next(&mut external_properties);
+                // SAFETY: Both format-query chains are in scope for this live HAL physical device.
+                // The requested tiling, usage and handle type match the planned export.
                 unsafe {
                     hal.shared_instance()
                         .raw_instance()
@@ -952,9 +984,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                 )
                 .sharing_mode(vk::SharingMode::EXCLUSIVE)
                 .initial_layout(vk::ImageLayout::UNDEFINED);
+            // SAFETY: The extension and actual extent/format were checked. The linked external-
+            // memory create info remains live for this synchronous call.
             let image = unsafe { device.create_image(&create, None) }
                 .map_err(|e| format!("Create GUI export Vulkan image: {e:?}"))?;
+            // SAFETY: The new image belongs to this device and is still live.
             let requirements = unsafe { device.get_image_memory_requirements(image) };
+            // SAFETY: The live HAL instance owns the physical device whose memory types are
+            // queried.
             let properties = unsafe {
                 hal.shared_instance()
                     .raw_instance()
@@ -966,6 +1003,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                         .property_flags
                         .contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
             }) else {
+                // SAFETY: The unbound image belongs to this device and has never been submitted.
                 unsafe {
                     device.destroy_image(image, None);
                 }
@@ -974,6 +1012,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             let mut export = vk::ExportMemoryAllocateInfo::default()
                 .handle_types(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD);
             let mut dedicated = vk::MemoryDedicatedAllocateInfo::default().image(image);
+            // SAFETY: The export and dedicated-allocation structures live through the call. Size
+            // and memory index were selected from this image's requirements.
             let memory = match unsafe {
                 device.allocate_memory(
                     &vk::MemoryAllocateInfo::default()
@@ -986,13 +1026,19 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             } {
                 Ok(memory) => memory,
                 Err(error) => {
+                    // SAFETY: Allocation failed before any binding or submission. This path alone
+                    // owns the image.
                     unsafe {
                         device.destroy_image(image, None);
                     }
                     return Err(format!("Allocate GUI export Vulkan memory: {error:?}"));
                 }
             };
+            // SAFETY: The dedicated memory and image belong to the same device, and offset zero
+            // meets the queried requirements.
             if let Err(error) = unsafe { device.bind_image_memory(image, memory, 0) } {
+                // SAFETY: This allocation and image have never been submitted. Destroy the owned
+                // image before freeing the memory.
                 unsafe {
                     device.destroy_image(image, None);
                     device.free_memory(memory, None);
@@ -1009,6 +1055,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                 hal.shared_instance().raw_instance(),
                 device,
             );
+            // SAFETY: The enabled external-memory extension exports this live dedicated OPAQUE_FD
+            // allocation. Its native owner remains pinned.
             let fd = unsafe {
                 extension.get_memory_fd(
                     &vk::MemoryGetFdInfoKHR::default()
@@ -1017,6 +1065,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                 )
             }
             .map_err(|e| format!("Export GUI Vulkan memory FD: {e:?}"))?;
+            // SAFETY: A successful get_memory_fd gives the caller a new owned file descriptor.
             let fd = unsafe { OwnedFd::from_raw_fd(fd) };
             Ok(SharedImageInfo {
                 handle: SharedMemoryHandle::OpaqueFd(fd),
@@ -1035,6 +1084,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             render: &RenderState,
             image: &GuiSharedImage,
         ) -> Result<wgpu::Texture, String> {
+            // SAFETY: The HAL guard pins the WGPU device until its owned texture wrapper is
+            // created. No WGPU operation is called while that guard is held.
             let hal = unsafe { render.device.as_hal::<wgpu::hal::api::Vulkan>() }
                 .ok_or("WGPU/Vulkan device disappeared")?;
             let desc = texture_descriptor(
@@ -1058,6 +1109,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                 view_formats: vec![],
             };
             let owner = image.native.clone();
+            // SAFETY: This raw texture was created on the GUI device to match hal_desc. The drop
+            // callback retains the native image and allocation.
             let hal_texture = unsafe {
                 hal.texture_from_raw(
                     image.native.image,
@@ -1070,6 +1123,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             // The producer published initialized GENERAL contents. In pinned
             // HAL, the legal inclusive COPY_SRC|RESOURCE state maps to GENERAL;
             // the compute pass then records GENERAL -> SHADER_READ_ONLY_OPTIMAL.
+            // SAFETY: The HAL texture belongs to this WGPU device and matches desc. The completed
+            // producer leaves the contents initialized in GENERAL, which matches the initial HAL
+            // state.
             Ok(unsafe {
                 render
                     .device
@@ -1089,12 +1145,17 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         }
         impl Pending {
             pub(super) fn complete(&self) -> Result<bool, String> {
+                // SAFETY: Pending retains the creating device and its live fence throughout this
+                // status query.
                 unsafe { self.native.device.get_fence_status(self.fence) }
                     .map_err(|e| format!("GPU presentation release fence: {e:?}"))
             }
         }
         impl Drop for Pending {
             fn drop(&mut self) {
+                // SAFETY: Release occurs before submission, after confirmed completion, or through
+                // retirement after polling the GUI device. Unknown completion keeps the owner
+                // pinned.
                 unsafe {
                     self.native.device.destroy_fence(self.fence, None);
                     self.native.device.destroy_command_pool(self.pool, None);
@@ -1110,9 +1171,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         ) -> Result<Pending, String> {
             // Only called on the UI thread, adjacent to our own wgpu submit.
             // The worker allocator never touches the GUI queue.
+            // SAFETY: The HAL guard pins this device. Queue access is serialized on the UI thread
+            // and the guard is dropped before WGPU submission.
             let hal = unsafe { render.device.as_hal::<wgpu::hal::api::Vulkan>() }
                 .ok_or("WGPU/Vulkan device disappeared")?;
             let device = hal.raw_device();
+            // SAFETY: The GUI queue family was enabled on this device. This command pool is private
+            // to the pending presentation.
             let pool = unsafe {
                 device.create_command_pool(
                     &vk::CommandPoolCreateInfo::default()
@@ -1121,9 +1186,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                 )
             }
             .map_err(|e| format!("Presentation command pool: {e:?}"))?;
+            // SAFETY: The live device creates an unsignaled fence for the release submission.
             let fence = match unsafe { device.create_fence(&Default::default(), None) } {
                 Ok(fence) => fence,
                 Err(error) => {
+                    // SAFETY: No buffers were allocated from this private pool and no work was
+                    // submitted.
                     unsafe {
                         device.destroy_command_pool(pool, None);
                     }
@@ -1136,6 +1204,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                 fence,
                 _lease: lease,
             };
+            // SAFETY: The private pool is live on this device and has no pending buffers.
+            // Allocation returns two buffers for its queue family.
             let buffers = unsafe {
                 device.allocate_command_buffers(
                     &vk::CommandBufferAllocateInfo::default()
@@ -1146,6 +1216,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             }
             .map_err(|e| format!("Presentation command buffers: {e:?}"))?;
             for (index, &command) in buffers.iter().enumerate() {
+                // SAFETY: The primary command was just allocated from this private pool and has
+                // never been submitted.
                 unsafe {
                     device.begin_command_buffer(
                         command,
@@ -1190,6 +1262,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                     } else {
                         vk::AccessFlags::empty()
                     });
+                // SAFETY: This fresh buffer is recording on the GUI queue family. The image lease
+                // retains the one shared color subresource, and the barriers pair with the
+                // producer's external ownership transfers.
                 unsafe {
                     device.cmd_pipeline_barrier(
                         command,
@@ -1213,6 +1288,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                         .map_err(|e| format!("End presentation barrier: {e:?}"))?;
                 }
             }
+            // SAFETY: The UI thread has exclusive GUI queue submission access here. The first
+            // executable buffer belongs to that queue family, and Pending retains its pool and
+            // image.
             unsafe {
                 device.queue_submit(
                     hal.raw_queue(),
@@ -1226,6 +1304,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             let device = device.clone();
             drop(hal);
             render.queue.submit([commands]);
+            // SAFETY: This UI submission follows the WGPU consumer on the same queue. The second
+            // command is executable, and Pending retains its unsignaled fence, pool and lease.
             if let Err(error) = unsafe {
                 device.queue_submit(
                     queue,

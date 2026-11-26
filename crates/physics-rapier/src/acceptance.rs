@@ -121,6 +121,7 @@ fn rollback_and_retry(custom: bool) {
             .find(|event| event.name == "fixture.physics")
             .unwrap();
         assert!(state.payload["runs"].as_u64().unwrap() >= 70);
+        assert_eq!(state.payload["ray"]["object"].as_u64(), Some(BALL));
         assert!(
             events
                 .iter()
@@ -277,7 +278,10 @@ fn update(ctx: &mut ScriptContext) {
         ctx.emit_event(serde_json::json!("fixture.physics_unavailable"));
         return;
     }
+    // The old stdout marker must stay out of the dedicated response pipe.
+    println!("__MODULE_ENGINE_SCRIPT_PACKET__ user output before the Rapier query");
     let Ok(PhysicsQueryResult::Hit(Some(hit))) = ctx.query_physics(&ray) else { panic!("expected ray hit") };
+    println!("user output after the Rapier query");
     assert_eq!(hit.object, 9007199254740993);
     let invalid = PhysicsQuery::Ray {
         origin:[f32::NAN,0.,0.], direction:[0.,1.,0.], max_distance:10., filter:PhysicsQueryFilter::default(),

@@ -558,6 +558,7 @@ impl SceneViewportState {
     }
 
     /// Draw only after the host has applied interact() actions and updated its snapshot.
+    #[cfg(any(test, feature = "verification"))]
     pub fn paint(
         &mut self,
         ui: &mut egui::Ui,

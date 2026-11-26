@@ -2375,22 +2375,29 @@ mod tests {
             width: usize,
             height: usize,
             _: &RenderOverrides,
-        ) -> Result<Frame, String> {
+        ) -> Result<Frame, crate::RendererError> {
             SoftwareRenderer.render(scene, camera, width, height, &RenderOverrides::default())
         }
-        fn validate_overrides(&self, overrides: &RenderOverrides) -> Result<(), String> {
+        fn validate_overrides(
+            &self,
+            overrides: &RenderOverrides,
+        ) -> Result<(), crate::RendererError> {
             if overrides.parameters.keys().any(|p| p != "tonemap")
                 || overrides.enabled.keys().any(|p| p != "aa")
                 || !overrides.resource_commands.is_empty()
             {
-                return Err("Unsupported renderer target".into());
+                return Err(crate::RendererError::Unsupported(
+                    "Unsupported renderer target",
+                ));
             }
             for params in overrides.parameters.values() {
                 for (name, value) in params {
                     if name != "exposure"
                         && (name != "mode" || !matches!(value.as_f64(), Some(0.0 | 1.0)))
                     {
-                        return Err("Unsupported renderer parameter".into());
+                        return Err(crate::RendererError::Unsupported(
+                            "Unsupported renderer parameter",
+                        ));
                     }
                 }
             }

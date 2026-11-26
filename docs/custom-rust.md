@@ -59,7 +59,7 @@ All IDs are exact `u64` values. The optional `references` field is a map from
 source object IDs to named target IDs. Older v3 workers ignore the additional
 JSON field. Updated workers read an absent field as empty, including for legacy
 Update and Speed. A script using `ctx.reference` needs the updated SDK sources.
-The existing v3 SDK pin and world command set still apply.
+SDK v4 keeps the same reference format and world commands.
 
 The same snapshot supplies the native local transform through
 `ctx.object(id)?.transform` and only active, registered schema components through
@@ -130,11 +130,32 @@ fn update(ctx: &mut ScriptContext) {
 
 Menu interaction owns its pointer, popup and keyboard input rather than forwarding a click into the game world. Removed/unbindable settings hide their controls. The menu reports **Applying** when accepted and displayed-frame selections differ, **Refused** for an invalid request, and **Not saved / works until exit** for an accepted choice whose storage failed. Clicking the current option can retry persistence. A malformed menu candidate preserves the previous accepted description; the UI can keep it disabled with its error instead of accepting new input from the rejected packet.
 
-These fields and [synchronous physics queries](physics-rapier.md) are part of
-the exact SDK data/API identity **`module-engine-data-api/v4`**.
-`engine-sdk.json`, linked Core, workers, prebuilt metadata and Engine/Player
-locks must agree. For an earlier SDK use the explicit compatible rebuild and
-contract-update route. This identity covers data and API compatibility.
+<a id="worker-protocol"></a>
+
+### SDK and worker protocol
+
+The Custom API, including [synchronous physics queries](physics-rapier.md),
+uses SDK `0.4.0` with the exact data/API fingerprint
+`module-engine-data-api/v4`. The selected `engine-sdk.json`, linked Core,
+worker SDK probe and Engine/Player pins must agree.
+
+Worker protocol 4 carries the physics requests and final responses as JSON
+lines on a dedicated response pipe. The host sends requests and query results
+on stdin. Worker stdout, including Windows CRT and inherited child stdout,
+goes to a sink. Stderr remains a bounded diagnostic stream. The 1 MiB packet
+limit applies to the JSON payload before the line terminator.
+
+Player checks its package's SDK pin and each loaded `script.json` worker
+protocol. It requires protocol 4 for SDK v4 workers from this build. Earlier
+protocol 2 and 3 exports need the Player and workers they were built with. A
+protocol 3 worker from an earlier SDK v4 physics build also needs a fresh
+export to run with this Player.
+
+To upgrade, open the source project in a compatible Full Editor. Use
+**Tools → Publish Engine profile / update contracts** and save when changing
+the SDK pin. Export a new Team or Player folder with that build so the SDK or
+prebuilt workers and package pins are recreated together.
+[Engine profiles and migration](engine-profiles.md#миграция-существующего-проекта).
 
 <a id="визуальные-scalar-выражения"></a>
 

@@ -455,7 +455,7 @@ mod tests {
         let before = fs::read(fixture.root.join("project.json")).unwrap();
         assert_eq!(validate_package(&fixture.root).unwrap(), fixture.document);
         assert_eq!(fs::read(fixture.root.join("project.json")).unwrap(), before);
-        fixture.manifest.sdk_data_api_fingerprint = "module-engine-data-api/v1".into();
+        fixture.manifest.sdk_data_api_fingerprint = "module-engine-data-api/v3".into();
         fixture.write_manifest();
         assert!(
             validate_package(&fixture.root)

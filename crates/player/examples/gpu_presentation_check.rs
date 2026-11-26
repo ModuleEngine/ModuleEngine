@@ -396,7 +396,7 @@ fn run(report: &Arc<Mutex<Value>>, report_path: &Path, png: bool) -> Result<Fram
     )?;
     record(
         report,
-        json!({"case":"rejected_shader_preserves_display","passed":true,"diagnostic":rejection}),
+        json!({"case":"rejected_shader_preserves_display","passed":true,"diagnostic":rejection.to_string()}),
     );
 
     let leased = presented(
@@ -420,7 +420,7 @@ fn run(report: &Arc<Mutex<Value>>, report_path: &Path, png: bool) -> Result<Fram
     drop(leased);
     record(
         report,
-        json!({"case":"rejected_target_preserves_endpoint_and_display","passed":true,"diagnostic":target_error}),
+        json!({"case":"rejected_target_preserves_endpoint_and_display","passed":true,"diagnostic":target_error.to_string()}),
     );
 
     fixture.adapter_mismatch_check(&mut *renderer)?;
@@ -877,7 +877,7 @@ impl Fixture<'_> {
         // admission. These checks exercise logical flight even on a fast GPU.
         record(
             self.report,
-            json!({"case":"async_pending_busy_and_target_preservation","passed":true,"native_pending":true,"second_submission_busy":true,"cpu_render_rejected":true,"same_target_idempotent":true,"different_target_rejected":true,"diagnostic":rejection,"readback_before_completion":false}),
+            json!({"case":"async_pending_busy_and_target_preservation","passed":true,"native_pending":true,"second_submission_busy":true,"cpu_render_rejected":true,"same_target_idempotent":true,"different_target_rejected":true,"diagnostic":rejection.to_string(),"readback_before_completion":false}),
         );
 
         let mut invalid = document.clone();
@@ -1252,8 +1252,7 @@ impl Fixture<'_> {
                 .err()
                 .ok_or_else(|| format!("{name}: mismatched adapter was accepted"))?;
             ensure(
-                rejection
-                    == "No matching GUI adapter with Vulkan 1.3 dynamic rendering and external-memory import",
+                matches!(std::error::Error::source(&rejection).and_then(|error| error.downcast_ref::<module_engine_vulkan::VulkanError>()), Some(module_engine_vulkan::VulkanError::NoPresentationAdapter)),
                 format!("{name}: adapter matching was not reached: {rejection}"),
             )?;
             ensure(
@@ -1316,7 +1315,7 @@ impl Fixture<'_> {
             record(
                 self.report,
                 json!({
-                    "case": name, "passed": true, "diagnostic": rejection,
+                    "case": name, "passed": true, "diagnostic": rejection.to_string(),
                     "only_identity_changed": true, "allocator_preserved": true,
                     "last_good_display_unchanged": true, "retained_endpoint_gpu_publication": true,
                     "dimensions": [width, height], "differing_bytes": 0,

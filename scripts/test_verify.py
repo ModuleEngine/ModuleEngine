@@ -73,12 +73,14 @@ class Fixture(unittest.TestCase):
 
 class RegistryTests(Fixture):
     def test_registry_covers_the_actual_rust_ignored_inventory(self):
-        source_root = Path(__file__).resolve().parent.parent / "crates"
-        self.assertTrue(source_root.is_dir(), "Run this inventory test in the actual checkout")
+        repo = Path(__file__).resolve().parent.parent
+        source_roots = (repo / "crates", repo / "examples/bench")
         pattern = re.compile(r'#\[ignore[^\]]*\]\s*(?:#\[[^\]]*\]\s*)*fn\s+(\w+)\s*\(')
         actual = []
-        for path in source_root.rglob("*.rs"):
-            actual.extend(pattern.findall(path.read_text(encoding="utf-8")))
+        for source_root in source_roots:
+            self.assertTrue(source_root.is_dir(), "Run this inventory test in the actual checkout")
+            for path in source_root.rglob("*.rs"):
+                actual.extend(pattern.findall(path.read_text(encoding="utf-8")))
         registered = [s["filter"].rsplit("::", 1)[-1] for s in self.data["steps"] if s.get("ignored")]
         self.assertCountEqual(actual, registered, "Every real #[ignore] needs a purpose and profile/exclusion decision")
 
@@ -97,13 +99,17 @@ class RegistryTests(Fixture):
             "render-settings-history", "custom-player-settings", "custom-player-settings-rollback", "custom-player-settings-stale",
             "native-window-icons", "native-window-z-order",
             "r12-existing-game-roundtrip", "r12-player-stable-id-ipc", "r14-s3-tick-cost", "r15-event-replay",
-            "r16-s3-vulkan", "r61-custom-physics", "r61-s2-physics",
+            "r16-s3-vulkan", "r19-s3-motion-update-cost", "r71-gltf-playback",
+            "r61-custom-physics", "r61-s2-physics",
         })
         self.assertEqual(len(verify.plan(self.data, self.steps, "native")["steps"]), 5)
         self.assertEqual(len(verify.plan(self.data, self.steps, "package")["steps"]), 2)
         tools = verify.plan(self.data, self.steps, "native-tools")["steps"]
         self.assertEqual([step["id"] for step in tools], ["native-linker", "native-context", "native-exe-spellings"])
         self.assertFalse(any("sharedGPU" in step.get("resources", []) for step in tools))
+        editor_tests = [s for s in self.data["steps"] if s.get("package") == "module-engine-editor"]
+        self.assertTrue(editor_tests)
+        self.assertTrue(all("verification" in s.get("features", []) for s in editor_tests))
 
     def test_windows_only_is_an_explicit_linux_skip(self):
         chosen = verify.plan(self.data, self.steps, "native", "linux")["steps"]
@@ -113,9 +119,10 @@ class RegistryTests(Fixture):
 
     def test_clippy_is_explicit_strict_and_does_not_duplicate_formatting(self):
         chosen = verify.plan(self.data, self.steps, "clippy")["steps"]
-        self.assertEqual([step["id"] for step in chosen], ["clippy"])
+        self.assertEqual([step["id"] for step in chosen], ["clippy", "clippy-editor-default"])
         self.assertEqual(chosen[0]["argv"], ["cargo", "clippy", "--offline", "--locked", "--target", "{native_host}", "--workspace", "--all-targets", "--all-features", "--", "-D", "warnings"])
-        self.assertTrue(chosen[0]["pinned_rust"])
+        self.assertEqual(chosen[1]["argv"], ["cargo", "clippy", "--offline", "--locked", "--release", "--target", "{native_host}", "-p", "module-engine-editor", "--bins", "--", "-D", "warnings"])
+        self.assertTrue(all(step["pinned_rust"] for step in chosen))
         self.assertEqual([s["id"] for s in verify.plan(self.data, self.steps, "contracts")["steps"]].count("fmt"), 1)
         with patch.object(verify.subprocess, "run", side_effect=AssertionError("process")), patch.object(verify.subprocess, "Popen", side_effect=AssertionError("process")), redirect_stdout(io.StringIO()):
             self.assertEqual(verify.main(["--profile", "clippy", "--plan"], self.root), 0)
@@ -200,22 +207,25 @@ class ArtifactTests(Fixture):
 
 class ExecutionTests(Fixture):
     def test_clippy_uses_the_native_host_and_propagates_command_failure(self):
-        for fail in [False, True]:
+        for failed_step in [None, 1, 2]:
             seen = []
             runner = self.runner("clippy")
             runner.host = self.host
             runner.prepare = lambda: None
             def command(argv, timeout):
                 seen.append(argv)
-                if fail:
+                if len(seen) == failed_step:
                     raise verify.VerificationError("Clippy warning")
             runner.command = command
             with redirect_stdout(io.StringIO()):
                 results, failed = runner.run()
-            self.assertEqual(failed, fail)
-            self.assertEqual(results[0]["status"], "failed" if fail else "passed")
-            self.assertEqual(seen[0][seen[0].index("--target") + 1], self.host)
-            self.assertNotIn("{native_host}", seen[0])
+            self.assertEqual(failed, failed_step is not None)
+            expected = {None: ["passed", "passed"], 1: ["failed", "not_run"], 2: ["passed", "failed"]}
+            self.assertEqual([result["status"] for result in results], expected[failed_step])
+            self.assertEqual(len(seen), failed_step or 2)
+            for argv in seen:
+                self.assertEqual(argv[argv.index("--target") + 1], self.host)
+                self.assertNotIn("{native_host}", argv)
 
     def test_clippy_rejects_unpinned_rust_version_or_target_before_cargo(self):
         pin_path = self.root / ("toolchain-manifest.json" if verify.PLATFORM == "windows" else "scripts/linux-toolchain.json")
@@ -288,11 +298,15 @@ class ExecutionTests(Fixture):
         self.assertIn("--ignored", seen[0][0])
         self.assertIn("--exact", seen[1][0])
         self.assertEqual(os.environ.get("PATH"), original_path)
-        runner.products[("p", "lib", False)] = {"path": str(self.binary), "sha256": "stale"}
-        # Test the real cached-artifact integrity check, bypassing compilation.
+        cached = {"path": str(self.binary), "sha256": verify.digest(self.binary)}
+        runner.products[("p", "lib", False, ())] = cached
+        runner.products[("p", "lib", False, ("verification",))] = {**cached, "sha256": "stale"}
+        # Test feature selection and integrity on the actual cache path.
         del runner.artifact
-        with self.assertRaises(verify.VerificationError):
-            runner.artifact({"package": "p", "target_kind": "lib"})
+        target = {"package": "p", "target_kind": "lib"}
+        self.assertEqual(runner.artifact(target), cached)
+        with self.assertRaisesRegex(verify.VerificationError, "changed after its Cargo build"):
+            runner.artifact({**target, "features": ["verification"]})
 
     def test_zero_discovery_and_false_summary_never_pass(self):
         for discovered in [False, True]:

@@ -7,6 +7,7 @@ publish = false
 
 [features]
 bench = ["module-engine-vulkan/bench"]
+verification = []
 
 [dependencies]
 module-engine-player = { path = "../player", features = ["ui", "arpg", "puzzle", "g1", "vulkan", "audio", "persistence", "rapier-physics"] }

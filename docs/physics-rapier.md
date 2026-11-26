@@ -102,7 +102,9 @@ Replay feeds identical recorded input to two fresh sessions and compares full
 ordered traces of poses, events and query results. The GameHost rollback
 check rejects a collision tick at a later commit, compares the accepted state
 and retries against a fresh reference. The explicitly run Custom variant
-uses two actual workers, one before and one after physics.
+uses two actual workers, one before and one after physics. The post-step
+worker writes user stdout before and after a real Rapier query and returns
+the expected hit through the dedicated response channel.
 
 The S2 physics measure uses the stock 20-enemy Small monsters encounter and
 its compiled controller in a headless GameHost. Only the fixture adds seven

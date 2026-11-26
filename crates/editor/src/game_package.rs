@@ -1555,7 +1555,16 @@ mod tests {
             overrides: Default::default(),
             references: Default::default(),
         });
+        let project_path = backend.join("r61-physics-fixture.json");
+        let full = crate::distribution::DistributionProfile::Full;
         let archived = serde_json::to_vec(&document).unwrap();
+        let inactive_policy =
+            crate::distribution::detect(&project_path, &document, Some(full)).unwrap();
+        assert!(
+            inactive_policy.can_author_engine(),
+            "{:?}",
+            inactive_policy.source_status
+        );
         let inactive = crate::runtime_delivery::prepare(&document, &backend).unwrap();
         assert!(
             !selected_features(&inactive, &backend)
@@ -1594,12 +1603,7 @@ mod tests {
             &backend,
         )
         .unwrap();
-        let policy = crate::distribution::detect(
-            &backend.join("r61-physics-fixture.json"),
-            &document,
-            Some(crate::distribution::DistributionProfile::Full),
-        )
-        .unwrap();
+        let policy = crate::distribution::detect(&project_path, &document, Some(full)).unwrap();
         assert!(policy.can_author_engine(), "{:?}", policy.source_status);
         let active = crate::runtime_delivery::prepare(&document, &backend).unwrap();
         assert!(

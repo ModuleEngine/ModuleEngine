@@ -20,7 +20,7 @@ impl FrameRenderer for Recorder {
             .map_or(SceneSync::SnapshotOnly, RenderScene::sync)
     }
 
-    fn update_scene(&mut self, update: SceneUpdate<'_>) -> Result<(), String> {
+    fn update_scene(&mut self, update: SceneUpdate<'_>) -> Result<(), RendererError> {
         self.0
             .lock()
             .unwrap()
@@ -28,6 +28,7 @@ impl FrameRenderer for Recorder {
             .as_mut()
             .unwrap()
             .apply(update)
+            .map_err(RendererError::Scene)
     }
 
     fn render_retained(
@@ -36,7 +37,7 @@ impl FrameRenderer for Recorder {
         w: usize,
         h: usize,
         controls: &RenderOverrides,
-    ) -> Result<Frame, String> {
+    ) -> Result<Frame, RendererError> {
         let snapshot = self
             .0
             .lock()
@@ -44,7 +45,8 @@ impl FrameRenderer for Recorder {
             .retained
             .as_ref()
             .unwrap()
-            .snapshot()?
+            .snapshot()
+            .map_err(RendererError::Scene)?
             .clone();
         self.render(&snapshot, camera, w, h, controls)
     }
@@ -56,10 +58,10 @@ impl FrameRenderer for Recorder {
         w: usize,
         h: usize,
         controls: &RenderOverrides,
-    ) -> Result<Frame, String> {
+    ) -> Result<Frame, RendererError> {
         let mut draws = self.0.lock().unwrap();
         if draws.fail {
-            return Err("injected presentation failure".into());
+            return Err(RendererError::Unavailable("injected presentation failure"));
         }
         draws.snapshots.push(scene.clone());
         draws.batches.push(controls.resource_commands.clone());
@@ -477,7 +479,7 @@ impl FrameRenderer for GpuRecorder {
             .map_or(SceneSync::SnapshotOnly, RenderScene::sync)
     }
 
-    fn update_scene(&mut self, update: SceneUpdate<'_>) -> Result<(), String> {
+    fn update_scene(&mut self, update: SceneUpdate<'_>) -> Result<(), RendererError> {
         self.0
             .lock()
             .unwrap()
@@ -485,6 +487,7 @@ impl FrameRenderer for GpuRecorder {
             .as_mut()
             .unwrap()
             .apply(update)
+            .map_err(RendererError::Scene)
     }
 
     fn render_retained_presented(
@@ -493,7 +496,7 @@ impl FrameRenderer for GpuRecorder {
         width: usize,
         height: usize,
         controls: &RenderOverrides,
-    ) -> Result<RenderSubmission, String> {
+    ) -> Result<RenderSubmission, RendererError> {
         let snapshot = self
             .0
             .lock()
@@ -501,7 +504,8 @@ impl FrameRenderer for GpuRecorder {
             .retained
             .as_ref()
             .unwrap()
-            .snapshot()?
+            .snapshot()
+            .map_err(RendererError::Scene)?
             .clone();
         self.render_presented(&snapshot, camera, width, height, controls)
     }
@@ -513,23 +517,25 @@ impl FrameRenderer for GpuRecorder {
         _: usize,
         _: usize,
         _: &RenderOverrides,
-    ) -> Result<Frame, String> {
+    ) -> Result<Frame, RendererError> {
         self.0.lock().unwrap().cpu_calls += 1;
-        Err("fixture GPU renderer forbids a silent CPU fallback".into())
+        Err(RendererError::Unavailable(
+            "fixture GPU renderer forbids a silent CPU fallback",
+        ))
     }
     fn set_presentation_target(
         &mut self,
         target: Option<Arc<dyn PresentationTarget>>,
-    ) -> Result<(), String> {
+    ) -> Result<(), RendererError> {
         let mut draws = self.0.lock().unwrap();
         draws.target_attempts += 1;
         if let Some(target) = &target {
             let target = target
                 .as_any()
                 .downcast_ref::<FixturePresentationTarget>()
-                .ok_or("fixture target type")?;
+                .ok_or(RendererError::Unsupported("fixture target type"))?;
             if draws.reject_target == Some(target.0) {
-                return Err("injected target rejection".into());
+                return Err(RendererError::Unavailable("injected target rejection"));
             }
         }
         draws.accepted_target = target;
@@ -542,11 +548,13 @@ impl FrameRenderer for GpuRecorder {
         width: usize,
         height: usize,
         controls: &RenderOverrides,
-    ) -> Result<RenderSubmission, String> {
+    ) -> Result<RenderSubmission, RendererError> {
         let mut draws = self.0.lock().unwrap();
         draws.attempts += 1;
         if draws.fail_submit {
-            return Err("injected successor admission failure".into());
+            return Err(RendererError::Unavailable(
+                "injected successor admission failure",
+            ));
         }
         if draws.busy || draws.pending.is_some() {
             return Ok(RenderSubmission::Busy);
@@ -579,21 +587,25 @@ impl FrameRenderer for GpuRecorder {
             Ok(RenderSubmission::Ready(frame))
         }
     }
-    fn poll_presented(&mut self, ticket: u64) -> Result<Option<Frame>, String> {
+    fn poll_presented(&mut self, ticket: u64) -> Result<Option<Frame>, RendererError> {
         let mut draws = self.0.lock().unwrap();
         draws.polls += 1;
         if draws.fail_poll {
-            return Err("injected asynchronous completion failure".into());
+            return Err(RendererError::Unavailable(
+                "injected asynchronous completion failure",
+            ));
         }
         if draws.pending.as_ref().map(|(id, _)| *id) != Some(ticket) {
-            return Err("fixture unknown presentation ticket".into());
+            return Err(RendererError::Unavailable(
+                "fixture unknown presentation ticket",
+            ));
         }
         if !draws.ready {
             return Ok(None);
         }
         Ok(draws.pending.take().map(|(_, frame)| frame))
     }
-    fn discard_presented(&mut self, ticket: u64) -> Result<(), String> {
+    fn discard_presented(&mut self, ticket: u64) -> Result<(), RendererError> {
         let mut draws = self.0.lock().unwrap();
         draws.discarded.push(ticket);
         if draws.pending.as_ref().map(|(id, _)| *id) == Some(ticket) {
@@ -706,7 +718,7 @@ impl RendererAdapter for GpuSettingsAdapter {
         &self,
         _: &Node,
         _: &GraphDocument,
-    ) -> Result<Option<RenderControlTargets>, String> {
+    ) -> Result<Option<RenderControlTargets>, RendererError> {
         Ok(Some(RenderControlTargets {
             controls: BTreeSet::from(["edge".into()]),
             resources: BTreeSet::new(),
@@ -717,14 +729,14 @@ impl RendererAdapter for GpuSettingsAdapter {
         _: &Node,
         _: &GraphDocument,
         controls: &RenderOverrides,
-    ) -> Result<(), String> {
+    ) -> Result<(), RendererError> {
         if !controls.parameters.is_empty()
             || !controls.resource_commands.is_empty()
             || controls.enabled.keys().any(|id| id != "edge")
         {
-            return Err(
-                "GPU settings fixture accepts only the declared edge enabled control".into(),
-            );
+            return Err(RendererError::Unsupported(
+                "GPU settings fixture accepts only the declared edge enabled control",
+            ));
         }
         Ok(())
     }
@@ -841,6 +853,7 @@ pub(crate) fn request_gpu_setting(host: &mut GameHost, option: &str) -> Result<(
                 .renderer_adapter(&route.renderer.module)
                 .ok_or("Fixture adapter missing")?
                 .validate_controls(route.renderer, &document, controls)
+                .map_err(String::from)
         },
     )?;
     assert!(

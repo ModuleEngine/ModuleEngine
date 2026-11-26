@@ -112,9 +112,9 @@ pub use cleanup::{
 mod jobs;
 pub use jobs::{JobLease, finish_background_jobs, spawn_job};
 
-const PACKET_MARKER: &str = "__MODULE_ENGINE_SCRIPT_PACKET__";
 const MAX_PACKET: usize = 1024 * 1024;
 const SDK_IDENTITY_ARGUMENT: &str = "--module-engine-sdk-identity";
+const WORKER_PROTOCOL_VERSION: u32 = 4;
 static NEXT_WORKER: AtomicU64 = AtomicU64::new(1);
 
 /// Supported compiled entry-point signatures. Other Rust in the source remains
@@ -1131,13 +1131,20 @@ fn verify_worker_lock(
     Ok(versions)
 }
 
+fn worker_argument() -> String {
+    format!("--module-engine-json-worker-v{WORKER_PROTOCOL_VERSION}")
+}
+
 fn worker_source(kind: ScriptKind) -> String {
+    let stdio = include_str!("worker_stdio.rs");
+    let worker_argument = worker_argument();
     let invoke = match kind {
         ScriptKind::Update => {
             r#"
         if input.get("physics_queries").and_then(serde_json::Value::as_bool) == Some(true) {
+            let response = std::rc::Rc::clone(&response);
             module_engine_core::with_script_physics_queries(
-                move |query| physics_query(request_id, query),
+                move |query| physics_query(&response, request_id, query),
                 || user_program::invoke(&mut context),
             );
         } else {
@@ -1154,29 +1161,32 @@ fn worker_source(kind: ScriptKind) -> String {
         r#"use std::io::{{BufRead, Write}};
 use module_engine_core::{{PhysicsQuery, PhysicsQueryError, PhysicsQueryResponse, ScriptContext, SdkIdentity}};
 mod user_program;
+{stdio}
+const MAX_PACKET: usize = {MAX_PACKET};
 
 fn read_packet() -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {{
     let stdin = std::io::stdin();
     let mut reader = stdin.lock();
     let mut bytes = Vec::new();
-    let count = std::io::Read::take(&mut reader, 1048577).read_until(b'\n', &mut bytes)?;
+    let count = std::io::Read::take(&mut reader, (MAX_PACKET + 2) as u64).read_until(b'\n', &mut bytes)?;
     if count == 0 {{ return Ok(None); }}
-    if bytes.len() > 1048576 {{ return Err("input too large".into()); }}
+    if bytes.len() > MAX_PACKET + 1 {{ return Err("input too large".into()); }}
+    if bytes.last() != Some(&b'\n') {{ return Err("unterminated input packet".into()); }}
     Ok(Some(serde_json::from_slice(&bytes)?))
 }}
 
-fn write_packet(packet: &serde_json::Value) -> Result<(), Box<dyn std::error::Error>> {{
-    let output = serde_json::to_string(packet)?;
-    if output.len() + "{PACKET_MARKER}".len() + 1 > 1048576 {{ return Err("output too large".into()); }}
-    println!("\n{PACKET_MARKER}{{}}", output);
-    std::io::stdout().flush()?;
+fn write_packet(mut pipe: &std::fs::File, packet: &serde_json::Value) -> Result<(), Box<dyn std::error::Error>> {{
+    let mut output = serde_json::to_vec(packet)?;
+    if output.len() > MAX_PACKET {{ return Err("output too large".into()); }}
+    output.push(b'\n');
+    pipe.write_all(&output)?;
     Ok(())
 }}
 
 #[allow(dead_code)]
-fn physics_query(request_id: u64, query: &PhysicsQuery) -> PhysicsQueryResponse {{
-    fn exchange(request_id: u64, query: &PhysicsQuery) -> Result<PhysicsQueryResponse, Box<dyn std::error::Error>> {{
-        write_packet(&serde_json::json!({{
+fn physics_query(pipe: &std::fs::File, request_id: u64, query: &PhysicsQuery) -> PhysicsQueryResponse {{
+    fn exchange(pipe: &std::fs::File, request_id: u64, query: &PhysicsQuery) -> Result<PhysicsQueryResponse, Box<dyn std::error::Error>> {{
+        write_packet(pipe, &serde_json::json!({{
             "request_id": request_id,
             "sdk": SdkIdentity::current(),
             "physics_query": query,
@@ -1189,14 +1199,19 @@ fn physics_query(request_id: u64, query: &PhysicsQuery) -> PhysicsQueryResponse 
             .ok_or("host did not return a physics result")?;
         Ok(serde_json::from_value(result)?)
     }}
-    exchange(request_id, query).map_err(|error| PhysicsQueryError::Transport(error.to_string()))?
+    exchange(pipe, request_id, query).map_err(|error| PhysicsQueryError::Transport(error.to_string()))?
 }}
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {{
-    if std::env::args().nth(1).as_deref() == Some("{SDK_IDENTITY_ARGUMENT}") {{
-        println!("{{}}", serde_json::to_string(&SdkIdentity::current())?);
-        return Ok(());
+    match std::env::args().nth(1).as_deref() {{
+        Some("{SDK_IDENTITY_ARGUMENT}") => {{
+            println!("{{}}", serde_json::to_string(&SdkIdentity::current())?);
+            return Ok(());
+        }}
+        Some("{worker_argument}") => {{}}
+        _ => return Err("expected ModuleEngine worker mode {worker_argument}".into()),
     }}
+    let response = std::rc::Rc::new(response_pipe()?);
     while let Some(input) = read_packet()? {{
         let request_id = input.get("request_id").and_then(serde_json::Value::as_u64).ok_or("missing request_id")?;
         let sdk: SdkIdentity = serde_json::from_value(input.get("sdk").cloned().ok_or("missing SDK identity")?)?;
@@ -1217,7 +1232,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {{
             }}
             Err(error) => serde_json::json!({{"request_id":request_id,"sdk":SdkIdentity::current(),"error":error.to_string()}}),
         }};
-        write_packet(&packet)?;
+        write_packet(&response, &packet)?;
     }}
     Ok(())
 }}
@@ -2005,7 +2020,7 @@ mod tests {
         let mut wrong_version = SdkIdentity::current();
         wrong_version.version.push_str("-different");
         let mut wrong_api = SdkIdentity::current();
-        wrong_api.data_api_fingerprint = "module-engine-data-api/v1".into();
+        wrong_api.data_api_fingerprint = "module-engine-data-api/v3".into();
         for sdk in [wrong_version, wrong_api] {
             let bytes =
                 serde_json::to_vec(&serde_json::json!({"schema_version":1,"sdk":sdk})).unwrap();
@@ -2364,14 +2379,6 @@ fn update(ctx: &mut ScriptContext) {
             .unwrap();
         assert!(panic.tick(&context, Duration::from_secs(2)).is_err());
         assert!(panic.worker_process_id().unwrap().is_none());
-        let noisy = compiler
-            .compile("fn update(_: &mut ScriptContext) { print!(\"{}\", \"x\".repeat(1048577)); }")
-            .unwrap();
-        assert!(matches!(
-            noisy.tick(&context, Duration::from_secs(2)),
-            Err(ScriptError::Packet(_))
-        ));
-        assert!(noisy.worker_process_id().unwrap().is_none());
         let mut oversized = context.clone();
         oversized.events = vec![serde_json::json!("x".repeat(MAX_PACKET))];
         assert!(matches!(

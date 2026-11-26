@@ -109,6 +109,7 @@ def workspace(output):
     # Limit the parent Cargo's debug info without exporting a profile override
     # into Custom's worker environment, where it would invalidate reuse proofs.
     command = ["cargo", "test", "--workspace", "--locked", "--no-fail-fast",
+               "--features", "module-engine-editor/verification",
                "--config", "profile.test.debug=0",
                "--message-format=json-render-diagnostics", "--", "--show-output"]
     print(" ".join(command), flush=True)

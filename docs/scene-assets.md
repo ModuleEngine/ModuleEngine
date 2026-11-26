@@ -58,7 +58,7 @@ Opening Assets for the first time indexes project files and assigns missing IDs.
 
 File reading, hashing, and catalog construction run on a worker thread. Assets displays an indexing indicator; other editor windows remain available. Browser file operations are locked until scanning completes. A result is accepted only for its original folder and current index, and scene edits made during the scan are preserved. Back references for all files are computed by a shared document traversal rather than a separate traversal per tile.
 
-Import supports static glTF/GLB, PNG/JPEG, and basic WAV. A model is copied together with external buffers and images. Every file receives a persistent ID; new asset assignments use `asset://ID`. Old relative paths remain compatible.
+Import supports glTF/GLB, including skins and transform clips, as well as PNG/JPEG and basic WAV. A model is copied together with external buffers and images. Every file receives a persistent ID. New asset assignments use `asset://ID` and old relative paths remain compatible. [glTF playback](content.md#gltf-animation).
 
 Dragging a model from Assets into Scene creates a new object at the point under the cursor; it does not replace the model of an object already there. The selected object's model can be explicitly replaced through Inspector. Dragging a texture onto an object assigns it to the object's material.
 
