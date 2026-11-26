@@ -51,6 +51,18 @@ RU = """
 
 
 class ParseTest(unittest.TestCase):
+    def test_paused_status_keeps_its_estimate_and_must_match_between_languages(self):
+        en = "### R2 — P · 1 week\n\n| R2.5 | T | C | Paused · 2–3 w |\n"
+        ru = "### R2 — Ф · 1 неделя\n\n| R2.5 | З | К | На паузе · 2–3 н |\n"
+        en_phases, ru_phases = roadmap_map.parse(en, "en"), roadmap_map.parse(ru, "ru")
+        task = roadmap_map.merge(en_phases, ru_phases)[0].tasks[0]
+        self.assertEqual((task.state, task.paused, task.effort), ("todo", True, "На паузе · 2–3 н"))
+        self.assertEqual(roadmap_map.compare(en_phases, ru_phases), [])
+        plain_ru = roadmap_map.parse(ru.replace("На паузе · ", ""), "ru")
+        self.assertTrue(any("pause" in e for e in roadmap_map.compare(en_phases, plain_ru)))
+        with self.assertRaisesRegex(ValueError, "estimate"):
+            roadmap_map.parse(en.replace("2–3 w", "Done"), "en")
+
     def test_optional_prefix_is_parsed_and_must_match_between_languages(self):
         en = "### R1 — P · 1 week\n\n| R1.1 | T | C | Optional · 2–3 d |\n"
         ru = "### R1 — Ф · 1 неделя\n\n| R1.1 | З | К | Необязательно · 2–3 д |\n"
@@ -92,8 +104,8 @@ class ParseTest(unittest.TestCase):
 
 
 ROOT = Path(roadmap_map.__file__).resolve().parent.parent
-WORDS = {"en": {"done": "Done", "cur": "In progress", "todo": "1 d", "opt": "Optional · 1 d"},
-         "ru": {"done": "Сделано", "cur": "В работе", "todo": "1 д", "opt": "Необязательно · 1 д"}}
+WORDS = {"en": {"done": "Done", "cur": "In progress", "todo": "1 d", "opt": "Optional · 1 d", "paused": "Paused · 1 d"},
+         "ru": {"done": "Сделано", "cur": "В работе", "todo": "1 д", "opt": "Необязательно · 1 д", "paused": "На паузе · 1 д"}}
 STATE_NAMES = {"done": "Готово", "cur": "В работе", "todo": "Впереди"}
 
 
@@ -546,6 +558,23 @@ class NextMovePriorityTest(unittest.TestCase):
             for open_tasks in ((), ("RV-B.4",), ("RV-C.4",), ("RV-B.4", "RV-C.4")):
                 with self.subTest(markdown_order=markdown_order, open_tasks=open_tasks):
                     self.assert_next_move(self.full_track(open_tasks, markdown_order), "R2.5")
+
+    def test_paused_r25_holds_its_phase_even_when_all_prerequisites_are_done(self):
+        spec = self.full_track(markdown_order=True)
+        spec["R2"][4] = "paused"
+        spec["R3"] = ["done", "todo"]
+        self.assert_next_move(spec, "R3.2")
+        del spec["R3"]
+        self.assert_next_move(spec, "R1.9")
+
+    def test_only_paused_work_has_no_active_or_next_move(self):
+        spec = self.full_track()
+        spec["R2"][4] = "paused"
+        spec["R1"][-1] = "done"
+        spec["RV-D"] = ["done"] * 2
+        table = PageModelTest().fixture(spec)["summary"]
+        self.assertEqual((table["kind"], table["task"]), ("paused", "R2.5"))
+        self.assertIsNone(WorldModelTest().fixture(spec)["focus"])
 
     def test_r24_cannot_bypass_blocked_r23_and_completion_unlocks_r23(self):
         for markdown_order in (False, True):

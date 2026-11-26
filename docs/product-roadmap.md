@@ -6,7 +6,7 @@ Recorded project roadmap and planning baseline, updated 17 November 2026.
 
 The final demonstration is concrete: you assemble the capabilities you need. A colleague reproduces that configuration from its description and changes a second game. The first game still builds and plays as before. A player receives only what their game needs.
 
-This document records the reviewed sequence and its full acceptance expectations. **The owner closed 0.4.2 on 17 November 2026. On 21 November 2026 the owner started the [engine rebuild track](#rebuild) and paused the 0.5 brief and new UI work until its core phases R1, R3 and R4 are accepted. 0.5 implementation has not started.** The 0.4.1 implementation and historical 0.4.2 engineering evidence remain recorded below. Future version numbers and milestone scopes are planning labels: they do not mean those versions have shipped, authorize every implementation, or promise dates. Existing specifications, ownership boundaries and budgets remain in force. Use the agreed [0.5 composition and dependency scope](#compose) for the next brief and the [owner check cards](product-roadmap-checks.md) for short personal checks.
+This document records the reviewed sequence and its full acceptance expectations. **The owner closed 0.4.2 on 17 November 2026. On 21 November 2026 the owner started the [engine rebuild track](#rebuild) and paused the 0.5 brief and new UI work until its core phases R1, R3 and R4 are accepted. The 0.5 milestone remains paused on `main`.** The 0.4.1 implementation and historical 0.4.2 engineering evidence remain recorded below. Future version numbers and milestone scopes are planning labels: they do not mean those versions have shipped, authorize every implementation, or promise dates. Existing specifications, ownership boundaries and budgets remain in force. Use the agreed [0.5 composition and dependency scope](#compose) for the next brief and the [owner check cards](product-roadmap-checks.md) for short personal checks.
 
 [Version map](#map) · [Baseline](#baseline) · [Starting handoff](#start) · [Independent use](#usability) · [Release decisions](#decision) · [Engine rebuild](#rebuild) · [AI-assisted live authoring](#ai-authoring)
 
@@ -55,7 +55,7 @@ Basis: [current status](current-status.md), [G1 evidence and acceptance boundari
 
 ## Next brief — 0.5 composition and understandable dependencies
 
-**Entry.** The owner closed 0.4.2 on 17 November 2026. Before implementation, define a separate brief from the [agreed 0.5 scope](#compose): current capabilities, examples with/without audio, rights and actual Player-composition evidence. Implementation of 0.5 has not started.
+**Entry.** The owner closed 0.4.2 on 17 November 2026. Before implementation, define a separate brief from the [agreed 0.5 scope](#compose): current capabilities, examples with/without audio, rights and actual Player-composition evidence. The 0.5 milestone remains paused on `main`.
 
 1. Preserve the working UI and authored data. Reconcile stage 4 with implemented 2A and complete only confirmed gaps instead of repeating a redesign.
 2. In Full, show the audio consumer and removal consequences. First refuse clearly while the request is needed; after removing the request, carry the change through UI, runtime and a real Player package. Provide restoration of previous values.
@@ -106,7 +106,7 @@ Original detailed brief: [0.4.2 plan](release-042-plan.md). The protocol above i
 
 ## 0.5 — I assemble what I need and understand the consequences
 
-**Status — paused by the owner on 21 November 2026 until the [engine rebuild track](#rebuild) phases R1, R3 and R4 are accepted; implementation has not started and follows a separate brief.**
+**Status — paused by the owner on 21 November 2026 until the [engine rebuild track](#rebuild) phases R1, R3 and R4 are accepted. It follows a separate brief.**
 
 Disabling a button while retaining its service, resource requirement and Player dependency does not remove unnecessary engine capabilities.
 
@@ -321,19 +321,19 @@ Basis: [portfolio gates](portfolio-roadmap.md), [independent review](review.md),
 
 ## Engine rebuild track — a modern Vulkan renderer and ready-made libraries
 
-**Status — started by the owner's decision of 21 November 2026; it is the current priority. No implementation has started yet.** The owner chose the high-end rendering route: stay on Vulkan through `ash`, render the editor through Vulkan as well, build the renderer GPU-driven from the start, and then add hybrid ray tracing, mesh shaders and other modern features on top of a solid rasterizer. Runtime pieces that are not this project's value (ECS storage, physics, audio, math) move to proven libraries; the editor, its authored-data rules and the render-graph/HLSL authoring model stay.
+**Status — the owner started this track on 21 November 2026. It remains the current priority.** The owner chose the high-end rendering route: stay on Vulkan through `ash`, render the editor through Vulkan as well, build the renderer GPU-driven from the start, and then add hybrid ray tracing, mesh shaders and other modern features on top of a solid rasterizer. Runtime pieces that are not this project's value (ECS storage, physics, audio, math) move to proven libraries; the editor, its authored-data rules and the render-graph/HLSL authoring model stay.
 
 Phase numbers R0–R10 are planning labels, not versions. Effort is a rough range for one full-time developer with Vulkan experience; it is speculation until R0 records real throughput (see the [complete route](#map) rule on estimates). The phases are ordered by dependency; independent phases can overlap when there is more than one developer.
 
-**Task status.** The last column of every phase task table is the task's status: `Done`, `In progress` (an estimate may follow in parentheses), or the effort estimate while the task has not started. Change it in the same pull request that completes or starts the task, in both languages. The [visual roadmap](roadmap-map.md) is rebuilt from this column after every merge to `main`.
+**Task status.** The last column records completion, active work, a pending estimate, or a paused estimate. Optional tasks keep their `Optional ·` prefix. Implementation chats hand over accepted results and evidence. The dedicated roadmap chat checks `main` and actual starts with the working chats, then records them together in one EN/RU pull request. The [visual roadmap](roadmap-map.md) uses these tables.
 
 **Relation to the version route.** On 21 November 2026 the owner paused the 0.5 brief and new UI work until R1, R3 and R4 are accepted, because they change the world storage, the editor shell and the editor/game boundary that 0.5 would build on. The track does not replace any milestone: R5 is the technical base for [1.3](#real), R6–R7 supply the physics and skeleton that [0.9a](#combat) and the [G2 decisions](#g2-agreement) need, and every phase keeps the G1 and ARPG budgets from [release decisions](#decision) as regression gates. Ray tracing and mesh shaders are optional hardware tiers: G1/G3-style packages must never require them.
 
-### Where the code stands today
+### Historical starting point, 0.4.2
 
-Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
+Snapshot of `main` at `b6f54c9` before the rebuild. See [current status](current-status.md) for implemented behavior.
 
-| Area | Current state | Consequence |
+| Area | State at the checkpoint | Consequence |
 | --- | --- | --- |
 | World storage | `EcsWorld` (`crates/engine-core/src/world.rs`) keeps every column in `BTreeMap<u64, _>`; dynamic components are `serde_json::Value`. `GameSession::step_budget` (`crates/engine-core/src/game.rs`) clones the whole `GameState` before every 60 Hz tick for rollback. | Tick cost grows with world size even when nothing changes; components are parsed JSON, not typed data. |
 | Earlier storage decision | [ecs-storage-decision.md](ecs-storage-decision.md) chose to extend `EcsWorld` over `hecs` as a migration-cost choice with no performance claim. | R1 must record a superseding decision backed by a benchmark. |
@@ -394,7 +394,7 @@ Checked against `main` at `b6f54c9` (0.4.2 checkpoint):
 | R1.6 | Change-driven extraction: render extraction reads `Changed<…>` and produces deltas (spawned, moved, removed, material changed) instead of a full `SceneSnapshot`. The full snapshot remains for the software renderer and diagnostics. | On S3 with 1,000 moving objects the delta contains only those objects. Schema-only edits must not produce a transform delta. | Done |
 | R1.7 | Migrate consumers: `game-host`/`game_worker`, `runtime-script` typed commands, `project-g1`, `project-puzzle`, `gameplay-arpg`, `example-two-arenas`. The Object provider stays a compatibility adapter. | All crate test suites pass; no consumer touches the old column maps. | Done |
 | R1.8 | Acceptance and removal of the old storage. Measure the [session checkpoint copy cost](#r18-session-checkpoint). | S2 tick p95 [not worse](bench.md#not-worse) than R0.6. S3 ECS tick p99 ≤2 ms in the standalone fixture, taken over all samples of the five paired runs combined (each run's own p99 is reported alongside). The paired comparison with R0.6 is reported in full; its memory and S3 ECS differences are the [accepted cost](#r18-accepted-cost) of R1.1/R1.2 and do not block. Compare S3 with session metadata against the R1.4 baseline and report the copy cost separately. S1/S2 absolute gates pass (60 FPS, S1 peak working set ≤1 GiB). Independent review. | Done |
-| R1.9 | S3 ECS tick optimisation ([accepted regression](#r18-accepted-cost) from R1.8). First add a per-operation microbenchmark for the 1,000 motion updates: Bevy lookup, `Arc`/binding bookkeeping, JSON access. Then batch transform updates and move the per-write bookkeeping to once per batch. | Paired Release comparison against the R1.8 candidate on `main` after #38 (`133f98f`) or later: S3 ECS mean and p95 lower, no S3 sample above 2 ms in a strict per-sample run, S2 tick p95 [not worse](bench.md#not-worse) than R0.6. Late rejection and retry through `GameHost` still pass. Independent review. | Optional · 2–3 d |
+| R1.9 | S3 ECS tick optimisation ([accepted regression](#r18-accepted-cost) from R1.8). First add a per-operation microbenchmark for the 1,000 motion updates: Bevy lookup, `Arc`/binding bookkeeping, JSON access. Then batch transform updates and move the per-write bookkeeping to once per batch. | Paired Release comparison against the R1.8 candidate on `main` after #38 (`133f98f`) or later: S3 ECS mean and p95 lower, no S3 sample above 2 ms in a strict per-sample run, S2 tick p95 [not worse](bench.md#not-worse) than R0.6. Late rejection and retry through `GameHost` still pass. Independent review. | Optional · Done |
 
 <a id="r18-accepted-cost"></a>
 
@@ -491,14 +491,14 @@ Each fix starts with a regression test that fails on the current code and runs i
 
 | # | Task | Acceptance | Effort |
 | --- | --- | --- | --- |
-| RV-D.1 | Custom worker protocol on its own channel instead of a marker in the stdout that user code also writes to. | User output, including the marker text, does not break the packet parser; a test covers it. | Optional · In progress |
-| RV-D.2 | Enforce `clippy::undocumented_unsafe_blocks` in `render-vulkan`, then in presentation, native dialogs and Host waits. | The lint is enforced for `render-vulkan` in the clippy profile; every `unsafe` block there states its preconditions. | Optional · 1–2 d |
-| RV-D.3 | Editor verification modules behind a feature flag, as `bench` already is. | A release Editor builds without the verification modules; verification routes enable the feature; the EXE size change is recorded. | Optional · 1 d |
-| RV-D.4 | Compare the not-worse tolerance (the larger of 5 % and twice the range of five baseline runs) with the median absolute deviation or a confidence interval of the median on recorded series. | A dated decision in [benchmarks](bench.md#not-worse) to keep or change the rule, with the recorded series behind it. | Optional · 1 d |
-| RV-D.5 | Typed errors at Core boundaries: `WorldProvider` and the renderer adapter keep the error type instead of `String`. | `VulkanError` and world errors reach the caller with their kind; these boundaries gain no new `Result<_, String>`. | Optional · 3–4 d |
-| RV-D.6 | Report malformed component values. `world_component` in ARPG and similar readers count or log deserialization failures instead of treating the component as absent. | A malformed `health` produces a diagnostic in debug builds and a counter in verification output. | Optional · 0.5 d |
-| RV-D.7 | Explicit consent before compiling Custom Rust from an unfamiliar Team project. | Opening such a project runs no `build.rs` or procedural macro until the user agrees; the answer is remembered per project. | Optional · 1–2 d |
-| RV-D.8 | Documentation entry point. README describes the current state and the R track without paths from one PC, the build version is separated from milestone status, and `current-status.md` is split into a short current snapshot and an archive. | README and `current-status.md` in both languages match `main`; the archive keeps old entries with working links. | Optional · 1 d |
+| RV-D.1 | Custom worker protocol on its own channel instead of a marker in the stdout that user code also writes to. | User output, including the marker text, does not break the packet parser; a test covers it. | Optional · Done |
+| RV-D.2 | Enforce `clippy::undocumented_unsafe_blocks` in `render-vulkan`, then in presentation, native dialogs and Host waits. | The lint is enforced for `render-vulkan` in the clippy profile; every `unsafe` block there states its preconditions. | Optional · Done |
+| RV-D.3 | Editor verification modules behind a feature flag, as `bench` already is. | A release Editor builds without the verification modules; verification routes enable the feature; the EXE size change is recorded. | Optional · Done |
+| RV-D.4 | Compare the not-worse tolerance (the larger of 5 % and twice the range of five baseline runs) with the median absolute deviation or a confidence interval of the median on recorded series. | A dated decision in [benchmarks](bench.md#not-worse) to keep or change the rule, with the recorded series behind it. | Optional · Done |
+| RV-D.5 | Typed errors at Core boundaries: `WorldProvider` and the renderer adapter keep the error type instead of `String`. | `VulkanError` and world errors reach the caller with their kind; these boundaries gain no new `Result<_, String>`. | Optional · Done |
+| RV-D.6 | Report malformed component values. `world_component` in ARPG and similar readers count or log deserialization failures instead of treating the component as absent. | A malformed `health` produces a diagnostic in debug builds and a counter in verification output. | Optional · Done |
+| RV-D.7 | Explicit consent before compiling Custom Rust from an unfamiliar Team project. | Opening such a project runs no `build.rs` or procedural macro until the user agrees; the answer is remembered per project. | Optional · Done |
+| RV-D.8 | Documentation entry point. README describes the current state and the R track without paths from one PC, the build version is separated from milestone status, and `current-status.md` is split into a short current snapshot and an archive. | README and `current-status.md` in both languages match `main`; the archive keeps old entries with working links. | Optional · Done |
 
 <a id="rebuild-r2"></a>
 
@@ -510,7 +510,7 @@ Each fix starts with a regression test that fails on the current code and runs i
 | R2.2 | Bindless resources: one global descriptor set with descriptor indexing (texture array, samplers, storage buffers) or buffer device address. Replace the atlas with per-texture images, mipmaps generated at import or on upload, anisotropic sampling. The push-constant ABI gains bindless indices; custom HLSL passes keep working. | 1,000 unique textures without the 8192 px limit; no shimmering on a moving camera over S4 floors; existing custom-pass tests pass. | Done |
 | R2.3 | GPU-resident scene: one mesh pool (shared vertex/index buffers) uploaded once per mesh; instance buffer with transforms and material indices updated from R1.6 deltas; material buffer. Remove the CPU vertex transform in `geometry.rs`. | Upload bytes per frame proportional to changed objects; S3 CPU frame ≤1 ms. | Done |
 | R2.4 | GPU culling and indirect drawing: compute frustum culling, `vkCmdDrawIndexedIndirectCount`, then two-phase Hi-Z occlusion culling. | Draw calls per pass do not grow with object count; S3 scaled to 100,000 instances keeps 60 FPS at 1080p on the [R0.4 reference GPU](hardware-tiers.md#reference-gpu). | Done |
-| R2.5 | Render graph v2: automatic barriers with synchronization2, transient resource aliasing, async compute queue. Existing graph documents load unchanged; built-in passes (forward, gbuffer, deferred, SSAO, FXAA, tonemap, color encode) are migrated. | Existing graph and custom-pass tests pass; built-ins match the old images within the `image_quality_check` tolerance; transient memory on S4 is at least 30 % lower. | 2–3 w |
+| R2.5 | Render graph v2: automatic barriers with synchronization2, transient resource aliasing, async compute queue. Existing graph documents load unchanged; built-in passes (forward, gbuffer, deferred, SSAO, FXAA, tonemap, color encode) are migrated. | Existing graph and custom-pass tests pass; built-ins match the old images within the `image_quality_check` tolerance; transient memory on S4 is at least 30 % lower. | Paused · 2–3 w |
 | R2.6 | Game swapchain for Player: present modes, frame pacing, resize, prepared for HDR output. | Player S1/S2 run directly on the swapchain; frame-time p95 [not worse](bench.md#not-worse) than R0.6. | 1 w |
 | R2.7 | Parity and switch: the old renderer behind a feature flag until S1/S2 pass, then removal. | S1/S2 gates pass on the new renderer; old code deleted; independent review. | 0.5–1 w |
 
@@ -520,7 +520,7 @@ Each fix starts with a regression test that fails on the current code and runs i
 
 | # | Task | Acceptance | Effort |
 | --- | --- | --- | --- |
-| R3.1 | Spike: `eframe` has no Vulkan backend. Compare `winit` + `egui-winit` + `egui-ash-renderer` against a thin own egui painter on the R2 device. Recommendation: own painter, so the editor, scene views and game share one `VkDevice`. | Decision recorded; the spike draws the current editor at ≥60 FPS with crisp text at 100 % and 150 % DPI. | 4–5 d |
+| R3.1 | Spike: `eframe` has no Vulkan backend. Compare `winit` + `egui-winit` + `egui-ash-renderer` against a thin own egui painter on the R2 device. [Decision](decisions.md#r31-editor-painter): R3.2 starts with `egui-ash-renderer 0.13.0`. ModuleEngine owns the device, swapchain and frame lifetime. | Decision recorded; the spike draws the current editor at ≥60 FPS with crisp text at 100 % and 150 % DPI. | Done |
 | R3.2 | Replace the `eframe` shell in Editor and Player UI: window, input, clipboard, IME, DPI, cursor, and the detached native windows from `native_windows.rs`. egui widgets and panes stay unchanged. | Every existing pane opens; detached windows, docking and resize work; native window checks pass. | 1–1.5 w |
 | R3.3 | Scene and Game views sample render-graph output images on the same device. Remove the D3D12/OPAQUE_FD interop path after acceptance. | One frame less latency than today; `gpu_presentation.rs` interop removed; Linux uses the same path. | 4–5 d |
 | R3.4 | Port verification hooks that depend on `eframe` (`__screenshot`, `ui_capture.rs`, editor benchmark). | UI capture and editor benchmark run as before. | 2–3 d |
@@ -532,7 +532,7 @@ Each fix starts with a regression test that fails on the current code and runs i
 
 | # | Task | Acceptance | Effort |
 | --- | --- | --- | --- |
-| R4.1 | Define an editor extension interface: a game registers its panels, inspectors, verification scenarios and Play hooks. | Interface documented in [architecture](architecture.md). | 2 d |
+| R4.1 | Define an editor extension interface: a game registers its panels, inspectors, verification scenarios and Play hooks. | Interface documented in [architecture](architecture.md). | Done |
 | R4.2 | Move game-specific code out of `game_ui.rs` and related editor files into the `ui` features of `gameplay-arpg`, `project-g1` and `project-puzzle`, together with the game presentation registration in `crates/player/src/presentations.rs`; turn `example-two-arenas` into an example that uses the same interface. | The editor crate builds with no game crate in its dependencies, and Player registers game presentations through the same interface. | 4–6 d |
 | R4.3 | Composition selects which games are linked into an editor build. | Adding a test game requires no change in `crates/editor`; G1 and ARPG behave as before. | 1–2 d |
 
@@ -555,7 +555,7 @@ Each fix starts with a regression test that fails on the current code and runs i
 
 | # | Task | Acceptance | Effort |
 | --- | --- | --- | --- |
-| R6.1 | `rapier3d`: rigid body, collider and joint components; a physics step synchronized to the 60 Hz tick with `enhanced-determinism`; raycasts and shape queries for systems and scripts; collision events as `GameEvent`; debug draw in the Scene view. | Recorded-input replay stays identical; S2 with projectiles: physics ≤1 ms per tick. | 1–1.5 w |
+| R6.1 | `rapier3d`: rigid body, collider and joint components; a physics step synchronized to the 60 Hz tick with `enhanced-determinism`; raycasts and shape queries for systems and scripts; collision events as `GameEvent`; debug draw in the Scene view. | Recorded-input replay stays identical; S2 with projectiles: physics ≤1 ms per tick. | Done |
 | R6.2 | Move game collision code to `rapier3d` where it is a general physics problem; grid rules in `game-kit` stay as game rules. | G1 levels and the ARPG encounter play as before. | 2–3 d |
 | R6.3 | `kira` replaces the WinMM mixer: OGG/MP3/FLAC/WAV, buses, volume and fades, spatial audio; Linux output. Existing game-event-to-sound bindings and audio composition from 0.5 planning keep their meaning. | Same bindings play on Windows and Linux; measured output latency ≤50 ms. | 4–5 d |
 | R6.4 | `glam` for math instead of hand-written matrix helpers (`transform_point` and similar); `rfd` for native file dialogs where the editor has its own. | No hand-written matrix code left outside codecs; dialogs work on Windows and Linux. | 2–3 d |
@@ -566,7 +566,7 @@ Each fix starts with a regression test that fails on the current code and runs i
 
 | # | Task | Acceptance | Effort |
 | --- | --- | --- | --- |
-| R7.1 | Import glTF skins, joints and animation clips (the importer rejects them today). | Khronos skinned samples (CesiumMan, Fox) import and play. | 1 w |
+| R7.1 | Import glTF skins, joints and animation clips (the importer rejects them today). | Khronos skinned samples (CesiumMan, Fox) import and play. | Done |
 | R7.2 | GPU skinning in compute, writing into the mesh pool, so culling, shadows and later ray-tracing refits see the skinned pose. | 50 skinned characters on S2 within the frame budget. | 1 w |
 | R7.3 | Animation runtime: clip sampling, blending, additive layers, root motion, events on frames. | Attack and dodge timing from the G2 decisions 24–25 can be driven by animation events. | 1 w |
 | R7.4 | Animation state graph with both a visual editor and a text file, applied during paused Play (G2 decisions 22 and 26). | Owner edits a transition while paused and sees it after resuming. | 1–1.5 w |
@@ -578,7 +578,7 @@ Each fix starts with a regression test that fails on the current code and runs i
 
 | # | Task | Acceptance | Effort |
 | --- | --- | --- | --- |
-| R8.1 | Spike: meshlet build with `meshopt` and a task/mesh shader path on S5. | Decision with numbers: mesh path vs R2.4 indirect path. | 4–5 d |
+| R8.1 | Spike: meshlet build with `meshopt` and a task/mesh shader path on S5. [Decision](decisions.md#r81-meshlet-prototype): keep R2.4 as the production path and retain the experimental Tier B prototype. | Decision with numbers: mesh path vs R2.4 indirect path. | Done |
 | R8.2 | Meshlets at import: clustering, bounds and normal cones stored in the asset. | Meshlet data cached; import time recorded. | 3–4 d |
 | R8.3 | Task/mesh shader pipeline with per-meshlet frustum, cone and Hi-Z culling. | S5 at 60 FPS at 1080p on the [R0.4 reference GPU](hardware-tiers.md#reference-gpu) using tier B. | 1.5 w |
 | R8.4 | Continuous LOD: simplified LOD chain (`meshopt` simplify) or meshlet hierarchy with screen-space error selection, without visible popping. | S5 memory and GPU time within agreed budget; no popping in a fly-through. | 1.5–2 w |
@@ -766,3 +766,7 @@ The following 27 recorded choices are part of this planning baseline, not requir
 | 25 | Dodge can interrupt an attack or projectile preparation at any moment. |
 | 26 | Apply animation/AI graph changes during paused Play. |
 | 27 | Items appear on the ground and are picked up by clicking. |
+**Accepted on 26 November 2026.** RV-D.1–RV-D.8, the R1.9 S3 optimisation, the [R3.1 painter comparison](editor-vulkan-spike.md#r31-results), the R4.1 editor extension contract, the R6.1 Rapier step, R7.1 glTF import and CPU animation playback, and the [R8.1 S5 prototype](r81-s5-meshlets.md#r81-result) are complete at the checked `main` snapshot. The [final Windows and Linux CI](https://github.com/myjname/ModuleEngine/actions/runs/45771712793) passed at `f8bc9ac`.
+
+**Next by dependency.** The map offers R6.2 first, followed by R3.2, R4.2, R7.2 and R8.2. These tasks have not started. R2.5 has cleared its technical prerequisites and remains paused. The 0.5 milestone on `main` and new UI work still wait for acceptance of R1, R3 and R4. The tested audio scenario and both Practice Arena examples are preserved on the [separate 0.5 audio branch at `c199903`](https://github.com/myjname/ModuleEngine/commit/c19990396a9c5be43309f9d102a992385555d81e).
+

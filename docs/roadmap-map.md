@@ -20,6 +20,7 @@ The last column of every phase task table in the roadmap is the status:
 | `In progress`, optionally `In progress (2–3 d)` | `В работе`, optionally `В работе (2–3 д)` | Task in progress |
 | An estimate such as `2–3 d` or `1.5 w` | An estimate such as `2–3 д` or `1,5 н` | Not started |
 | `Optional · 2–3 d` (before the estimate) | `Необязательно · 2–3 д` | Tracked like any task, but its phase and the checkpoints that depend on it finish without it. A phase made only of optional tasks, such as RV-D, finishes when all of them are done. Both tables must carry the prefix |
+| `Paused · 2–3 w` | `На паузе · 2–3 н` | Keeps the estimate. The maps omit this task and later tasks in its phase when choosing the next move. When work starts, replace the pause marker with `In progress` |
 
 The dedicated roadmap chat records status transitions. Implementation chats pass along accepted results and verification evidence and update technical contracts in their own pull requests. When a transition is ready, the planning chat compares `main` with the working chats and proposes one status pull request for the confirmed completions and work that has actually started. Apply the proposal from the dedicated roadmap chat and edit both language tables together. Keep the original estimate in parentheses when marking a task in progress if the estimate still applies.
 

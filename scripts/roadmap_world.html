@@ -448,7 +448,8 @@ function selectProv(i) { if (provs[i].reg.landmark || true) { sel = i; selReg = 
 function selectReg(k) { sel = -1; selReg = k; renderPanel(); redraw(); }
 const taskProvs = provs.filter(p => p.kind === 'task'), total = taskProvs.filter(p => p.st === 'done').length;
 const curIds = moves.current, frontIds = moves.next, wonRegs = regs.filter(r => !r.landmark && regDone(r)).length;
-document.getElementById('hud').innerHTML = `<span>Захвачено <b>${total}/${taskProvs.length}</b><span class="bar">${taskProvs.map(p => `<i class="${p.st === 'done' ? 'on' : ''}"></i>`).join('')}</span></span><span>${curIds.length ? 'Осада' : 'Следующий ход'}: <b>${esc((curIds.length ? curIds : frontIds).join(', ') || '—')}</b></span><span>Областей: <b>${wonRegs}/${rk.length}</b></span>`;
+const pausedId = !curIds.length && !frontIds.length && !moves.blocked ? moves.paused : null;
+document.getElementById('hud').innerHTML = `<span>Захвачено <b>${total}/${taskProvs.length}</b><span class="bar">${taskProvs.map(p => `<i class="${p.st === 'done' ? 'on' : ''}"></i>`).join('')}</span></span><span>${curIds.length ? 'Осада' : pausedId ? 'На паузе' : 'Следующий ход'}: <b>${esc((curIds.length ? curIds : frontIds).join(', ') || pausedId || '—')}</b></span><span>Областей: <b>${wonRegs}/${rk.length}</b></span>`;
 if (SRC) document.getElementById('meta').textContent = `Статусы из ${SRC.source}${SRC.commit ? ' · коммит ' + SRC.commit : ''} · собрано ${SRC.generated}`;
 /* chronicle: the latest GitHub events; all text from the events file is escaped */
 const EVN = { commit: ['⚔', 'Коммит'], pr: ['⛵', 'PR открыт'], merge: ['🏴', 'PR влит'], comment: ['🕊', 'Комментарий'], review: ['📜', 'Ревью'] };
