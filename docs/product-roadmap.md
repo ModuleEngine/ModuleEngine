@@ -325,7 +325,11 @@ Basis: [portfolio gates](portfolio-roadmap.md), [independent review](review.md),
 
 Phase numbers R0–R10 are planning labels, not versions. Effort is a rough range for one full-time developer with Vulkan experience; it is speculation until R0 records real throughput (see the [complete route](#map) rule on estimates). The phases are ordered by dependency; independent phases can overlap when there is more than one developer.
 
-**Task status.** The last column records completion, active work, a pending estimate, or a paused estimate. Optional tasks keep their `Optional ·` prefix. Implementation chats hand over accepted results and evidence. The dedicated roadmap chat checks `main` and actual starts with the working chats, then records them together in one EN/RU pull request. The [visual roadmap](roadmap-map.md) uses these tables.
+**Task status.** The last column records completion, active work, a pending estimate, or a paused estimate such as `Paused · 2–3 w`. Optional tasks keep their `Optional ·` prefix. Implementation chats hand over accepted results and evidence. The dedicated roadmap chat checks `main` and actual starts with the working chats, then records them together in one EN/RU pull request. The [visual roadmap](roadmap-map.md) uses these tables.
+
+**Accepted by 26 November 2026.** RV-D.1–RV-D.8, the R1.9 S3 optimisation, the [R3.1 painter comparison](editor-vulkan-spike.md#r31-results), the R4.1 editor extension contract, the R6.1 Rapier step, R7.1 glTF import and CPU animation playback, and the [R8.1 S5 prototype](r81-s5-meshlets.md#r81-result) are complete at the checked `main` snapshot. The [final Windows and Linux CI](https://github.com/myjname/ModuleEngine/actions/runs/45771712793) passed at `f8bc9ac`.
+
+**Next by dependency.** The map offers R6.2 first, followed by R3.2, R4.2, R7.2 and R8.2. These tasks have not started. R2.5 has cleared its technical prerequisites and remains paused. The 0.5 milestone on `main` and new UI work still wait for acceptance of R1, R3 and R4. The tested audio scenario and both Practice Arena examples are preserved on the [separate 0.5 audio branch at `c199903`](https://github.com/myjname/ModuleEngine/commit/c19990396a9c5be43309f9d102a992385555d81e).
 
 **Relation to the version route.** On 21 November 2026 the owner paused the 0.5 brief and new UI work until R1, R3 and R4 are accepted, because they change the world storage, the editor shell and the editor/game boundary that 0.5 would build on. The track does not replace any milestone: R5 is the technical base for [1.3](#real), R6–R7 supply the physics and skeleton that [0.9a](#combat) and the [G2 decisions](#g2-agreement) need, and every phase keeps the G1 and ARPG budgets from [release decisions](#decision) as regression gates. Ray tracing and mesh shaders are optional hardware tiers: G1/G3-style packages must never require them.
 
@@ -766,7 +770,3 @@ The following 27 recorded choices are part of this planning baseline, not requir
 | 25 | Dodge can interrupt an attack or projectile preparation at any moment. |
 | 26 | Apply animation/AI graph changes during paused Play. |
 | 27 | Items appear on the ground and are picked up by clicking. |
-**Accepted on 26 November 2026.** RV-D.1–RV-D.8, the R1.9 S3 optimisation, the [R3.1 painter comparison](editor-vulkan-spike.md#r31-results), the R4.1 editor extension contract, the R6.1 Rapier step, R7.1 glTF import and CPU animation playback, and the [R8.1 S5 prototype](r81-s5-meshlets.md#r81-result) are complete at the checked `main` snapshot. The [final Windows and Linux CI](https://github.com/myjname/ModuleEngine/actions/runs/45771712793) passed at `f8bc9ac`.
-
-**Next by dependency.** The map offers R6.2 first, followed by R3.2, R4.2, R7.2 and R8.2. These tasks have not started. R2.5 has cleared its technical prerequisites and remains paused. The 0.5 milestone on `main` and new UI work still wait for acceptance of R1, R3 and R4. The tested audio scenario and both Practice Arena examples are preserved on the [separate 0.5 audio branch at `c199903`](https://github.com/myjname/ModuleEngine/commit/c19990396a9c5be43309f9d102a992385555d81e).
-
