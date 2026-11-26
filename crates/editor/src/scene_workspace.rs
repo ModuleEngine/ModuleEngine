@@ -1010,6 +1010,7 @@ mod tests {
     }
     #[test]
     fn global_transition_cancels_personal_pane_gesture_before_saving() {
+        let _finish = crate::FinishSerialRenderTest;
         let mut editor = editor();
         let initial = editor.document.clone();
         let objects = initial

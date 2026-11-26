@@ -39,7 +39,7 @@ the same PR group. Each push to `main`, merge-queue event, and manual run has
 its own group keyed by run ID. A second merge can start before the first
 finishes and cannot cancel or replace its run.
 
-All other PRs run both OS jobs with native and package checks. On pushes and merge groups,
+All other PRs run both platforms with native and package checks. On pushes and merge groups,
 only matching status-cell edits in both roadmaps qualify for the light job. Within the
 ordinary matrix for non-PR events, edits limited to `docs/`,
 Markdown, `LICENSE-MIT`, `LICENSE-APACHE`, or `.gitignore` skip native and package
@@ -48,12 +48,12 @@ them. Failure to determine the diff fails planning.
 
 | Runner | Ordinary matrix | When sources change |
 | --- | --- | --- |
-| `windows-2022` | Workspace, minimal Player, Python unit checks, [license policy](licensing.md#third-party-code), `contracts`, `clippy` | `native-tools`, then `package` |
-| `ubuntu-24.04` | Workspace on Mesa lavapipe with pinned DXC, exact no-DXC check, minimal Player, Python unit checks, [license policy](licensing.md#third-party-code), `contracts`, `clippy` | `native` on Mesa lavapipe, then `package` |
+| `windows-2025` | Workspace, minimal Player, Python unit checks, [license policy](licensing.md#third-party-code), `contracts`, `clippy` | `native-tools`, and `package` |
+| `ubuntu-24.04` | Workspace on Mesa lavapipe with pinned DXC, exact no-DXC check, minimal Player, Python unit checks, [license policy](licensing.md#third-party-code), `contracts`, `clippy` | `native` on Mesa lavapipe, and `package` |
 
-Both jobs run `cargo fetch --locked` before `cargo test --workspace --locked`.
-The workspace command runs all normal unit, integration and doc tests and
-records passed, failed, ignored and capability-skipped counts per package.
+Every Rust job fetches locked dependencies. The workspace job runs the regular tests
+with pinned cargo-nextest and the doc-tests with Cargo. It combines Nextest JUnit
+results with doc-test counts and records capability skip reasons for each package.
 Any ordinary test failure or a missing Custom SDK cache fails the job.
 On Linux, the migration and Vulkan allocation-recovery tests and the Editor
 tests for initial Scene preparation and Rust recovery and Apply with Game
@@ -87,9 +87,13 @@ Successful CI does not confirm hardware Linux, strict 60 FPS, cold-start, or
 interactive desktop acceptance. `package` uses minimal Cargo fixtures,
 not a real game export. Linux CI passes `--require-capabilities` so missing Vulkan or DXC fails the required offscreen check.
 
-The two platforms run in parallel on separate hosted VMs; commands within
-each VM run sequentially. Each job receives a fresh hosted checkout
-and separate caches/TEMP; the developer's authored working directory is not used.
+Each platform runs separate workspace, default Release Editor build and CLI test,
+Clippy, contracts and minimal Player jobs. The plan can also select native and package
+jobs independently. Each job gets its own hosted VM and TEMP. GPU and native tests
+within a job run serially. Windows places Cargo products on a Dev Drive.
+Top-level workspace builds use rust-lld on Windows and lld on Linux. Release Editor,
+Clippy and minimal Player invocations set the fast linker and `CARGO_PROFILE_DEV_DEBUG=0`.
+The native and Custom SDK proofs retain their audited compiler environment.
 Rust version/native target come from the existing Windows/Linux manifests.
 Before the offline launcher, CI explicitly installs pinned Rust with the `rustfmt` and `clippy` components and runs
 `cargo fetch --locked`. The Linux matrix installs system link libraries and Mesa,
@@ -107,8 +111,8 @@ and confirming the fix requires a new successful `package` on hosted Windows.
 Reports and command logs from `outputs/verification` are published as an artifact for
 each platform even after failure; if verification did not start, the GitHub job log
 contains the preparation error. Retention is 14 days. Full source/artifact hashes and
-scope remain in the launcher's normal `result.json`. A conservative combined Cargo
-cache restores only admitted dependency/workspace build paths; every check still runs.
+scope remain in the launcher's normal `result.json`. The jobs share a dependency cache for each OS. Reports are named by suite,
+OS and attempt.
 [Measurement and cache boundaries](build-verification-performance.md) define compatible
 keys and how to assess total hosted time, including restore/save costs.
 

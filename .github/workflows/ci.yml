@@ -61,7 +61,8 @@ jobs:
       - uses: taiki-e/install-action@893d6ee8d714b6c7dfe2bcd94e5759e9a7958a7e # v2
         with:
           tool: cargo-nextest@0.9.152
-      - name: Select and verify Linux software Vulkan
+      - &vulkan
+        name: Select and verify Linux software Vulkan
         if: runner.os == 'Linux'
         run: |
           icd=$(find /usr/share/vulkan/icd.d -maxdepth 1 -name 'lvp_icd*.json' -print -quit)
@@ -70,8 +71,11 @@ jobs:
           VK_DRIVER_FILES="$icd" vulkaninfo --summary
       - name: Verify the explicit DXC capability skip on Linux
         if: runner.os == 'Linux'
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=lld
         run: python scripts/ci_workspace_tests.py --without-dxc
-      - name: Restore pinned Linux DXC
+      - &dxc
+        name: Restore pinned Linux DXC
         if: runner.os == 'Linux'
         run: |
           python scripts/ci_linux_dxc.py
@@ -144,20 +148,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/ci-setup
-      - name: Select and verify Linux software Vulkan
-        if: runner.os == 'Linux'
-        run: |
-          icd=$(find /usr/share/vulkan/icd.d -maxdepth 1 -name 'lvp_icd*.json' -print -quit)
-          test -n "$icd"
-          echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
-          VK_DRIVER_FILES="$icd" vulkaninfo --summary
-      - name: Restore pinned Linux DXC
-        if: runner.os == 'Linux'
-        run: |
-          python scripts/ci_linux_dxc.py
-          echo "MODULE_ENGINE_DXC=$GITHUB_WORKSPACE/.tools/ci-dxc/bin/dxc" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/.tools/ci-dxc/lib" >> "$GITHUB_ENV"
-          LD_LIBRARY_PATH="$GITHUB_WORKSPACE/.tools/ci-dxc/lib" .tools/ci-dxc/bin/dxc --version
+      - *vulkan
+      - *dxc
       - name: Third-party license policy and notices file
         run: python scripts/third_party_licenses.py --check
       - name: Launcher and CI policy unit checks
@@ -206,20 +198,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/ci-setup
-      - name: Select and verify Linux software Vulkan
-        if: runner.os == 'Linux'
-        run: |
-          icd=$(find /usr/share/vulkan/icd.d -maxdepth 1 -name 'lvp_icd*.json' -print -quit)
-          test -n "$icd"
-          echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
-          VK_DRIVER_FILES="$icd" vulkaninfo --summary
-      - name: Restore pinned Linux DXC
-        if: runner.os == 'Linux'
-        run: |
-          python scripts/ci_linux_dxc.py
-          echo "MODULE_ENGINE_DXC=$GITHUB_WORKSPACE/.tools/ci-dxc/bin/dxc" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/.tools/ci-dxc/lib" >> "$GITHUB_ENV"
-          LD_LIBRARY_PATH="$GITHUB_WORKSPACE/.tools/ci-dxc/lib" .tools/ci-dxc/bin/dxc --version
+      - *vulkan
+      - *dxc
       - name: Windows native toolchain contracts (no GPU acceptance)
         if: runner.os == 'Windows'
         run: python scripts/verify.py --profile native-tools --timeout 1800
@@ -240,20 +220,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/ci-setup
-      - name: Select and verify Linux software Vulkan
-        if: runner.os == 'Linux'
-        run: |
-          icd=$(find /usr/share/vulkan/icd.d -maxdepth 1 -name 'lvp_icd*.json' -print -quit)
-          test -n "$icd"
-          echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
-          VK_DRIVER_FILES="$icd" vulkaninfo --summary
-      - name: Restore pinned Linux DXC
-        if: runner.os == 'Linux'
-        run: |
-          python scripts/ci_linux_dxc.py
-          echo "MODULE_ENGINE_DXC=$GITHUB_WORKSPACE/.tools/ci-dxc/bin/dxc" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/.tools/ci-dxc/lib" >> "$GITHUB_ENV"
-          LD_LIBRARY_PATH="$GITHUB_WORKSPACE/.tools/ci-dxc/lib" .tools/ci-dxc/bin/dxc --version
+      - *vulkan
+      - *dxc
       - name: Native package fixture contracts
         run: python scripts/verify.py --profile package --timeout 1800
       - *reports

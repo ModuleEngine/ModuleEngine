@@ -5206,6 +5206,7 @@ mod tests {
 
     #[test]
     fn deleting_scoped_names_preserves_other_targets_and_renderer_deletion_cleans_all() {
+        let _finish = crate::FinishSerialRenderTest;
         let root = crate::project::source_root();
         let mut document = crate::host::gpu_document(WorldKind::Objects, RenderPath::Forward);
         crate::host::ensure_authoring_configuration(&mut document);
@@ -5872,6 +5873,7 @@ mod tests {
     }
     #[test]
     fn explicitly_selected_incident_wire_is_not_recreated_by_node_bypass() {
+        let _finish = crate::FinishSerialRenderTest;
         let document = crate::host::gpu_document(WorldKind::Objects, RenderPath::Forward);
         let mut editor = Editor::new(
             document,

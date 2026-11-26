@@ -183,6 +183,8 @@ compile/link, прямые тесты и затраты launcher/observer. Ло�
 
 ## CI
 
+На каждой ОС workspace, Release Editor, Clippy, contracts и минимальный Player выполняются отдельными заданиями. Выбранные задания native и package также запускаются параллельно; обязательная проверка сверяет результаты всех заданий с планом.
+
 [GitHub Actions и обязательный check](ci.md) выполняют отдельные планы/проверки `contracts` и `clippy` на Windows и
 Linux при изменениях исходников, включая маршруты native/package. PR только с документацией проходят проверки ссылок и дорожной карты. Перед offline
 проверками CI явно восстанавливает pinned Rust с `rustfmt`/`clippy` и locked dependencies. Для

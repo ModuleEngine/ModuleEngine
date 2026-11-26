@@ -155,6 +155,23 @@ class PolicyTests(unittest.TestCase):
 
 
 class WorkspaceReportingTests(unittest.TestCase):
+    def test_nextest_counts_cases_and_verifies_captured_output(self):
+        xml = """<testsuites><testsuite name="crate::integration">
+        <testcase name="ran"/>
+        <testcase name="no_gpu"><system-err>MODULEENGINE_TEST_SKIPno_gpuVulkan: No loader</system-err></testcase>
+        <testcase name="ignored"><skipped/></testcase>
+        <testcase name="failed"><failure/></testcase>
+        </testsuite></testsuites>"""
+        counts, executed = ci_workspace_tests.report([], {"id": "crate"})
+        ci_workspace_tests.nextest_results(io.StringIO(xml), counts, executed)
+        self.assertEqual(executed, {("crate", "ran")})
+        self.assertEqual(counts["crate"], {"passed": 1, "failed": 1, "ignored": 1,
+                                         "capability_skips": {"no_gpu": "Vulkan: No loader"}})
+        for invalid in [xml.replace("SKIPno_gpu", "SKIPother"), xml.replace("crate::", "unknown::"), "<testsuites/>",
+                        xml.replace("MODULEENGINE_TEST_SKIP", "Vulkan validation ERROR:")]:
+            with self.assertRaises(ci_workspace_tests.VerificationError):
+                ci_workspace_tests.nextest_results(io.StringIO(invalid), counts, executed)
+
     def test_sums_unit_and_doc_results_and_distinguishes_capability_skips(self):
         artifact = {"reason": "compiler-artifact", "package_id": "crate#test",
                     "executable": "/target/debug/deps/test-123",

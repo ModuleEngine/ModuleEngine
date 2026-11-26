@@ -96,6 +96,22 @@ def report(lines, package_names):
     return counts, executed
 
 
+def nextest_skips(captured, name):
+    # Nextest's JUnit writer strips literal tabs from captured libtest output.
+    # Reconstruct only the marker belonging to this testcase; malformed or
+    # duplicate markers must still fail the regular capability-skip audit.
+    prefix = "MODULEENGINE_TEST_SKIP"
+    lines = []
+    for line in captured.splitlines():
+        if line.startswith(prefix) and not line.startswith(prefix + "\t"):
+            if not line.startswith(prefix + name):
+                raise VerificationError("Mismatched nextest capability marker")
+            reason = line[len(prefix + name):]
+            line = f"{prefix}\t{name}\t{reason}"
+        lines.append(line)
+    return test_skips("\n".join(lines), [name])
+
+
 def nextest_results(xml, counts, executed):
     cases = 0
     for suite in ET.parse(xml).getroot().findall("testsuite"):
@@ -114,7 +130,7 @@ def nextest_results(xml, counts, executed):
                 row["ignored"] += 1
             elif case.find("failure") is not None or case.find("error") is not None:
                 row["failed"] += 1
-            elif skipped := test_skips(captured, [name]):
+            elif skipped := nextest_skips(captured, name):
                 row["capability_skips"].update(skipped)
             else:
                 row["passed"] += 1
