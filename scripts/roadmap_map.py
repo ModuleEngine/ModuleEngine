@@ -47,6 +47,10 @@ OPTIONAL_PREFIX = {
     "en": re.compile(r"^optional\s*[·:]\s*", re.IGNORECASE),
     "ru": re.compile(r"^необязательно\s*[·:]\s*", re.IGNORECASE),
 }
+PAUSED_PREFIX = {
+    "en": re.compile(r"^paused\s*[·:]\s*", re.IGNORECASE),
+    "ru": re.compile(r"^на паузе\s*[·:]\s*", re.IGNORECASE),
+}
 DONE_PREFIX = re.compile(r"^(done|сделано|выполнено|готово)\b[^:]{0,40}:\s*", re.IGNORECASE)
 ESTIMATE = {
     lang: re.compile(rf"{number}(?:\s*[–-]\s*{number})?\s+{unit}")
@@ -65,6 +69,7 @@ class Task:
     detail: str = ""    # full task cell, for the campaign map card
     criteria: str = ""  # full acceptance cell
     optional: bool = False  # does not gate its phase
+    paused: bool = False  # pending an explicit restart
 
 
 @dataclass
@@ -140,22 +145,26 @@ def parse(markdown: str, lang: str) -> list[Phase]:
         if current_section != section:
             current_section = section
             phases.append(Phase(section[1], section[2]))
-        status = cells[-1]
+        status = plain(cells[-1])
         task_id = plain(cells[0])
-        optional = bool(OPTIONAL_PREFIX[lang].match(plain(status)))
+        remaining, optional = OPTIONAL_PREFIX[lang].subn("", status)
+        estimate_or_state, paused = PAUSED_PREFIX[lang].subn("", remaining)
         try:
-            state = classify(OPTIONAL_PREFIX[lang].sub("", plain(status)), lang)
+            state = classify(estimate_or_state, lang)
+            if paused and state != "todo":
+                raise ValueError("a paused task requires an effort estimate")
         except ValueError as exc:
             raise ValueError(f"{EN_PATH if lang == 'en' else RU_PATH}: {task_id}: {exc}") from exc
         phases[-1].tasks.append(Task(
             id=task_id,
             state=state,
-            effort=plain(status),
+            effort=status,
             text=short(plain(cells[1])),
             acceptance=short(plain(cells[2])) if len(cells) > 3 else "",
             detail=plain(cells[1]),
             criteria=plain(cells[2]) if len(cells) > 3 else "",
-            optional=optional,
+            optional=bool(optional),
+            paused=bool(paused),
         ))
     return phases
 
@@ -173,6 +182,8 @@ def compare(en: list[Phase], ru: list[Phase]) -> list[str]:
         other = ru_tasks.get(task_id)
         if other and other.optional != task.optional:
             errors.append(f"{task_id}: optional marker differs between {EN_PATH} and {RU_PATH}")
+        if other and other.paused != task.paused:
+            errors.append(f"{task_id}: pause marker differs between {EN_PATH} and {RU_PATH}")
         if other and other.state != task.state:
             errors.append(
                 f"{task_id}: status differs — English '{task.effort}' is {names[task.state]}, "
@@ -199,6 +210,7 @@ def merge(en: list[Phase], ru: list[Phase]) -> list[Phase]:
                 detail=local.detail if local else task.detail,
                 criteria=local.criteria if local else task.criteria,
                 optional=task.optional,
+                paused=task.paused,
             ))
         merged.append(Phase(phase.id, ru_titles.get(phase.id, phase.title), tasks))
     return merged

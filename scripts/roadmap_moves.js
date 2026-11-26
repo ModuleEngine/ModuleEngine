@@ -30,13 +30,17 @@ function roadmapMoves(phases, definitions, taskDeps) {
   };
 
   const resumed = [], continuing = [], fresh = [], optional = [];
-  let blocked;
+  let blocked, paused;
   for (const phase of visible) {
     if (phase.tasks.some(t => t.state === 'cur')) continue;
     const pending = phase.tasks.filter(t => t.state === 'todo');
     // Choose the phase head before checking its dependencies: a blocked head holds the queue.
     const task = pending.find(t => !t.optional) || pending[0];
     if (!task) continue;
+    if (task.paused) {
+      paused ??= task.id;
+      continue;
+    }
     const deps = taskDeps[task.id] || [];
     const waits = missingParents(phase).concat(deps.filter(id => !done.has(id)));
     if (waits.length) {
@@ -53,5 +57,5 @@ function roadmapMoves(phases, definitions, taskDeps) {
   // Resume a started phase at its cross-phase gate before other independent work.
   const next = resumed.concat(continuing);
   if (!next.length && !current.length) next.push(...(fresh.length ? fresh : optional).slice(0, 1));
-  return { current, next, blocked };
+  return { current, next, blocked, paused };
 }

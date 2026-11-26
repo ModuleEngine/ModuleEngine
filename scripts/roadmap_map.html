@@ -331,7 +331,7 @@
     R3: { id: 'R3', kicker: 'Фаза · ядро и редактор', title: 'Редактор на Vulkan без моста DX12', cls: 'later', tag: 'ПОСЛЕ R2.1',
       ttl: 'Редактор на Vulkan', meta: '3–5 нед', goal: 'Убрать eframe/WGPU и мост через DX12: редактор, окна сцены и игра работают на одном VkDevice. Панели egui не меняются.',
       effort: '3–5 недель', deps: ['R2'], depNote: 'нужна только R2.1, дальше параллельно с R2', unlocks: ['g05'], tasks: [
-        ['R3.1', 'Прототип painter для egui на устройстве R2', '≥60 FPS, чёткий текст на 100 % и 150 % DPI', '4–5 д', N],
+        ['R3.1', 'Сравнение painter’ов для egui на устройстве R2', 'Оба прошли порог ≥60 FPS и проверку текста на 100 % и 150 % DPI. Для R3.2 выбран egui-ash-renderer 0.13.0', '4–5 д', N],
         ['R3.2', 'Заменить оболочку eframe в Editor и Player', 'Все панели, окна и докинг работают', '1–1,5 н', N],
         ['R3.3', 'Окна Scene и Game на том же устройстве, удалить мост', 'Задержка меньше; Linux тем же путём', '4–5 д', N],
         ['R3.4', 'Перенести снимки UI и бенчмарк редактора', 'Работают как раньше', '2–3 д', N],
@@ -369,7 +369,7 @@
     R8: { id: 'R8', kicker: 'Фаза · современное изображение', title: 'Mesh shaders и виртуальная геометрия', cls: 'later', tag: 'ПОСЛЕ R2.4',
       ttl: 'Mesh shaders', meta: '4–6 нед · уровень B', goal: 'Meshlets, task/mesh shaders и непрерывный LOD для плотной геометрии, с запасным путём для GPU без mesh shaders.',
       effort: '4–6 недель', deps: ['R2'], depNote: 'из R2 нужна R2.4', unlocks: [], tasks: [
-        ['R8.1', 'Прототип meshlets и mesh shaders на S5', 'Решение с цифрами', '4–5 д', N],
+        ['R8.1', 'Прототип meshlets и mesh shaders на S5', 'Путь уровня B остаётся экспериментальным. Рабочие сборки сохраняют путь R2.4', '4–5 д', N],
         ['R8.2', 'Meshlets при импорте', 'Данные кэшируются', '3–4 д', N],
         ['R8.3', 'Конвейер task/mesh с отсечением', 'S5 при 60 FPS 1080p', '1,5 н', N],
         ['R8.4', 'Непрерывный LOD без «перескоков»', 'Память и время в бюджете', '1,5–2 н', N],
@@ -405,7 +405,7 @@
       ttl: 'Первая полезная точка', meta: '≈4,5–7 мес', goal: 'GPU-driven рендер с PBR и тенями: первый момент, когда новое изображение видно в играх. Примерно через 4,5–7 месяцев (R0, R1, R2 и R5).',
       effort: '≈4,5–7 месяцев', deps: ['R5'], unlocks: ['v13'], tasks: [] },
     v05: { id: '0.5', kicker: 'Рубеж версий · на паузе', title: 'Нужный состав', cls: 'paused', tag: 'НА ПАУЗЕ',
-      ttl: 'Нужный состав', meta: 'реализация не начата', goal: 'Добавить, убрать или заменить возможность, понимая последствия. Бриф сохранён, работа возобновится после контрольной точки R1 + R3 + R4.',
+      ttl: 'Нужный состав', meta: 'поставка в main на паузе', goal: 'Добавить, убрать или заменить возможность, понимая последствия. Бриф сохранён, работа возобновится после контрольной точки R1 + R3 + R4.',
       effort: '—', deps: ['g05'], unlocks: [], tasks: [] },
     g09: { id: '0.9a', kicker: 'Рубеж версий', title: 'Первый бой G2', cls: 'ver', tag: 'ВЕРСИИ',
       ttl: 'Первый бой G2', meta: 'нужны R6 и R7', goal: 'Физика, звук и скелетная анимация из R6–R7 должны быть готовы до того, как они понадобятся бою G2 и его решениям.',
@@ -440,7 +440,7 @@
       p.tasks.forEach(t => { old[t[0]] = t; });
       p.tasks = ph.tasks.map(t => {
         const o = old[t.id];
-        const note = t.state === 'done' ? (o && o[4] === D ? o[3] : 'выполнено') : (o && o[4] !== D ? o[3] : t.effort);
+        const note = t.paused ? t.effort : t.state === 'done' ? (o && o[4] === D ? o[3] : 'выполнено') : (o && o[4] !== D ? o[3] : t.effort);
         return [t.id, o ? o[1] : t.text, o ? o[2] : t.acceptance, note, ST[t.state], !!t.optional];
       });
     });
@@ -506,6 +506,7 @@
     const id = moves.current[0] || moves.next[0];
     if (id) return { kind: moves.current.length ? 'cur' : 'next', item: flat.find(x => x.t[0] === id), remaining: open.length };
     if (!open.length) return { kind: flat.length ? 'done' : 'empty', remaining: 0 };
+    if (!moves.blocked && moves.paused) return { kind: 'paused', item: flat.find(x => x.t[0] === moves.paused), remaining: open.length };
     const k = moves.blocked ? flat.find(x => x.t[0] === moves.blocked.task.id).k : open[0].k;
     return { kind: 'blocked', phase: k, waits: moves.blocked?.waits || [], remaining: open.length };
   })();
@@ -653,8 +654,8 @@
 
   // "Now" strip, header pill and footer stamp
   const li = (title, small) => `<li>${esc(title)}${small ? `<small>${esc(small)}</small>` : ''}</li>`;
-  const cur = ['cur', 'next'].includes(summary.kind) ? summary.item : null;
-  const curLabel = { cur: 'Сейчас', next: 'Следующая задача', blocked: 'Работа заблокирована', done: 'Трек завершён', empty: 'Нет данных' }[summary.kind];
+  const cur = ['cur', 'next', 'paused'].includes(summary.kind) ? summary.item : null;
+  const curLabel = { cur: 'Сейчас', next: 'Следующая задача', paused: 'На паузе', blocked: 'Работа заблокирована', done: 'Трек завершён', empty: 'Нет данных' }[summary.kind];
   const done = flat.filter(x => x.t[4] === D);
   const doneShown = done.slice(-4);
   $('now-done').innerHTML = li(`${phases.v042.id} — ${phases.v042.title}`, 'Принята владельцем 17.11.2026') +
