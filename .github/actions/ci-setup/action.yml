@@ -1,0 +1,64 @@
+name: Prepare hosted Rust verification
+description: Install the pinned toolchain and restore locked dependencies on a fresh runner
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      with:
+        python-version: '3.12'
+    - uses: samypr100/setup-dev-drive@562171fe8df7401fdf582d766cd3b6ab80d5b1a0 # v4
+      if: runner.os == 'Windows'
+      with:
+        drive-size: 14GB
+    - name: Place Cargo build output on the Windows Dev Drive
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        fsutil devdrv query "$env:DEV_DRIVE"
+        if ($LASTEXITCODE) { throw 'Native Dev Drive required' }
+        $products = New-Item -ItemType Directory -Path (Join-Path $env:DEV_DRIVE 'build')
+        New-Item -ItemType Junction -Path target -Target $products.FullName
+    - name: Install Linux link dependencies (no desktop or GPU claim)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install --no-install-recommends -y build-essential pkg-config libx11-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan1 mesa-vulkan-drivers vulkan-tools lld
+    - name: Install and select pinned native Rust
+      shell: pwsh
+      run: |
+        $pinFile = if ($IsWindows) { 'toolchain-manifest.json' } else { 'scripts/linux-toolchain.json' }
+        $pin = (Get-Content -Raw -LiteralPath $pinFile | ConvertFrom-Json).rust
+        $toolchain = "$($pin.version)-$($pin.target)"
+        rustup toolchain install $toolchain --profile minimal --component rustfmt --component clippy
+        if ($LASTEXITCODE -ne 0) { throw 'Pinned native toolchain restoration failed' }
+        "RUSTUP_TOOLCHAIN=$toolchain" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        $cache = Join-Path $env:RUNNER_TEMP 'module-engine-cargo'
+        New-Item -ItemType Directory -Force -Path $cache | Out-Null
+        "CARGO_HOME=$cache" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+    - name: Inspect conservative Cargo cache compatibility
+      id: cargo-cache-context
+      shell: bash
+      run: python scripts/ci_cache.py
+    - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      if: steps.cargo-cache-context.outputs.enabled == 'true'
+      with:
+        shared-key: ${{ steps.cargo-cache-context.outputs.restore_prefix }}
+        cache-targets: false
+        cache-bin: false
+        save-if: ${{ github.job == 'workspace' }}
+    - name: Fetch locked dependencies before offline verification
+      shell: bash
+      run: cargo fetch --locked
+    - name: Select the hosted linker for top-level Cargo builds
+      shell: pwsh
+      run: |
+        if ($IsWindows) {
+          $sysroot = rustc --print sysroot
+          $bin = Join-Path $sysroot 'lib/rustlib/x86_64-pc-windows-msvc/bin'
+          Get-Item -LiteralPath (Join-Path $bin 'rust-lld.exe') -ErrorAction Stop
+          "$bin" >> $env:GITHUB_PATH
+        } else {
+          ld.lld --version
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+        }

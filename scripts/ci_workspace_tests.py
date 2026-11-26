@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 
 from python_runtime import require_python
 from verify import VerificationError, test_skips
@@ -95,7 +96,34 @@ def report(lines, package_names):
     return counts, executed
 
 
-def workspace(output):
+def nextest_results(xml, counts, executed):
+    cases = 0
+    for suite in ET.parse(xml).getroot().findall("testsuite"):
+        # Nextest binary IDs are package or package::kind/target.
+        package = suite.attrib["name"].split("::", 1)[0]
+        if package not in counts:
+            raise VerificationError(f"Unknown nextest package: {package}")
+        row = counts[package]
+        for case in suite.findall("testcase"):
+            cases += 1
+            name = case.attrib["name"]
+            captured = "\n".join(case.findtext(tag) or "" for tag in ("system-out", "system-err"))
+            if "Vulkan validation ERROR:" in captured:
+                raise VerificationError("Workspace tests reported Vulkan validation errors")
+            if case.find("skipped") is not None:
+                row["ignored"] += 1
+            elif case.find("failure") is not None or case.find("error") is not None:
+                row["failed"] += 1
+            elif skipped := test_skips(captured, [name]):
+                row["capability_skips"].update(skipped)
+            else:
+                row["passed"] += 1
+                executed.add((package, name))
+    if not cases:
+        raise VerificationError("No nextest cases in JUnit report")
+
+
+def workspace(output, nextest=False):
     output.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, CARGO_TERM_COLOR="never", RUST_TEST_THREADS="1",
                MODULE_ENGINE_VERIFY_SERIAL="1")
@@ -112,6 +140,20 @@ def workspace(output):
                "--features", "module-engine-editor/verification",
                "--config", "profile.test.debug=0",
                "--message-format=json-render-diagnostics", "--", "--show-output"]
+    nextest_code = 0
+    if nextest:
+        linker = ('target.x86_64-pc-windows-msvc.linker="rust-lld"' if os.name == "nt"
+                  else 'target.x86_64-unknown-linux-gnu.rustflags=["-C","link-arg=-fuse-ld=lld"]')
+        options = ["--workspace", "--locked", "--features", "module-engine-editor/verification",
+                   "--config", "profile.test.debug=0", "--config", linker]
+        junit = Path(env["CARGO_TARGET_DIR"]) / "nextest/ci/workspace.xml"
+        junit.unlink(missing_ok=True)
+        nextest_code = subprocess.run(["cargo", "nextest", "run", "--profile", "ci", *options], env=env).returncode
+        if not junit.is_file():
+            raise VerificationError(f"Nextest produced no JUnit report (exit {nextest_code})")
+        shutil.copyfile(junit, output / "workspace.xml")
+        command = ["cargo", "test", "--doc", "--no-fail-fast", *options,
+                   "--message-format=json-render-diagnostics", "--", "--show-output"]
     print(" ".join(command), flush=True)
     log = output / "workspace.log"
     with log.open("w", encoding="utf-8") as stream, subprocess.Popen(
@@ -125,6 +167,9 @@ def workspace(output):
         code = process.wait()
     with log.open(encoding="utf-8") as stream:
         counts, executed = report(stream, names)
+    if nextest:
+        nextest_results(output / "workspace.xml", counts, executed)
+        code = nextest_code or code
     (output / "workspace.json").write_text(
         json.dumps({"cargo_exit": code, "packages": counts}, indent=2) + "\n", encoding="utf-8")
     rows = ["| Package | Passed | Failed | Ignored | Capability skips |", "| --- | ---: | ---: | ---: | ---: |"]
@@ -196,6 +241,7 @@ def main():
     require_python()
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--nextest", action="store_true")
     mode.add_argument("--without-dxc", action="store_true")
     mode.add_argument("--check-minimal-player", action="store_true")
     parser.add_argument("--output", type=Path, default=Path("outputs/verification/ci-workspace"))
@@ -206,7 +252,7 @@ def main():
         elif args.check_minimal_player:
             check_minimal_player()
         else:
-            return workspace(args.output)
+            return workspace(args.output, args.nextest)
     except (OSError, VerificationError, subprocess.CalledProcessError) as error:
         print(f"CI workspace tests: {error}", file=sys.stderr)
         return 1

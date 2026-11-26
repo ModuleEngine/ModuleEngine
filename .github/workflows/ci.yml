@@ -43,59 +43,24 @@ jobs:
       - name: Reject new documentation links to local files
         run: python scripts/check_doc_links.py --base "$CI_BASE"
 
-  checks:
-    name: Workspace and selected routes (${{ matrix.os }})
+  workspace:
+    name: workspace (${{ matrix.os }})
     needs: plan
     if: needs.plan.outputs.docs_only == 'false'
-    strategy:
+    strategy: &os_matrix
       fail-fast: false
-      max-parallel: 2
       matrix:
-        os: [windows-2022, ubuntu-24.04]
+        os: [windows-2025, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: ./.github/actions/ci-setup
+      - uses: taiki-e/install-action@893d6ee8d714b6c7dfe2bcd94e5759e9a7958a7e # v2
         with:
-          python-version: '3.12'
-      - name: Install Linux link dependencies (no desktop or GPU claim)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y build-essential pkg-config libx11-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan1 mesa-vulkan-drivers vulkan-tools
-      - name: Install and select pinned native Rust
-        shell: pwsh
-        run: |
-          $pinFile = if ($IsWindows) { 'toolchain-manifest.json' } else { 'scripts/linux-toolchain.json' }
-          $pin = (Get-Content -Raw -LiteralPath $pinFile | ConvertFrom-Json).rust
-          $toolchain = "$($pin.version)-$($pin.target)"
-          rustup toolchain install $toolchain --profile minimal --component rustfmt --component clippy
-          if ($LASTEXITCODE -ne 0) { throw 'Pinned native toolchain restoration failed' }
-          "RUSTUP_TOOLCHAIN=$toolchain" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          $cache = Join-Path $env:RUNNER_TEMP 'module-engine-cargo'
-          New-Item -ItemType Directory -Force -Path $cache | Out-Null
-          "CARGO_HOME=$cache" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - name: Inspect conservative Cargo cache compatibility
-        id: cargo-cache-context
-        run: python scripts/ci_cache.py
-      - name: Restore compatible Cargo dependencies and workspace products
-        if: steps.cargo-cache-context.outputs.enabled == 'true'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          key: ${{ steps.cargo-cache-context.outputs.key }}
-          restore-keys: ${{ steps.cargo-cache-context.outputs.restore_prefix }}
-          path: |
-            ${{ env.CARGO_HOME }}/registry
-            ${{ env.CARGO_HOME }}/git
-            target/debug
-            target/release
-            target/${{ steps.cargo-cache-context.outputs.native_host }}/debug
-            target/${{ steps.cargo-cache-context.outputs.native_host }}/release
-      - name: Fetch locked dependencies before offline verification
-        run: cargo fetch --locked
+          tool: cargo-nextest@0.9.152
       - name: Select and verify Linux software Vulkan
         if: runner.os == 'Linux'
         run: |
@@ -114,48 +79,184 @@ jobs:
           echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/.tools/ci-dxc/lib" >> "$GITHUB_ENV"
           LD_LIBRARY_PATH="$GITHUB_WORKSPACE/.tools/ci-dxc/lib" .tools/ci-dxc/bin/dxc --version
       - name: Run all workspace tests and report package counts
-        run: python scripts/ci_workspace_tests.py
-      - name: Check and build the minimal Player
+        run: python scripts/ci_workspace_tests.py --nextest
+      - &reports
+        name: Upload current-run reports even after failure
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: verification-${{ github.job }}-${{ matrix.os }}-${{ github.run_attempt }}
+          path: outputs/verification/
+          if-no-files-found: warn
+          retention-days: 14
+
+  release:
+    name: release (${{ matrix.os }})
+    needs: plan
+    if: needs.plan.outputs.docs_only == 'false'
+    strategy: *os_matrix
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/ci-setup
+      - name: Build the default Release Editor
+        env: &build_env
+          CARGO_PROFILE_DEV_DEBUG: '0'
+          CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: rust-lld
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=lld
+        run: cargo build --offline --locked --release -p module-engine-editor --bins
+      - name: Default Release Editor refuses verification commands
+        env: *build_env
+        run: cargo test --offline --locked --release -p module-engine-editor --test verification_cli
+      - *reports
+
+  clippy:
+    name: clippy (${{ matrix.os }})
+    needs: plan
+    if: needs.plan.outputs.docs_only == 'false'
+    strategy: *os_matrix
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/ci-setup
+      - name: Inspect Clippy plan
+        run: python scripts/verify.py --profile clippy --plan
+      - name: Strict pinned Clippy (workspace and default Release Editor)
+        env: *build_env
+        run: python scripts/verify.py --profile clippy --timeout 1800
+      - *reports
+
+  contracts:
+    name: contracts (${{ matrix.os }})
+    needs: plan
+    if: needs.plan.outputs.docs_only == 'false'
+    strategy: *os_matrix
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/ci-setup
+      - name: Select and verify Linux software Vulkan
+        if: runner.os == 'Linux'
         run: |
-          python scripts/ci_workspace_tests.py --check-minimal-player
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo build --locked -p module-engine-player --no-default-features --config profile.dev.debug=0
-        shell: pwsh
-      - name: Test the minimal Player separately
-        run: cargo test --locked -p module-engine-player --no-default-features --config profile.test.debug=0
+          icd=$(find /usr/share/vulkan/icd.d -maxdepth 1 -name 'lvp_icd*.json' -print -quit)
+          test -n "$icd"
+          echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
+          VK_DRIVER_FILES="$icd" vulkaninfo --summary
+      - name: Restore pinned Linux DXC
+        if: runner.os == 'Linux'
+        run: |
+          python scripts/ci_linux_dxc.py
+          echo "MODULE_ENGINE_DXC=$GITHUB_WORKSPACE/.tools/ci-dxc/bin/dxc" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/.tools/ci-dxc/lib" >> "$GITHUB_ENV"
+          LD_LIBRARY_PATH="$GITHUB_WORKSPACE/.tools/ci-dxc/lib" .tools/ci-dxc/bin/dxc --version
       - name: Third-party license policy and notices file
         run: python scripts/third_party_licenses.py --check
       - name: Launcher and CI policy unit checks
         run: python -B -m unittest discover -s scripts -p "test_*.py" -v
       - name: Inspect contracts plan
         run: python scripts/verify.py --profile contracts --plan
-      - name: Inspect Clippy plan
-        run: python scripts/verify.py --profile clippy --plan
-      - name: Strict pinned Clippy (workspace and default Release Editor)
-        run: python scripts/verify.py --profile clippy --timeout 1800
-      - name: Default Release Editor refuses verification commands
-        run: cargo test --offline --locked --release -p module-engine-editor --test verification_cli
       - name: Contracts
         run: python scripts/verify.py --profile contracts --timeout 1800
       - name: Standalone ECS spike contracts (Release)
         run: cargo test --release --locked --manifest-path crates/ecs-spike/Cargo.toml --target-dir target/ecs-spike
+      - *reports
+
+  player:
+    name: player (${{ matrix.os }})
+    needs: plan
+    if: needs.plan.outputs.docs_only == 'false'
+    strategy: *os_matrix
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/ci-setup
+      - name: Check and build the minimal Player
+        env: *build_env
+        run: |
+          python scripts/ci_workspace_tests.py --check-minimal-player
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --locked -p module-engine-player --no-default-features --config profile.dev.debug=0
+        shell: pwsh
+      - name: Test the minimal Player separately
+        env: *build_env
+        run: cargo test --locked -p module-engine-player --no-default-features --config profile.test.debug=0
+      - *reports
+
+  native:
+    name: native (${{ matrix.os }})
+    needs: plan
+    if: needs.plan.outputs.native == 'true'
+    strategy: *os_matrix
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/ci-setup
+      - name: Select and verify Linux software Vulkan
+        if: runner.os == 'Linux'
+        run: |
+          icd=$(find /usr/share/vulkan/icd.d -maxdepth 1 -name 'lvp_icd*.json' -print -quit)
+          test -n "$icd"
+          echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
+          VK_DRIVER_FILES="$icd" vulkaninfo --summary
+      - name: Restore pinned Linux DXC
+        if: runner.os == 'Linux'
+        run: |
+          python scripts/ci_linux_dxc.py
+          echo "MODULE_ENGINE_DXC=$GITHUB_WORKSPACE/.tools/ci-dxc/bin/dxc" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/.tools/ci-dxc/lib" >> "$GITHUB_ENV"
+          LD_LIBRARY_PATH="$GITHUB_WORKSPACE/.tools/ci-dxc/lib" .tools/ci-dxc/bin/dxc --version
       - name: Windows native toolchain contracts (no GPU acceptance)
-        if: runner.os == 'Windows' && needs.plan.outputs.native == 'true'
+        if: runner.os == 'Windows'
         run: python scripts/verify.py --profile native-tools --timeout 1800
       - name: Linux native offscreen contracts (Mesa software device)
-        if: runner.os == 'Linux' && needs.plan.outputs.native == 'true'
+        if: runner.os == 'Linux'
         run: python scripts/verify.py --profile native --require-capabilities --timeout 1800
-      - name: Native package fixture contracts
-        if: needs.plan.outputs.package == 'true'
-        run: python scripts/verify.py --profile package --timeout 1800
-      - name: Upload current-run reports even after failure
-        if: always()
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - *reports
+
+  package:
+    name: package (${{ matrix.os }})
+    needs: plan
+    if: needs.plan.outputs.package == 'true'
+    strategy: *os_matrix
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          name: verification-${{ matrix.os }}-${{ github.run_attempt }}
-          path: outputs/verification/
-          if-no-files-found: warn
-          retention-days: 14
+          persist-credentials: false
+      - uses: ./.github/actions/ci-setup
+      - name: Select and verify Linux software Vulkan
+        if: runner.os == 'Linux'
+        run: |
+          icd=$(find /usr/share/vulkan/icd.d -maxdepth 1 -name 'lvp_icd*.json' -print -quit)
+          test -n "$icd"
+          echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
+          VK_DRIVER_FILES="$icd" vulkaninfo --summary
+      - name: Restore pinned Linux DXC
+        if: runner.os == 'Linux'
+        run: |
+          python scripts/ci_linux_dxc.py
+          echo "MODULE_ENGINE_DXC=$GITHUB_WORKSPACE/.tools/ci-dxc/bin/dxc" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/.tools/ci-dxc/lib" >> "$GITHUB_ENV"
+          LD_LIBRARY_PATH="$GITHUB_WORKSPACE/.tools/ci-dxc/lib" .tools/ci-dxc/bin/dxc --version
+      - name: Native package fixture contracts
+        run: python scripts/verify.py --profile package --timeout 1800
+      - *reports
 
   documentation:
     name: Documentation checks
@@ -182,7 +283,7 @@ jobs:
   required:
     name: CI required
     if: always()
-    needs: [plan, checks, documentation]
+    needs: [plan, workspace, release, clippy, contracts, player, native, package, documentation]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -194,10 +295,5 @@ jobs:
           python-version: '3.12'
       - name: Reject failed, cancelled or skipped prerequisite jobs
         env:
-          CI_PLAN_RESULT: ${{ needs.plan.result }}
-          CI_CHECKS_RESULT: ${{ needs.checks.result }}
-          CI_DOCUMENTATION_RESULT: ${{ needs.documentation.result }}
-          CI_NATIVE: ${{ needs.plan.outputs.native }}
-          CI_PACKAGE: ${{ needs.plan.outputs.package }}
-          CI_DOCS_ONLY: ${{ needs.plan.outputs.docs_only }}
+          CI_NEEDS: ${{ toJSON(needs) }}
         run: python scripts/ci_plan.py --gate

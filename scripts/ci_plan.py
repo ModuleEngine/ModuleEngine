@@ -106,16 +106,26 @@ def plan(base, head="HEAD", event=""):
     return select_non_pr(paths, docs_only=roadmap_status_only(before, after))
 
 
-def check_gate(plan_result, checks_result, documentation_result, selected):
-    if plan_result != "success":
+CORE_JOBS = ("workspace", "release", "clippy", "contracts", "player")
+
+
+def check_gate(needs):
+    if needs.get("plan", {}).get("result") != "success":
         raise ValueError("CI requires successful route selection")
+    selected = needs["plan"].get("outputs", {})
     if set(selected) != set(ROUTES) or any(value not in {"true", "false"} for value in selected.values()):
         raise ValueError("Missing or invalid route selection")
-    if selected["docs_only"] == "true":
-        if (selected["native"], selected["package"], checks_result, documentation_result) != ("false", "false", "skipped", "success"):
-            raise ValueError("Documentation CI requires successful roadmap checks and a skipped OS matrix")
-    elif (checks_result, documentation_result) != ("success", "skipped"):
-        raise ValueError("Ordinary CI requires success from both OS jobs and skips the documentation job")
+    docs = selected["docs_only"] == "true"
+    if docs and any(selected[key] == "true" for key in ("native", "package")):
+        raise ValueError("Documentation-only plan selected a native route")
+    expected = {key: not docs for key in CORE_JOBS}
+    expected.update(documentation=docs, native=selected["native"] == "true", package=selected["package"] == "true")
+    if set(needs) != {"plan", *expected}:
+        raise ValueError("Missing or unexpected prerequisite job")
+    for job, required in expected.items():
+        result = needs[job].get("result")
+        if result != ("success" if required else "skipped"):
+            raise ValueError(f"Unexpected result for {job}: {result}")
 
 
 def main():
@@ -124,10 +134,8 @@ def main():
     parser.add_argument("--gate", action="store_true")
     args = parser.parse_args()
     if args.gate:
-        selected = {key: os.environ.get("CI_" + key.upper(), "") for key in ROUTES}
-        check_gate(os.environ.get("CI_PLAN_RESULT"), os.environ.get("CI_CHECKS_RESULT"),
-                   os.environ.get("CI_DOCUMENTATION_RESULT"), selected)
-        print("CI required passed; route selection: " + json.dumps(selected))
+        check_gate(json.loads(os.environ["CI_NEEDS"]))
+        print("CI required passed")
         return
     selected = plan(args.base, event=os.environ.get("GITHUB_EVENT_NAME", ""))
     print(json.dumps(selected, ensure_ascii=True, indent=2))

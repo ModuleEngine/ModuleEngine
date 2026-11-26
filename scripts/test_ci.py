@@ -73,80 +73,66 @@ class PolicyTests(unittest.TestCase):
                 ci_plan.changed_files("a" * 40)
 
     def test_gate_rejects_every_non_success_prerequisite(self):
-        normal = {"native": "true", "package": "true", "docs_only": "false"}
-        light = {"native": "false", "package": "false", "docs_only": "true"}
-        ci_plan.check_gate("success", "success", "skipped", normal)
-        ci_plan.check_gate("success", "skipped", "success", light)
-        for result in ["failure", "cancelled", "skipped", "", None]:
-            for planning, checks, roadmap, selected in [
-                (result, "success", "skipped", normal), ("success", result, "skipped", normal),
-                (result, "skipped", "success", light), ("success", "skipped", result, light),
-                ("success", result, "success", normal),
-            ]:
+        for docs, native, package in [(True, False, False), (False, True, True),
+                                      (False, False, False), (False, True, False)]:
+            selected = {"docs_only": str(docs).lower(), "native": str(native).lower(),
+                        "package": str(package).lower()}
+            needs = {job: {"result": "skipped" if docs else "success"} for job in
+                     ("workspace", "release", "player", "clippy", "contracts")}
+            for job, enabled in (("documentation", docs), ("native", native), ("package", package)):
+                needs[job] = {"result": "success" if enabled else "skipped"}
+            needs["plan"] = {"result": "success", "outputs": selected}
+            ci_plan.check_gate(needs)
+            for job in needs:
                 with self.assertRaises(ValueError):
-                    ci_plan.check_gate(planning, checks, roadmap, selected)
-        for selected in [{}, {**normal, "native": "TRUE"}, {**normal, "docs_only": ""},
-                         {**light, "native": "true"}, {**light, "package": "true"}]:
-            with self.assertRaises(ValueError):
-                ci_plan.check_gate("success", "skipped", "success", selected)
+                    ci_plan.check_gate({k: v for k, v in needs.items() if k != job})
+                for result in {"success", "failure", "skipped", "cancelled", None} - {needs[job]["result"]}:
+                    with self.subTest(job=job, result=result), self.assertRaises(ValueError):
+                        ci_plan.check_gate({**needs, job: {**needs[job], "result": result}})
+            for invalid in ({}, {**selected, "native": ""}, {**selected, "native": "true", "docs_only": "true"}):
+                with self.assertRaises(ValueError):
+                    ci_plan.check_gate({**needs, "plan": {"result": "success", "outputs": invalid}})
 
-    def test_workflow_keeps_unconditional_gate_and_pinned_read_only_actions(self):
-        # Structure check complements policy tests; Actions still needs its first real run.
-        text = (Path(__file__).resolve().parent.parent / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        self.assertNotIn("pull_request_target", text)
-        self.assertNotIn("self-hosted", text)
-        self.assertNotIn("continue-on-error", text)
-        self.assertIn("    if: always()\n    needs: [plan, checks, documentation]", text)
-        self.assertIn("    if: needs.plan.outputs.docs_only == 'false'", text)
-        self.assertIn("    if: needs.plan.outputs.docs_only == 'true'", text)
-        self.assertIn("  contents: read", text)
+    def test_parallel_workflow_covers_each_route_and_requires_both_platforms(self):
+        root = Path(__file__).resolve().parents[1]
+        text = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        setup = (root / ".github/actions/ci-setup/action.yml").read_text(encoding="utf-8")
+        self.assertIn("needs: [plan, workspace, release, clippy, contracts, player, native, package, documentation]", text)
+        self.assertIn("name: CI required\n    if: always()", text)
+        self.assertIn("CI_NEEDS: ${{ toJSON(needs) }}", text)
+        self.assertIn("os: [windows-2025, ubuntu-24.04]", text)
+        self.assertIn("fail-fast: false", text)
         self.assertIn("  merge_group:", text)
-        self.assertNotIn("CARGO_PROFILE_TEST_DEBUG:", text)
-        self.assertNotIn("CARGO_PROFILE_DEV_DEBUG:", text)
-        self.assertIn('echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/.tools/ci-dxc/lib" >> "$GITHUB_ENV"', text)
-        self.assertIn("--component rustfmt --component clippy", text)
-        self.assertIn("run: python scripts/verify.py --profile clippy --plan", text)
-        self.assertIn("run: python scripts/verify.py --profile clippy --timeout 1800", text)
-        for line in text.splitlines():
-            if "uses:" in line:
-                self.assertRegex(line, r"uses: actions/[a-z-]+@[0-9a-f]{40} # v")
-
-    def test_cache_never_controls_fetch_verification_or_artifact_reporting(self):
-        text = (Path(__file__).resolve().parent.parent / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        self.assertNotIn("cache-hit", text)
-        self.assertNotIn("lookup-only", text)
-        self.assertNotIn("save-always", text)
-        self.assertIn("actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6", text)
-        cache = text.split("      - name: Restore compatible Cargo", 1)[1].split("      - name:", 1)[0]
-        self.assertIn("if: steps.cargo-cache-context.outputs.enabled == 'true'", cache)
-        self.assertEqual(cache.count("restore-keys:"), 1)
-        paths = cache.split("          path: |\n", 1)[1].splitlines()
-        self.assertEqual([p.strip() for p in paths], ["${{ env.CARGO_HOME }}/registry", "${{ env.CARGO_HOME }}/git",
-                         "target/debug", "target/release", "target/${{ steps.cargo-cache-context.outputs.native_host }}/debug",
-                         "target/${{ steps.cargo-cache-context.outputs.native_host }}/release"])
-        self.assertLess(text.index("run: python scripts/ci_cache.py"), text.index("run: cargo fetch --locked"))
-        for block in text.split("      - name: ")[1:]:
-            if any(command in block for command in ["run: cargo fetch --locked", "run: python scripts/verify.py --profile contracts",
-                                                   "run: python scripts/verify.py --profile clippy"]):
-                self.assertNotIn("        if:", block.split("      - ", 1)[0])
-        self.assertIn("if: runner.os == 'Windows' && needs.plan.outputs.native == 'true'", text)
-        self.assertIn("if: runner.os == 'Linux' && needs.plan.outputs.native == 'true'", text)
-        self.assertIn("if: needs.plan.outputs.package == 'true'", text)
-
-    def test_full_matrix_fetches_before_workspace_and_separate_player_checks(self):
-        text = (Path(__file__).resolve().parent.parent / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        commands = [
-            "cargo fetch --locked", "scripts/ci_workspace_tests.py --without-dxc",
-            "scripts/ci_linux_dxc.py", "run: python scripts/ci_workspace_tests.py\n",
-            "scripts/ci_workspace_tests.py --check-minimal-player",
-            "cargo build --locked -p module-engine-player --no-default-features",
-            "cargo test --locked -p module-engine-player --no-default-features",
-        ]
-        self.assertEqual(sorted(text.index(command) for command in commands),
-                         [text.index(command) for command in commands])
-        for block in text.split("      - name: ")[1:]:
-            if any(command in block for command in commands[3:]):
-                self.assertNotIn("        if:", block.split("      - ", 1)[0])
+        cases = {
+            "workspace": ["--without-dxc", "ci_linux_dxc.py", "ci_workspace_tests.py --nextest"],
+            "release": ["cargo build --offline --locked --release", "--test verification_cli"],
+            "clippy": ["--profile clippy --plan", "--profile clippy --timeout"],
+            "contracts": ["third_party_licenses.py --check", "unittest discover", "--profile contracts --plan",
+                          "--profile contracts --timeout", "--manifest-path crates/ecs-spike/Cargo.toml"],
+            "player": ["--check-minimal-player", "cargo build --locked -p module-engine-player",
+                       "cargo test --locked -p module-engine-player"],
+            "native": ["--profile native-tools", "--profile native --require-capabilities"],
+            "package": ["--profile package --timeout"],
+        }
+        for job, required in cases.items():
+            block = text.split(f"\n  {job}:\n", 1)[1].split("\n\n  ", 1)[0]
+            self.assertIn("strategy: " + ("&os_matrix" if job == "workspace" else "*os_matrix"), block)
+            route = job if job in ("native", "package") else "docs_only"
+            flag = "true" if route == job else "false"
+            self.assertIn(f"if: needs.plan.outputs.{route} == '{flag}'", block)
+            self.assertEqual([block.index(cmd) for cmd in required], sorted(block.index(cmd) for cmd in required))
+            self.assertIn("uses: ./.github/actions/ci-setup", block)
+            self.assertIn("&reports" if job == "workspace" else "*reports", block)
+        self.assertIn("name: Upload current-run reports even after failure\n        if: always()", text)
+        self.assertIn("cache-targets: false", setup)
+        self.assertIn("cache-bin: false", setup)
+        self.assertLess(setup.index("ci_cache.py"), setup.index("run: cargo fetch --locked"))
+        for workflow in [text, setup]:
+            for forbidden in ["continue-on-error", "self-hosted", "pull_request_target", "cache-hit"]:
+                self.assertNotIn(forbidden, workflow)
+            for line in workflow.splitlines():
+                if "uses:" in line and "uses: ./" not in line:
+                    self.assertRegex(line, r"uses: [a-zA-Z0-9/-]+@[0-9a-f]{40} # v")
 
     def test_concurrency_does_not_share_a_group_across_main_runs(self):
         text = (Path(__file__).resolve().parent.parent / ".github/workflows/ci.yml").read_text(encoding="utf-8")
