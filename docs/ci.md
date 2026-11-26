@@ -7,7 +7,8 @@
 Ordinary PRs run the workspace tests, the minimal Player configuration, the
 default Release Editor's CLI test, and separate `contracts` and `clippy`
 checks on Windows and Linux.
-Executable-source changes add native and package checks. Documentation-only PRs have a dedicated check. `CI required` succeeds after planning and
+Executable-source changes add native and package checks.
+Documentation-only PRs have a dedicated check. `CI required` succeeds after planning and
 every job required by the selected route. Performance, desktop dialogs, hardware
 GPU and full Full/Team/Player delivery are outside this CI scope.
 
@@ -19,9 +20,11 @@ The [workflow](../.github/workflows/ci.yml) runs for all PRs, pushes to `main`, 
 and manual invocation; there are no workflow-level path filters. [ci_plan.py](../scripts/ci_plan.py)
 reads the Git diff, including deleted files and both sides of renames. A nonempty PR uses
 `Documentation checks` when every changed path is a regular, non-executable
-Markdown file under `docs/`, a root `AGENTS.md` or README, or a README directly in
+Markdown file (`.md` or `.markdown`) under `docs/`,
+a root `AGENTS.md` or README, or a README directly in
 a crate or example directory (`README.md` or `README.ru.md`). This job runs the
-generator and Node model tests, checks [roadmap EN/RU consistency](roadmap-map.md), and builds both HTML pages. The
+generator and Node model tests, checks [roadmap EN/RU consistency](roadmap-map.md),
+and builds both HTML pages. The
 standalone Roadmap map workflow still checks Chromium and publishes Pages.
 
 Planning also runs [check_doc_links.py](../scripts/check_doc_links.py) on

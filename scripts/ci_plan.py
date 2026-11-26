@@ -38,7 +38,6 @@ def changed_files(base, head="HEAD"):
     return sorted(paths), regular
 
 
-
 def status_edits(before, after):
     """Return task IDs for a nonempty status-cell-only edit, or None."""
     old_lines = before.splitlines(keepends=True)
@@ -107,15 +106,15 @@ def plan(base, head="HEAD", event=""):
     return select_non_pr(paths, docs_only=roadmap_status_only(before, after))
 
 
-def check_gate(plan_result, checks_result, roadmap_result, selected):
+def check_gate(plan_result, checks_result, documentation_result, selected):
     if plan_result != "success":
         raise ValueError("CI requires successful route selection")
     if set(selected) != set(ROUTES) or any(value not in {"true", "false"} for value in selected.values()):
         raise ValueError("Missing or invalid route selection")
     if selected["docs_only"] == "true":
-        if (selected["native"], selected["package"], checks_result, roadmap_result) != ("false", "false", "skipped", "success"):
+        if (selected["native"], selected["package"], checks_result, documentation_result) != ("false", "false", "skipped", "success"):
             raise ValueError("Documentation CI requires successful roadmap checks and a skipped OS matrix")
-    elif (checks_result, roadmap_result) != ("success", "skipped"):
+    elif (checks_result, documentation_result) != ("success", "skipped"):
         raise ValueError("Ordinary CI requires success from both OS jobs and skips the documentation job")
 
 
@@ -127,7 +126,7 @@ def main():
     if args.gate:
         selected = {key: os.environ.get("CI_" + key.upper(), "") for key in ROUTES}
         check_gate(os.environ.get("CI_PLAN_RESULT"), os.environ.get("CI_CHECKS_RESULT"),
-                   os.environ.get("CI_ROADMAP_RESULT"), selected)
+                   os.environ.get("CI_DOCUMENTATION_RESULT"), selected)
         print("CI required passed; route selection: " + json.dumps(selected))
         return
     selected = plan(args.base, event=os.environ.get("GITHUB_EVENT_NAME", ""))

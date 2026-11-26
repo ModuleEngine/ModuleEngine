@@ -196,7 +196,7 @@ jobs:
         env:
           CI_PLAN_RESULT: ${{ needs.plan.result }}
           CI_CHECKS_RESULT: ${{ needs.checks.result }}
-          CI_ROADMAP_RESULT: ${{ needs.documentation.result }}
+          CI_DOCUMENTATION_RESULT: ${{ needs.documentation.result }}
           CI_NATIVE: ${{ needs.plan.outputs.native }}
           CI_PACKAGE: ${{ needs.plan.outputs.package }}
           CI_DOCS_ONLY: ${{ needs.plan.outputs.docs_only }}
