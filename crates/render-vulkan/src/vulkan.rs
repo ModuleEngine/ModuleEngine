@@ -39,6 +39,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(all(windows, feature = "editor-spike"))]
+#[path = "editor_spike.rs"]
+pub(crate) mod editor_spike;
 #[path = "materials.rs"]
 mod materials;
 use materials::{MaterialLayout, MaterialSet};
@@ -547,6 +550,21 @@ impl VulkanRenderer {
         resource_root: std::path::PathBuf,
         presentation_target: Option<Arc<VulkanPresentationTarget>>,
     ) -> Result<Self, VulkanError> {
+        Self::new_with_instance(
+            resource_root,
+            presentation_target,
+            Arc::new(InstanceLifetime::new(&[])?),
+            #[cfg(all(windows, feature = "editor-spike"))]
+            None,
+        )
+    }
+
+    fn new_with_instance(
+        resource_root: std::path::PathBuf,
+        presentation_target: Option<Arc<VulkanPresentationTarget>>,
+        owner: Arc<InstanceLifetime>,
+        #[cfg(all(windows, feature = "editor-spike"))] surface: Option<&editor_spike::Surface>,
+    ) -> Result<Self, VulkanError> {
         // SAFETY: The instance owns the enumerated physical devices and Vulkan fills their names
         // with terminated strings. Device creation uses queried queues/features, borrowed create
         // info valid through the call, and retained instance/device owners for the resulting
@@ -554,12 +572,11 @@ impl VulkanRenderer {
         unsafe {
             let trace = std::env::var_os("MODULE_ENGINE_VULKAN_TRACE")
                 .map(|_| NEXT_TRACE_ID.fetch_add(1, Ordering::Relaxed));
-            let owner = InstanceLifetime::new()?;
             let instance = owner.raw.clone();
             let candidates = instance
                 .enumerate_physical_devices()
                 .map_err(VulkanError::api("enumerate adapters"))?;
-            let mut extension_error = None;
+            let mut selection_error = None;
             let selected = candidates
                 .into_iter()
                 .filter_map(|physical| {
@@ -577,16 +594,31 @@ impl VulkanRenderer {
                         return None;
                     }
                     let families = instance.get_physical_device_queue_family_properties(physical);
-                    let family = families.iter().position(|p| {
+                    let graphics_compute = |p: &vk::QueueFamilyProperties| {
                         p.queue_count != 0
                             && p.queue_flags
                                 .contains(vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE)
-                    })?;
+                    };
+                    #[cfg(all(windows, feature = "editor-spike"))]
+                    let family = match surface {
+                        Some(surface) => match surface.queue_family(physical, &families) {
+                            Ok(family) => family?,
+                            Err(error) => {
+                                selection_error.get_or_insert(error);
+                                return None;
+                            }
+                        },
+                        None => families.iter().position(graphics_compute)?,
+                    };
+                    #[cfg(not(all(windows, feature = "editor-spike")))]
+                    let family = families.iter().position(graphics_compute)?;
                     let extensions = match instance.enumerate_device_extension_properties(physical)
                     {
                         Ok(extensions) => extensions,
                         Err(error) => {
-                            extension_error.get_or_insert(error);
+                            selection_error.get_or_insert(VulkanError::api(
+                                "enumerate device extensions",
+                            )(error));
                             return None;
                         }
                     };
@@ -594,6 +626,15 @@ impl VulkanRenderer {
                         && !extensions.iter().any(|extension| {
                             CStr::from_ptr(extension.extension_name.as_ptr())
                                 == crate::presentation::extension_name()
+                        })
+                    {
+                        return None;
+                    }
+                    #[cfg(all(windows, feature = "editor-spike"))]
+                    if surface.is_some()
+                        && !extensions.iter().any(|extension| {
+                            CStr::from_ptr(extension.extension_name.as_ptr())
+                                == ash::khr::swapchain::NAME
                         })
                     {
                         return None;
@@ -620,8 +661,15 @@ impl VulkanRenderer {
                     }
                 });
             let Some((physical, capabilities, properties, timestamp_valid_bits)) = selected else {
-                if let Some(source) = extension_error {
-                    return Err(VulkanError::api("enumerate device extensions")(source));
+                if let Some(error) = selection_error {
+                    return Err(error);
+                }
+                #[cfg(all(windows, feature = "editor-spike"))]
+                if surface.is_some() {
+                    return Err(VulkanError::Presentation(
+                        "No R2 Vulkan graphics+compute queue can present to the spike window"
+                            .into(),
+                    ));
                 }
                 return Err(if presentation_target.is_some() {
                     VulkanError::NoPresentationAdapter
@@ -661,6 +709,14 @@ impl VulkanRenderer {
                 vec![crate::presentation::extension_name().as_ptr()]
             } else {
                 Vec::new()
+            };
+            #[cfg(all(windows, feature = "editor-spike"))]
+            let extensions = if surface.is_some() {
+                let mut extensions = extensions;
+                extensions.push(ash::khr::swapchain::NAME.as_ptr());
+                extensions
+            } else {
+                extensions
             };
             let device = instance
                 .create_device(

@@ -822,6 +822,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "egui-ash-renderer"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5366921cf6111f490b2a8a2ac9fe44800afe9ae8dc95b693ebb6f9dd791e00ef"
+dependencies = [
+ "ash",
+ "egui",
+ "log",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "egui-wgpu"
 version = "0.36.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1763,7 +1775,11 @@ dependencies = [
 name = "module-engine-editor"
 version = "0.4.0"
 dependencies = [
+ "ash",
+ "bytemuck",
  "eframe",
+ "egui-ash-renderer",
+ "egui-winit",
  "libc",
  "module-engine-arpg",
  "module-engine-content",
@@ -1782,6 +1798,7 @@ dependencies = [
  "png",
  "serde",
  "serde_json",
+ "winit",
 ]
 
 [[package]]

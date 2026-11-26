@@ -19,6 +19,7 @@
 ## Implemented
 
 - **Editor.** Full with verified sources can change Engine and Project. Team freezes the architecture and allows only the exposed Project changes. Scene, Hierarchy, Inspector and Assets edit the authored project. Game runs a separate Play copy. See [editor workflow](editor-workflow.md) and [distribution](distribution.md).
+- **Vulkan editor prototype.** Both painters drew the Editor root on an R2 device and met the timing and text criteria at native 100% and 150% DPI on the Windows reference machine. The R3.2 shell starts with the library painter. See the [measurements and captures](editor-vulkan-spike.md#r31-results).
 - **Physics.** An optional [Rapier step](physics-rapier.md) adds bodies, colliders, joints, collision events and queries at 60 Hz. Scene displays physics geometry and Player selects the native feature from the authored schedule.
 - **glTF animation.** The importer loads joint hierarchies, inverse binds, skin weights and TRS tracks. GameHost loops the first applicable clip and deforms vertex positions on the CPU. The Khronos playback check covers CesiumMan and Fox alongside the static crystal. See [content and verification](content.md#gltf-animation).
 - **Delivery.** Player uses built game logic and SPIR-V. Crate Garden has ten levels and a Windows acceptance record on the reference machine. Two Arenas is the technical ARPG example. See the [Crate Garden receipt](g1-verification-20261101.md), [game authoring](editor-game.md) and [Player](player.md).

@@ -32,6 +32,8 @@ mod player_settings_verification;
 mod project;
 #[cfg(feature = "verification")]
 mod puzzle_verification;
+#[cfg(all(windows, feature = "r31-spike"))]
+mod r31_spike;
 #[cfg(feature = "verification")]
 mod render_settings_verification;
 mod runtime_delivery;
@@ -204,6 +206,8 @@ fn run() -> Result<(), String> {
         println!(
             "\nMouse: drag nodes; output pin -> compatible input pin; double click compound.\n3D: drag to orbit; wheel to zoom. See README.md and README.ru.md for documentation.\nScene: hold RMB + WASD to fly, Q/E down/up, mouse to look, RMB+wheel speed, G/R/S tools, MMB orbit, Shift+MMB pan, wheel zoom, F frame, Escape cancel."
         );
+        #[cfg(all(windows, feature = "r31-spike"))]
+        println!("  module-engine-editor --r31-editor-vulkan ash|thin 1.0|1.5 <new output folder>");
         return Ok(());
     }
     #[cfg(feature = "verification")]
@@ -215,6 +219,8 @@ fn run() -> Result<(), String> {
         return Err("Built-in source fixtures require a Full source checkout. Use --check <project.json> to verify a Team project with its saved Custom Rust permission.".into());
     }
     match args.first().map(String::as_str) {
+        #[cfg(all(windows, feature = "r31-spike"))]
+        Some("--r31-editor-vulkan") => return r31_spike::run(&args[1..], requested_profile),
         Some("--allow-team-custom-rust") => {
             let [_, path] = args.as_slice() else {
                 return Err("Usage: --allow-team-custom-rust <project.json>".into());
