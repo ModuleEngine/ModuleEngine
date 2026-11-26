@@ -185,7 +185,7 @@ and repeat reports do not establish hosted cache benefit or Editor cold-start.
 ## CI
 
 [GitHub Actions and the required check](ci.md) run separate `contracts` and `clippy` plans/checks on Windows and
-Linux, including documentation PRs, and add native/package routes for source changes. Before offline
+Linux for source changes, including native/package routes. Documentation-only PRs use the link and roadmap checks. Before offline
 checks, CI explicitly restores pinned Rust with `rustfmt`/`clippy` and locked dependencies. Enforcing
 merge requirements needs an applied branch rule; having YAML is not
 proof of a first successful hosted run or configured protection.

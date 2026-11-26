@@ -449,7 +449,7 @@ budget, address it in R1.8 and recheck late rejection and retry through
 
 Two independent reviews of `main` at `c93f919` were made on 23 November 2026, one on Windows with the reference GPU and one on Linux with a software Vulkan device. They were combined on 24 November 2026. Their findings are planned as three required stages and one optional stage:
 
-1. **RV-A** first: the whole workspace in required CI, so that the regression tests written in RV-B and later run on every pull request. A pull request that changes only status cells of existing tasks in the two roadmap files keeps the light `Roadmap status checks` route; every other pull request takes the full route.
+1. **RV-A** first: the whole workspace in required CI, so that the regression tests written in RV-B and later run on every pull request. RV-A originally reserved the light route for roadmap status cells. See the [current CI routes](ci.md) for documentation-only PRs.
 2. **RV-B**: the editor scenarios found by the review. R2.5 starts after RV-A, RV-B.1–RV-B.3 and RV-C.3 are done; RV-B.4 may close separately.
 3. **RV-C** alongside the start of R2.5: evidence that a clean clone can read, the R2.5 baseline and, before any R6 task, the measured ARPG tick and the decision on typed components.
 4. **RV-D** is optional: maintenance items taken when work touches the subsystem.

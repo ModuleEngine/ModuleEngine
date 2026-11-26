@@ -154,7 +154,10 @@ def main():
     try:
         base = args.base if args.base.strip("0") else "HEAD^"
         base = git("rev-parse", "--verify", f"{base}^{{commit}}").strip()
-        changed = git("diff", "--name-status", "--no-renames", "-z", base, "HEAD", "--", "docs/")
+        changed = git("diff", "--name-status", "--no-renames", "-z", base, "HEAD", "--", "docs/",
+                      "AGENTS.md", "README.md", "README.ru.md",
+                      ":(glob)crates/*/README.md", ":(glob)crates/*/README.ru.md",
+                      ":(glob)examples/*/README.md", ":(glob)examples/*/README.ru.md")
         fields = changed.rstrip("\0").split("\0")
         failed = False
         for status, doc in zip(fields[::2], fields[1::2]):

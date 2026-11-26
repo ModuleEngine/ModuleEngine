@@ -7,8 +7,7 @@
 Ordinary PRs run the workspace tests, the minimal Player configuration, the
 default Release Editor's CLI test, and separate `contracts` and `clippy`
 checks on Windows and Linux.
-Executable-source changes add native and package checks. Status-only roadmap
-transitions have a dedicated check. `CI required` succeeds after planning and
+Executable-source changes add native and package checks. Documentation-only PRs have a dedicated check. `CI required` succeeds after planning and
 every job required by the selected route. Performance, desktop dialogs, hardware
 GPU and full Full/Team/Player delivery are outside this CI scope.
 
@@ -18,10 +17,11 @@ GPU and full Full/Team/Player delivery are outside this CI scope.
 
 The [workflow](../.github/workflows/ci.yml) runs for all PRs, pushes to `main`, the merge queue,
 and manual invocation; there are no workflow-level path filters. [ci_plan.py](../scripts/ci_plan.py)
-reads the Git diff, including deleted files and both sides of renames. A nonempty
-edit restricted to existing status cells in both [roadmap tables](roadmap-map.md)
-can use `Roadmap status checks` after bilingual validation. This job runs the
-generator and Node model tests, `--check`, and builds both HTML pages. The
+reads the Git diff, including deleted files and both sides of renames. A nonempty PR uses
+`Documentation checks` when every changed path is a regular, non-executable
+Markdown file under `docs/`, a root `AGENTS.md` or README, or a README directly in
+a crate or example directory (`README.md` or `README.ru.md`). This job runs the
+generator and Node model tests, checks [roadmap EN/RU consistency](roadmap-map.md), and builds both HTML pages. The
 standalone Roadmap map workflow still checks Chromium and publishes Pages.
 
 Planning also runs [check_doc_links.py](../scripts/check_doc_links.py) on
@@ -36,7 +36,9 @@ the same PR group. Each push to `main`, merge-queue event, and manual run has
 its own group keyed by run ID. A second merge can start before the first
 finishes and cannot cancel or replace its run.
 
-Other changes use the ordinary matrix. Within it, edits limited to `docs/`,
+All other PRs run both OS jobs with native and package checks. On pushes and merge groups,
+only matching status-cell edits in both roadmaps qualify for the light job. Within the
+ordinary matrix for non-PR events, edits limited to `docs/`,
 Markdown, `LICENSE-MIT`, `LICENSE-APACHE`, or `.gitignore` skip native and package
 routes. Unknown source paths, empty diffs, initial pushes and manual runs enable
 them. Failure to determine the diff fails planning.
@@ -62,8 +64,7 @@ The minimal Player is built and tested in separate Cargo invocations with
 graph must exclude game packages and Vulkan. The Player's test-only Two Arenas
 fixture is outside that graph.
 
-The ordinary matrix plans and runs `clippy` separately on both platforms,
-including documentation PRs outside the status-only route. On the pinned
+The ordinary matrix plans and runs `clippy` separately on both platforms. On the pinned
 native target it runs `--workspace --all-targets --all-features` and then
 `--release -p module-engine-editor --bins` with the default features. Both
 offline, locked runs pass `-D warnings`.
