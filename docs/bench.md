@@ -294,6 +294,24 @@ passes and neither side's sources or binary changed during the series. A
 rejected comparison exits 1, an error 2. A comparison of a commit against
 itself (A/A) shows the machine's current noise.
 
+**25 November 2026 — keep the current tolerance (RV-D.4).** For each blocking
+metric, we recalculated the cutoff as `max(floor, 2 × 1.4826 × relative MAD)`.
+Relative MAD is the median absolute deviation from the baseline median divided
+by that median, expressed as a percentage. The scale factor estimates standard
+deviation under normal noise. The input was six comparable Windows series from
+22–23 November, including one A/A rerun with ten runs on each side. The MAD
+cutoff was tighter for 38 of 58 comparisons. For the five-run series it was
+tighter for 24 of 37 comparisons and changed none of their worse/pass decisions.
+
+Two metrics crossed the cutoff across all series. One three-run S3 series moved
+from `same` to `worse` for mean ECS tick (+5.28%, 11.47% range cutoff and 5.00%
+MAD cutoff). The ten-run A/A series for `077371c464d2c124288c858e10950f212a76c93e`
+also moved to `worse` for peak working set (+4.19%, 17.97% range cutoff and 1.00%
+MAD cutoff). That A/A run had two working-set bands on the same code. This is
+evidence of a false regression signal under the proposed cutoff, so the present
+rule and borderline rerun stay in force. The [recorded samples and calculation](evidence/rv-d-bench.json)
+identify each input report, its hash, the measured arrays and the excluded runs.
+
 **Declared presentation change.** When the presentation path itself is the
 change under test (R2.6: the current WGPU path against the direct Vulkan
 swapchain), declare each field that may differ between the sides:

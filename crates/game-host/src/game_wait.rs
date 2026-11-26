@@ -1,6 +1,9 @@
 //! Owned, interruptible actor deadlines. Windows uses a high-resolution timer
 //! without changing process/system timer resolution; standard parking keeps an
 //! owned predicate independent of the thread token used by other libraries.
+
+#![deny(clippy::undocumented_unsafe_blocks)]
+
 #[cfg(windows)]
 use std::sync::atomic::AtomicU64;
 use std::{
@@ -243,9 +246,11 @@ mod windows {
         #[cfg(test)]
         close_outcome: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
     }
-    // Kernel event/timer handles can be signaled/waited on across threads. The
-    // unique owner closes only after the Arc-held wake users/owner wait release it.
+    // SAFETY: Kernel event and timer handles may move across threads. The unique owner closes the
+    // handle only after the last retained user releases it.
     unsafe impl Send for Handle {}
+    // SAFETY: Windows synchronizes event signaling and waiting internally. A shared borrow holds
+    // the handle open through the native call.
     unsafe impl Sync for Handle {}
     impl Handle {
         fn take(raw: RawHandle) -> Result<Self, u32> {
@@ -255,16 +260,23 @@ mod windows {
                     #[cfg(test)]
                     close_outcome: None,
                 })
+                // SAFETY: GetLastError reads this thread's error immediately after failed handle
+                // creation.
                 .ok_or_else(|| unsafe { GetLastError() })
         }
         pub(super) fn event() -> Result<Self, u32> {
             // Auto-reset event retains one pre-wait signal; never ResetEvent.
+            // SAFETY: Null security attributes and event name request an unnamed, privately owned
+            // auto-reset event.
             Self::take(unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) })
         }
         pub(super) fn set(&self) -> Result<(), u32> {
+            // SAFETY: A live owner holds the event handle through this signaller's borrow.
             if unsafe { SetEvent(self.raw.as_ptr()) } != 0 {
                 Ok(())
             } else {
+                // SAFETY: GetLastError reads this thread's result immediately after SetEvent
+                // failed.
                 Err(unsafe { GetLastError() })
             }
         }
@@ -277,6 +289,8 @@ mod windows {
     }
     impl Drop for Handle {
         fn drop(&mut self) {
+            // SAFETY: This is the unique owned kernel handle. All borrows and waiters ended before
+            // Drop.
             let result = unsafe { CloseHandle(self.raw.as_ptr()) };
             #[cfg(test)]
             if let Some(outcome) = &self.close_outcome {
@@ -284,6 +298,8 @@ mod windows {
                 let result = if result != 0 {
                     1
                 } else {
+                    // SAFETY: No other Win32 call has occurred on this thread after CloseHandle
+                    // failed.
                     u64::from(unsafe { GetLastError() }) + 2
                 };
                 outcome.store(result, Ordering::Release);
@@ -298,6 +314,8 @@ mod windows {
         pub(super) fn new() -> Result<Self, String> {
             // CREATE_WAITABLE_TIMER_HIGH_RESOLUTION; auto-reset, minimal
             // TIMER_MODIFY_STATE | SYNCHRONIZE access, no named/shared timer.
+            // SAFETY: Null attributes and name create a private timer. Flags request a high-
+            // resolution auto-reset timer with change-state and wait rights.
             Handle::take(unsafe {
                 CreateWaitableTimerExW(std::ptr::null(), std::ptr::null(), 2, 0x0010_0002)
             })
@@ -311,6 +329,8 @@ mod windows {
             let watchdog = duration.saturating_add(WATCHDOG_GRACE);
             let mut timeout_ms = safety_timeout(watchdog);
             let started = Instant::now();
+            // SAFETY: This owner holds a live timer. due is a readable relative i64. The one-shot
+            // arm has no callback or deferred references.
             if unsafe {
                 SetWaitableTimerEx(
                     self.0.raw.as_ptr(),
@@ -323,6 +343,7 @@ mod windows {
                 )
             } == 0
             {
+                // SAFETY: SetWaitableTimerEx just failed on this thread.
                 return Err(format!("SetWaitableTimerEx: Windows error {}", unsafe {
                     GetLastError()
                 }));
@@ -337,6 +358,8 @@ mod windows {
             let (result, error, elapsed) = loop {
                 let result = wait_objects(&handles, timeout_ms);
                 let error = if result == u32::MAX {
+                    // SAFETY: A WAIT_FAILED result came immediately from WaitForMultipleObjects on
+                    // this thread.
                     unsafe { GetLastError() }
                 } else {
                     0
@@ -347,8 +370,10 @@ mod windows {
                 }
                 timeout_ms = safety_timeout(watchdog.saturating_sub(elapsed));
             };
+            // SAFETY: The timer borrow keeps its native handle live through cancellation.
             let cancelled = unsafe { CancelWaitableTimer(self.0.raw.as_ptr()) };
             let cancel_error = if cancelled == 0 {
+                // SAFETY: CancelWaitableTimer just failed on this thread.
                 unsafe { GetLastError() }
             } else {
                 0
@@ -375,6 +400,8 @@ mod windows {
     }
     impl Drop for Timer {
         fn drop(&mut self) {
+            // SAFETY: The Timer still holds its handle. Cancelling before the handle owner drops
+            // releases any outstanding arm.
             unsafe { CancelWaitableTimer(self.0.raw.as_ptr()) };
         }
     }
@@ -393,6 +420,8 @@ mod windows {
         if EARLY_TIMEOUT_ONCE.with(|pending| pending.replace(false)) {
             return 258;
         }
+        // SAFETY: The initialized array has exactly two live distinct handles, kept open by the
+        // timer and event owners for the full wait.
         unsafe { WaitForMultipleObjects(2, handles.as_ptr(), 0, timeout_ms) }
     }
     pub(super) fn relative_due(duration: Duration) -> i64 {

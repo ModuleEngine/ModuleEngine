@@ -10,9 +10,9 @@
 - [Диагностика поведения ModuleEngine](debugging-skill.md)
 - [Внедрение рабочего процесса ассистента и пилот Serena](assistant-efficiency-20261017.md)
 
-- [ModuleEngine 0.4](../../README.ru.md)
+- [ModuleEngine](../../README.ru.md)
 - [Работа над ModuleEngine](agent-guide.md)
-- [Текущее состояние ModuleEngine](current-status.md)
+- [Текущее состояние ModuleEngine](current-status.md) · [Архив состояния](status-archive.md)
 - [Запуск нативных бенчмарков S1–S5](bench.md) · [Принятая серия R0.2, 21 ноября 2026](bench-r02-20261121.md)
 - [Продуктовая карта по версиям: стабильные конфигурации, самостоятельные авторы и пять игр](product-roadmap.md#map)
 - [Визуальная дорожная карта, собираемая автоматически из статусов задач](roadmap-map.md)

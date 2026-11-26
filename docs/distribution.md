@@ -24,6 +24,28 @@ Backend pins strictly check the executable, tool manifest, DXC/DLL/licenses, ass
 
 This is a working editing policy, not a security sandbox or a cryptographically signed delivery. A user with file access can modify the program; Custom Rust has ordinary OS privileges.
 
+<a id="team-custom-rust-permission"></a>
+
+## Team Custom Rust permission
+
+The first time a Team project with Custom Rust opens, the editor offers
+**Open without compiling** and **Allow compilation**. Compiling can run
+Cargo build scripts and procedural macros with the current user's permissions.
+A refusal leaves the project open for editing, with Custom compilation blocked.
+Use **File → Review Custom Rust permission…** to grant permission later.
+
+The editor remembers both choices in the current user's state directory
+(`LOCALAPPDATA` on Windows, `XDG_STATE_HOME` or `~/.local/state` on Linux).
+The canonical project JSON path, frozen blueprint and installed SDK inventory
+identify the permission. A different path after Save As or a changed SDK
+requires its own choice. Edits to the permitted Rust sources within a trusted
+project use the same permission.
+
+For command-line use, explicitly run `--allow-team-custom-rust <project.json>`
+before requesting a check, render, Play or export that compiles the project.
+The permission command records the choice. SDK and blueprint checks still apply
+when the project runs.
+
 <a id="экспорт-и-sdk"></a>
 
 ## Export and SDK

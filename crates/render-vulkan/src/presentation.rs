@@ -92,9 +92,9 @@ impl DeviceLifetime {
 
 impl Drop for DeviceLifetime {
     fn drop(&mut self) {
+        // SAFETY: DeviceLifetime owns the device and retains its instance. Submitted work is
+        // confirmed before releasing its owners. An unknown result quarantines the entire owner.
         unsafe {
-            // Every producer submission is confirmed before its resources drop,
-            // or its entire owner/device is quarantined on an unknown result.
             self.device.destroy_device(None);
         }
     }
@@ -116,6 +116,8 @@ pub(crate) mod instance {
     impl InstanceLifetime {
         pub(crate) fn new() -> Result<Self, VulkanError> {
             let entry =
+                // SAFETY: Use the system Vulkan loader with the platform ABI. InstanceLifetime
+                // keeps the entry loaded until the instance and its devices are destroyed.
                 unsafe { Entry::load() }.map_err(|source| VulkanError::Loader(Arc::new(source)))?;
             let app = vk::ApplicationInfo::default()
                 .application_name(c"ModuleEngine GPU graph")
@@ -123,6 +125,8 @@ pub(crate) mod instance {
             #[cfg(debug_assertions)]
             let (raw, debug) = debug::Diagnostics::create(&entry, &app)?;
             #[cfg(not(debug_assertions))]
+            // SAFETY: The live loader consumes the application/create info synchronously. The
+            // application name is a static terminated C string.
             let raw = unsafe {
                 entry.create_instance(
                     &vk::InstanceCreateInfo::default().application_info(&app),
@@ -149,6 +153,8 @@ pub(crate) mod instance {
         fn drop(&mut self) {
             #[cfg(debug_assertions)]
             self.debug.destroy();
+            // SAFETY: All DeviceLifetime owners retain this instance. The debug messenger is
+            // already destroyed and no device can still reference the instance.
             unsafe { self.raw.destroy_instance(None) };
             #[cfg(debug_assertions)]
             self.debug.report();
@@ -190,6 +196,8 @@ pub(crate) mod instance {
             data: *const vk::DebugUtilsMessengerCallbackDataEXT<'_>,
             user: *mut c_void,
         ) -> vk::Bool32 {
+            // SAFETY: The callback user data is a live Box<Counts> retained through messenger
+            // destruction. Atomics support concurrent callbacks.
             let counts = unsafe { &*user.cast::<Counts>() };
             if severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR) {
                 counts.errors.fetch_add(1, Relaxed);
@@ -197,6 +205,8 @@ pub(crate) mod instance {
             } else {
                 counts.warnings.fetch_add(1, Relaxed);
             }
+            // SAFETY: Vulkan supplies callback data and its NUL-terminated message for the duration
+            // of this callback.
             let message = unsafe { CStr::from_ptr((*data).p_message) }.to_string_lossy();
             log(format_args!("Vulkan validation {severity:?}: {message}"));
             vk::FALSE
@@ -211,13 +221,19 @@ pub(crate) mod instance {
                 entry: &Entry,
                 app: &vk::ApplicationInfo<'_>,
             ) -> Result<(ash::Instance, Self), VulkanError> {
+                // SAFETY: The loaded entry stays live for the entire instance-layer enumeration.
                 let layers = unsafe { entry.enumerate_instance_layer_properties() }
                     .map_err(VulkanError::api("enumerate instance layers"))?;
+                // SAFETY: The live loader enumerates global extensions with no layer-name pointer.
                 let extensions = unsafe { entry.enumerate_instance_extension_properties(None) }
                     .map_err(VulkanError::api("enumerate instance extensions"))?;
                 let validation = layers
                     .iter()
+                    // SAFETY: Vulkan initializes every enumerated layer name as a NUL-terminated
+                    // array.
                     .any(|layer| unsafe { CStr::from_ptr(layer.layer_name.as_ptr()) == LAYER });
+                // SAFETY: Vulkan initializes each enumerated extension name as a NUL-terminated
+                // array.
                 let utils = extensions.iter().any(|extension| unsafe {
                     CStr::from_ptr(extension.extension_name.as_ptr()) == ash::ext::debug_utils::NAME
                 });
@@ -241,6 +257,8 @@ pub(crate) mod instance {
                 }
                 let instance = if utils {
                     let mut instance_callback = callback_info;
+                    // SAFETY: Every advertised layer and extension name is a live terminated
+                    // string. The call borrows both the create chain and its callback data.
                     unsafe {
                         entry.create_instance(
                             &info
@@ -250,14 +268,20 @@ pub(crate) mod instance {
                         )
                     }
                 } else {
+                    // SAFETY: The live create info contains only advertised layer names and borrows
+                    // buffers that outlive the call.
                     unsafe { entry.create_instance(&info, None) }
                 }
                 .map_err(VulkanError::api("1.3 instance"))?;
                 let messenger = if utils {
                     let loader = ash::ext::debug_utils::Instance::new(entry, &instance);
+                    // SAFETY: The debug-utils extension was enabled on this instance. The boxed
+                    // callback data outlives this messenger.
                     match unsafe { loader.create_debug_utils_messenger(&callback_info, None) } {
                         Ok(messenger) => Some((loader, messenger)),
                         Err(error) => {
+                            // SAFETY: Instance creation succeeded, but no messenger or logical
+                            // device was created. This path owns and destroys the instance.
                             unsafe { instance.destroy_instance(None) };
                             return Err(VulkanError::api("create debug messenger")(error));
                         }
@@ -295,6 +319,8 @@ pub(crate) mod instance {
                 let info = vk::DebugUtilsObjectNameInfoEXT::default()
                     .object_handle(object)
                     .object_name(&name);
+                // SAFETY: The provided handle is still live on this device. The name is terminated
+                // and lives through the call.
                 match unsafe { loader.set_debug_utils_object_name(&info) } {
                     Ok(()) => {
                         // Record a bounded sample of successful names, even when
@@ -312,6 +338,8 @@ pub(crate) mod instance {
 
             pub(super) fn destroy(&mut self) {
                 if let Some((loader, messenger)) = self.messenger.take() {
+                    // SAFETY: This messenger belongs to the retained instance. Destruction occurs
+                    // once, before the instance and boxed callback state are released.
                     unsafe { loader.destroy_debug_utils_messenger(messenger, None) };
                 }
             }
@@ -380,6 +408,8 @@ pub(crate) fn matches_adapter(
 ) -> bool {
     let mut ids = vk::PhysicalDeviceIDProperties::default();
     let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut ids);
+    // SAFETY: The physical device belongs to this live instance. The ID properties chain is
+    // writable for the duration of the query.
     unsafe {
         instance.get_physical_device_properties2(physical, &mut properties);
     }
@@ -411,6 +441,8 @@ pub(crate) fn validate_external_format(
     let max_extent = {
         let mut properties =
             vk::ImageFormatProperties2::default().push_next(&mut external_properties);
+        // SAFETY: The live instance owns the selected physical device. Both external-format query
+        // chains remain initialized and in scope through the call.
         unsafe {
             context
                 .instance
@@ -495,6 +527,8 @@ impl<T> PresentationPool<T> {
 }
 impl Drop for SharedImage {
     fn drop(&mut self) {
+        // SAFETY: This slot uniquely owns the image and its allocation. Producer completion and the
+        // consumer lease cover all accesses before drop.
         unsafe {
             self.context.device.destroy_image(self.image, None);
             if self.memory != vk::DeviceMemory::null() {
@@ -530,6 +564,8 @@ impl SharedImage {
             .usage(SHARED_USAGE)
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .push_next(&mut external);
+        // SAFETY: The verified external format and extent match the intended import. The live
+        // external-memory create chain names the enabled handle type.
         let image = unsafe { context.device.create_image(&image_info, None) }
             .map_err(VulkanError::api("create shared image"))?;
         context.name(image, || format!("GUI shared RGBA8 frame {width}x{height}"));
@@ -541,6 +577,7 @@ impl SharedImage {
             initialized: AtomicBool::new(false),
             context,
         };
+        // SAFETY: This image was just created on the same retained device.
         let requirements = unsafe { result.context.device.get_image_memory_requirements(image) };
         // Vulkan's Resource Creation contract says requirements.size has no
         // meaning for D3D12_RESOURCE images. Comparing it with DX12 allocation
@@ -561,6 +598,8 @@ impl SharedImage {
                 &result.context.device,
             );
             let mut properties = vk::MemoryWin32HandlePropertiesKHR::default();
+            // SAFETY: The enabled Win32 extension can query this live D3D12 resource handle. Its
+            // output properties are initialized writable storage.
             unsafe {
                 extension.get_memory_win32_handle_properties(
                     handle_type(),
@@ -610,6 +649,9 @@ impl SharedImage {
             let mut import = vk::ImportMemoryWin32HandleInfoKHR::default()
                 .handle_type(handle_type())
                 .handle(handle.as_raw_handle() as _);
+            // SAFETY: The retained GUI resource exports this handle type on the matched adapter.
+            // Requirements and handle properties selected a compatible memory type for this
+            // dedicated image.
             unsafe {
                 result.context.device.allocate_memory(
                     &allocation.push_next(&mut dedicated).push_next(&mut import),
@@ -624,6 +666,9 @@ impl SharedImage {
             let mut import = vk::ImportMemoryFdInfoKHR::default()
                 .handle_type(handle_type())
                 .fd(handle.as_raw_fd());
+            // SAFETY: The retained GUI image exports this same-device handle. Allocation size and
+            // memory type match the exporter and image requirements. Vulkan consumes the FD only on
+            // success.
             unsafe {
                 result.context.device.allocate_memory(
                     &allocation.push_next(&mut dedicated).push_next(&mut import),
@@ -639,6 +684,8 @@ impl SharedImage {
             let SharedMemoryHandle::OpaqueFd(handle) = info.handle;
             let _ = handle.into_raw_fd(); // Successful vkAllocateMemory consumed this FD.
         }
+        // SAFETY: The dedicated allocation was created for this exact unbound image on the same
+        // device, with offset zero.
         unsafe {
             result
                 .context
@@ -694,6 +741,9 @@ impl SharedImage {
             .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
             .src_queue_family_index(family)
             .dst_queue_family_index(vk::QUEUE_FAMILY_EXTERNAL);
+        // SAFETY: The slot remains rented through completion. Source and target are distinct
+        // matching RGBA8 images in the recorded layouts. The acquire and release transfer ownership
+        // between this queue family and the external owner.
         unsafe {
             self.context.device.cmd_pipeline_barrier(
                 command,

@@ -246,6 +246,7 @@ impl Editor {
             .unwrap_or_else(|| ctx.viewport_rect());
         let areas = os_work_areas();
         if areas.is_empty() {
+            #[cfg(feature = "verification")]
             if let Some(geometry) = ctx.data(|d| {
                 d.get_temp::<crate::ui_capture::CaptureGeometry>(egui::Id::new(
                     "diagnostic-geometry",
@@ -261,7 +262,7 @@ impl Editor {
             ctx.data_mut(|d| d.insert_temp(key, true));
             return;
         }
-        let mut current = DetachedArea {
+        let current = DetachedArea {
             id: 0,
             editor: EditorType::Scene,
             tree: None,
@@ -272,6 +273,9 @@ impl Editor {
             position: Some((rect.min * ctx.pixels_per_point()).into()),
             size: rect.size().into(),
         };
+        #[cfg(feature = "verification")]
+        let mut current = current;
+        #[cfg(feature = "verification")]
         if let Some(geometry) = ctx.data(|d| {
             d.get_temp::<crate::ui_capture::CaptureGeometry>(egui::Id::new("diagnostic-geometry"))
         }) {

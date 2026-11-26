@@ -31,11 +31,11 @@ verify_tests() {
     return "$test_status"
 }
 cargo fmt --all -- --check
-cargo check --offline --locked --release --target "$host" --workspace --all-targets
-verify_tests --offline --locked --release --target "$host" --workspace --lib --bins -- --show-output --test-threads=1
-verify_tests --offline --locked --release --target "$host" -p module-engine-editor game_ui::tests::interactive_game_ui_keeps_drawing_and_applying_rust_during_slow_ticks -- --ignored --exact --show-output --test-threads=1
-cargo clippy --offline --locked --release --target "$host" --workspace --all-targets -- -D warnings
-cargo test --offline --locked --release --target "$host" --workspace --doc
-cargo build --offline --locked --release --target "$host" -p module-engine-editor
+cargo check --offline --locked --release --target "$host" --workspace --features module-engine-editor/verification --all-targets
+verify_tests --offline --locked --release --target "$host" --workspace --features module-engine-editor/verification --lib --bins -- --show-output --test-threads=1
+verify_tests --offline --locked --release --target "$host" -p module-engine-editor --features verification game_ui::tests::interactive_game_ui_keeps_drawing_and_applying_rust_during_slow_ticks -- --ignored --exact --show-output --test-threads=1
+cargo clippy --offline --locked --release --target "$host" --workspace --features module-engine-editor/verification --all-targets -- -D warnings
+cargo test --offline --locked --release --target "$host" --workspace --features module-engine-editor/verification --doc
+cargo build --offline --locked --release --target "$host" -p module-engine-editor --features verification
 "$CARGO_TARGET_DIR/$host/release/module-engine-editor" --self-check outputs/linux-verification/cpu
 echo 'Build, workspace tests with reported capability skips, and CPU self-check passed. Native desktop-window/export checks remain separate; see docs/linux-support.md.'

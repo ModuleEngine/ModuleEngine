@@ -68,7 +68,7 @@ arguments retain the previous heavy legacy suite**.
 | --- | --- | --- |
 | `quick` | `cargo fmt --all -- --check`, all lib tests of `module-engine-core` and `module-engine-project`. | Not the workspace, Editor, Vulkan runtime, secondary Custom builds, or ignored acceptance. Cold compilation can still be slow. |
 | `contracts` | Quick plus `cargo_build::tests::`, four Inspector regressions, 99 Inspector property scenarios, four previous Save As tests, 28 workflow preservation scenarios, and two `diagnostic_personal` tests for explicit-root validation and Recent/layout isolation with source permissions preserved. | Not all UI, native dialogs, or the full authoring suite. |
-| `clippy` | `cargo clippy --offline --locked --target {native_host} --workspace --all-targets --all-features -- -D warnings` on the pinned native toolchain. | No formatting, tests, or runtime checks; not engine or delivery acceptance. |
+| `clippy` | Strict Clippy on all workspace targets and features, followed by the default Release Editor binary. Both passes use `-D warnings` and the pinned native toolchain. | No formatting, tests, or runtime checks; not engine or delivery acceptance. |
 | `render` | CPU graph and cache checks, native DXC compilation, and offscreen Vulkan regressions including GameHost scene updates, rejected ticks and scene switches. | No desktop, delivery, or performance acceptance. |
 | `native` | Five explicit ignored tests: Stop/reuse, slow-UI/hot-apply, native linker, cache context, and Windows executable spellings. | Not desktop benchmark, screen latency, Full export, or strict 60 FPS. A Windows-only test is marked `skipped` on Linux, not passed. |
 | `native-tools` | Three native linker/cache/executable-spelling checks from `native`, without GameUI or GPU. | Not full `native`; a Windows-only test is marked `skipped` on Linux. Used by Windows CI. |
@@ -81,6 +81,29 @@ exactly once, and it adds no steps to the legacy suite. Run
 `{native_host}` unresolved. Execution checks the actual `rustc -vV` release and
 native host against `toolchain-manifest.json` on Windows or
 `scripts/linux-toolchain.json` on Linux before Cargo metadata; a mismatch fails.
+
+`module-engine-vulkan` denies `clippy::undocumented_unsafe_blocks` for every
+target. The native presentation bridge, Windows file dialogs, and Host wait
+modules enforce it as well. Each safety comment identifies the lifetime,
+ownership, and synchronization requirements that apply at the call site.
+
+The Editor's verification commands and native capture support are built with
+`--features verification`. The launcher selects this feature for Editor tests,
+and both legacy wrappers enable it for their Editor commands. Build ordinary
+Editor packages without it. The `bench` feature still enables the separate
+native S1–S5 benchmark route.
+
+The `verification_cli` integration test runs the actual Editor executable.
+CI runs it with `verification` in the workspace suite and separately in the
+default Release build. The enabled `--self-check` must write a passing CPU
+report. The default Editor must exit with the feature requirement and leave
+the report directory absent.
+
+On 25 November 2026, matched Windows x64 Release builds using Rust 1.99.0
+measured 37,123,584 bytes with default features and 38,485,504 bytes with
+`verification`, a difference of 1,361,920 bytes (3.54% of the feature build).
+Both use the same development source digest
+`ec5bc2b26b2a8e620d4bc684e75c7a2ac1641dd3dd75e13fbd200fd895f530ec`.
 
 Checks run sequentially. For Rust tests, the launcher first obtains
 `cargo metadata`, then `cargo test --no-run --message-format=json` for the selected

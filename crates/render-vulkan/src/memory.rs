@@ -86,6 +86,8 @@ impl ResourceMemory {
             Self::Suballocated { allocation, .. } => {
                 let allocation = allocation.as_ref().unwrap();
                 // The allocation owns this binding range until the resource drops.
+                // SAFETY: The allocation is live and owns this subrange until its resource is
+                // destroyed.
                 (unsafe { allocation.memory() }, allocation.offset())
             }
         }
@@ -99,6 +101,8 @@ impl ResourceMemory {
         copy: impl FnOnce(*mut u8),
     ) -> Result<(), VulkanError> {
         match self {
+            // SAFETY: The caller excludes GPU and host conflicts in this host-visible range. The
+            // mapping is checked before invoking the copy and is released immediately afterwards.
             Self::Standalone(context, memory) => unsafe {
                 let device = &context.device;
                 let mapped = device
@@ -123,6 +127,8 @@ impl ResourceMemory {
 impl Drop for ResourceMemory {
     fn drop(&mut self) {
         match self {
+            // SAFETY: The owning resource has destroyed its binding and completed GPU use before
+            // dropping the allocation.
             Self::Standalone(context, memory) => unsafe {
                 context.device.free_memory(*memory, None);
             },

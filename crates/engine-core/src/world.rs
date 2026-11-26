@@ -9,6 +9,7 @@ use bevy_reflect::Reflect;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Identifies built-in world storage or a separately registered source provider.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -102,6 +103,28 @@ pub struct SceneSnapshot {
     pub time: f32,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum WorldError {
+    #[error("This World provider does not support portable object editing")]
+    ObjectsUnsupported,
+    #[error("This World provider does not support portable world commands")]
+    CommandsUnsupported,
+    #[error("No executable provider registered for '{0}'")]
+    MissingProvider(String),
+    #[error("{0}")]
+    Configuration(String),
+    #[error("{0}")]
+    Commands(String),
+    #[error("{0}")]
+    Provider(#[source] Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl From<WorldError> for String {
+    fn from(error: WorldError) -> Self {
+        error.to_string()
+    }
+}
+
 /// Minimal executable source-provider boundary implemented by world authors.
 pub trait WorldProvider: Send {
     /// Advance the provider. Runtime supplies finite values and nonnegative dt;
@@ -111,17 +134,17 @@ pub trait WorldProvider: Send {
     fn snapshot(&self) -> SceneSnapshot;
     /// Optional portable editing API. Existing read-only providers keep rendering
     /// unchanged and explicitly reject editing rather than silently doing nothing.
-    fn objects(&self) -> Result<Vec<WorldObject>, String> {
-        Err("This World provider does not support portable object editing".into())
+    fn objects(&self) -> Result<Vec<WorldObject>, WorldError> {
+        Err(WorldError::ObjectsUnsupported)
     }
     /// Apply all operations or none. Built-ins share the same local-transform,
     /// object-ID and subtree-removal semantics with independent persistent stores.
-    fn apply_commands(&mut self, _commands: &[WorldCommand]) -> Result<(), String> {
-        Err("This World provider does not support portable world commands".into())
+    fn apply_commands(&mut self, _commands: &[WorldCommand]) -> Result<(), WorldError> {
+        Err(WorldError::CommandsUnsupported)
     }
     /// Validate without mutation so hosts can stage mixed world/render packets.
-    fn validate_commands(&self, commands: &[WorldCommand]) -> Result<(), String> {
-        crate::validate_world_commands(&self.objects()?, commands)
+    fn validate_commands(&self, commands: &[WorldCommand]) -> Result<(), WorldError> {
+        crate::validate_world_commands(&self.objects()?, commands).map_err(WorldError::Commands)
     }
 }
 
@@ -305,7 +328,7 @@ impl ObjectsWorld {
 }
 
 impl WorldProvider for ObjectsWorld {
-    fn objects(&self) -> Result<Vec<WorldObject>, String> {
+    fn objects(&self) -> Result<Vec<WorldObject>, WorldError> {
         fn collect(object: &Object, parent: Option<u64>, result: &mut Vec<WorldObject>) {
             result.push(WorldObject {
                 id: object.id,
@@ -325,7 +348,7 @@ impl WorldProvider for ObjectsWorld {
         Ok(objects)
     }
 
-    fn apply_commands(&mut self, commands: &[WorldCommand]) -> Result<(), String> {
+    fn apply_commands(&mut self, commands: &[WorldCommand]) -> Result<(), WorldError> {
         fn velocities(object: &Object, result: &mut BTreeMap<u64, [f32; 3]>) {
             result.insert(object.id, object.angular_velocity);
             for child in &object.children {
@@ -357,7 +380,7 @@ impl WorldProvider for ObjectsWorld {
             velocities(root, &mut velocities_map);
         }
         let mut objects = self.objects()?.into_iter().map(|o| (o.id, o)).collect();
-        crate::control::edit_object_map(&mut objects, commands)?;
+        crate::control::edit_object_map(&mut objects, commands).map_err(WorldError::Commands)?;
         for command in commands {
             if let WorldCommand::Spawn { object } = command {
                 velocities_map.remove(&object.id);
@@ -477,6 +500,7 @@ pub struct EcsWorld {
     rows: Arc<EcsRows>,
     staged: Option<StagedRows>,
     time: f32,
+    malformed_component_reads: Arc<AtomicU64>,
 }
 
 #[derive(Debug, Default)]
@@ -763,6 +787,7 @@ impl Clone for EcsWorld {
             rows: Arc::new((*self.rows).clone()),
             staged: self.staged.clone(),
             time: self.time,
+            malformed_component_reads: Arc::new(AtomicU64::new(self.malformed_component_reads())),
         };
         copy.publish_staged();
         copy
@@ -795,6 +820,9 @@ impl EcsWorld {
                 .as_ref()
                 .map(|parent| StagedRows::new(validated_base, Some(Arc::clone(parent)))),
             time: self.time,
+            // The diagnostic belongs to the live world, even when an attempted
+            // tick rolls back its authored/gameplay changes.
+            malformed_component_reads: Arc::clone(&self.malformed_component_reads),
         };
         self.staged = Some(StagedRows::new(validated_base, parent));
         original
@@ -907,6 +935,7 @@ impl EcsWorld {
             rows: Arc::new(EcsRows::default()),
             staged: None,
             time: 0.,
+            malformed_component_reads: Arc::default(),
         };
         for object in objects {
             world.spawn_object(object);
@@ -1151,6 +1180,29 @@ impl EcsWorld {
             Some(edit) => edit.as_ref()?.components.get(name),
             None => self.rows.components.get(name)?.get(&id),
         }
+    }
+
+    /// Decode a live component. An absent component is a successful empty read.
+    pub fn decode_component<'a, T: Deserialize<'a>>(
+        &'a self,
+        id: u64,
+        name: &str,
+    ) -> Result<Option<T>, serde_json::Error> {
+        self.component(id, name)
+            .map(T::deserialize)
+            .transpose()
+            .inspect_err(|error| {
+                let count = self
+                    .malformed_component_reads
+                    .fetch_add(1, Ordering::Relaxed);
+                if cfg!(debug_assertions) && count < 8 {
+                    eprintln!("Malformed component '{name}' on object {id}: {error}");
+                }
+            })
+    }
+
+    pub fn malformed_component_reads(&self) -> u64 {
+        self.malformed_component_reads.load(Ordering::Relaxed)
     }
 
     // A staged removal can empty a base column. Conservatively treat it as
@@ -1601,12 +1653,12 @@ impl EcsWorld {
 }
 
 impl WorldProvider for EcsWorld {
-    fn objects(&self) -> Result<Vec<WorldObject>, String> {
+    fn objects(&self) -> Result<Vec<WorldObject>, WorldError> {
         Ok(self.objects_snapshot())
     }
 
-    fn apply_commands(&mut self, commands: &[WorldCommand]) -> Result<(), String> {
-        EcsWorld::apply_commands(self, commands)
+    fn apply_commands(&mut self, commands: &[WorldCommand]) -> Result<(), WorldError> {
+        EcsWorld::apply_commands(self, commands).map_err(WorldError::Commands)
     }
 
     fn step(&mut self, dt: f32, speed: f32) {
@@ -2380,8 +2432,8 @@ mod tests {
                 && unchanged
                     .iter()
                     .all(|(_, _, validation, application, preserved)| {
-                        validation.as_ref().is_err_and(|error| error == rejected)
-                            && application.as_ref().is_err_and(|error| error == rejected)
+                        validation.as_ref().is_err_and(|error| matches!(error, WorldError::Commands(message) if message == rejected))
+                            && application.as_ref().is_err_and(|error| matches!(error, WorldError::Commands(message) if message == rejected))
                             && *preserved
                     }),
             "Constructors and input validation: {results:?}\nPer provider: {unchanged:?}",

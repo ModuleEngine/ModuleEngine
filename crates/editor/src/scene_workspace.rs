@@ -27,6 +27,17 @@ impl Editor {
     }
 
     pub(super) fn game_context(&mut self) -> Result<(PathBuf, Option<PathBuf>, WorldKind), String> {
+        if let Some(distribution) = self.distribution.as_ref()
+            && let Err(error) = distribution.check_custom_consent()
+            && self
+                .document
+                .game
+                .as_ref()
+                .is_some_and(|game| !crate::game_host::script_ids(game).is_empty())
+        {
+            // A missing compiler would select Player's precompiled-script path.
+            return Err(error);
+        }
         let (root, compile) = self.configure_game_roots();
         let kind = crate::game_host::selected_world_kind(&self.document, &self.registry)?;
         Ok((root, compile, kind))

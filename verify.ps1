@@ -117,7 +117,7 @@ function Get-VerificationLegacyEditorExecutable([string]$CargoExecutable) {
     if ($verificationTargets.Count -ne 1) { throw 'Cargo metadata did not identify exactly one Editor binary target.' }
     $verificationTarget = $verificationTargets[0]
     $LASTEXITCODE = 0
-    $verificationBuildLines = @(& $CargoExecutable build --offline --locked --release --target $verificationHost -p module-engine-editor --bin module-engine-editor --message-format=json)
+    $verificationBuildLines = @(& $CargoExecutable build --offline --locked --release --target $verificationHost -p module-engine-editor --features verification --bin module-engine-editor --message-format=json)
     $verificationBuildExit = $LASTEXITCODE
     $verificationFinished = @()
     $verificationExecutables = @()
@@ -236,25 +236,25 @@ try {
     # Integration-style units invoke the same Cargo cache, GPU and hard wall
     # timeouts. Serialize these fixtures so setup does not distort tick timing.
     Invoke-VerificationLegacyTests $verificationCargo 'Tests failed' @(
-        '--offline', '--locked', '--workspace', '--lib', '--bins', '--', '--show-output', '--test-threads=1'
+        '--offline', '--locked', '--workspace', '--features', 'module-engine-editor/verification', '--lib', '--bins', '--', '--show-output', '--test-threads=1'
     )
     Invoke-VerificationLegacyTests $verificationCargo 'Isolated native Game UI/slow Rust acceptance failed' @(
-        '--offline', '--locked', '-p', 'module-engine-editor',
+        '--offline', '--locked', '-p', 'module-engine-editor', '--features', 'verification',
         'game_ui::tests::interactive_game_ui_keeps_drawing_and_applying_rust_during_slow_ticks',
         '--', '--ignored', '--exact', '--show-output', '--test-threads=1'
     )
-    & $verificationCargo test --offline --locked --workspace --doc
+    & $verificationCargo test --offline --locked --workspace --features module-engine-editor/verification --doc
     if ($LASTEXITCODE -ne 0) { throw "Doc-tests failed" }
-    & $verificationCargo clippy --offline --locked --workspace --all-targets '--' -D warnings
+    & $verificationCargo clippy --offline --locked --workspace --features module-engine-editor/verification --all-targets '--' -D warnings
     if ($LASTEXITCODE -ne 0) { throw "Clippy failed" }
     $env:RUSTDOCFLAGS='-D warnings'
-    & $verificationCargo doc --offline --locked --workspace --no-deps
+    & $verificationCargo doc --offline --locked --workspace --features module-engine-editor/verification --no-deps
     if ($LASTEXITCODE -ne 0) { throw "Rustdoc failed" }
-    & $verificationCargo run --offline --locked -p module-engine-editor '--' --self-check outputs/verification-v04/cpu
+    & $verificationCargo run --offline --locked -p module-engine-editor --features verification '--' --self-check outputs/verification-v04/cpu
     if ($LASTEXITCODE -ne 0) { throw "CPU runtime self-check failed" }
-    & $verificationCargo run --offline --locked -p module-engine-editor '--' --legacy-verify-check --integration-check outputs/verification-v04/integration
+    & $verificationCargo run --offline --locked -p module-engine-editor --features verification '--' --legacy-verify-check --integration-check outputs/verification-v04/integration
     if ($LASTEXITCODE -ne 0) { throw "Vulkan/Rust/project integration check failed" }
-    & $verificationCargo run --offline --locked -p module-engine-editor '--' --legacy-verify-check --settings-check outputs/verification-v04/settings
+    & $verificationCargo run --offline --locked -p module-engine-editor --features verification '--' --legacy-verify-check --settings-check outputs/verification-v04/settings
     if ($LASTEXITCODE -ne 0) { throw "Settings/properties policy check failed" }
     $verificationGame = Join-Path $PSScriptRoot 'game-project-v4.json'
     if (-not (Test-Path -LiteralPath $verificationGame -PathType Leaf)) {
@@ -267,13 +267,13 @@ try {
         $null -eq (Get-Content -LiteralPath $verificationGame -Raw | ConvertFrom-Json).game) {
         throw 'No authored game exists. Create the example with: cargo run --locked -p module-engine-editor -- --new-game game-project.json; then run verify.ps1 again.'
     }
-    & $verificationCargo run --offline --locked -p module-engine-editor '--' --legacy-verify-check --game-check $verificationGame outputs/verification-v04/game
+    & $verificationCargo run --offline --locked -p module-engine-editor --features verification '--' --legacy-verify-check --game-check $verificationGame outputs/verification-v04/game
     if ($LASTEXITCODE -ne 0) { throw "Authored game/Player pipeline check failed" }
-    & $verificationCargo run --offline --locked -p module-engine-editor '--' --legacy-verify-check --editor-ui-check $verificationGame outputs/verification-v04/editor-ui
+    & $verificationCargo run --offline --locked -p module-engine-editor --features verification '--' --legacy-verify-check --editor-ui-check $verificationGame outputs/verification-v04/editor-ui
     if ($LASTEXITCODE -ne 0) { throw "Editor workflow check failed" }
-    & $verificationCargo run --offline --locked -p module-engine-editor '--' --legacy-verify-check --scene-assets-check $verificationGame outputs/verification-v04/scene-assets
+    & $verificationCargo run --offline --locked -p module-engine-editor --features verification '--' --legacy-verify-check --scene-assets-check $verificationGame outputs/verification-v04/scene-assets
     if ($LASTEXITCODE -ne 0) { throw "Scene/Assets/export check failed" }
-    & $verificationCargo run --offline --locked -p module-engine-editor '--' --legacy-verify-check --game-worker-check $verificationGame outputs/verification-v04/game-worker
+    & $verificationCargo run --offline --locked -p module-engine-editor --features verification '--' --legacy-verify-check --game-worker-check $verificationGame outputs/verification-v04/game-worker
     if ($LASTEXITCODE -ne 0) { throw "Background simulation/lifecycle check failed" }
     if ($NativeBenchmarks) {
         # A real desktop is required; CPU processing and native cadence are

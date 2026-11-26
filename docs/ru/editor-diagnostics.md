@@ -13,10 +13,10 @@ native capture ещё не проверен.
 
 ## Запуск
 
-Используйте установленный Python, поддерживающий launcher, и абсолютный путь к
-существующему обычному Editor executable текущих ОС/архитектуры. Приложите его build
-report, чтобы сопоставить SHA executable с нужным source snapshot. Test harness
-или старый executable без diagnostic protocol не подходит. Linux требует обычного
+Соберите Editor командой `cargo build --locked --release -p module-engine-editor --features verification`.
+Передайте абсолютный путь к этому EXE и используйте Python, поддерживаемый launcher.
+Сохраните отчёт сборки, чтобы сопоставить SHA исполняемого файла со снимком исходников.
+Linux требует обычного
 loader/toolchain environment и работающего X11 или Wayland display; см.
 [требования Linux](linux-support.md). Workflow export может использовать существующие
 build tools и caches; сам wrapper не устанавливает инструменты и не восстанавливает

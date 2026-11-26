@@ -2437,9 +2437,10 @@ mod tests {
                                 color: [255; 4],
                             })
                             .collect();
-                        Ok(Box::new(module_engine_core::ObjectsWorld::from_objects(
-                            objects,
-                        )?))
+                        Ok(Box::new(
+                            module_engine_core::ObjectsWorld::from_objects(objects)
+                                .map_err(module_engine_core::WorldError::Configuration)?,
+                        ))
                     },
                 )
                 .unwrap();

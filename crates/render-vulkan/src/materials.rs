@@ -29,6 +29,8 @@ impl MaterialLayout {
         });
         let bindings = std::array::from_fn::<_, 3, _>(|i| bindings[i].binding(i as u32));
         let device = &context.device;
+        // SAFETY: The bindless path checked the descriptor limits and enabled sampler anisotropy.
+        // The bindings live through creation and the owner retains the sampler and layout.
         unsafe {
             let layout = device
                 .create_descriptor_set_layout(
@@ -63,6 +65,8 @@ impl MaterialLayout {
 
 impl Drop for MaterialLayout {
     fn drop(&mut self) {
+        // SAFETY: Descriptor sets and in-flight users retain this layout. It alone owns the sampler
+        // and set layout on the live device.
         unsafe {
             self.context.device.destroy_sampler(self.sampler, None);
             self.context
@@ -112,6 +116,8 @@ impl MaterialSet {
 
 impl Drop for MaterialSet {
     fn drop(&mut self) {
+        // SAFETY: The fresh or retired material set owns its pool. No pending command can still use
+        // its descriptors.
         unsafe {
             self.layout
                 .context
@@ -142,6 +148,9 @@ impl MaterialUploads {
             return Ok(None);
         }
         let buffer = renderer.buffer(self.bytes as u64, vk::BufferUsageFlags::TRANSFER_SRC)?;
+        // SAFETY: The fresh host-visible staging buffer covers the packed upload size. Every source
+        // and destination range has the validated RGBA byte count and no GPU submission uses the
+        // buffer yet.
         unsafe {
             buffer
                 .memory
@@ -212,6 +221,7 @@ impl VulkanRenderer {
         rows: Vec<usize>,
         resident_indices: Option<Arc<Buffer>>,
     ) -> Result<Option<(Arc<MaterialSet>, MaterialUploads)>, VulkanError> {
+        // SAFETY: The physical device belongs to the renderer's live instance.
         let properties = unsafe { self.instance.get_physical_device_properties(self.physical) };
         let limits = properties.limits;
         let byte_count = (rows.len() as u64 + u64::from(FIRST_MATERIAL_ROW)) * 4;
@@ -315,6 +325,8 @@ impl VulkanRenderer {
             ty,
             descriptor_count: count,
         });
+        // SAFETY: The fresh descriptor pool matches the retained layout and is unused by any
+        // submission. Descriptor infos point at images, sampler and index buffer kept by the set.
         unsafe {
             let pool = self
                 .device
@@ -466,6 +478,8 @@ fn record_mip_upload(
             .src_access_mask(from.1)
             .dst_stage_mask(to.0)
             .dst_access_mask(to.1)];
+        // SAFETY: The graphics command buffer is recording outside rendering. These subresources
+        // are within the texture and the layouts match the earlier mip transitions.
         unsafe {
             device.cmd_pipeline_barrier2(
                 command,
@@ -488,6 +502,8 @@ fn record_mip_upload(
             height,
             depth: 1,
         });
+    // SAFETY: The staging range contains the full RGBA base mip. The image has transfer-destination
+    // usage and was transitioned to the requested layout.
     unsafe { device.cmd_copy_buffer_to_image(command, staging, image, dst, &[region]) };
     let end = |mip: u32| vk::Offset3D {
         x: (width >> mip).max(1u32) as i32,
@@ -508,6 +524,8 @@ fn record_mip_upload(
                 .src_offsets([vk::Offset3D::default(), end(level)])
                 .dst_subresource(subresource(level + 1))
                 .dst_offsets([vk::Offset3D::default(), end(level + 1)]);
+            // SAFETY: Linear blitting support was checked when selecting this path. Consecutive
+            // mips are disjoint, fit the image, and are in their required transfer layouts.
             unsafe {
                 device.cmd_blit_image(
                     command,
