@@ -48,8 +48,8 @@ them. Failure to determine the diff fails planning.
 
 | Runner | Ordinary matrix | When sources change |
 | --- | --- | --- |
-| `windows-2025` | Workspace, minimal Player, Python unit checks, [license policy](licensing.md#third-party-code), `contracts`, `clippy` | `native-tools`, and `package` |
-| `ubuntu-24.04` | Workspace on Mesa lavapipe with pinned DXC, exact no-DXC check, minimal Player, Python unit checks, [license policy](licensing.md#third-party-code), `contracts`, `clippy` | `native` on Mesa lavapipe, and `package` |
+| `windows-2025` | Workspace, minimal Player, Python unit checks, [license policy](licensing.md#third-party-code), `contracts`, `clippy` | `native-tools` and `package` |
+| `ubuntu-24.04` | Workspace on Mesa lavapipe with pinned DXC, exact no-DXC check, minimal Player, Python unit checks, [license policy](licensing.md#third-party-code), `contracts`, `clippy` | `native` on Mesa lavapipe and `package` |
 
 Every Rust job fetches locked dependencies. The workspace job runs the regular tests
 with pinned cargo-nextest and the doc-tests with Cargo. It combines Nextest JUnit

@@ -103,6 +103,12 @@ class PolicyTests(unittest.TestCase):
         self.assertIn("os: [windows-2025, ubuntu-24.04]", text)
         self.assertIn("fail-fast: false", text)
         self.assertIn("  merge_group:", text)
+        self.assertIn("permissions:\n  contents: read\n", text)
+        self.assertIn("--component rustfmt --component clippy", setup)
+        self.assertIn('echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/.tools/ci-dxc/lib" >> "$GITHUB_ENV"', text)
+        for build_override in ("CARGO_PROFILE_TEST_DEBUG:", "CARGO_PROFILE_DEV_DEBUG:"):
+            self.assertNotIn(build_override, text.split("\njobs:\n", 1)[0])
+        self.assertIn("if: steps.cargo-cache-context.outputs.enabled == 'true'", setup)
         cases = {
             "workspace": ["--without-dxc", "ci_linux_dxc.py", "ci_workspace_tests.py --nextest"],
             "release": ["cargo build --offline --locked --release", "--test verification_cli"],

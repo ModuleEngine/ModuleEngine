@@ -46,8 +46,8 @@ package. Неизвестные исходные пути, пустой diff, п
 
 | Runner | Обычная матрица | При изменении исходников |
 | --- | --- | --- |
-| `windows-2025` | Workspace, минимальный Player, Python unit checks, [проверка лицензий](licensing.md#third-party-code), `contracts`, `clippy` | `native-tools`, и `package` |
-| `ubuntu-24.04` | Workspace на Mesa lavapipe с закреплённым DXC, точечная проверка без DXC, минимальный Player, Python unit checks, [проверка лицензий](licensing.md#third-party-code), `contracts`, `clippy` | `native` на Mesa lavapipe, и `package` |
+| `windows-2025` | Workspace, минимальный Player, Python unit checks, [проверка лицензий](licensing.md#third-party-code), `contracts`, `clippy` | `native-tools` и `package` |
+| `ubuntu-24.04` | Workspace на Mesa lavapipe с закреплённым DXC, точечная проверка без DXC, минимальный Player, Python unit checks, [проверка лицензий](licensing.md#third-party-code), `contracts`, `clippy` | `native` на Mesa lavapipe и `package` |
 
 Каждое задание Rust загружает закреплённые зависимости. Задание workspace
 выполняет обычные тесты через закреплённый cargo-nextest, а doc-тесты через Cargo.
