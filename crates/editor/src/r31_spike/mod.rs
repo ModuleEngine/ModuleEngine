@@ -145,8 +145,13 @@ fn fixture(
     project::save(&path, &document)?;
     let personal = root.join("personal");
     fs::create_dir(&personal).map_err(|e| e.to_string())?;
-    let mut editor =
-        Editor::new_with_diagnostic_personal_root(document, path, distribution, Some(personal));
+    let mut editor = Editor::new_native_with_diagnostic_personal_root(
+        document,
+        path,
+        distribution,
+        Some(personal),
+        None,
+    );
     editor.r31_spike_layout()?;
     Ok((editor, resource_root))
 }

@@ -77,7 +77,7 @@
     "crates/editor/src/properties.rs": "426a5bae5edff4537769855130436faf6ec0394ec43efc87d7a9c57d52b2ffce",
     "crates/editor/src/puzzle_verification.rs": "7a192b3a9fa507e13380c3948eb0c4b7cb899221438b9a6ca8ed27b16c30df44",
     "crates/editor/src/r31_spike/gpu.rs": "21fad246ace9175f6bc92f13bd99ca2034e744d947c9bf365fabcd5beb9fbb1a",
-    "crates/editor/src/r31_spike/mod.rs": "58dc84c7d920ae0533e5dbddc6f1759297ba5367e0d5f34218bfd95f738a0af5",
+    "crates/editor/src/r31_spike/mod.rs": "fa5832677f806529f7d1330c01f0a0adbc6d0fe6923fa605f2860feb86d7d7c9",
     "crates/editor/src/r31_spike/painter.rs": "e61802accb54db7ce08b275d5a6fef799dfbe903d291a6bb8e0b0526d28216ad",
     "crates/editor/src/r31_spike/thin.hlsl": "684f463e01736b56766196340936a181e6e011054e5d70510190531b350246f7",
     "crates/editor/src/r31_spike/thin.rs": "02e2c0c8a32b5b3d2dc01291a0fdc73022d395f200af5b6e068e468154333e76",
