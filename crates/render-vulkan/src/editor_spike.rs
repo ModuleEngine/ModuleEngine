@@ -24,7 +24,8 @@ impl Surface {
             {
                 continue;
             }
-            // The candidate and the surface belong to this instance, and the index is enumerated.
+            // SAFETY: The candidate and surface belong to this retained instance, and the
+            // index comes from the candidate's enumerated queue families.
             let supported = unsafe {
                 self.loader
                     .get_physical_device_surface_support(physical, index as u32, self.raw)
@@ -40,7 +41,8 @@ impl Surface {
 
 impl Drop for Surface {
     fn drop(&mut self) {
-        // The owner retains the instance and the caller has destroyed the swapchain.
+        // SAFETY: The surface retains its instance. EditorDevice's caller must destroy any
+        // swapchain made from the borrowed handles before releasing this owner.
         unsafe { self.loader.destroy_surface(self.raw, None) };
     }
 }
@@ -80,7 +82,8 @@ impl EditorDevice {
             ash::khr::win32_surface::NAME,
         ])?);
         let win32 = ash::khr::win32_surface::Instance::new(instance.entry(), &instance.raw);
-        // Both instance extensions are enabled, and the caller pins the Win32 window.
+        // SAFETY: Both instance extensions are enabled and the caller keeps the Win32
+        // window live for the surface's lifetime.
         let raw = unsafe {
             win32.create_win32_surface(
                 &vk::Win32SurfaceCreateInfoKHR::default()

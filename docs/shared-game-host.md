@@ -24,7 +24,11 @@ The application chooses a writable local-user root. Standalone defaults use an a
 
 On load, valid stored option IDs become local choices; unavailable options fall back to current valid Project resolution with a reason, while unknown payload entries are retained. Malformed/incompatible saves use the service's read-only policy and are not silently replaced. Accepted choices stage a persistence event after validation. A write failure keeps the accepted session choice and records `persistence.saved:false` plus an error; it does not turn an accepted choice into a refusal. Retrying the current option can retry that write. The previous saved data and the persistence service's existing atomic-publication/recovery guarantees remain authoritative. Examples and menu/API limits are in [Custom Rust](custom-rust.md#script-settings-menu) and [settings](settings.md#player-menu-preferences).
 
-The new ScriptContext requests/menu/status fields require exact SDK data/API identity `module-engine-data-api/v3` across linked Core, worker probe/packets, prebuilt metadata and Engine/Player locks. The existing strict mismatch rejection is retained; v2 artifacts require an explicit compatible rebuild/contract update rather than implicit acceptance. This changes the data/API boundary, not a promise of Rust ABI compatibility.
+Settings, menus and [synchronous physics queries](physics-rapier.md) use exact
+SDK data/API identity `module-engine-data-api/v4` across linked Core, worker
+probe and packets, prebuilt metadata and Engine/Player locks. Earlier
+artifacts require an explicit compatible rebuild and contract update. SDK
+identity covers the data and API boundary.
 
 ## Authored data and runtime preparation
 
@@ -77,6 +81,13 @@ control targets and validation before GPU construction. Vulkan owns the concrete
 pass/HLSL/format checks. `FrameRenderer` provides CPU pixels or an opaque GPU lease, portable controls,
 optional counters and optional synchronous candidate preparation. A factory can
 also implement an independent CPU renderer with no Vulkan dependency.
+
+`WorldProvider` returns `WorldError`, with distinct errors for provider selection,
+world storage and invalid command batches. The renderer adapter and frame
+renderer return `RendererError`. The Vulkan adapter preserves its concrete
+`VulkanError` as the error source. Core Runtime propagates the source so callers
+can inspect the kind, including unsupported controls and failed preparation.
+Existing application text and report boundaries format the errors for display.
 
 ## Native frame ownership
 
@@ -197,6 +208,11 @@ rows named by accepted deltas. On the [R2.3 path](hardware-tiers.md#r23-scene)
 the next successful graphics submission publishes those GPU updates. A busy
 request keeps edits pending. A reset or scene switch reconciles the rows
 against the new accepted list and can reuse meshes already in the device pool.
+
+GameHost reprojects owners of playing glTF clips when presentation time
+changes, including joints on an object whose ECS transform is stationary.
+Scenes with those drawables use the expanded snapshot submission, which
+keeps CPU-deformed geometry out of the resident mesh pool. [glTF playback](content.md#gltf-animation).
 
 The software renderer, explicit `author_snapshot()` for picking/diagnostics,
 and compatibility world providers retain the snapshot path. A contribution can

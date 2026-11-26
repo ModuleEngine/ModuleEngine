@@ -453,16 +453,17 @@ impl Control {
 }
 
 struct CpuAdapter(Arc<Control>);
-fn cpu_config(node: &Node) -> Result<(u64, [u8; 3]), String> {
+fn cpu_config(node: &Node) -> Result<(u64, [u8; 3]), RendererError> {
     Ok((
         node.params["generation"]
             .as_u64()
-            .ok_or("CPU generation must be an integer")?,
-        serde_json::from_value(node.params["tint"].clone())
-            .map_err(|error| format!("CPU tint: {error}"))?,
+            .ok_or(RendererError::Unsupported(
+                "CPU generation must be an integer",
+            ))?,
+        serde_json::from_value(node.params["tint"].clone()).map_err(RendererError::backend)?,
     ))
 }
-fn cpu_controls(controls: &RenderOverrides) -> Result<(), String> {
+fn cpu_controls(controls: &RenderOverrides) -> Result<(), RendererError> {
     if !controls.enabled.is_empty()
         || !controls.resource_commands.is_empty()
         || controls.parameters.iter().any(|(pass, values)| {
@@ -475,19 +476,26 @@ fn cpu_controls(controls: &RenderOverrides) -> Result<(), String> {
                 })
         })
     {
-        return Err("CPU source rejected render control".into());
+        return Err(RendererError::Unsupported(
+            "CPU source rejected render control",
+        ));
     }
     Ok(())
 }
 impl RendererAdapter for CpuAdapter {
-    fn dependency_revision(&self, _: &Node, _: &GraphDocument) -> Result<u64, String> {
-        self.0.dependency.lock().unwrap().clone()
+    fn dependency_revision(&self, _: &Node, _: &GraphDocument) -> Result<u64, RendererError> {
+        self.0
+            .dependency
+            .lock()
+            .unwrap()
+            .clone()
+            .map_err(RendererError::Scene)
     }
     fn control_targets(
         &self,
         _: &Node,
         _: &GraphDocument,
-    ) -> Result<Option<RenderControlTargets>, String> {
+    ) -> Result<Option<RenderControlTargets>, RendererError> {
         Ok(Some(RenderControlTargets {
             controls: BTreeSet::from(["tint".into()]),
             resources: BTreeSet::new(),
@@ -498,7 +506,7 @@ impl RendererAdapter for CpuAdapter {
         node: &Node,
         _: &GraphDocument,
         controls: &RenderOverrides,
-    ) -> Result<(), String> {
+    ) -> Result<(), RendererError> {
         cpu_config(node)?;
         cpu_controls(controls)
     }
@@ -510,10 +518,12 @@ struct CpuRenderer {
     renders: u64,
 }
 impl CpuRenderer {
-    fn candidate(node: &Node, control: Arc<Control>) -> Result<Self, String> {
+    fn candidate(node: &Node, control: Arc<Control>) -> Result<Self, RendererError> {
         let (generation, tint) = cpu_config(node)?;
         if control.reject_generation.load(Ordering::SeqCst) == generation {
-            return Err("Injected CPU candidate rejection".into());
+            return Err(RendererError::Unavailable(
+                "Injected CPU candidate rejection",
+            ));
         }
         Ok(Self {
             control,
@@ -531,10 +541,10 @@ impl FrameRenderer for CpuRenderer {
         width: usize,
         height: usize,
         controls: &RenderOverrides,
-    ) -> Result<Frame, String> {
+    ) -> Result<Frame, RendererError> {
         cpu_controls(controls)?;
         if self.control.fail_render.load(Ordering::SeqCst) {
-            return Err("Injected CPU draw failure".into());
+            return Err(RendererError::Unavailable("Injected CPU draw failure"));
         }
         let mut scene = scene.clone();
         let red = controls
@@ -567,11 +577,11 @@ impl FrameRenderer for CpuRenderer {
         &mut self,
         node: &Node,
         _: &GraphDocument,
-    ) -> Result<Option<Box<dyn FrameRenderer>>, String> {
+    ) -> Result<Option<Box<dyn FrameRenderer>>, RendererError> {
         self.control.candidates.fetch_add(1, Ordering::SeqCst);
         Ok(Some(Box::new(Self::candidate(node, self.control.clone())?)))
     }
-    fn validate_overrides(&self, overrides: &RenderOverrides) -> Result<(), String> {
+    fn validate_overrides(&self, overrides: &RenderOverrides) -> Result<(), RendererError> {
         cpu_controls(overrides)
     }
 }
@@ -590,7 +600,7 @@ impl Drop for CpuRenderer {
 struct SourceWorld(BTreeMap<u64, WorldObject>);
 impl WorldProvider for SourceWorld {
     fn step(&mut self, _: f32, _: f32) {}
-    fn objects(&self) -> Result<Vec<WorldObject>, String> {
+    fn objects(&self) -> Result<Vec<WorldObject>, module_engine_core::WorldError> {
         Ok(self.0.values().cloned().collect())
     }
     fn snapshot(&self) -> SceneSnapshot {
@@ -613,8 +623,11 @@ impl WorldProvider for SourceWorld {
         }
         SceneSnapshot { items, time: 0. }
     }
-    fn apply_commands(&mut self, commands: &[WorldCommand]) -> Result<(), String> {
-        validate_world_commands(&self.objects()?, commands)?;
+    fn apply_commands(
+        &mut self,
+        commands: &[WorldCommand],
+    ) -> Result<(), module_engine_core::WorldError> {
+        validate_world_commands(&self.objects()?, commands).map_err(WorldError::Commands)?;
         let mut next = self.0.clone();
         for command in commands {
             match command {
@@ -746,7 +759,7 @@ impl Fixture {
                             .wait_timeout_while(released, WAIT, |released| !*released)
                             .unwrap();
                         if !*released {
-                            return Err("CPU factory gate timed out".into());
+                            return Err(RendererError::Unavailable("CPU factory gate timed out"));
                         }
                     }
                     Ok(Box::new(CpuRenderer::candidate(node, built.clone())?))
@@ -2100,8 +2113,19 @@ fn r14_tick_rejection_discards_visible_writes_and_retry_starts_at_last_commit() 
             ctx.game.world.insert_component(
                 1,
                 "fixture.payload",
-                json!({"literal.key": next, "null": null}),
+                json!({"literal.key": next - 1, "null": null}),
             )?;
+            assert_eq!(
+                ctx.game.world.edit_transforms_with_component(
+                    &[1],
+                    "fixture.payload",
+                    |_, transform, payload| {
+                        transform.translation[1] += 1.;
+                        payload["literal.key"] = json!(next);
+                    },
+                ),
+                1
+            );
             ctx.game.world.transform_mut(2).unwrap().translation[1] += 1.;
             ctx.game
                 .world
@@ -2129,8 +2153,8 @@ fn r14_tick_rejection_discards_visible_writes_and_retry_starts_at_last_commit() 
                 [GameEvent::new("fixture.write", json!(next))]
             );
             assert_eq!(
-                ctx.game.world.object(1).unwrap().transform.translation[0],
-                next as f32
+                ctx.game.world.object(1).unwrap().transform.translation,
+                [next as f32, next as f32, 0.]
             );
             assert_eq!(
                 ctx.game.world.object(2).unwrap().transform.translation[1],
@@ -2235,6 +2259,12 @@ fn r14_tick_rejection_discards_visible_writes_and_retry_starts_at_last_commit() 
     reject.store(false, Ordering::SeqCst);
     assert_eq!(host.step(0., &input).unwrap(), 1);
     assert_eq!(host.session.state().tick, 2);
+    let world = &host.session.state().world;
+    assert_eq!(world.transform(1).unwrap().translation, [2., 2., 0.]);
+    assert_eq!(
+        world.component(1, "fixture.payload"),
+        Some(&json!({"literal.key": 2, "null": null}))
+    );
     assert_eq!(host.session.state().module_data["fixture.tick"], json!(2));
     assert_eq!(
         host.session.events(),

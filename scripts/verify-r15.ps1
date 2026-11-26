@@ -65,7 +65,7 @@ try {
         throw "The replay baseline was recorded for $($expected.target)."
     }
     @("HEAD $revision", "Baseline $($expected.revision)", $rust) | Set-Content (Join-Path $OutputRoot 'source.txt')
-    $replay = @('test', '--offline', '--locked', '--release', '--target', $expected.target, '-p', 'module-engine-editor',
+    $replay = @('test', '--offline', '--locked', '--release', '--target', $expected.target, '-p', 'module-engine-editor', '--features', 'verification',
         'schedule_replay::r15_schedule_event_replay', '--', '--exact', '--ignored', '--nocapture', '--test-threads=1')
     foreach ($run in @('first', 'repeat')) {
         $env:MODULE_ENGINE_R15_RUN = Join-Path $OutputRoot $run

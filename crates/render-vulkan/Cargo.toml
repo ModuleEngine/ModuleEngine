@@ -9,6 +9,9 @@ publish = false
 bench = []
 editor-spike = []
 
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
+
 [dependencies]
 module-engine-core = { path = "../engine-core" }
 thiserror.workspace = true

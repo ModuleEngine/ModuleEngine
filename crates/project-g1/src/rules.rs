@@ -575,7 +575,7 @@ fn decorate_garden_snapshot(snapshot: &mut SceneSnapshot, game: &GameState) {
         ) {
             continue;
         }
-        let Ok(cell) = serde_json::from_value::<CellData>(raw.clone()) else {
+        let Ok(Some(cell)) = game.world.decode_component::<CellData>(id, CELL) else {
             continue;
         };
         match cell.kind {
@@ -605,10 +605,7 @@ fn project_garden_poses(
 ) -> Result<BTreeMap<u64, [[f32; 4]; 4]>, String> {
     let mut models = BTreeMap::new();
     for item in &snapshot.items {
-        let Some(raw) = game.world.component(item.id, CELL) else {
-            continue;
-        };
-        let Ok(cell) = serde_json::from_value::<CellData>(raw.clone()) else {
+        let Ok(Some(cell)) = game.world.decode_component::<CellData>(item.id, CELL) else {
             continue;
         };
         if let Some(delta) = ambient_pose(cell.kind, game.time)

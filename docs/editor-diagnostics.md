@@ -12,10 +12,9 @@ passed its Windows/Linux verification routes; it did not run native diagnostic c
 
 ## Run
 
-Use an installed Python supporting the launcher and an absolute path to the existing
-normal Editor executable for the current OS/architecture. Supply its build report so
-that the executable SHA can be matched to the intended source snapshot. A test harness
-or a stale executable lacking the diagnostic protocol is unsuitable. Linux needs the
+Build the Editor with `cargo build --locked --release -p module-engine-editor --features verification`.
+Pass the absolute path to that executable and use a Python that supports the launcher.
+Keep the build report to match the executable SHA to its source snapshot. Linux needs the
 normal loader/toolchain environment and a working X11 or Wayland display; see the
 [Linux requirements](linux-support.md). Workflow export may use existing build tools
 and caches; the wrapper itself does not install tools or restore dependencies.

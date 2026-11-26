@@ -1,10 +1,10 @@
 //! Host-owned transactional state and bounded, reusable JSON-lines workers.
 
 use super::{
-    CompiledScript, MAX_PACKET, NEXT_WORKER, PACKET_MARKER, ScriptError, ScriptKind, ScriptTick,
-    validate_sdk_match, validate_supported_sdk,
+    CompiledScript, MAX_PACKET, NEXT_WORKER, ScriptError, ScriptKind, ScriptTick,
+    WORKER_PROTOCOL_VERSION, validate_sdk_match, validate_supported_sdk, worker_argument,
 };
-use module_engine_core::{ScriptContext, SdkIdentity};
+use module_engine_core::{PhysicsQuery, PhysicsQueryResponse, ScriptContext, SdkIdentity};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -14,11 +14,12 @@ use std::{
     process::{Command, Stdio},
     sync::{Arc, Mutex, atomic::Ordering, mpsc},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const STATE_PREFIX: &str = "// module-engine-state:";
-const PROTOCOL_VERSION: u32 = 2;
+const MAX_PHYSICS_QUERIES: usize = 64;
+pub(super) type QueryPhysics<'a> = &'a dyn Fn(&PhysicsQuery) -> PhysicsQueryResponse;
 const MAX_MANIFEST: u64 = (MAX_PACKET * 8) as u64;
 
 /// Source-declared state schema and defaults. A schema name/version and the
@@ -286,6 +287,7 @@ impl CompiledScript {
         &self,
         context: &ScriptContext,
         timeout: Duration,
+        physics: Option<QueryPhysics<'_>>,
     ) -> Result<ScriptTick, ScriptError> {
         validate_supported_sdk(&self.sdk_identity)?;
         if !context.time.is_finite()
@@ -312,7 +314,7 @@ impl CompiledScript {
             .worker
             .as_mut()
             .unwrap()
-            .exchange(&context, &self.sdk_identity, timeout)
+            .exchange(&context, &self.sdk_identity, timeout, physics)
             .and_then(|value| {
                 validate_packet_sdk(&value, &self.sdk_identity)?;
                 if let Some(error) = value.get("error").and_then(Value::as_str) {
@@ -400,7 +402,7 @@ impl CompiledScript {
         fs::copy(&self.executable, directory.join(&executable))
             .map_err(|e| ScriptError::Setup(e.to_string()))?;
         let manifest = PrecompiledManifest {
-            protocol_version: PROTOCOL_VERSION,
+            protocol_version: WORKER_PROTOCOL_VERSION,
             executable,
             source: self.source.clone(),
             kind: self.kind,
@@ -448,16 +450,18 @@ impl CompiledScript {
         let value: Value = serde_json::from_slice(&bytes)
             .map_err(|error| ScriptError::Setup(error.to_string()))?;
         if value.get("protocol_version").and_then(Value::as_u64)
-            != Some(u64::from(PROTOCOL_VERSION))
+            != Some(u64::from(WORKER_PROTOCOL_VERSION))
         {
-            return Err(ScriptError::Setup("Unsupported precompiled script protocol; protocol 2 requires an exact SDK identity".into()));
+            return Err(ScriptError::Setup(format!(
+                "Unsupported precompiled script protocol; export the Player package for protocol {WORKER_PROTOCOL_VERSION}"
+            )));
         }
         let manifest: PrecompiledManifest =
             serde_json::from_value(value).map_err(|e| ScriptError::Setup(e.to_string()))?;
         validate_sdk_match(&manifest.sdk, expected_sdk)?;
-        if manifest.protocol_version != PROTOCOL_VERSION || manifest.source.len() > MAX_PACKET {
+        if manifest.source.len() > MAX_PACKET {
             return Err(ScriptError::Setup(
-                "unsupported precompiled script protocol/source size".into(),
+                "precompiled source exceeds 1 MiB".into(),
             ));
         }
         if StateDeclaration::from_source(&manifest.source)? != manifest.state {
@@ -539,6 +543,7 @@ impl Worker {
     fn start(executable: &Path, directory: &Path) -> Result<Self, ScriptError> {
         let mut command = Command::new(executable);
         command
+            .arg(worker_argument())
             .current_dir(directory)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -557,53 +562,33 @@ impl Worker {
                 }
             }
         });
-        let stdout = child.stdout.take().unwrap();
+        // This is a startup handle for the private response writer. The worker
+        // detaches it from stdout before invoking Custom code.
+        let pipe = child.stdout.take().unwrap();
         let (responses, output) = mpsc::sync_channel(1);
         thread::spawn(move || {
-            let mut reader = BufReader::new(stdout);
+            let mut reader = BufReader::new(pipe);
             let mut line = Vec::new();
-            let mut ignored = 0;
             loop {
                 line.clear();
                 let count = (&mut reader)
-                    .take((MAX_PACKET + 1) as u64)
+                    .take((MAX_PACKET + 2) as u64)
                     .read_until(b'\n', &mut line);
-                match count {
-                    Ok(0) => {
-                        let _ =
-                            responses.send(Err(ScriptError::Worker("worker closed output".into())));
-                        break;
+                let packet = match count {
+                    Ok(0) => Err(ScriptError::Worker("worker closed output".into())),
+                    Ok(_) if line.len() > MAX_PACKET + 1 => {
+                        Err(ScriptError::Packet("worker output exceeds 1 MiB".into()))
                     }
-                    Ok(_) if line.len() > MAX_PACKET => {
-                        let _ = responses.send(Err(ScriptError::Packet(
-                            "worker output exceeds 1 MiB".into(),
-                        )));
-                        break;
+                    Ok(_) if line.last() != Some(&b'\n') => {
+                        Err(ScriptError::Packet("unterminated worker packet".into()))
                     }
-                    Err(error) => {
-                        let _ = responses.send(Err(ScriptError::Worker(error.to_string())));
-                        break;
-                    }
-                    _ => {}
-                }
-                if let Some(index) = line
-                    .windows(PACKET_MARKER.len())
-                    .position(|bytes| bytes == PACKET_MARKER.as_bytes())
-                {
-                    let value = serde_json::from_slice(&line[index + PACKET_MARKER.len()..])
-                        .map_err(|e| ScriptError::Packet(e.to_string()));
-                    if responses.send(value).is_err() {
-                        break;
-                    }
-                    ignored = 0;
-                } else {
-                    ignored += line.len();
-                    if ignored > MAX_PACKET {
-                        let _ = responses.send(Err(ScriptError::Packet(
-                            "worker debug output exceeds 1 MiB per request".into(),
-                        )));
-                        break;
-                    }
+                    Ok(_) => serde_json::from_slice(&line)
+                        .map_err(|error| ScriptError::Packet(error.to_string())),
+                    Err(error) => Err(ScriptError::Worker(error.to_string())),
+                };
+                let invalid = packet.is_err();
+                if responses.send(packet).is_err() || invalid {
+                    break;
                 }
             }
         });
@@ -636,30 +621,76 @@ impl Worker {
         context: &ScriptContext,
         sdk: &SdkIdentity,
         timeout: Duration,
+        physics: Option<QueryPhysics<'_>>,
     ) -> Result<Value, ScriptError> {
+        let start = Instant::now();
         self.sequence = self.sequence.wrapping_add(1);
         let mut packet = serde_json::json!({"request_id":self.sequence,"sdk":sdk});
         packet["context"] = serde_json::to_value(context)
             .map_err(|error| ScriptError::Packet(error.to_string()))?;
+        if physics.is_some() {
+            packet["physics_queries"] = Value::Bool(true);
+        }
+        self.send(&packet)?;
+
+        let mut queries = 0;
+        loop {
+            let remaining = timeout
+                .checked_sub(start.elapsed())
+                .ok_or(ScriptError::Timeout(timeout.as_millis()))?;
+            let mut response = self.receive(remaining, timeout)?;
+            if response.get("request_id").and_then(Value::as_u64) != Some(self.sequence) {
+                return Err(ScriptError::Packet(
+                    "worker returned a stale request ID".into(),
+                ));
+            }
+            let Some(request) = response
+                .as_object_mut()
+                .and_then(|packet| packet.remove("physics_query"))
+            else {
+                return Ok(response);
+            };
+            validate_packet_sdk(&response, sdk)?;
+            let physics =
+                physics.ok_or_else(|| ScriptError::Packet("physics queries unavailable".into()))?;
+            queries += 1;
+            if queries > MAX_PHYSICS_QUERIES {
+                return Err(ScriptError::Packet(
+                    "worker exceeded 64 physics queries in one update".into(),
+                ));
+            }
+            let query: PhysicsQuery = serde_json::from_value(request)
+                .map_err(|error| ScriptError::Packet(format!("Invalid physics query: {error}")))?;
+            self.send(&serde_json::json!({
+                "request_id": self.sequence,
+                "physics_result": physics(&query),
+            }))?;
+        }
+    }
+
+    fn send(&self, packet: &Value) -> Result<(), ScriptError> {
         let mut bytes =
-            serde_json::to_vec(&packet).map_err(|error| ScriptError::Packet(error.to_string()))?;
+            serde_json::to_vec(packet).map_err(|error| ScriptError::Packet(error.to_string()))?;
         if bytes.len() > MAX_PACKET {
             return Err(ScriptError::Packet("input exceeds 1 MiB".into()));
         }
         bytes.push(b'\n');
         self.input
             .try_send(bytes)
-            .map_err(|_| ScriptError::Worker("worker input unavailable".into()))?;
+            .map_err(|_| ScriptError::Worker("worker input unavailable".into()))
+    }
+
+    fn receive(&self, remaining: Duration, timeout: Duration) -> Result<Value, ScriptError> {
         let response = self
             .output
-            .recv_timeout(timeout)
+            .recv_timeout(remaining)
             .map_err(|error| match error {
                 mpsc::RecvTimeoutError::Timeout => ScriptError::Timeout(timeout.as_millis()),
                 mpsc::RecvTimeoutError::Disconnected => {
                     ScriptError::Worker("worker output unavailable".into())
                 }
             })?;
-        let value = response.map_err(|error| {
+        response.map_err(|error| {
             let details = self
                 .stderr
                 .lock()
@@ -671,13 +702,7 @@ impl Worker {
             } else {
                 ScriptError::Worker(format!("{error}: {details}"))
             }
-        })?;
-        if value.get("request_id").and_then(Value::as_u64) != Some(self.sequence) {
-            return Err(ScriptError::Packet(
-                "worker returned a stale request ID".into(),
-            ));
-        }
-        Ok(value)
+        })
     }
 }
 
@@ -690,6 +715,161 @@ impl Drop for Worker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_stdout_and_stderr_are_separate_from_worker_packets() {
+        crate::requires_offline_sdk!();
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let artifacts =
+            crate::TestArtifactGuard::new(&root.join(".work/test-temp"), "worker-output").unwrap();
+        let compiler = crate::ScriptCompiler::new(root, artifacts.path().to_owned());
+        let source = r#"// module-engine-state: {"schema":"output.v1","initial":{"count":0}}
+
+#[cfg(windows)]
+fn write_windows_stdout() {
+    use std::{ffi::{c_char, c_void}, process::{Command, Stdio}};
+    unsafe extern "C" {
+        fn puts(message: *const c_char) -> i32;
+        fn fflush(stream: *mut c_void) -> i32;
+    }
+
+    // Keep an unrelated file open where a stale CRT handle could be reused.
+    let _sentinel = std::fs::OpenOptions::new()
+        .write(true)
+        .open("stdout-sentinel.bin").unwrap();
+    // SAFETY: the message is NUL-terminated. fflush(NULL) flushes CRT output streams.
+    let (put, flush) = unsafe {
+        (puts(c"__MODULE_ENGINE_SCRIPT_PACKET__ CRT stdout".as_ptr()),
+         fflush(std::ptr::null_mut()))
+    };
+    assert!(put >= 0 && flush == 0, "CRT stdout write/flush failed: {put}/{flush}");
+
+    // The generated SDK probe prints its identity to stdout and then exits.
+    let child = Command::new(std::env::current_exe().unwrap())
+        .arg("__SDK_IDENTITY_ARGUMENT__")
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .status().unwrap();
+    assert!(child.success(), "child with inherited stdout: {child}");
+}
+
+fn update(ctx: &mut ScriptContext) {
+    #[cfg(windows)]
+    write_windows_stdout();
+    println!("ordinary output");
+    println!("__MODULE_ENGINE_SCRIPT_PACKET__ user diagnostic");
+    eprintln!("__MODULE_ENGINE_SCRIPT_PACKET__ user stderr");
+    std::io::Write::write_all(&mut std::io::stdout(), &vec![b'x'; 1048578]).unwrap();
+    let count = ctx.state["count"].as_u64().unwrap() + 1;
+    ctx.state["count"] = serde_json::json!(count);
+    ctx.set_color(1, [10, 20, 30, 255]);
+    ctx.emit_event(serde_json::json!({"count":count}));
+}
+"#
+        .replace("__SDK_IDENTITY_ARGUMENT__", crate::SDK_IDENTITY_ARGUMENT);
+        let script = compiler.compile(&source).unwrap();
+        let old_mode = Command::new(&script.executable)
+            .arg("--module-engine-json-worker")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(!old_mode.status.success());
+        assert!(String::from_utf8_lossy(&old_mode.stderr).contains(&worker_argument()));
+        #[cfg(windows)]
+        let sentinel = artifacts.path().join("stdout-sentinel.bin");
+        #[cfg(windows)]
+        let untouched = b"ordinary fixture file";
+        #[cfg(windows)]
+        let script = {
+            fs::write(&sentinel, untouched).unwrap();
+            script.with_asset_root(artifacts.path()).unwrap()
+        };
+        let context = ScriptContext::new(1.0, 0.016, vec![]);
+        let mut previous_pid = None;
+        for count in 1..=2 {
+            let pending = script.tick(&context, Duration::from_secs(5));
+            #[cfg(windows)]
+            assert_eq!(fs::read(&sentinel).unwrap(), untouched);
+            let tick = pending.unwrap();
+            assert_eq!(tick.state, serde_json::json!({"count":count}));
+            assert_eq!(tick.events, [serde_json::json!({"count":count})]);
+            assert_eq!(
+                tick.commands,
+                [module_engine_core::ControlCommand::World(
+                    module_engine_core::WorldCommand::SetColor {
+                        id: 1,
+                        color: [10, 20, 30, 255],
+                    }
+                )]
+            );
+            script.commit_tick(&tick).unwrap();
+            let pid = script.worker_process_id().unwrap().unwrap();
+            assert_eq!(*previous_pid.get_or_insert(pid), pid);
+        }
+
+        {
+            let mut instance = script.lock_instance().unwrap();
+            let worker = instance.worker.as_mut().unwrap();
+            // Dropping the sender closes the input pipe after the two requests.
+            drop(std::mem::replace(
+                &mut worker.input,
+                mpsc::sync_channel(1).0,
+            ));
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Some(status) = worker.child.try_wait().unwrap() {
+                    assert!(status.success(), "worker exited with {status}");
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "worker did not exit at EOF"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+
+        #[cfg(windows)]
+        let process = {
+            use std::os::windows::io::AsHandle;
+            let instance = script.lock_instance().unwrap();
+            instance
+                .worker
+                .as_ref()
+                .unwrap()
+                .child
+                .as_handle()
+                .try_clone_to_owned()
+                .unwrap()
+        };
+        script.stop_worker().unwrap();
+        assert_eq!(script.worker_process_id().unwrap(), None);
+        assert_eq!(script.state().unwrap(), serde_json::json!({"count":2}));
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::{AsRawHandle, RawHandle};
+            #[link(name = "kernel32")]
+            unsafe extern "system" {
+                fn WaitForSingleObject(handle: RawHandle, milliseconds: u32) -> u32;
+            }
+            // SAFETY: process is a live duplicate of this worker's process
+            // handle. A zero timeout only checks whether it has signaled exit.
+            assert_eq!(
+                unsafe { WaitForSingleObject(process.as_raw_handle(), 0) },
+                0
+            );
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let pid = previous_pid.unwrap() as libc::pid_t;
+            // SAFETY: signal 0 checks this positive PID without sending a signal.
+            assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::ESRCH)
+            );
+        }
+    }
 
     #[test]
     fn worker_packets_require_exact_sdk_before_any_payload_is_accepted() {
@@ -724,7 +904,7 @@ mod tests {
         .unwrap();
         let source = "fn update(_: &mut ScriptContext) {}";
         let manifest = PrecompiledManifest {
-            protocol_version: PROTOCOL_VERSION,
+            protocol_version: WORKER_PROTOCOL_VERSION,
             executable: "not-started.exe".into(),
             source: source.into(),
             kind: ScriptKind::Update,
@@ -740,24 +920,36 @@ mod tests {
         assert_eq!(loaded.worker_process_id().unwrap(), None);
         assert_eq!(loaded.state().unwrap(), Value::Null);
         assert!(!root.join("engine-sdk.json").exists());
-        for edit in 0..4 {
+        let prior_sdk = "module-engine-data-api/v3";
+        let current = SdkIdentity::current();
+        let protocol_error = "Unsupported precompiled script protocol";
+        for (protocol, sdk_api, expected_error) in [
+            (2, prior_sdk, protocol_error),
+            (3, prior_sdk, protocol_error),
+            (3, current.data_api_fingerprint.as_str(), protocol_error),
+            (
+                WORKER_PROTOCOL_VERSION,
+                prior_sdk,
+                "SDK requires exact data/API identity",
+            ),
+        ] {
             let mut wrong = value.clone();
-            match edit {
-                0 => wrong["sdk"]["version"] = serde_json::json!("other"),
-                1 => {
-                    wrong["sdk"]["data_api_fingerprint"] =
-                        serde_json::json!("module-engine-data-api/v1")
-                }
-                2 => {
-                    wrong.as_object_mut().unwrap().remove("sdk");
-                }
-                _ => wrong["protocol_version"] = serde_json::json!(1),
-            }
+            wrong["protocol_version"] = serde_json::json!(protocol);
+            wrong["sdk"]["data_api_fingerprint"] = serde_json::json!(sdk_api);
+            fs::write(&path, serde_json::to_vec(&wrong).unwrap()).unwrap();
+            let error = CompiledScript::load_precompiled(&path, &root).unwrap_err();
+            assert!(error.to_string().contains(expected_error), "{error}");
+        }
+        let mut wrong_version = value.clone();
+        wrong_version["sdk"]["version"] = serde_json::json!("other");
+        let mut missing_sdk = value;
+        missing_sdk.as_object_mut().unwrap().remove("sdk");
+        for wrong in [wrong_version, missing_sdk] {
             fs::write(&path, serde_json::to_vec(&wrong).unwrap()).unwrap();
             assert!(CompiledScript::load_precompiled(&path, &root).is_err());
-            assert_eq!(loaded.worker_process_id().unwrap(), None);
-            assert_eq!(loaded.state().unwrap(), Value::Null);
         }
+        assert_eq!(loaded.worker_process_id().unwrap(), None);
+        assert_eq!(loaded.state().unwrap(), Value::Null);
     }
 
     #[test]

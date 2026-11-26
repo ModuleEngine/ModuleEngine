@@ -10,6 +10,7 @@ pub const KNOWN_NATIVE_FEATURES: &[&str] = &[
     "vulkan",
     "audio",
     "persistence",
+    "rapier-physics",
 ];
 
 /// A source installer declares which native feature owns its contracts. A base
@@ -241,6 +242,13 @@ pub fn installed_native_features() -> Result<NativeFeatureCatalog, String> {
         [],
         [],
         [module_engine_host_services::PERSISTENCE_SERVICE_ID.into()],
+    )?;
+    #[cfg(feature = "rapier-physics")]
+    catalog.register(
+        "rapier-physics",
+        [module_engine_physics_rapier::MODULE_ID.into()],
+        [],
+        [],
     )?;
     Ok(catalog)
 }

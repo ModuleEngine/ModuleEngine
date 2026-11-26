@@ -14,6 +14,8 @@ pub(crate) struct TransferQueue {
 
 impl TransferQueue {
     pub fn new(context: &Arc<DeviceLifetime>, family: u32) -> Result<Self, VulkanError> {
+        // SAFETY: The logical device requested queue zero of this dedicated transfer family at
+        // creation.
         let queue = unsafe { context.device.get_device_queue(family, 0) };
         context.name(queue, || format!("ModuleEngine transfer queue {family}"));
         let timeline = Timeline::new(context, "ModuleEngine transfer timeline")?;
@@ -63,6 +65,9 @@ pub(crate) fn record_upload(
         .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
         .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ);
     pool.begin()?;
+    // SAFETY: Both buffers are recording on their respective families. The staging region fits the
+    // whole atlas subresource, and matching release/acquire barriers pair with the transfer
+    // timeline dependency.
     unsafe {
         device.cmd_pipeline_barrier2(
             pool.command,

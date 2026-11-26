@@ -9,6 +9,7 @@ use bevy_reflect::Reflect;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Identifies built-in world storage or a separately registered source provider.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -102,6 +103,28 @@ pub struct SceneSnapshot {
     pub time: f32,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum WorldError {
+    #[error("This World provider does not support portable object editing")]
+    ObjectsUnsupported,
+    #[error("This World provider does not support portable world commands")]
+    CommandsUnsupported,
+    #[error("No executable provider registered for '{0}'")]
+    MissingProvider(String),
+    #[error("{0}")]
+    Configuration(String),
+    #[error("{0}")]
+    Commands(String),
+    #[error("{0}")]
+    Provider(#[source] Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl From<WorldError> for String {
+    fn from(error: WorldError) -> Self {
+        error.to_string()
+    }
+}
+
 /// Minimal executable source-provider boundary implemented by world authors.
 pub trait WorldProvider: Send {
     /// Advance the provider. Runtime supplies finite values and nonnegative dt;
@@ -111,17 +134,17 @@ pub trait WorldProvider: Send {
     fn snapshot(&self) -> SceneSnapshot;
     /// Optional portable editing API. Existing read-only providers keep rendering
     /// unchanged and explicitly reject editing rather than silently doing nothing.
-    fn objects(&self) -> Result<Vec<WorldObject>, String> {
-        Err("This World provider does not support portable object editing".into())
+    fn objects(&self) -> Result<Vec<WorldObject>, WorldError> {
+        Err(WorldError::ObjectsUnsupported)
     }
     /// Apply all operations or none. Built-ins share the same local-transform,
     /// object-ID and subtree-removal semantics with independent persistent stores.
-    fn apply_commands(&mut self, _commands: &[WorldCommand]) -> Result<(), String> {
-        Err("This World provider does not support portable world commands".into())
+    fn apply_commands(&mut self, _commands: &[WorldCommand]) -> Result<(), WorldError> {
+        Err(WorldError::CommandsUnsupported)
     }
     /// Validate without mutation so hosts can stage mixed world/render packets.
-    fn validate_commands(&self, commands: &[WorldCommand]) -> Result<(), String> {
-        crate::validate_world_commands(&self.objects()?, commands)
+    fn validate_commands(&self, commands: &[WorldCommand]) -> Result<(), WorldError> {
+        crate::validate_world_commands(&self.objects()?, commands).map_err(WorldError::Commands)
     }
 }
 
@@ -305,7 +328,7 @@ impl ObjectsWorld {
 }
 
 impl WorldProvider for ObjectsWorld {
-    fn objects(&self) -> Result<Vec<WorldObject>, String> {
+    fn objects(&self) -> Result<Vec<WorldObject>, WorldError> {
         fn collect(object: &Object, parent: Option<u64>, result: &mut Vec<WorldObject>) {
             result.push(WorldObject {
                 id: object.id,
@@ -325,7 +348,7 @@ impl WorldProvider for ObjectsWorld {
         Ok(objects)
     }
 
-    fn apply_commands(&mut self, commands: &[WorldCommand]) -> Result<(), String> {
+    fn apply_commands(&mut self, commands: &[WorldCommand]) -> Result<(), WorldError> {
         fn velocities(object: &Object, result: &mut BTreeMap<u64, [f32; 3]>) {
             result.insert(object.id, object.angular_velocity);
             for child in &object.children {
@@ -357,7 +380,7 @@ impl WorldProvider for ObjectsWorld {
             velocities(root, &mut velocities_map);
         }
         let mut objects = self.objects()?.into_iter().map(|o| (o.id, o)).collect();
-        crate::control::edit_object_map(&mut objects, commands)?;
+        crate::control::edit_object_map(&mut objects, commands).map_err(WorldError::Commands)?;
         for command in commands {
             if let WorldCommand::Spawn { object } = command {
                 velocities_map.remove(&object.id);
@@ -477,6 +500,7 @@ pub struct EcsWorld {
     rows: Arc<EcsRows>,
     staged: Option<StagedRows>,
     time: f32,
+    malformed_component_reads: Arc<AtomicU64>,
 }
 
 #[derive(Debug, Default)]
@@ -763,6 +787,7 @@ impl Clone for EcsWorld {
             rows: Arc::new((*self.rows).clone()),
             staged: self.staged.clone(),
             time: self.time,
+            malformed_component_reads: Arc::new(AtomicU64::new(self.malformed_component_reads())),
         };
         copy.publish_staged();
         copy
@@ -795,6 +820,9 @@ impl EcsWorld {
                 .as_ref()
                 .map(|parent| StagedRows::new(validated_base, Some(Arc::clone(parent)))),
             time: self.time,
+            // The diagnostic belongs to the live world, even when an attempted
+            // tick rolls back its authored/gameplay changes.
+            malformed_component_reads: Arc::clone(&self.malformed_component_reads),
         };
         self.staged = Some(StagedRows::new(validated_base, parent));
         original
@@ -907,6 +935,7 @@ impl EcsWorld {
             rows: Arc::new(EcsRows::default()),
             staged: None,
             time: 0.,
+            malformed_component_reads: Arc::default(),
         };
         for object in objects {
             world.spawn_object(object);
@@ -1153,6 +1182,29 @@ impl EcsWorld {
         }
     }
 
+    /// Decode a live component. An absent component is a successful empty read.
+    pub fn decode_component<'a, T: Deserialize<'a>>(
+        &'a self,
+        id: u64,
+        name: &str,
+    ) -> Result<Option<T>, serde_json::Error> {
+        self.component(id, name)
+            .map(T::deserialize)
+            .transpose()
+            .inspect_err(|error| {
+                let count = self
+                    .malformed_component_reads
+                    .fetch_add(1, Ordering::Relaxed);
+                if cfg!(debug_assertions) && count < 8 {
+                    eprintln!("Malformed component '{name}' on object {id}: {error}");
+                }
+            })
+    }
+
+    pub fn malformed_component_reads(&self) -> u64 {
+        self.malformed_component_reads.load(Ordering::Relaxed)
+    }
+
     // A staged removal can empty a base column. Conservatively treat it as
     // present until publication so callers need only inspect staged writes.
     pub(crate) fn may_have_component(&self, name: &str) -> bool {
@@ -1182,6 +1234,78 @@ impl EcsWorld {
         let rows = Arc::make_mut(&mut self.rows);
         rows.mark_binding_changed(id, name);
         rows.components.get_mut(name)?.get_mut(&id)
+    }
+
+    /// Edit the local transform and an existing named component together.
+    /// Calls `edit` in input order, including repeated IDs, and skips rows
+    /// without that component. Returns the number of calls to `edit`.
+    pub fn edit_transforms_with_component(
+        &mut self,
+        ids: &[u64],
+        name: &str,
+        mut edit: impl FnMut(u64, &mut Transform, &mut serde_json::Value),
+    ) -> usize {
+        let mut count = 0;
+        if self.staged.is_some() {
+            for &id in ids {
+                if self.component(id, name).is_none() {
+                    continue;
+                }
+                self.staged
+                    .as_mut()
+                    .unwrap()
+                    .unchecked_transforms
+                    .insert(id);
+                let row = self.stage_row(id).unwrap();
+                edit(
+                    id,
+                    &mut row.transform,
+                    row.components.get_mut(name).unwrap(),
+                );
+                count += 1;
+            }
+            return count;
+        }
+
+        if ids.is_empty()
+            || (Arc::strong_count(&self.rows) != 1
+                && !self
+                    .rows
+                    .components
+                    .get(name)
+                    .is_some_and(|column| ids.iter().any(|id| column.contains_key(id))))
+        {
+            return 0;
+        }
+        let rows = Arc::make_mut(&mut self.rows);
+        let Some(column) = rows.components.get_mut(name) else {
+            return 0;
+        };
+        let render_binding = matches!(name, "mesh" | "material");
+        for &id in ids {
+            let Some(component) = column.get_mut(&id) else {
+                continue;
+            };
+            let handle = rows.index[&id];
+            if count == 0 {
+                // Record the batch before exposing its first mutable values.
+                rows.render_writes += 1;
+            }
+            if render_binding {
+                rows.world
+                    .get_mut::<RenderBindings>(handle)
+                    .unwrap()
+                    .set_changed();
+            }
+            let transform = rows
+                .world
+                .get_mut::<Transform>(handle)
+                .unwrap()
+                .into_inner();
+            edit(id, transform, component);
+            count += 1;
+        }
+        count
     }
 
     pub fn insert_component(
@@ -1529,12 +1653,12 @@ impl EcsWorld {
 }
 
 impl WorldProvider for EcsWorld {
-    fn objects(&self) -> Result<Vec<WorldObject>, String> {
+    fn objects(&self) -> Result<Vec<WorldObject>, WorldError> {
         Ok(self.objects_snapshot())
     }
 
-    fn apply_commands(&mut self, commands: &[WorldCommand]) -> Result<(), String> {
-        EcsWorld::apply_commands(self, commands)
+    fn apply_commands(&mut self, commands: &[WorldCommand]) -> Result<(), WorldError> {
+        EcsWorld::apply_commands(self, commands).map_err(WorldError::Commands)
     }
 
     fn step(&mut self, dt: f32, speed: f32) {
@@ -1620,6 +1744,11 @@ fn transform(translation: [f32; 3], scale: [f32; 3]) -> Transform {
 }
 
 #[cfg(test)]
+#[cfg(not(debug_assertions))]
+#[path = "../../../examples/bench/s3_ecs_cost.rs"]
+mod s3_cost;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     fn entity(
@@ -1677,10 +1806,18 @@ mod tests {
 
     #[test]
     fn unchecked_transforms_survive_dropped_packets_and_clear_after_validated_apply() {
-        let mut world =
-            EcsWorld::from_entities(vec![entity(1, None, &[]), entity(2, None, &[])]).unwrap();
+        let mut world = EcsWorld::from_entities(vec![
+            entity(1, None, &[("motion", serde_json::Value::Null)]),
+            entity(2, None, &[]),
+        ])
+        .unwrap();
         let committed = world.checkpoint_tick(true);
-        world.transform_mut(1).unwrap().translation[0] = f32::NAN;
+        assert_eq!(
+            world.edit_transforms_with_component(&[2, 1], "motion", |_, transform, _| {
+                transform.translation[0] = f32::NAN;
+            }),
+            1
+        );
         let repair = [WorldCommand::SetPosition {
             id: 1,
             position: [0.; 3],
@@ -1970,6 +2107,64 @@ mod tests {
     }
 
     #[test]
+    fn batch_edits_preserve_input_order_and_track_each_committed_transform() {
+        use serde_json::{Value, json};
+
+        let mut world = EcsWorld::from_entities(vec![
+            entity(1, None, &[("motion", json!({"literal.key": null}))]),
+            entity(2, None, &[("mesh", Value::Null)]),
+            entity(3, None, &[("motion", Value::Null)]),
+        ])
+        .unwrap();
+        let shared = world.rows.clone();
+        assert_eq!(
+            world.edit_transforms_with_component(&[2, 99], "motion", |_, _, _| unreachable!()),
+            0
+        );
+        assert!(Arc::ptr_eq(&world.rows, &shared));
+        drop(shared);
+
+        let mut cursor = RenderChangeCursor::default();
+        world.read_render_changes(&mut cursor);
+        let writes = world.rows.render_writes;
+        let mut ids = Vec::new();
+        let count = world.edit_transforms_with_component(
+            &[3, 2, 1, 3, 99],
+            "motion",
+            |id, transform, value| {
+                ids.push(id);
+                transform.translation[1] += 1.;
+                value["offset"] = Value::from(transform.translation[1]);
+            },
+        );
+        assert_eq!(count, 3);
+        assert_eq!(ids, [3, 1, 3]);
+        assert_eq!(world.rows.render_writes, writes + 1);
+        assert_eq!(world.transform(1).unwrap().translation[1], 1.);
+        assert_eq!(world.transform(2).unwrap().translation[1], 0.);
+        assert_eq!(world.transform(3).unwrap().translation[1], 2.);
+        assert_eq!(
+            world.component(1, "motion"),
+            Some(&json!({"literal.key": null, "offset": 1.}))
+        );
+        assert_eq!(world.component(3, "motion"), Some(&json!({"offset": 2.})));
+        let mut changed = world.read_render_changes(&mut cursor).changed;
+        changed.sort_unstable();
+        assert_eq!(changed, [1, 3]);
+
+        let previous_tick = cursor.position.unwrap().tick;
+        world.edit_transforms_with_component(&[2], "mesh", |_, _, value| {
+            *value = json!({"path": "mesh"});
+        });
+        let rows = Arc::get_mut(&mut world.rows).unwrap();
+        let changed_bindings = rows.world.last_change_tick_scope(previous_tick, |world| {
+            let mut query = world.query_filtered::<&StableId, Changed<RenderBindings>>();
+            query.iter(world).map(|id| id.0).collect::<Vec<_>>()
+        });
+        assert_eq!(changed_bindings, [2]);
+    }
+
+    #[test]
     fn stable_index_rejects_a_stale_handle_when_bevy_reuses_its_slot() {
         let target = 9_007_199_254_740_993;
         let child = 9_007_199_254_740_994;
@@ -2237,8 +2432,8 @@ mod tests {
                 && unchanged
                     .iter()
                     .all(|(_, _, validation, application, preserved)| {
-                        validation.as_ref().is_err_and(|error| error == rejected)
-                            && application.as_ref().is_err_and(|error| error == rejected)
+                        validation.as_ref().is_err_and(|error| matches!(error, WorldError::Commands(message) if message == rejected))
+                            && application.as_ref().is_err_and(|error| matches!(error, WorldError::Commands(message) if message == rejected))
                             && *preserved
                     }),
             "Constructors and input validation: {results:?}\nPer provider: {unchanged:?}",

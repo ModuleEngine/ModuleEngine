@@ -1,5 +1,23 @@
 use super::*;
 
+/// Exercise the production ARPG reader on missing and malformed health data.
+pub fn verify_health_component_reads() -> Result<Value, String> {
+    let mut world = EcsWorld::demo();
+    let read =
+        |world: &EcsWorld| queries::world_component::<components::Health>(world, 1, "health");
+    if read(&world).is_some() || world.malformed_component_reads() != 0 {
+        return Err("An absent health component should leave the decode counter at zero".into());
+    }
+    let missing = world.malformed_component_reads();
+    world.insert_component(1, "health", json!({"maximum":10.0,"current":"broken"}))?;
+    if read(&world).is_some() || world.malformed_component_reads() != 1 {
+        return Err("Malformed health should be reported as one failed decode".into());
+    }
+    Ok(
+        json!({"missing_health_errors":missing,"malformed_health_errors":world.malformed_component_reads()}),
+    )
+}
+
 /// Normalize only this package's process-local incarnation bookkeeping.
 /// Node IDs are resolved through the authored graph so Custom state remains
 /// exact, even when it uses similarly named fields.
@@ -28,6 +46,16 @@ pub fn portable_system_states(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_health_increments_diagnostics_and_absence_does_not() {
+        let report = verify_health_component_reads().unwrap();
+        assert_eq!(
+            report,
+            json!({"missing_health_errors":0,"malformed_health_errors":1})
+        );
+        println!("{report}");
+    }
 
     fn fixture() -> (ExecutionGraph, BTreeMap<String, Value>) {
         let mut graph = gameplay_schedule();

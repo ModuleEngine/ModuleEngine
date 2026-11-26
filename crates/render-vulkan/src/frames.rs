@@ -13,6 +13,8 @@ pub(crate) struct CommandPool {
 impl CommandPool {
     pub fn new(context: &Arc<DeviceLifetime>, family: u32) -> Result<Self, VulkanError> {
         let device = &context.device;
+        // SAFETY: family is a queue family enabled on this device. The pool is fresh and kept alive
+        // by CommandPool while its primary buffer exists.
         unsafe {
             let pool = device
                 .create_command_pool(
@@ -41,6 +43,8 @@ impl CommandPool {
 
     /// The caller acquired a free slot and confirmed the previous command's completion.
     pub fn begin(&self) -> Result<(), VulkanError> {
+        // SAFETY: The slot is exclusively reserved and its last flight has completed. Reset and
+        // begin use the buffer from this pool on the same device.
         unsafe {
             let device = &self.context.device;
             device
@@ -59,6 +63,8 @@ impl CommandPool {
 
 impl Drop for CommandPool {
     fn drop(&mut self) {
+        // SAFETY: The slot is unused or its flight completed. Unknown in-flight status retains the
+        // whole owner in retirement instead of dropping this pool.
         unsafe { self.context.device.destroy_command_pool(self.pool, None) };
     }
 }
@@ -96,6 +102,8 @@ impl FramePools {
                 descriptor_count: 1024,
             },
         ];
+        // SAFETY: The pool is new on this device, and the fixed descriptor sizes stay live during
+        // creation.
         let descriptors = unsafe {
             context.device.create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
@@ -116,6 +124,8 @@ impl FramePools {
 
 impl Drop for FramePools {
     fn drop(&mut self) {
+        // SAFETY: No flight using this slot's descriptor sets remains pending when its pools are
+        // released.
         unsafe {
             self.context
                 .device
@@ -133,6 +143,8 @@ impl Timeline {
     pub fn new(context: &Arc<DeviceLifetime>, name: &str) -> Result<Arc<Self>, VulkanError> {
         let mut kind =
             vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::TIMELINE);
+        // SAFETY: The device has timeline semaphores enabled. The semaphore type chain lives
+        // through creation.
         let raw = unsafe {
             context.device.create_semaphore(
                 &vk::SemaphoreCreateInfo::default().push_next(&mut kind),
@@ -148,6 +160,7 @@ impl Timeline {
     }
 
     pub fn counter(&self) -> Result<u64, vk::Result> {
+        // SAFETY: This Arc-owned semaphore was created as a timeline on the retained device.
         unsafe { self.context.device.get_semaphore_counter_value(self.raw) }
     }
 
@@ -172,6 +185,9 @@ impl Timeline {
             .wait_semaphore_infos(wait_info.as_slice())
             .command_buffer_infos(&command)
             .signal_semaphore_infos(&signal);
+        // SAFETY: The renderer owns the selected queue exclusively during submission. The buffer is
+        // executable for that queue family, the signal value increases, and the flight retains the
+        // command pool and timelines through completion.
         unsafe {
             self.context
                 .device
@@ -182,6 +198,8 @@ impl Timeline {
 
 impl Drop for Timeline {
     fn drop(&mut self) {
+        // SAFETY: The final Arc is released after all flights using this timeline complete or
+        // before any submission.
         unsafe { self.context.device.destroy_semaphore(self.raw, None) };
     }
 }
@@ -209,6 +227,8 @@ impl Completion {
                 value,
             });
         }
+        // SAFETY: The retained device is live and the default create info makes a fresh unsignaled
+        // fence.
         let fence = unsafe { context.device.create_fence(&Default::default(), None) }
             .map_err(VulkanError::api("create producer fence"))?;
         Ok(Self::Fence {
@@ -229,6 +249,8 @@ impl Completion {
                 debug_assert!(wait.is_none());
                 let commands = [command];
                 let submit = vk::SubmitInfo::default().command_buffers(&commands);
+                // SAFETY: The renderer exclusively submits the executable buffer to its own queue.
+                // This completion owns a fresh unsignaled fence retained with the flight.
                 unsafe { context.device.queue_submit(queue, &[submit], *fence) }
             }
         }
@@ -239,11 +261,14 @@ impl Completion {
             Self::Timeline { timeline, value } => {
                 timeline.counter().map(|completed| completed >= *value)
             }
+            // SAFETY: The fence is owned by this completion on the same retained device.
             Self::Fence { context, fence } => unsafe { context.device.get_fence_status(*fence) },
         }
     }
 
     pub fn wait(&self) -> Result<(), vk::Result> {
+        // SAFETY: The chosen completion owns a live fence or timeline on its retained device. The
+        // one-element wait arrays live through the call.
         unsafe {
             match self {
                 Self::Timeline { timeline, value } => timeline.context.device.wait_semaphores(
@@ -265,6 +290,8 @@ impl Completion {
 impl Drop for Completion {
     fn drop(&mut self) {
         if let Self::Fence { context, fence } = self {
+            // SAFETY: The fence is uniquely owned. The flight is dropped only before submission or
+            // after confirmed completion.
             unsafe { context.device.destroy_fence(*fence, None) };
         }
     }

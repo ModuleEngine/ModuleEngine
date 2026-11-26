@@ -1,11 +1,12 @@
 use crate::{
     Camera, ControlCommand, Diagnostic, Frame, FrameRenderer, Graph, GraphDocument, ModuleRegistry,
-    Node, RenderOverrides, RenderSubmission, SceneSnapshot, Severity, WorldKind, WorldObject,
-    WorldProvider, validate_graph,
+    Node, RenderOverrides, RenderSubmission, RendererError, SceneSnapshot, Severity, WorldError,
+    WorldKind, WorldObject, WorldProvider, validate_graph,
 };
 use std::collections::BTreeSet;
+use std::error::Error;
 use std::fmt;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Debug)]
 pub struct CommandSource {
@@ -20,6 +21,7 @@ pub struct CommandSource {
 pub struct RuntimeError {
     pub message: String,
     pub diagnostics: Vec<Diagnostic>,
+    source: Option<Arc<dyn Error + Send + Sync>>,
 }
 
 impl fmt::Display for RuntimeError {
@@ -28,7 +30,29 @@ impl fmt::Display for RuntimeError {
     }
 }
 
-impl std::error::Error for RuntimeError {}
+impl Error for RuntimeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.source.as_deref().map(|error| error as &dyn Error)
+    }
+}
+
+impl From<WorldError> for RuntimeError {
+    fn from(error: WorldError) -> Self {
+        execution_error(error)
+    }
+}
+
+impl From<RendererError> for RuntimeError {
+    fn from(error: RendererError) -> Self {
+        execution_error(error)
+    }
+}
+
+impl From<RuntimeError> for String {
+    fn from(error: RuntimeError) -> Self {
+        error.message
+    }
+}
 
 /// Explicit connection-only selection. Resolving this route creates no provider
 /// or renderer and is safe during authoring/headless installation preflight.
@@ -153,7 +177,7 @@ struct RuntimePresentation {
 }
 
 impl RuntimePresentation {
-    fn poll(&mut self, renderer: &mut dyn FrameRenderer) -> Result<(), String> {
+    fn poll(&mut self, renderer: &mut dyn FrameRenderer) -> Result<(), RendererError> {
         if self.ready.is_some() {
             return Ok(());
         }
@@ -190,6 +214,7 @@ impl Runtime {
             return Err(RuntimeError {
                 message,
                 diagnostics,
+                source: None,
             });
         }
         let graph = &document.root;
@@ -260,12 +285,8 @@ impl Runtime {
                 }
             }
         }
-        let provider = registry
-            .create_world(&world.module, &world.params)
-            .map_err(route_error)?;
-        let executable_renderer = registry
-            .create_renderer(renderer, document)
-            .map_err(route_error)?;
+        let provider = registry.create_world(&world.module, &world.params)?;
+        let executable_renderer = registry.create_renderer(renderer, document)?;
         validate_live_properties(document, provider.as_ref()).map_err(route_error)?;
         if document.engine.initialized {
             // A permitted preset must be executable before the engine exposes it.
@@ -293,9 +314,7 @@ impl Runtime {
                     .collect::<Vec<_>>();
                 let mut overrides = RenderOverrides::default();
                 overrides.apply_commands(&render).map_err(route_error)?;
-                executable_renderer
-                    .validate_overrides(&overrides)
-                    .map_err(route_error)?;
+                executable_renderer.validate_overrides(&overrides)?;
             }
         }
         let kind = registry
@@ -329,19 +348,24 @@ impl Runtime {
     }
 
     /// Execute the supported extraction/rasterization route into RGBA8.
-    pub fn render(&self, width: usize, height: usize, camera: Camera) -> Result<Frame, String> {
+    pub fn render(
+        &self,
+        width: usize,
+        height: usize,
+        camera: Camera,
+    ) -> Result<Frame, RendererError> {
         let mut renderer = self
             .renderer
             .lock()
-            .map_err(|_| "Renderer lock is poisoned".to_string())?;
+            .map_err(|_| RendererError::Unavailable("Renderer lock is poisoned"))?;
         let mut presentation = self
             .presentation
             .lock()
-            .map_err(|_| "Presentation lock is poisoned".to_string())?;
+            .map_err(|_| RendererError::Unavailable("Presentation lock is poisoned"))?;
         if presentation.pending.is_some() {
-            return Err(
-                "Diagnostic readback is unavailable while a presentation is pending".into(),
-            );
+            return Err(RendererError::Unavailable(
+                "Diagnostic readback is unavailable while a presentation is pending",
+            ));
         }
         let mut overrides = self.overrides.clone();
         let consumed = presentation
@@ -364,15 +388,15 @@ impl Runtime {
     pub fn set_presentation_target(
         &self,
         target: Option<std::sync::Arc<dyn crate::PresentationTarget>>,
-    ) -> Result<(), String> {
+    ) -> Result<(), RendererError> {
         let mut renderer = self
             .renderer
             .lock()
-            .map_err(|_| "Renderer lock is poisoned".to_string())?;
+            .map_err(|_| RendererError::Unavailable("Renderer lock is poisoned"))?;
         let mut presentation = self
             .presentation
             .lock()
-            .map_err(|_| "Presentation lock is poisoned".to_string())?;
+            .map_err(|_| RendererError::Unavailable("Presentation lock is poisoned"))?;
         let unchanged = match (&presentation.target, &target) {
             (None, None) => true,
             (Some(previous), Some(candidate)) => std::sync::Arc::ptr_eq(previous, candidate),
@@ -382,7 +406,9 @@ impl Runtime {
             return Ok(());
         }
         if presentation.pending.is_some() || presentation.ready.is_some() {
-            return Err("Cannot replace presentation target while a frame is pending".into());
+            return Err(RendererError::Unavailable(
+                "Cannot replace presentation target while a frame is pending",
+            ));
         }
         renderer.set_presentation_target(target.clone())?;
         presentation.target = target;
@@ -404,14 +430,14 @@ impl Runtime {
     /// Hidden panes still reap producer work. Retain the frozen completion until
     /// their next render call, without submitting a new request or changing its
     /// displayed camera metadata.
-    pub fn poll_presentation(&self) -> Result<(), String> {
+    pub fn poll_presentation(&self) -> Result<(), RendererError> {
         let mut renderer = self
             .renderer
             .lock()
-            .map_err(|_| "Renderer lock is poisoned".to_string())?;
+            .map_err(|_| RendererError::Unavailable("Renderer lock is poisoned"))?;
         self.presentation
             .lock()
-            .map_err(|_| "Presentation lock is poisoned".to_string())?
+            .map_err(|_| RendererError::Unavailable("Presentation lock is poisoned"))?
             .poll(renderer.as_mut())
     }
 
@@ -440,15 +466,15 @@ impl Runtime {
         width: usize,
         height: usize,
         camera: Camera,
-    ) -> Result<Option<Frame>, String> {
+    ) -> Result<Option<Frame>, RendererError> {
         let mut renderer = self
             .renderer
             .lock()
-            .map_err(|_| "Renderer lock is poisoned".to_string())?;
+            .map_err(|_| RendererError::Unavailable("Renderer lock is poisoned"))?;
         let mut presentation = self
             .presentation
             .lock()
-            .map_err(|_| "Presentation lock is poisoned".to_string())?;
+            .map_err(|_| RendererError::Unavailable("Presentation lock is poisoned"))?;
         let key = RuntimePresentationKey {
             revision: self.scene_revision,
             camera,
@@ -496,7 +522,7 @@ impl Runtime {
         }
     }
 
-    pub fn objects(&self) -> Result<Vec<WorldObject>, String> {
+    pub fn objects(&self) -> Result<Vec<WorldObject>, WorldError> {
         self.provider.objects()
     }
 
@@ -520,18 +546,21 @@ impl Runtime {
 
     /// The project boundary uses the same gate for native UI and compiled Rust.
     /// Engine-authoring apply_controls remains available for trusted tooling.
-    pub fn apply_project_controls(&mut self, commands: &[ControlCommand]) -> Result<(), String> {
-        crate::validate_project_controls(&self.document, commands)?;
+    pub fn apply_project_controls(
+        &mut self,
+        commands: &[ControlCommand],
+    ) -> Result<(), RuntimeError> {
+        crate::validate_project_controls(&self.document, commands).map_err(route_error)?;
         self.apply_controls(commands)
     }
 
     /// Apply exposed values and the first matching ready-variant rule per group.
     /// The host calls this once per tick before project script commands.
-    pub fn apply_project_settings(&mut self, time: f64) -> Result<(), String> {
+    pub fn apply_project_settings(&mut self, time: f64) -> Result<(), RuntimeError> {
         if !self.document.engine.initialized {
             return Ok(());
         }
-        let commands = crate::project_commands(&self.document, time)?;
+        let commands = crate::project_commands(&self.document, time).map_err(route_error)?;
         self.apply_project_controls(&commands)
     }
 
@@ -582,7 +611,7 @@ impl Runtime {
 
     /// Validate the render batch before changing the world. Each provider applies
     /// its world batch transactionally. Resource commands are per-frame actions.
-    pub fn apply_controls(&mut self, commands: &[ControlCommand]) -> Result<(), String> {
+    pub fn apply_controls(&mut self, commands: &[ControlCommand]) -> Result<(), RuntimeError> {
         let world = commands
             .iter()
             .filter_map(|c| match c {
@@ -598,13 +627,13 @@ impl Runtime {
             })
             .collect::<Vec<_>>();
         let mut candidate = self.overrides.clone();
-        candidate.apply_commands(&render)?;
+        candidate.apply_commands(&render).map_err(route_error)?;
         if !world.is_empty() {
             self.provider.validate_commands(&world)?;
         }
         self.renderer
             .lock()
-            .map_err(|_| "Renderer lock is poisoned".to_string())?
+            .map_err(|_| RendererError::Unavailable("Renderer lock is poisoned"))?
             .validate_overrides(&candidate)?;
         if !world.is_empty() {
             self.provider.apply_commands(&world)?;
@@ -841,6 +870,15 @@ fn route_error(message: impl Into<String>) -> RuntimeError {
     RuntimeError {
         message: message.into(),
         diagnostics: vec![],
+        source: None,
+    }
+}
+
+fn execution_error(error: impl Error + Send + Sync + 'static) -> RuntimeError {
+    RuntimeError {
+        message: error.to_string(),
+        diagnostics: vec![],
+        source: Some(Arc::new(error)),
     }
 }
 
@@ -966,7 +1004,7 @@ mod tests {
             width: usize,
             height: usize,
             _: &RenderOverrides,
-        ) -> Result<Frame, String> {
+        ) -> Result<Frame, crate::RendererError> {
             Ok(crate::render_scene(scene, width, height, camera))
         }
 
@@ -977,7 +1015,7 @@ mod tests {
             width: usize,
             height: usize,
             overrides: &RenderOverrides,
-        ) -> Result<RenderSubmission, String> {
+        ) -> Result<RenderSubmission, crate::RendererError> {
             let mut state = self.0.lock().unwrap();
             if state.busy {
                 return Ok(RenderSubmission::Busy);
@@ -1000,7 +1038,7 @@ mod tests {
             Ok(RenderSubmission::Pending(ticket))
         }
 
-        fn poll_presented(&mut self, ticket: u64) -> Result<Option<Frame>, String> {
+        fn poll_presented(&mut self, ticket: u64) -> Result<Option<Frame>, crate::RendererError> {
             let mut state = self.0.lock().unwrap();
             Ok(if state.ready {
                 state.frames.remove(&ticket)
@@ -1009,7 +1047,7 @@ mod tests {
             })
         }
 
-        fn discard_presented(&mut self, ticket: u64) -> Result<(), String> {
+        fn discard_presented(&mut self, ticket: u64) -> Result<(), crate::RendererError> {
             self.0.lock().unwrap().discarded.push(ticket);
             Ok(())
         }
@@ -1017,7 +1055,7 @@ mod tests {
         fn backend_name(&self) -> &str {
             "Deterministic asynchronous test renderer"
         }
-        fn validate_overrides(&self, _: &RenderOverrides) -> Result<(), String> {
+        fn validate_overrides(&self, _: &RenderOverrides) -> Result<(), crate::RendererError> {
             Ok(())
         }
     }
@@ -1171,12 +1209,14 @@ mod tests {
             runtime
                 .set_presentation_target(None)
                 .unwrap_err()
+                .to_string()
                 .contains("pending")
         );
         assert!(
             runtime
                 .render(16, 12, Camera::default())
                 .unwrap_err()
+                .to_string()
                 .contains("pending")
         );
         let mut rejected = demo_document(WorldKind::Objects);
@@ -1370,7 +1410,24 @@ mod tests {
                 enabled: false,
             }),
         ];
-        assert!(runtime.apply_controls(&commands).is_err());
+        let error = runtime.apply_controls(&commands).unwrap_err();
+        assert!(matches!(
+            error
+                .source()
+                .and_then(|cause| cause.downcast_ref::<RendererError>()),
+            Some(RendererError::Unsupported(_))
+        ));
+        let error = runtime
+            .apply_controls(&[ControlCommand::World(crate::WorldCommand::Remove {
+                id: u64::MAX,
+            })])
+            .unwrap_err();
+        assert!(matches!(
+            error
+                .source()
+                .and_then(|cause| cause.downcast_ref::<WorldError>()),
+            Some(WorldError::Commands(_))
+        ));
         assert_eq!(runtime.objects().unwrap(), before);
     }
 }

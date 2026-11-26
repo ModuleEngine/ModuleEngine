@@ -213,11 +213,22 @@ pub struct Distribution {
     manifest: Option<PackageManifest>,
     frozen_hash: String,
     gameplay_source_ids: BTreeSet<String>,
+    custom_consent: Option<crate::team_custom_consent::Consent>,
 }
 pub fn detect(
     project_path: &Path,
     document: &GraphDocument,
     requested: Option<DistributionProfile>,
+) -> Result<Distribution, String> {
+    let state = crate::team_custom_consent::state_directory();
+    detect_with_consent_directory(project_path, document, requested, state.as_deref())
+}
+
+pub(crate) fn detect_with_consent_directory(
+    project_path: &Path,
+    document: &GraphDocument,
+    requested: Option<DistributionProfile>,
+    consent_directory: Option<&Path>,
 ) -> Result<Distribution, String> {
     let current = std::env::current_dir().map_err(|e| e.to_string())?;
     let absolute = if project_path.is_absolute() {
@@ -334,6 +345,19 @@ pub fn detect(
     if profile == DistributionProfile::Team {
         diagnostics.push("Team profile permanently disables Engine authoring".into());
     }
+    let custom_consent = if profile == DistributionProfile::Team
+        && (!document.custom_sources.is_empty() || !gameplay_source_ids.is_empty())
+    {
+        let sdk_files = manifest.as_ref().map(|manifest| &manifest.sdk_files);
+        let scope = serde_json::to_vec(&(&frozen_hash, sdk_files)).map_err(|e| e.to_string())?;
+        Some(crate::team_custom_consent::Consent::load(
+            &absolute,
+            &scope,
+            consent_directory,
+        ))
+    } else {
+        None
+    };
     let distribution = Distribution {
         profile,
         package_root,
@@ -342,11 +366,35 @@ pub fn detect(
         manifest,
         frozen_hash,
         gameplay_source_ids,
+        custom_consent,
     };
     distribution.validate_document(document)?;
     Ok(distribution)
 }
 impl Distribution {
+    pub(crate) fn custom_consent(&self) -> Option<&crate::team_custom_consent::Consent> {
+        self.custom_consent.as_ref()
+    }
+
+    pub(crate) fn record_custom_consent(
+        &mut self,
+        choice: crate::team_custom_consent::Choice,
+    ) -> Result<(), String> {
+        self.custom_consent
+            .as_mut()
+            .ok_or("The selected project needs no Team Custom Rust permission")?
+            .record(choice)
+    }
+
+    pub(crate) fn check_custom_consent(&self) -> Result<(), String> {
+        if self.custom_consent().is_some_and(|consent| {
+            consent.choice() != Some(crate::team_custom_consent::Choice::Allow)
+        }) {
+            return Err("Custom Rust compilation needs permission for this Team project. In Editor use File → Review Custom Rust permission, or pass --allow-team-custom-rust <project.json> as a separate CLI command.".into());
+        }
+        Ok(())
+    }
+
     pub fn can_author_engine(&self) -> bool {
         self.profile == DistributionProfile::Full && self.source_status.available
     }
@@ -400,6 +448,7 @@ impl Distribution {
             {
                 return Err("Team Custom SDK is incomplete".into());
             }
+            self.check_custom_consent()?;
             verify_sdk(&self.package_root, m)?;
             Ok(self.package_root.join(".sdk"))
         } else if self.source_status.available {
@@ -640,6 +689,9 @@ pub fn write_full_manifest(
     for descriptor in crate::host::registry()?.descriptors() {
         ids.insert(descriptor.id.clone());
     }
+    // Full can add the physics node later, including when the sealed project
+    // does not schedule it yet.
+    ids.insert(module_engine_physics_rapier::MODULE_ID.into());
     let module_sources = ids.into_iter().map(|id| (id, sources.clone())).collect();
     let mut sdk_files = BTreeMap::new();
     if root.join(".sdk").is_dir() {
@@ -963,8 +1015,10 @@ const NATIVE_FILES: &[&str] = &[
     "crates/engine-core/src/scenes.rs",
     "crates/engine-core/src/systems.rs",
     "crates/engine-content/Cargo.toml",
+    "crates/engine-content/src/animation.rs",
     "crates/engine-content/src/lib.rs",
     "crates/runtime-script/src/persistent.rs",
+    "crates/runtime-script/src/worker_stdio.rs",
     "Cargo.toml",
     "Cargo.lock",
     "crates/editor/Cargo.toml",
@@ -974,6 +1028,8 @@ const NATIVE_FILES: &[&str] = &[
     "crates/editor/src/host.rs",
     "crates/editor/src/project.rs",
     "crates/editor/src/distribution.rs",
+    "crates/editor/src/team_custom_consent.rs",
+    "crates/editor/tests/verification_cli.rs",
     "crates/editor/src/authoring.rs",
     "crates/editor/src/activity.rs",
     "crates/editor/src/editor_benchmark.rs",
@@ -993,6 +1049,15 @@ const NATIVE_FILES: &[&str] = &[
     "crates/engine-core/src/settings.rs",
     "crates/engine-core/src/backend.rs",
     "crates/engine-core/src/control.rs",
+    "crates/engine-core/src/physics.rs",
+    "crates/physics-rapier/Cargo.toml",
+    "crates/physics-rapier/src/lib.rs",
+    "crates/physics-rapier/src/schema.rs",
+    "crates/physics-rapier/src/simulation.rs",
+    "crates/physics-rapier/src/queries.rs",
+    "crates/physics-rapier/src/debug_draw.rs",
+    "crates/physics-rapier/src/tests.rs",
+    "crates/physics-rapier/src/acceptance.rs",
     "crates/engine-core/src/graph.rs",
     "crates/engine-core/src/registry.rs",
     "crates/engine-core/src/render.rs",
@@ -1266,6 +1331,47 @@ mod delivery_tests {
         let doc = crate::host::settings_demo_document(WorldKind::Objects);
         let m = write_full_manifest(&root, &doc).unwrap();
         assert!(inspect_full_sources(&root, &m, &doc).available);
+        assert!(
+            m.module_sources[module_engine_physics_rapier::MODULE_ID]
+                .iter()
+                .any(|path| path == "crates/physics-rapier/src/simulation.rs")
+        );
+        let full = detect(
+            &root.join("project.json"),
+            &doc,
+            Some(DistributionProfile::Full),
+        )
+        .unwrap();
+        assert!(full.can_author_engine(), "{:?}", full.source_status);
+        assert_eq!(full.compile_root().unwrap(), root);
+        let mapped_sources = m.files.keys().filter(|path| {
+            path.starts_with("crates/") && (path.ends_with(".rs") || path.ends_with("Cargo.toml"))
+        });
+        assert!(!m.module_sources.is_empty());
+        assert!(
+            m.module_sources
+                .values()
+                .all(|paths| paths.iter().eq(mapped_sources.clone()))
+        );
+        for required in [
+            "crates/engine-content/src/animation.rs",
+            "crates/runtime-script/src/worker_stdio.rs",
+            "crates/editor/src/team_custom_consent.rs",
+            "crates/editor/tests/verification_cli.rs",
+        ] {
+            assert_eq!(m.files[required], hash_file(&root.join(required)).unwrap());
+            let mut omitted = m.clone();
+            omitted.files.remove(required);
+            let status = inspect_full_sources(&root, &omitted, &doc);
+            assert!(!status.available, "omitted required source: {required}");
+            let diagnostic = format!("Source inventory omits {required}");
+            assert!(
+                status
+                    .diagnostics
+                    .iter()
+                    .any(|line| line.contains(&diagnostic))
+            );
+        }
         let icon = "crates/editor/assets/editor.ico";
         assert!(m.files.contains_key(icon));
         assert!(!native_source_path("crates/editor/assets/unrelated.ico"));
@@ -1317,6 +1423,8 @@ mod delivery_tests {
             "crates/editor/src/native_windows.rs",
             "crates/project-tools/src/scene_files.rs",
             "crates/engine-core/src/component_schema.rs",
+            "crates/engine-core/src/physics.rs",
+            "crates/physics-rapier/Cargo.toml",
             "crates/engine-core/src/composition.rs",
             "crates/engine-core/src/capabilities.rs",
             "crates/player/src/capabilities.rs",
@@ -1365,6 +1473,7 @@ mod delivery_tests {
             manifest: None,
             frozen_hash: blueprint_hash(&doc, &game).unwrap(),
             gameplay_source_ids: game,
+            custom_consent: None,
         };
         // No marker must produce a diagnostic rather than panic/native fallback.
         assert!(dist.compile_root().unwrap_err().contains("metadata"));

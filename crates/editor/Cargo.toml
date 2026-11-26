@@ -8,12 +8,14 @@ publish = false
 [features]
 bench = ["module-engine-vulkan/bench"]
 r31-spike = ["dep:ash", "dep:bytemuck", "dep:egui-ash-renderer", "dep:egui-winit", "dep:winit", "module-engine-vulkan/editor-spike"]
+verification = []
 
 [dependencies]
-module-engine-player = { path = "../player", features = ["ui", "arpg", "puzzle", "g1", "vulkan", "audio", "persistence"] }
+module-engine-player = { path = "../player", features = ["ui", "arpg", "puzzle", "g1", "vulkan", "audio", "persistence", "rapier-physics"] }
 module-engine-host = { path = "../game-host" }
 module-engine-host-services = { path = "../host-services", features = ["audio", "persistence"] }
 module-engine-core = { path = "../engine-core" }
+module-engine-physics-rapier = { path = "../physics-rapier", features = ["debug-draw"] }
 module-engine-arpg = { path = "../gameplay-arpg", features = ["ui"] }
 module-engine-two-arenas = { path = "../example-two-arenas" }
 module-engine-project-puzzle = { path = "../project-puzzle", features = ["ui"] }

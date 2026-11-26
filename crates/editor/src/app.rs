@@ -43,6 +43,7 @@ mod node_drafts;
 mod panels;
 #[path = "panes.rs"]
 mod panes;
+#[cfg(feature = "verification")]
 #[path = "editor_benchmark.rs"]
 pub(crate) mod performance;
 #[path = "properties.rs"]
@@ -152,6 +153,7 @@ pub struct Editor {
     last_ui_frame: Option<u64>,
     authoring_intent: bool,
     workflow: editor_workflow::Workflow,
+    #[cfg(feature = "verification")]
     ui_capture: crate::ui_capture::Capture,
     pending_area_focus: Option<u64>,
     area_drag: Option<area_drag::AreaDrag>,
@@ -173,7 +175,7 @@ impl Editor {
         if let Some(runtime) = &self.runtime
             && let Err(error) = runtime.poll_presentation()
         {
-            self.runtime_error = Some(error);
+            self.runtime_error = Some(error.into());
         }
         let producer_error = self.game_workbench.poll_gpu_presentation().err();
         let Some(bridge) = &self.gpu_bridge else {
@@ -263,6 +265,7 @@ impl Editor {
         }
         self.seed_capture_pane();
     }
+    #[cfg(feature = "verification")]
     pub fn show_verification_view(&mut self, view: &str) {
         match view {
             "detached-scene" => {
@@ -400,6 +403,7 @@ impl Editor {
     ) -> Self {
         Self::new_with_policy(document, path, Some(distribution))
     }
+    #[cfg(any(test, feature = "verification"))]
     /// Isolate only personal UI state for an explicitly requested diagnostic run.
     /// The distribution and its source/SDK permissions remain unchanged.
     pub(crate) fn new_with_diagnostic_personal_root(
@@ -437,6 +441,7 @@ impl Editor {
     ) -> Self {
         Self::new_with_policy_and_personal_root(document, path, distribution, None)
     }
+    #[cfg(any(test, feature = "verification"))]
     fn new_with_policy_and_personal_root(
         document: GraphDocument,
         path: PathBuf,
@@ -571,6 +576,7 @@ impl Editor {
             personal_save_time: 0.0,
             last_ui_frame: None,
             authoring_intent: false,
+            #[cfg(feature = "verification")]
             ui_capture: crate::ui_capture::Capture::new(),
             pending_area_focus: None,
             area_drag: None,
@@ -584,7 +590,10 @@ impl Editor {
             project_library_graph: None,
             module_search: String::new(),
         };
-        if std::env::var_os("EFRAME_SCREENSHOT_TO").is_some() && editor.gpu_bridge.is_none() {
+        if cfg!(feature = "verification")
+            && std::env::var_os("EFRAME_SCREENSHOT_TO").is_some()
+            && editor.gpu_bridge.is_none()
+        {
             // eframe's test-only capture exits after two frames. Prepare the real
             // Vulkan route before those frames so the capture verifies its UI.
             editor.diagnostics = validate_graph(&editor.document, &editor.registry);
@@ -705,6 +714,28 @@ impl Editor {
                 self.scripts.request(&id, source, kind);
             }
         }
+    }
+
+    fn set_custom_permission(
+        &mut self,
+        choice: crate::team_custom_consent::Choice,
+    ) -> Result<(), String> {
+        use crate::team_custom_consent::Choice;
+        let distribution = self
+            .distribution
+            .as_mut()
+            .ok_or("No Team project is open")?;
+        distribution.record_custom_consent(choice)?;
+        if choice == Choice::Deny {
+            self.status = "Custom Rust compilation is disabled for this Team project".into();
+            return Ok(());
+        }
+        let root = distribution.compile_root()?;
+        self.scripts = Scripts::with_root(root);
+        self.scripts.set_asset_root(&self.project_asset_root())?;
+        self.compile_connected_scripts();
+        self.status = "Custom Rust compilation is allowed for this Team project".into();
+        Ok(())
     }
 
     fn flush_history(&mut self) {
@@ -905,8 +936,8 @@ impl Editor {
                 .poll_at(&self.document, &self.registry, &backend_root)
         {
             if let Err(error) = runtime.apply_project_settings(self.time) {
-                self.preview_builder.failed_apply(&error);
-                self.runtime_error = Some(error);
+                self.preview_builder.failed_apply(&error.to_string());
+                self.runtime_error = Some(error.into());
                 return;
             }
             let authored = runtime
@@ -927,8 +958,8 @@ impl Editor {
                 if kept && let Some(previous) = &mut self.runtime {
                     previous.adopt_world(&mut runtime);
                 }
-                self.preview_builder.failed_apply(&error);
-                self.runtime_error = Some(error);
+                self.preview_builder.failed_apply(&error.to_string());
+                self.runtime_error = Some(error.into());
                 self.playing = false;
                 return;
             }
@@ -1066,7 +1097,7 @@ impl Editor {
                     .as_mut()
                     .is_some_and(|previous| runtime.adopt_world(previous));
                 if let Err(error) = runtime.apply_project_settings(self.time) {
-                    self.runtime_error = Some(error);
+                    self.runtime_error = Some(error.into());
                     self.playing = false;
                 }
                 self.runtime = Some(runtime);
@@ -1994,7 +2025,7 @@ impl Editor {
         if let Some(runtime) = &mut self.runtime {
             runtime.begin_frame();
             if let Err(error) = runtime.apply_project_settings(self.time) {
-                self.runtime_error = Some(error);
+                self.runtime_error = Some(error.into());
                 self.playing = false;
                 return;
             }
@@ -2039,9 +2070,12 @@ impl Editor {
                                 }
                             }
                         }
-                        if let Some(error) =
-                            script_error.or_else(|| runtime.apply_project_controls(&commands).err())
-                        {
+                        if let Some(error) = script_error.or_else(|| {
+                            runtime
+                                .apply_project_controls(&commands)
+                                .err()
+                                .map(String::from)
+                        }) {
                             let _ = self.scripts.reject_updates();
                             self.runtime_error = Some(error);
                             self.playing = false;
@@ -2406,8 +2440,8 @@ impl Editor {
                 Ok(None) => ui
                     .ctx()
                     .request_repaint_after(std::time::Duration::from_millis(1)),
-                Err(error) if error.starts_with("GPU is preparing a new configuration;") => {}
-                Err(error) => self.runtime_error = Some(error),
+                Err(module_engine_core::RendererError::Preparing) => {}
+                Err(error) => self.runtime_error = Some(error.into()),
             }
         }
         if let Some(texture) =
@@ -3100,12 +3134,13 @@ impl Editor {
 }
 
 impl eframe::App for Editor {
-    fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, _input: &mut egui::RawInput) {
         // Native focus/minimize events also arrive when eframe skips root UI.
         if self.area_drag.is_some() {
             self.update_area_drag(ctx);
         }
-        self.workflow_capture_input(input);
+        #[cfg(feature = "verification")]
+        self.workflow_capture_input(_input);
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         #[cfg(windows)]
@@ -3605,6 +3640,178 @@ mod tests {
         let point = text_center(&output, label);
         output.drop_without_applying_deltas();
         click_test_panel_at(editor, ctx, point, panel);
+    }
+
+    #[test]
+    fn team_open_denial_and_allow_gate_real_custom_build_hooks_per_project() {
+        module_engine_script::requires_offline_sdk!();
+        use crate::team_custom_consent::Choice;
+        use std::{fs, io::Write};
+
+        let source = project::source_root();
+        let fixture = module_engine_script::TestArtifactGuard::new(
+            &source.join(".work/test-temp"),
+            "team-consent",
+        )
+        .unwrap();
+        let package = fixture.path().join("team");
+        let decisions = fixture.path().join("personal-decisions");
+        crate::distribution::copy_native_fixture(&package);
+        project::create_custom_sdk(&source, &package).unwrap();
+        let tools = package.join("toolchain-manifest.json");
+        fs::copy(source.join("toolchain-manifest.json"), &tools).unwrap();
+        fs::write(
+            package.join(crate::distribution::EDITOR_EXECUTABLE),
+            b"Team fixture editor",
+        )
+        .unwrap();
+
+        let build_marker = fixture.path().join("build-script-ran.txt");
+        let macro_marker = fixture.path().join("proc-macro-ran.txt");
+        let sdk = package.join(".sdk");
+        let core = sdk.join("crates/engine-core");
+        let macro_root = sdk.join("crates/consent-test-macro");
+        fs::create_dir_all(macro_root.join("src")).unwrap();
+        fs::write(macro_root.join("Cargo.toml"), "[package]\nname='consent-test-macro'\nversion='0.0.0'\nedition='2024'\n[lib]\nproc-macro=true\n").unwrap();
+        fs::write(
+            core.join("build.rs"),
+            format!(
+                "fn main() {{ std::fs::write({:?}, \"build\").unwrap(); }}",
+                build_marker.to_str().unwrap(),
+            ),
+        )
+        .unwrap();
+        fs::write(macro_root.join("src/lib.rs"), format!(
+            "extern crate proc_macro;\n#[proc_macro]\npub fn consent_probe(_: proc_macro::TokenStream) -> proc_macro::TokenStream {{ std::fs::write({:?}, \"macro\").unwrap(); \"17_u8\".parse().unwrap() }}",
+            macro_marker.to_str().unwrap(),
+        )).unwrap();
+        let core_manifest = core.join("Cargo.toml");
+        let original = fs::read_to_string(&core_manifest).unwrap();
+        fs::write(
+            core_manifest,
+            original.replacen(
+                "[dependencies]",
+                "[dependencies]\nconsent-test-macro = { path = '../consent-test-macro' }",
+                1,
+            ),
+        )
+        .unwrap();
+        writeln!(
+            fs::OpenOptions::new()
+                .append(true)
+                .open(core.join("src/lib.rs"))
+                .unwrap(),
+            "\npub use consent_test_macro::consent_probe;"
+        )
+        .unwrap();
+        let metadata =
+            std::process::Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
+                .current_dir(&sdk)
+                .args(["metadata", "--offline", "--format-version", "1"])
+                .output()
+                .unwrap();
+        assert!(
+            metadata.status.success(),
+            "{}",
+            String::from_utf8_lossy(&metadata.stderr)
+        );
+
+        let mut document = module_engine_core::demo_document(WorldKind::Objects);
+        document.root.nodes.push(make_node(
+            "probe",
+            "custom.rust.update",
+            "Consent test",
+            [0., 0.],
+            serde_json::json!({"source_id":"probe"}),
+        ));
+        document
+            .root
+            .edges
+            .push(make_edge("probe", "world", "world", "commands"));
+        document.custom_sources.insert("probe".into(), "fn update(ctx: &mut ScriptContext) { ctx.set_color(1, [consent_probe!(), 2, 3, 255]); }".into());
+        host::ensure_authoring_configuration(&mut document);
+        crate::engine_profiles::finish_template(
+            &mut document,
+            crate::engine_profiles::ProfileKind::Neutral,
+            &package,
+        )
+        .unwrap();
+        let first = package.join("first.json");
+        let second = package.join("second.json");
+        let authored = serde_json::to_vec_pretty(&document).unwrap();
+        fs::write(&first, &authored).unwrap();
+        fs::write(&second, &authored).unwrap();
+        crate::distribution::write_team_manifest(&package, &document).unwrap();
+        let open = |path: &Path| {
+            crate::distribution::detect_with_consent_directory(
+                path,
+                &document,
+                None,
+                Some(&decisions),
+            )
+            .unwrap()
+        };
+        let blocked = open(&first);
+        assert!(
+            blocked
+                .compile_root()
+                .unwrap_err()
+                .contains("needs permission")
+        );
+        let mut editor = Editor::new_with_distribution(document.clone(), first.clone(), blocked);
+        assert!(editor.workflow.blocks_document_edits());
+        assert!(!build_marker.exists() && !macro_marker.exists());
+        assert!(!editor.scripts.has_active("probe"));
+        assert!(!editor.scripts.pending("probe"));
+
+        let ctx = egui::Context::default();
+        let modal = |editor: &mut Editor, ui: &mut egui::Ui| editor.draw_workflow_modals(ui.ctx());
+        test_panel_frame(&mut editor, &ctx, vec![], modal).drop_without_applying_deltas();
+        click_test_panel(&mut editor, &ctx, "Open without compiling", modal);
+        assert_eq!(
+            open(&first).custom_consent().unwrap().choice(),
+            Some(Choice::Deny)
+        );
+        assert!(!editor.workflow.blocks_document_edits());
+        assert!(!build_marker.exists() && !macro_marker.exists());
+        assert!(!editor.scripts.pending("probe"));
+
+        let toolbar = |editor: &mut Editor, ui: &mut egui::Ui| editor.draw_workflow_toolbar(ui);
+        click_test_panel(&mut editor, &ctx, "File", toolbar);
+        click_test_panel(&mut editor, &ctx, "Review Custom Rust permission…", toolbar);
+        assert!(editor.workflow.blocks_document_edits());
+        test_panel_frame(&mut editor, &ctx, vec![], modal).drop_without_applying_deltas();
+        click_test_panel(&mut editor, &ctx, "Allow compilation", modal);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+        while !editor.scripts.has_active("probe") {
+            editor.scripts.poll(&editor.document);
+            assert!(
+                !editor.scripts.errors.contains_key("probe"),
+                "{}",
+                editor.scripts.status
+            );
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{}",
+                editor.scripts.status
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(fs::read(&build_marker).unwrap(), b"build");
+        assert_eq!(fs::read(&macro_marker).unwrap(), b"macro");
+        assert_eq!(
+            open(&first).custom_consent().unwrap().choice(),
+            Some(Choice::Allow)
+        );
+        assert!(open(&first).compile_root().is_ok());
+        assert!(
+            open(&second)
+                .compile_root()
+                .unwrap_err()
+                .contains("needs permission")
+        );
+        assert_eq!(fs::read(first).unwrap(), authored);
+        assert_eq!(fs::read(second).unwrap(), authored);
     }
 
     fn inspector_fixture(
