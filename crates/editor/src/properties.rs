@@ -381,7 +381,11 @@ impl Editor {
             let result = runtime
                 .set_project_configuration(candidate.project.clone())
                 .and_then(|_| runtime.set_properties(candidate.properties.clone()))
-                .and_then(|_| runtime.apply_project_settings(self.time));
+                .and_then(|_| {
+                    runtime
+                        .apply_project_settings(self.time)
+                        .map_err(String::from)
+                });
             if let Err(error) = result {
                 let _ = runtime.set_project_configuration(previous_project);
                 let _ = runtime.set_properties(previous_properties);
@@ -773,7 +777,7 @@ impl Editor {
         let objects = match runtime.objects() {
             Ok(objects) => objects,
             Err(error) => {
-                ui.label(error);
+                ui.label(error.to_string());
                 return;
             }
         };
@@ -883,7 +887,7 @@ impl Editor {
                     color: object.color,
                 }),
             ]) {
-                self.status = error;
+                self.status = error.into();
             }
             self.last_render = -1.;
         }

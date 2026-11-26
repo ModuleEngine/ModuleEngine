@@ -18,8 +18,10 @@ pub use hierarchy_ui::{HierarchyAction, SceneMenuAction};
 #[cfg(test)]
 use module_engine_arpg::{ArpgInput, ExecutionGraphExt, GameInputExt};
 use module_engine_core::*;
+#[cfg(any(test, feature = "verification"))]
+use module_engine_script::ProgramStoreStats;
 use module_engine_script::{
-    CompiledProgramStore, CompiledScript, JobLease, ProgramStoreStats, ScriptCompiler, ScriptKind,
+    CompiledProgramStore, CompiledScript, JobLease, ScriptCompiler, ScriptKind,
 };
 #[cfg(test)]
 use module_engine_two_arenas::ProjectExt;
@@ -410,6 +412,7 @@ impl GameWorkbench {
     }
     /// Atomic counter snapshot only; native diagnostics never hash files or
     /// wait for Cargo on the UI thread.
+    #[cfg(any(test, feature = "verification"))]
     pub fn program_store_stats(&self) -> ProgramStoreStats {
         self.programs.stats()
     }
@@ -450,6 +453,7 @@ impl GameWorkbench {
         }
     }
 
+    #[cfg(feature = "verification")]
     pub(super) fn has_displayed_play_timings(&self) -> bool {
         self.play_session
             && self.displayed_timings.as_deref().is_some_and(|timings| {

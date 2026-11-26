@@ -10,9 +10,9 @@ English is the primary documentation language. Every document below has a comple
 - [Debug ModuleEngine behavior](../.agents/skills/moduleengine-debug/SKILL.md)
 - [Assistant workflow rollout and Serena pilot](assistant-efficiency-20261017.md)
 
-- [ModuleEngine 0.4](../README.md)
+- [ModuleEngine](../README.md)
 - [Working on ModuleEngine](../AGENTS.md)
-- [Current ModuleEngine Status](current-status.md)
+- [Current ModuleEngine Status](current-status.md) · [Status Archive](status-archive.md)
 - [Run native benchmarks S1–S5](bench.md) · [R0.2 accepted series, 21 November 2026](bench-r02-20261121.md)
 - [Product roadmap by version: stable configurations, independent authors and five games](product-roadmap.md#map)
 - [Visual roadmap built automatically from task statuses](roadmap-map.md)
@@ -64,6 +64,7 @@ English is the primary documentation language. Every document below has a comple
 ## Runtime, modules, and rendering
 
 - [Gameplay ECS storage](ecs-world.md)
+- [Optional Rapier physics](physics-rapier.md)
 - [Gameplay storage decision](ecs-storage-decision.md)
 - [Executable systems and the authored schedule](module-execution.md)
 - [Project Format 0.4](graph-format.md)
@@ -75,7 +76,7 @@ English is the primary documentation language. Every document below has a comple
 - [Custom Rust 0.4](custom-rust.md)
 - [Rust Custom State and Standalone Workers](custom-state.md)
 - [Reusing Custom Rust](custom-program-store.md)
-- [Static Models, Textures, and Materials](content.md)
+- [Models, Animation, Textures, and Materials](content.md)
 - [Vulkan and Custom HLSL](gpu-hlsl.md)
 - [Vulkan hardware tiers and the minimum Player hardware candidate](hardware-tiers.md)
 - [Adding a module](extending.md)

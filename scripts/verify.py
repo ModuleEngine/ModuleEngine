@@ -71,6 +71,10 @@ def load_registry(path):
                 raise VerificationError("Command argv must be a string array")
         elif step.get("target_kind") not in ("lib", "bin") or not step.get("package"):
             raise VerificationError("Invalid Rust test target")
+        features = step.get("features", [])
+        if (not isinstance(features, list) or not all(isinstance(v, str) and v for v in features)
+                or (features and step["kind"] != "tests")):
+            raise VerificationError("Rust test features must be a string array")
         if step.get("exact") and not step.get("filter"):
             raise VerificationError("Exact tests require a name")
         if step.get("timeout", 300) <= 0:
@@ -293,7 +297,8 @@ class Runner:
         self.metadata = json.loads(self.command(["cargo", "metadata", "--offline", "--locked", "--no-deps", "--format-version=1"], 60).read_text(encoding="utf-8"))
 
     def artifact(self, step):
-        key = (step["package"], step["target_kind"], step.get("release", False))
+        features = tuple(step.get("features", ()))
+        key = (step["package"], step["target_kind"], step.get("release", False), features)
         if key not in self.products:
             packages = [p for p in self.metadata["packages"] if p["name"] == step["package"] and p["id"] in self.metadata["workspace_members"] and Path(p["manifest_path"]).resolve().is_relative_to(self.root)]
             if len(packages) != 1:
@@ -306,11 +311,13 @@ class Runner:
             selector = {"package_id": package["id"], "manifest": Path(package["manifest_path"]).resolve(), "name": target["name"], "kind": step["target_kind"], "test": True}
             argv = ["cargo", "test", "--offline", "--locked", "--no-run", "--message-format=json", "--target", self.host, "-p", step["package"]]
             argv += ["--lib"] if step["target_kind"] == "lib" else ["--bin", target["name"]]
+            if features:
+                argv.extend(["--features", ",".join(features)])
             if step.get("release"):
                 argv.append("--release")
             log = self.command(argv, 1200)
             executable = select_artifact(log, selector, self.metadata["target_directory"], self.host, 0)
-            self.products[key] = {"path": str(executable), "sha256": digest(executable), "package_id": package["id"], "target": target["name"], "native_host": self.host, "release": step.get("release", False)}
+            self.products[key] = {"path": str(executable), "sha256": digest(executable), "package_id": package["id"], "target": target["name"], "native_host": self.host, "release": step.get("release", False), "features": list(features)}
         product = self.products[key]
         if digest(product["path"]) != product["sha256"]:
             raise VerificationError("Selected test executable changed after its Cargo build")

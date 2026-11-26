@@ -1,0 +1,20 @@
+[package]
+name = "module-engine-physics-rapier"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+debug-draw = ["rapier3d/debug-render"]
+
+[dependencies]
+module-engine-core = { path = "../engine-core" }
+rapier3d = { version = "0.36.1", default-features = false, features = ["dim3", "f32", "std", "enhanced-determinism"] }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+module-engine-arpg = { path = "../gameplay-arpg" }
+module-engine-host = { path = "../game-host" }
+module-engine-two-arenas = { path = "../example-two-arenas" }

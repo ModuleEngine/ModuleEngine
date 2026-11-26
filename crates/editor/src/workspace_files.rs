@@ -336,6 +336,7 @@ fn save_as_impl(
 }
 
 /// Create a project.json in a new/empty folder, using the current architecture.
+#[cfg(any(test, feature = "verification"))]
 pub fn new_project(
     source_path: &Path,
     destination_folder: &Path,

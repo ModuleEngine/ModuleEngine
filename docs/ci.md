@@ -4,8 +4,9 @@
 
 [English](ci.md) | [Русский](ru/ci.md) | [Documentation](README.md)
 
-Ordinary PRs run the workspace tests, the minimal Player configuration, and
-separate `contracts` and `clippy` checks on Windows and Linux.
+Ordinary PRs run the workspace tests, the minimal Player configuration, the
+default Release Editor's CLI test, and separate `contracts` and `clippy`
+checks on Windows and Linux.
 Executable-source changes add native and package checks. Status-only roadmap
 transitions have a dedicated check. `CI required` succeeds after planning and
 every job required by the selected route. Performance, desktop dialogs, hardware
@@ -62,8 +63,13 @@ graph must exclude game packages and Vulkan. The Player's test-only Two Arenas
 fixture is outside that graph.
 
 The ordinary matrix plans and runs `clippy` separately on both platforms,
-including documentation PRs outside the status-only route. Its command is
-`cargo clippy --offline --locked --target {native_host} --workspace --all-targets --all-features -- -D warnings`.
+including documentation PRs outside the status-only route. On the pinned
+native target it runs `--workspace --all-targets --all-features` and then
+`--release -p module-engine-editor --bins` with the default features. Both
+offline, locked runs pass `-D warnings`.
+The workspace tests enable `verification` and run a real `--self-check`.
+A separate `cargo test --offline --locked --release -p module-engine-editor --test verification_cli`
+checks the feature requirement in the default build.
 The launcher resolves `{native_host}` from the actual verbose Rust toolchain output
 and rejects a release/target mismatch with the platform manifest before Cargo metadata.
 Clippy does not run formatting, tests, or runtime scenarios; `contracts` still checks

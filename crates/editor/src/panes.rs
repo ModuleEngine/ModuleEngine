@@ -3113,6 +3113,16 @@ mod tests {
     #[test]
     fn multiple_viewports_keep_cameras_and_personal_layout_but_only_one_simulation_tick() {
         let mut document = demo_document(WorldKind::Objects);
+        // Exercise simulation with a Team project whose speed is a built-in scalar.
+        document.root.nodes.retain(|node| node.id != "speed");
+        document
+            .root
+            .edges
+            .retain(|edge| edge.from_node != "speed" && edge.to_node != "speed");
+        document.root.edges.push(module_engine_core::make_edge(
+            "base", "value", "world", "speed",
+        ));
+        document.custom_sources.clear();
         host::ensure_authoring_configuration(&mut document);
         let path = crate::project::source_root().join(".work/ui-team-fixture.json");
         let distribution = detect(&path, &document, Some(DistributionProfile::Team)).unwrap();

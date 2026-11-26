@@ -14,6 +14,7 @@ g1 = ["dep:module-engine-g1"]
 vulkan = ["dep:module-engine-vulkan", "dep:ash", "dep:windows"]
 audio = ["module-engine-host-services/audio"]
 persistence = ["module-engine-host-services/persistence"]
+rapier-physics = ["dep:module-engine-physics-rapier"]
 
 [dependencies]
 module-engine-core = { path = "../engine-core" }
@@ -24,6 +25,7 @@ module-engine-arpg = { path = "../gameplay-arpg", optional = true }
 module-engine-project-puzzle = { path = "../project-puzzle", optional = true }
 module-engine-g1 = { path = "../project-g1", optional = true }
 module-engine-vulkan = { path = "../render-vulkan", optional = true }
+module-engine-physics-rapier = { path = "../physics-rapier", optional = true }
 eframe = { workspace = true, optional = true }
 log = { version = "0.4", optional = true }
 serde.workspace = true

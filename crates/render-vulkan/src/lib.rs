@@ -32,6 +32,9 @@ pub use instance::validation_error_count;
 pub use module_engine_core::RendererPerformance;
 use presentation::instance;
 pub use retirement::{ProducerRetirementReport, finish_producer_retirements};
+#[cfg(all(windows, feature = "editor-spike"))]
+#[doc(hidden)]
+pub use vulkan::editor_spike::{EditorDevice, EditorDeviceHandles};
 pub use vulkan::{
     CullingStats, FrameWork, RenderGraphValidator, ResidentScene, SceneCulling, SceneInput,
     VertexAllocation, VulkanRenderer, validate_overrides, validate_overrides_at,

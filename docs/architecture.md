@@ -23,7 +23,7 @@ planned work.
 | Package | Purpose |
 | --- | --- |
 | module-engine-core | GraphDocument, registries, Object/ECS, WorldObject/commands, SceneSnapshot/Material, authored scenes and prefabs, SystemExecutor, and GameSession. Does not depend on Vulkan, UI, image import, or rustc. |
-| module-engine-content | Static glTF/GLB, PNG/JPEG, decoded cache, material/geometry, and asset dependencies of the selected project. |
+| module-engine-content | glTF/GLB geometry, skins and clips, PNG/JPEG, decoded cache, materials, and asset dependencies of the selected project. |
 | module-engine-vulkan | Raster/compute GPU graph, resource contracts, HLSL/DXC and SPIR-V validation, actual textured Forward/Deferred passes. |
 | module-engine-custom | Partial visual representations of Rust, source-span edits, and preservation of opaque text. |
 | module-engine-script | Rust worker compilation, persistent process, bounded JSON-lines IPC, and explicitly declared state with validate/commit/reject. |
@@ -39,6 +39,108 @@ registered executable systems, optional native services and source-installed UI/
 They are different extension contracts, not interchangeable graph nodes. Native
 export resolves required owner/presentation/service metadata through a shared
 catalog; generic export does not identify games by their presentation names.
+
+<a id="r41-editor-extensions"></a>
+
+## Game-owned editor extensions
+
+[R4.1](product-roadmap.md#rebuild-r4) defines the registration contract. R4.2
+moves the existing game-specific adapters to their owning packages. R4.3
+selects which game packages are linked into each Editor build.
+
+### Installation and activity
+
+Game packages own their rules, schemas, presentation and authoring callbacks,
+verification fixtures and assertions. An example project also owns its
+content and tuning. The application composition root calls each selected
+package's runtime installer, then calls its optional UI and verification
+installers with the relevant registries. The Editor composition consumes authoring and
+verification entries. Editor Game and standalone Player consume the same
+game-owned presentation entry through a shared dispatcher. The Player
+composition installs only the runtime and presentation entries it uses.
+
+Registration types and callbacks used by both applications belong to a
+game-independent contract layer using egui and Core data. The game `ui`
+features and the two shells depend on that layer. Core and GameHost keep their
+UI-free runtime contracts.
+The generic Editor and Player dispatchers resolve registry keys independently
+of the selected game's crate, title, and content directory. Registration
+happens during application assembly, before callbacks run. Validate each
+registration against its installed owner and reject duplicate keys without
+replacing existing entries. IDs remain stable across builds and independent of
+display labels. Existing personal layouts retain their pane identities.
+
+Installation makes an entry available for selection. Authoring checks the
+canonical `CompositionContext::activity` for the current document and the
+current Full/Team permissions. A consumed schema can bring its owner into
+authoring activity. A Play presentation is selected by the scheduled
+activation modules of its runtime `GameContribution`. The shared Host permits
+zero or one primary control presentation. Selection preserves the authored
+execution order.
+
+### What the package registers
+
+| Entry | Key and owner | Callback and application boundary |
+| --- | --- | --- |
+| Panel or tool | Stable pane ID, installed module ID, display metadata and Project or Full Engine scope | Read the authored document and composition. A tool can keep a local draft and return a candidate using the `ModuleToolContext` and `ModuleToolResponse` contract. Editor owns docking, draft acknowledgement and publication. |
+| Inspector | Exact component ID, owning module and schema version | Read the selected authored object and its effective component fields, with the authored values and their origin available separately. Propose edits to that component on the selected stable object ID. Editor uses the schema-generated Inspector when there is no matching adapter. |
+| Verification scenario | Stable scenario ID, installed owner, required features/profile and inputs | Run only on explicit request in the verification host. The game supplies the fixture, actions and assertions. The runner checks eligibility, invokes the scenario with isolated inputs and a separate output directory, and reports the result or why the scenario is unavailable. |
+| Play hooks | Active `GameContribution.id` and optional presentation callbacks | Read accepted session snapshots and app-provided UI status. Supply input, HUD, controls and optional aim or capture callbacks through the shared presentation contract. Return `GameInput` and any permitted application intent via `GameUiResponse`. Optional enter/leave hooks manage session-local presentation state. |
+
+Panels and inspectors submit drafts or edit proposals through Editor's normal
+validation and history. Edition, active owner and compatible schema must
+still match when an edit is applied. The Editor checks exact owner/schema/SDK
+pins, sources, asset references, and Project policy. Apply requires Stop.
+Rejected proposals and Cancel preserve the accepted authored data. A no-op
+Apply adds no history or local prefab override. The normal component edit
+path preserves unknown JSON, nulls, exact keys and unrelated owners' data.
+
+Play UI is dispatched against the accepted session. A successful Play start
+enters the presentation once. Pause and Resume keep that session. Restart and
+scene transitions are reflected in the next accepted snapshot. Stop leaves
+the presentation once and releases its session-local state. Failed, cancelled
+and superseded preparations never enter Play. The application routes input
+through the existing focus and worker rules and owns session and window
+controls. Editor sets `can_close_application` to false. Player honors close
+requests according to the window capabilities it supplies. Game logic and
+transactional tick hooks remain in the runtime installer.
+
+### Omission and export
+
+A composition built without a game leaves its registrations absent. A neutral
+or compatible project still has the generic scene tools and schema-driven
+Inspector. A persisted pane that lacks its registration is unavailable for
+that build. Play with no presentation adapter retains the generic controls,
+including Restart. Headless execution uses the runtime contracts alone.
+
+A missing required owner or service or a mismatch in a pinned version fails
+validation for the operation that needs the contract. Inactive opaque data
+stays in the authored document. Full and Team retain their normal source and
+policy checks. Player feature selection resolves required owners (including
+active schema owners), presentations and requested services through the
+native feature catalog. Full builds the selected set and Team uses a verified
+prebuilt variant for that set.
+
+### Verification routes for the split
+
+Use the existing scenarios as reference routes and preserve their CLI entry
+points when moving their implementations. For each run, record the fixture
+and output path, source or artifact identity, enabled features and result.
+
+| Package | Checks |
+| --- | --- |
+| G1 / Crate Garden | `g1.rules` owns the registered level palette. Exercise Apply, Undo/Redo and save/reopen under Full and Team. `g1.presentation` provides status-aware controls and menus in Game and Player. `--g1-check` exercises the campaign and its saves. |
+| Puzzle | The generic Inspector edits active puzzle schemas. `puzzle.presentation` provides input and HUD. `--puzzle-check` exercises authoring, save/reopen and both world routes. A separately selected Puzzle Player covers delivery without ARPG. |
+| ARPG / Two Arenas | ARPG owns mechanics, schemas and `arpg.presentation`, including projected aim, HUD and capture input. Two Arenas owns its content and encounter tuning. The Editor's `--game-check` provides the game-specific progression and defeat scenarios. |
+| Neutral and Player | The minimal Player CI build checks the dependency graph with `--no-default-features`. For the Editor split, check the normal/build dependency graphs of the generic Editor and a composed build with an omitted game. In that build, open a neutral project with the usual tools, check that the omitted entries are unavailable, and verify that a project requiring the missing contracts is rejected without changing its data. |
+
+At the R4.1 baseline, Editor still links the concrete games. The Editor wires
+G1's palette, the games supply schema-driven Inspector data, and the Player
+composition code assembles the three game UI contributions. See the [module
+tool registration](../crates/editor/src/panes.rs), [shared presentation
+dispatcher](../crates/player/src/presentations.rs), [Player export
+contracts](engine-profiles.md#экспорт-windows-player) and [minimal Player
+checks](ci.md#что-выполняется).
 
 <a id="два-маршрута-исполнения"></a>
 
@@ -69,7 +171,7 @@ and [worker](game-worker.md#interpolated-presentation).
 
 In the old Runtime, Object stores an actual recursive hierarchy, while ECS uses independent component tables. In the game path, mutable transforms, parents, colors, references, and dynamic components belong to one ECS. Native systems use column queries, and object DTOs are extracted for UI, IPC, and checks; see the [contract and lifetime](ecs-world.md). `from_objects` creates both stores from the resolved authored scene without demo angular velocities. Their commands and snapshots are equivalent for identical data. The renderer receives vertices/UVs, matrices, color, and Material; it does not query ECS or object storage. Matrices are row-major, and vectors are column vectors.
 
-ContentLibrary attaches imported primitives by stable object ID. glTF local matrices compose with the object matrix; TextureImage is shared between snapshots through Arc. Import and export are restricted to the selected project/package root. Opaque base-color material runs on the GPU; skeletons, transparency, full PBR, mipmaps, and streaming are not implemented yet.
+ContentLibrary attaches imported primitives by stable object ID. It applies the authored object's transform to imported or sampled geometry and shares TextureImage between snapshots through Arc. Import and export are restricted to the selected project/package root. Vulkan renders opaque base color and builds mipmaps on the indexed material path. [Content and CPU skinning](content.md).
 
 <a id="авторство-и-сохранённые-данные"></a>
 

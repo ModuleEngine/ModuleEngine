@@ -62,6 +62,7 @@ pub fn stamp_module_versions(document: &mut GraphDocument, registry: &ModuleRegi
 }
 
 /// Pin active schema owners independently of their scheduled consumers.
+#[cfg(any(test, feature = "verification"))]
 pub fn stamp_composition_versions(
     document: &mut GraphDocument,
     composition: &module_engine_core::CompositionContext,
@@ -695,7 +696,7 @@ fn add_game_assets_at(
     Ok(())
 }
 
-fn create_custom_sdk(source: &Path, target: &Path) -> Result<(), String> {
+pub(crate) fn create_custom_sdk(source: &Path, target: &Path) -> Result<(), String> {
     let sdk = target.join(".sdk");
     fs::create_dir_all(&sdk).map_err(|e| e.to_string())?;
     copy_new(

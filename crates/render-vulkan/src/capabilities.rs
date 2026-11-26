@@ -34,6 +34,7 @@ impl DeviceCapabilities {
     ) -> Option<Self> {
         let supports = |name| {
             extensions.iter().any(|extension| {
+                // SAFETY: Vulkan fills each enumerated extension name with a terminated string.
                 let reported = unsafe { CStr::from_ptr(extension.extension_name.as_ptr()) };
                 reported == name
             })
@@ -61,6 +62,8 @@ impl DeviceCapabilities {
         if supports(ash::khr::ray_tracing_pipeline::NAME) {
             features = features.push_next(&mut ray_pipeline);
         }
+        // SAFETY: physical came from this Vulkan 1.3 instance. The feature chain stays writable for
+        // the query and includes optional types only for advertised extensions.
         unsafe { instance.get_physical_device_features2(physical, &mut features) };
         let core = features.features;
         let sampler_anisotropy = core.sampler_anisotropy != 0;
@@ -73,7 +76,9 @@ impl DeviceCapabilities {
             && core12.descriptor_indexing != 0
             && core12.shader_sampled_image_array_non_uniform_indexing != 0
             && core12.runtime_descriptor_array != 0;
+        // SAFETY: physical was enumerated from the live instance.
         let limits = unsafe { instance.get_physical_device_properties(physical) }.limits;
+        // SAFETY: This format query uses that same physical device and a core Vulkan format.
         let texture_format = unsafe {
             instance.get_physical_device_format_properties(physical, vk::Format::R8G8B8A8_SRGB)
         };
@@ -108,6 +113,8 @@ impl DeviceCapabilities {
             && limits.max_per_stage_descriptor_storage_buffers >= 6
             && limits.max_descriptor_set_storage_buffers >= 6;
         let hiz_occlusion_culling = gpu_frustum_culling
+            // SAFETY: This query is for an enumerated physical device and the exact depth image
+            // format and usage considered for Hi-Z.
             && unsafe {
                 instance.get_physical_device_image_format_properties(
                     physical,

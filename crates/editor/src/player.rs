@@ -19,6 +19,7 @@ pub fn run(
     })?;
     module_engine_player::run_host(host)
 }
+#[cfg(feature = "verification")]
 pub fn run_benchmark(
     document: GraphDocument,
     root: &Path,

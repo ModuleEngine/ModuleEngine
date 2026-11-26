@@ -9,42 +9,57 @@ mod authoring;
 mod bench;
 mod canvas;
 mod distribution;
+#[cfg(feature = "verification")]
 mod engine_profile_verification;
 mod engine_profiles;
+#[cfg(feature = "verification")]
 mod g1_verification;
 mod game_host;
 mod game_package;
 mod game_templates;
 mod game_ui;
+#[cfg(feature = "verification")]
 mod game_verification;
 mod game_worker;
+#[cfg(feature = "verification")]
 mod game_worker_verification;
 mod host;
 mod layout;
 mod native_dialogs;
 mod player;
+#[cfg(feature = "verification")]
 mod player_settings_verification;
 mod project;
+#[cfg(feature = "verification")]
 mod puzzle_verification;
+#[cfg(all(windows, feature = "r31-spike"))]
+mod r31_spike;
+#[cfg(feature = "verification")]
 mod render_settings_verification;
 mod runtime_delivery;
 mod scalar;
+#[cfg(feature = "verification")]
 mod scene_assets_verification;
 mod scene_tools;
 mod scene_view_ui;
 #[cfg(test)]
 mod schedule_replay;
+#[cfg(feature = "verification")]
 mod settings_verification;
 #[cfg(test)]
 mod source_modules;
+mod team_custom_consent;
+#[cfg(feature = "verification")]
 mod ui_capture;
+#[cfg(feature = "verification")]
 mod verification;
 mod workspace_files;
 
 use module_engine_core::{
-    Camera, ControlCommand, Frame, GraphDocument, ModuleRegistry, Runtime, ScriptContext,
-    WorldKind, demo_document,
+    Camera, ControlCommand, Frame, GraphDocument, Runtime, ScriptContext, WorldKind,
 };
+#[cfg(any(test, feature = "verification"))]
+use module_engine_core::{ModuleRegistry, demo_document};
 use module_engine_script::{CompiledScript, ScriptCompiler, ScriptKind};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -90,9 +105,10 @@ fn main() {
     let gpu_cleanup = module_engine_player::gpu_presentation::finish_gpu_retirements()
         .map(|_| ())
         .map_err(|error| error.to_string());
-    let validation = if std::env::args()
-        .any(|arg| matches!(arg.as_str(), "--bench-scene" | "--legacy-verify-check"))
-    {
+    let validation = if std::env::args().any(|arg| {
+        (cfg!(feature = "bench") && arg == "--bench-scene")
+            || (cfg!(feature = "verification") && arg == "--legacy-verify-check")
+    }) {
         let errors = module_engine_vulkan::validation_error_count();
         if errors == 0 {
             Ok(())
@@ -109,7 +125,7 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
-    let (mut args, requested_profile) = parse_profile(std::env::args().skip(1).collect())?;
+    let (args, requested_profile) = parse_profile(std::env::args().skip(1).collect())?;
     let player_root = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(Path::to_path_buf))
@@ -126,6 +142,34 @@ fn run() -> Result<(), String> {
             "This is a standalone Player package. Editor/Engine commands are unavailable.".into(),
         );
     }
+    #[cfg(not(feature = "verification"))]
+    if let Some(command) = args.first().filter(|arg| {
+        matches!(
+            arg.as_str(),
+            "--legacy-verify-check"
+                | "--engine-profile-check"
+                | "--puzzle-check"
+                | "--g1-check"
+                | "--game-worker-check"
+                | "--editor-benchmark"
+                | "--scene-assets-check"
+                | "--player-benchmark"
+                | "--game-check"
+                | "--editor-ui-check"
+                | "--render-settings-check"
+                | "--new-settings-sample"
+                | "--settings-check"
+                | "--integration-check"
+                | "--self-check"
+        )
+    }) {
+        return Err(format!(
+            "{command} requires an Editor built with --features verification"
+        ));
+    }
+    #[cfg(feature = "verification")]
+    let mut args = args;
+    #[cfg(feature = "verification")]
     if args
         .first()
         .is_some_and(|arg| arg == "--legacy-verify-check")
@@ -151,26 +195,43 @@ fn run() -> Result<(), String> {
         }
     }
     if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("ModuleEngine {}", env!("CARGO_PKG_VERSION"));
         println!(
-            "ModuleEngine 0.4\n\n  module-engine-editor [project.json] [--profile full|team]\n  module-engine-editor --new-game game-project.json\n  module-engine-editor --play game-project.json\n  module-engine-editor --export-game game-project.json folder\n  module-engine-editor --game-check game-project.json [output-folder]\n  module-engine-editor --player-benchmark game-project.json [output-folder]\n  module-engine-editor --check project.json\n  module-engine-editor --render project.json output.png\n  module-engine-editor --export project.json folder\n  module-engine-editor --export-team project.json folder\n  module-engine-editor --self-check [output-folder]\n  module-engine-editor --integration-check [output-folder]\n  module-engine-editor --settings-check [output-folder]\n  module-engine-editor --editor-ui-check game-project.json output-folder\n\nMouse: drag nodes; output pin -> compatible input pin; double click compound.\n3D: drag to orbit; wheel to zoom. See README.md and README.ru.md for documentation."
+            "  module-engine-editor [project.json] [--profile full|team]\n  module-engine-editor --new-game game-project.json\n  module-engine-editor --play game-project.json\n  module-engine-editor --export-game game-project.json folder\n  module-engine-editor --check project.json\n  module-engine-editor --render project.json output.png\n  module-engine-editor --allow-team-custom-rust project.json\n  module-engine-editor --export project.json folder\n  module-engine-editor --export-team project.json folder\n  module-engine-editor --new-puzzle puzzle-project.json\n  module-engine-editor --new-g1 crate-garden/project.json\n  module-engine-editor --migrate-copy source.json new-project.json neutral|arpg|puzzle|g1"
+        );
+        #[cfg(feature = "verification")]
+        println!(
+            "  module-engine-editor --self-check [output-folder]\n  module-engine-editor --integration-check [output-folder]\n  module-engine-editor --settings-check [output-folder]\n  module-engine-editor --editor-ui-check game-project.json output-folder\n  module-engine-editor --scene-assets-check game-project.json output-folder\n  module-engine-editor --game-worker-check game-project.json output-folder\n  module-engine-editor --game-check game-project.json [output-folder]\n  module-engine-editor --editor-benchmark game-project.json output-folder\n  module-engine-editor --player-benchmark game-project.json [output-folder]\n  module-engine-editor --render-settings-check output-folder\n  module-engine-editor --new-settings-sample output-folder\n  module-engine-editor --engine-profile-check project.json output-folder\n  module-engine-editor --g1-check crate-garden/project.json output-folder\n  module-engine-editor --puzzle-check puzzle-project.json output-folder"
         );
         println!(
-            "  module-engine-editor --scene-assets-check game-project.json output-folder\n\nScene: hold RMB + WASD to fly, Q/E down/up, mouse to look, RMB+wheel speed, G/R/S tools, MMB orbit, Shift+MMB pan, wheel zoom, F frame, Escape cancel."
+            "\nMouse: drag nodes; output pin -> compatible input pin; double click compound.\n3D: drag to orbit; wheel to zoom. See README.md and README.ru.md for documentation.\nScene: hold RMB + WASD to fly, Q/E down/up, mouse to look, RMB+wheel speed, G/R/S tools, MMB orbit, Shift+MMB pan, wheel zoom, F frame, Escape cancel."
         );
-        println!("  module-engine-editor --editor-benchmark game-project.json output-folder");
-        println!("  module-engine-editor --game-worker-check game-project.json output-folder");
-        println!("  module-engine-editor --render-settings-check output-folder");
-        println!("  module-engine-editor --new-settings-sample output-folder");
-        println!("  module-engine-editor --new-puzzle puzzle-project.json");
-        println!("  module-engine-editor --new-g1 crate-garden/project.json");
-        println!("  module-engine-editor --g1-check crate-garden/project.json output-folder");
-        println!(
-            "  module-engine-editor --migrate-copy source.json new-project.json neutral|arpg|puzzle|g1"
-        );
-        println!("  module-engine-editor --puzzle-check puzzle-project.json output-folder");
+        #[cfg(all(windows, feature = "r31-spike"))]
+        println!("  module-engine-editor --r31-editor-vulkan ash|thin 1.0|1.5 <new output folder>");
         return Ok(());
     }
+    #[cfg(feature = "verification")]
+    if matches!(
+        args.first().map(String::as_str),
+        Some("--self-check" | "--integration-check" | "--settings-check")
+    ) && project::source_root().ends_with(".sdk")
+    {
+        return Err("Built-in source fixtures require a Full source checkout. Use --check <project.json> to verify a Team project with its saved Custom Rust permission.".into());
+    }
     match args.first().map(String::as_str) {
+        #[cfg(all(windows, feature = "r31-spike"))]
+        Some("--r31-editor-vulkan") => return r31_spike::run(&args[1..], requested_profile),
+        Some("--allow-team-custom-rust") => {
+            let [_, path] = args.as_slice() else {
+                return Err("Usage: --allow-team-custom-rust <project.json>".into());
+            };
+            let path = Path::new(path);
+            let document = project::read(path)?;
+            let mut distribution = distribution::detect(path, &document, requested_profile)?;
+            distribution.record_custom_consent(team_custom_consent::Choice::Allow)?;
+            println!("Custom Rust compilation allowed for {}", path.display());
+            return Ok(());
+        }
         #[cfg(feature = "bench")]
         Some("--bench-scene") => {
             if requested_profile.is_some() || args.len() != 3 {
@@ -213,6 +274,7 @@ fn run() -> Result<(), String> {
             );
             return Ok(());
         }
+        #[cfg(feature = "verification")]
         Some("--engine-profile-check") => {
             let source = Path::new(args.get(1).ok_or("Provide the legacy author project")?);
             let output = Path::new(args.get(2).ok_or("Provide a new evidence directory")?);
@@ -223,6 +285,7 @@ fn run() -> Result<(), String> {
             );
             return Ok(());
         }
+        #[cfg(feature = "verification")]
         Some("--puzzle-check") => {
             let source = Path::new(args.get(1).ok_or("Provide puzzle project JSON")?);
             let folder = Path::new(args.get(2).ok_or("Provide separate verification folder")?);
@@ -265,6 +328,7 @@ fn run() -> Result<(), String> {
             println!("Authored Crate Garden project: {}", saved.path.display());
             return Ok(());
         }
+        #[cfg(feature = "verification")]
         Some("--g1-check") => {
             let source = Path::new(args.get(1).ok_or("Provide Crate Garden project JSON")?);
             let folder = Path::new(
@@ -278,6 +342,7 @@ fn run() -> Result<(), String> {
             );
             return Ok(());
         }
+        #[cfg(feature = "verification")]
         Some("--game-worker-check") => {
             let source = Path::new(args.get(1).ok_or("Provide source project JSON")?);
             let output = Path::new(args.get(2).ok_or("Provide separate verification folder")?);
@@ -288,6 +353,7 @@ fn run() -> Result<(), String> {
             );
             return Ok(());
         }
+        #[cfg(feature = "verification")]
         Some("--editor-benchmark") => {
             let path = PathBuf::from(args.get(1).ok_or("Provide a source project JSON")?);
             let folder = PathBuf::from(args.get(2).ok_or("Provide a separate benchmark folder")?);
@@ -301,6 +367,7 @@ fn run() -> Result<(), String> {
             }
             return app::performance::run(document, path, package, &folder);
         }
+        #[cfg(feature = "verification")]
         Some("--scene-assets-check") => {
             let source = Path::new(args.get(1).ok_or("Provide project JSON")?);
             let output = Path::new(args.get(2).ok_or("Provide separate verification folder")?);
@@ -311,6 +378,7 @@ fn run() -> Result<(), String> {
             );
             return Ok(());
         }
+        #[cfg(feature = "verification")]
         Some("--player-benchmark") => {
             let path = PathBuf::from(args.get(1).ok_or("Provide a game project JSON")?);
             let folder = args
@@ -332,6 +400,7 @@ fn run() -> Result<(), String> {
             let kind = game_host::world_kind(&document)?;
             return player::run_benchmark(document, root, compile.as_deref(), kind, &folder);
         }
+        #[cfg(feature = "verification")]
         Some("--game-check") => {
             let path = PathBuf::from(args.get(1).ok_or("Provide a game project JSON")?);
             let folder = args
@@ -368,6 +437,7 @@ fn run() -> Result<(), String> {
             println!("Authored game project: {}", path.display());
             return Ok(());
         }
+        #[cfg(feature = "verification")]
         Some("--editor-ui-check") => {
             let path = PathBuf::from(args.get(1).ok_or("Provide a source project JSON")?);
             let folder = PathBuf::from(args.get(2).ok_or("Provide a verification folder")?);
@@ -468,6 +538,7 @@ fn run() -> Result<(), String> {
             );
             return Ok(());
         }
+        #[cfg(feature = "verification")]
         Some("--render-settings-check") => {
             let folder = Path::new(
                 args.get(1)
@@ -480,6 +551,7 @@ fn run() -> Result<(), String> {
             );
             return Ok(());
         }
+        #[cfg(feature = "verification")]
         Some("--new-settings-sample") => {
             let folder = Path::new(args.get(1).ok_or("Provide a new settings sample folder")?);
             let report = player_settings_verification::create(folder)?;
@@ -489,6 +561,7 @@ fn run() -> Result<(), String> {
             );
             return Ok(());
         }
+        #[cfg(feature = "verification")]
         Some("--settings-check") => {
             let folder = args
                 .get(1)
@@ -501,6 +574,7 @@ fn run() -> Result<(), String> {
             );
             return Ok(());
         }
+        #[cfg(feature = "verification")]
         Some("--integration-check") => {
             let folder = args
                 .get(1)
@@ -513,6 +587,7 @@ fn run() -> Result<(), String> {
             );
             return Ok(());
         }
+        #[cfg(feature = "verification")]
         Some("--self-check") => {
             return self_check(
                 args.get(1)
@@ -683,12 +758,20 @@ fn run() -> Result<(), String> {
     if distribution.profile == distribution::DistributionProfile::Full {
         host::ensure_authoring_configuration(&mut document);
     }
+    #[cfg(feature = "verification")]
     let diagnostic_personal_root = ui_capture::diagnostic_personal_root()?;
+    #[cfg(feature = "verification")]
     let capture_geometry = ui_capture::capture_geometry()?;
+    #[cfg(not(feature = "verification"))]
+    let diagnostic_personal_root = None;
+    #[cfg(not(feature = "verification"))]
+    let initial_size = [1580., 940.];
+    #[cfg(feature = "verification")]
+    let initial_size = capture_geometry.map_or([1580., 940.], |g| g.size);
     let options = module_engine_player::ui::native_options(
         eframe::egui::ViewportBuilder::default()
             .with_icon(app_icon::icon())
-            .with_inner_size(capture_geometry.map_or([1580., 940.], |g| g.size))
+            .with_inner_size(initial_size)
             .with_min_inner_size([320.0, 240.0])
             .with_clamp_size_to_monitor_size(true),
     )?;
@@ -699,6 +782,7 @@ fn run() -> Result<(), String> {
         Box::new(move |cc| {
             module_engine_player::ui::report_graphics(cc);
             app::configure_style(&cc.egui_ctx);
+            #[cfg(feature = "verification")]
             if let Some(geometry) = capture_geometry {
                 cc.egui_ctx.set_zoom_factor(geometry.zoom);
                 cc.egui_ctx.data_mut(|d| {
@@ -716,6 +800,7 @@ fn run() -> Result<(), String> {
             if open_custom {
                 editor.show_custom();
             }
+            #[cfg(feature = "verification")]
             if let Ok(view) = std::env::var("MODULE_ENGINE_CAPTURE_VIEW") {
                 editor.show_verification_view(&view);
             }
@@ -783,6 +868,7 @@ fn default_project_path() -> PathBuf {
     current
 }
 
+#[cfg(feature = "verification")]
 fn advance(document: &GraphDocument, runtime: &mut Runtime, frames: usize) -> Result<(), String> {
     advance_at(
         document,
@@ -838,7 +924,7 @@ fn advance_at(
             for (script, tick) in pending_ticks {
                 let _ = script.reject_tick(&tick);
             }
-            return Err(error);
+            return Err(error.into());
         }
         for (script, tick) in &pending_ticks {
             script.validate_tick(tick).map_err(|e| e.to_string())?;
@@ -972,6 +1058,7 @@ fn reject_same_render_path(input: &Path, output: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(feature = "verification")]
 fn self_check(folder: PathBuf) -> Result<(), String> {
     fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
     let registry = ModuleRegistry::builtin();
@@ -1011,6 +1098,7 @@ fn self_check(folder: PathBuf) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(any(test, feature = "verification"))]
 fn self_check_document(kind: WorldKind) -> Result<GraphDocument, String> {
     let mut document = demo_document(kind);
     engine_profiles::finish_template(

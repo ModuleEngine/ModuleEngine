@@ -27,9 +27,13 @@ pub struct ModuleDescriptor {
     pub properties: Vec<crate::PropertySchema>,
 }
 
-type WorldFactory = Arc<dyn Fn(&Value) -> Result<Box<dyn WorldProvider>, String> + Send + Sync>;
-type RendererFactory =
-    Arc<dyn Fn(&Node, &GraphDocument) -> Result<Box<dyn FrameRenderer>, String> + Send + Sync>;
+type WorldFactory =
+    Arc<dyn Fn(&Value) -> Result<Box<dyn WorldProvider>, crate::WorldError> + Send + Sync>;
+type RendererFactory = Arc<
+    dyn Fn(&Node, &GraphDocument) -> Result<Box<dyn FrameRenderer>, crate::RendererError>
+        + Send
+        + Sync,
+>;
 
 /// Authored gameplay keeps its own ECS; compatible providers are projections.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -189,7 +193,7 @@ impl ModuleRegistry {
                     validate_params: require_empty_world_params,
                 },
                 |params| {
-                    require_empty_world_params(params)?;
+                    require_empty_world_params(params).map_err(crate::WorldError::Configuration)?;
                     Ok(Box::new(ObjectsWorld::demo()))
                 },
             )
@@ -207,7 +211,7 @@ impl ModuleRegistry {
                     validate_params: require_empty_world_params,
                 },
                 |params| {
-                    require_empty_world_params(params)?;
+                    require_empty_world_params(params).map_err(crate::WorldError::Configuration)?;
                     Ok(Box::new(EcsWorld::demo()))
                 },
             )
@@ -365,7 +369,7 @@ impl ModuleRegistry {
         factory: F,
     ) -> Result<(), String>
     where
-        F: Fn(&Value) -> Result<Box<dyn WorldProvider>, String> + Send + Sync + 'static,
+        F: Fn(&Value) -> Result<Box<dyn WorldProvider>, crate::WorldError> + Send + Sync + 'static,
     {
         self.register_world_with_metadata(descriptor, WorldMetadata::default(), factory)
     }
@@ -377,7 +381,7 @@ impl ModuleRegistry {
         factory: F,
     ) -> Result<(), String>
     where
-        F: Fn(&Value) -> Result<Box<dyn WorldProvider>, String> + Send + Sync + 'static,
+        F: Fn(&Value) -> Result<Box<dyn WorldProvider>, crate::WorldError> + Send + Sync + 'static,
     {
         if metadata.game_policy == GameWorldPolicy::CanonicalEcs && metadata.kind != WorldKind::Ecs
         {
@@ -433,7 +437,7 @@ impl ModuleRegistry {
         factory: F,
     ) -> Result<(), String>
     where
-        F: Fn(&Node, &GraphDocument) -> Result<Box<dyn FrameRenderer>, String>
+        F: Fn(&Node, &GraphDocument) -> Result<Box<dyn FrameRenderer>, crate::RendererError>
             + Send
             + Sync
             + 'static,
@@ -449,7 +453,7 @@ impl ModuleRegistry {
     ) -> Result<(), String>
     where
         A: RendererAdapter + 'static,
-        F: Fn(&Node, &GraphDocument) -> Result<Box<dyn FrameRenderer>, String>
+        F: Fn(&Node, &GraphDocument) -> Result<Box<dyn FrameRenderer>, crate::RendererError>
             + Send
             + Sync
             + 'static,
@@ -503,25 +507,30 @@ impl ModuleRegistry {
         &self,
         node: &Node,
         document: &GraphDocument,
-    ) -> Result<Box<dyn FrameRenderer>, String> {
+    ) -> Result<Box<dyn FrameRenderer>, crate::RendererError> {
         self.renderer_adapter(&node.module)
-            .ok_or_else(|| format!("No renderer registered for '{}'", node.module))?
+            .ok_or_else(|| crate::RendererError::MissingRenderer(node.module.clone()))?
             .validate_controls(node, document, &crate::RenderOverrides::default())?;
         self.renderer_factories
             .get(&node.module)
-            .ok_or_else(|| format!("No renderer registered for '{}'", node.module))?(
-            node, document
+            .ok_or_else(|| crate::RendererError::MissingRenderer(node.module.clone()))?(
+            node, document,
         )
     }
 
-    pub fn create_world(&self, id: &str, params: &Value) -> Result<Box<dyn WorldProvider>, String> {
+    pub fn create_world(
+        &self,
+        id: &str,
+        params: &Value,
+    ) -> Result<Box<dyn WorldProvider>, crate::WorldError> {
         (self
             .world_metadata(id)
-            .ok_or_else(|| format!("No executable provider registered for '{id}'"))?
-            .validate_params)(params)?;
+            .ok_or_else(|| crate::WorldError::MissingProvider(id.to_owned()))?
+            .validate_params)(params)
+        .map_err(crate::WorldError::Configuration)?;
         self.world_factories
             .get(id)
-            .ok_or_else(|| format!("No executable provider registered for '{id}'"))?(params)
+            .ok_or_else(|| crate::WorldError::MissingProvider(id.to_owned()))?(params)
     }
 
     /// Build a fresh authored compatibility projection, replacing factory demo
@@ -530,22 +539,26 @@ impl ModuleRegistry {
         &self,
         node: &Node,
         objects: Vec<WorldObject>,
-    ) -> Result<Box<dyn WorldProvider>, String> {
+    ) -> Result<Box<dyn WorldProvider>, crate::WorldError> {
         if self
             .world_metadata(&node.module)
-            .ok_or("No registered world policy")?
+            .ok_or_else(|| crate::WorldError::MissingProvider(node.module.clone()))?
             .game_policy
             == GameWorldPolicy::CanonicalEcs
         {
-            return Err("Canonical ECS gameplay does not create a secondary provider".into());
+            return Err(crate::WorldError::Configuration(
+                "Canonical ECS gameplay does not create a secondary provider".into(),
+            ));
         }
         if node.subgraph.is_some() || objects.iter().any(|object| object.id == 0) {
-            return Err("Authored world needs a flat module and nonzero object IDs".into());
+            return Err(crate::WorldError::Configuration(
+                "Authored world needs a flat module and nonzero object IDs".into(),
+            ));
         }
-        crate::validate_world_commands(&objects, &[])?;
+        crate::validate_world_commands(&objects, &[]).map_err(crate::WorldError::Commands)?;
         let mut provider = self.create_world(&node.module, &node.params)?;
         let previous = provider.objects()?;
-        crate::validate_world_commands(&previous, &[])?;
+        crate::validate_world_commands(&previous, &[]).map_err(crate::WorldError::Commands)?;
         let mut commands: Vec<_> = previous
             .iter()
             .filter(|object| object.parent.is_none())
@@ -560,7 +573,7 @@ impl ModuleRegistry {
         provider.validate_commands(&commands)?;
         provider.apply_commands(&commands)?;
         let loaded = provider.objects()?;
-        crate::validate_world_commands(&loaded, &[])?;
+        crate::validate_world_commands(&loaded, &[]).map_err(crate::WorldError::Commands)?;
         let as_map = |objects: Vec<WorldObject>| {
             objects
                 .into_iter()
@@ -568,7 +581,9 @@ impl ModuleRegistry {
                 .collect::<BTreeMap<_, _>>()
         };
         if loaded.len() != objects.len() || as_map(loaded) != as_map(objects) {
-            return Err("World factory did not load the exact authored objects".into());
+            return Err(crate::WorldError::Configuration(
+                "World factory did not load the exact authored objects".into(),
+            ));
         }
         Ok(provider)
     }
@@ -654,7 +669,7 @@ mod tests {
             width: usize,
             height: usize,
             _: &RenderOverrides,
-        ) -> Result<crate::Frame, String> {
+        ) -> Result<crate::Frame, crate::RendererError> {
             self.renders += 1;
             let mut frame = crate::render_scene(scene, width, height, camera);
             for pixel in frame.rgba.as_chunks_mut::<4>().0 {
@@ -676,10 +691,16 @@ mod tests {
         revision: Arc<AtomicU64>,
     }
     impl RendererAdapter for Metadata {
-        fn dependency_revision(&self, _: &Node, _: &GraphDocument) -> Result<u64, String> {
+        fn dependency_revision(
+            &self,
+            _: &Node,
+            _: &GraphDocument,
+        ) -> Result<u64, crate::RendererError> {
             let revision = self.revision.load(Ordering::SeqCst);
             if revision == 0 {
-                Err("Missing source dependency".into())
+                Err(crate::RendererError::Unavailable(
+                    "Missing source dependency",
+                ))
             } else {
                 Ok(revision)
             }
@@ -688,7 +709,7 @@ mod tests {
             &self,
             _: &Node,
             _: &GraphDocument,
-        ) -> Result<Option<RenderControlTargets>, String> {
+        ) -> Result<Option<RenderControlTargets>, crate::RendererError> {
             Ok(Some(RenderControlTargets {
                 controls: BTreeSet::from(["tint".into()]),
                 resources: BTreeSet::from(["frame".into()]),
@@ -710,7 +731,9 @@ mod tests {
                 },
                 move |_, _| {
                     built.fetch_add(1, Ordering::SeqCst);
-                    Err("Injected device preparation failure".into())
+                    Err(crate::RendererError::Unavailable(
+                        "Injected device preparation failure",
+                    ))
                 },
             )
             .unwrap();
@@ -928,10 +951,10 @@ mod tests {
             fn snapshot(&self) -> SceneSnapshot {
                 SceneSnapshot::default()
             }
-            fn objects(&self) -> Result<Vec<WorldObject>, String> {
+            fn objects(&self) -> Result<Vec<WorldObject>, crate::WorldError> {
                 Ok(vec![])
             }
-            fn apply_commands(&mut self, _: &[WorldCommand]) -> Result<(), String> {
+            fn apply_commands(&mut self, _: &[WorldCommand]) -> Result<(), crate::WorldError> {
                 Ok(())
             }
         }

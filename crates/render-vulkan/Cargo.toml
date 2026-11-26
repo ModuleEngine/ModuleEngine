@@ -7,6 +7,10 @@ publish = false
 
 [features]
 bench = ["dep:meshopt", "dep:bytemuck"]
+editor-spike = []
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
 
 [dependencies]
 module-engine-core = { path = "../engine-core" }

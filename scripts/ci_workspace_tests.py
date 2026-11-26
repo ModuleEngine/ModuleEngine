@@ -21,6 +21,7 @@ CASE = re.compile(r"^test (.+?) \.\.\. (.*)$")
 FORBIDDEN_PLAYER_PACKAGES = {
     "module-engine-arpg", "module-engine-project-puzzle", "module-engine-g1",
     "module-engine-two-arenas", "module-engine-vulkan", "ash",
+    "module-engine-physics-rapier", "rapier3d",
 }
 
 
@@ -108,6 +109,7 @@ def workspace(output):
     # Limit the parent Cargo's debug info without exporting a profile override
     # into Custom's worker environment, where it would invalidate reuse proofs.
     command = ["cargo", "test", "--workspace", "--locked", "--no-fail-fast",
+               "--features", "module-engine-editor/verification",
                "--config", "profile.test.debug=0",
                "--message-format=json-render-diagnostics", "--", "--show-output"]
     print(" ".join(command), flush=True)
@@ -187,7 +189,7 @@ def check_minimal_player():
     print(tree, end="")
     packages = {line.split()[0] for line in tree.splitlines() if line.strip()}
     if forbidden := packages & FORBIDDEN_PLAYER_PACKAGES:
-        raise VerificationError("Minimal Player includes a game or Vulkan: " + ", ".join(sorted(forbidden)))
+        raise VerificationError("Minimal Player includes an optional game or engine capability: " + ", ".join(sorted(forbidden)))
 
 
 def main():

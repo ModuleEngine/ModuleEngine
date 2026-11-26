@@ -39,6 +39,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(all(windows, feature = "editor-spike"))]
+#[path = "editor_spike.rs"]
+pub(crate) mod editor_spike;
 #[path = "materials.rs"]
 mod materials;
 use materials::{MaterialLayout, MaterialSet};
@@ -137,6 +140,8 @@ struct Image {
 }
 impl Drop for Image {
     fn drop(&mut self) {
+        // SAFETY: The frame owner retains this device and the image until GPU use ends. Destroy its
+        // view before the image and let its memory owner release the binding afterwards.
         unsafe {
             if self.view != vk::ImageView::null() {
                 self.device.destroy_image_view(self.view, None);
@@ -171,6 +176,8 @@ struct Buffer {
 }
 impl Drop for Buffer {
     fn drop(&mut self) {
+        // SAFETY: The frame or staging owner retains this buffer through GPU use. Destroying its
+        // handle precedes releasing the bound memory.
         unsafe {
             if self.buffer != vk::Buffer::null() {
                 self.device.destroy_buffer(self.buffer, None);
@@ -461,12 +468,16 @@ struct OwnedShaderModule<'a>(&'a ash::Device, vk::ShaderModule);
 
 impl Drop for OwnedShaderModule<'_> {
     fn drop(&mut self) {
+        // SAFETY: This short-lived owner holds an unshared module on the creating device. Pipeline
+        // creation consumes the shader code before the module drops.
         unsafe { self.0.destroy_shader_module(self.1, None) };
     }
 }
 
 impl Drop for Pipeline {
     fn drop(&mut self) {
+        // SAFETY: The renderer and submitted frames retain pipeline ownership through completion.
+        // These handles belong to the same device.
         unsafe {
             self.device.destroy_pipeline(self.pipeline, None);
             self.device.destroy_pipeline_layout(self.layout, None);
@@ -608,15 +619,35 @@ impl VulkanRenderer {
         presentation_target: Option<Arc<VulkanPresentationTarget>>,
         enable_meshlets: bool,
     ) -> Result<Self, VulkanError> {
+        Self::new_with_instance(
+            resource_root,
+            presentation_target,
+            Arc::new(InstanceLifetime::new(&[])?),
+            enable_meshlets,
+            #[cfg(all(windows, feature = "editor-spike"))]
+            None,
+        )
+    }
+
+    fn new_with_instance(
+        resource_root: std::path::PathBuf,
+        presentation_target: Option<Arc<VulkanPresentationTarget>>,
+        owner: Arc<InstanceLifetime>,
+        enable_meshlets: bool,
+        #[cfg(all(windows, feature = "editor-spike"))] surface: Option<&editor_spike::Surface>,
+    ) -> Result<Self, VulkanError> {
+        // SAFETY: The instance owns the enumerated physical devices and Vulkan fills their names
+        // with terminated strings. Device creation uses queried queues/features, borrowed create
+        // info valid through the call, and retained instance/device owners for the resulting
+        // handles.
         unsafe {
             let trace = std::env::var_os("MODULE_ENGINE_VULKAN_TRACE")
                 .map(|_| NEXT_TRACE_ID.fetch_add(1, Ordering::Relaxed));
-            let owner = InstanceLifetime::new()?;
             let instance = owner.raw.clone();
             let candidates = instance
                 .enumerate_physical_devices()
                 .map_err(VulkanError::api("enumerate adapters"))?;
-            let mut extension_error = None;
+            let mut selection_error = None;
             let selected = candidates
                 .into_iter()
                 .filter_map(|physical| {
@@ -634,16 +665,31 @@ impl VulkanRenderer {
                         return None;
                     }
                     let families = instance.get_physical_device_queue_family_properties(physical);
-                    let family = families.iter().position(|p| {
+                    let graphics_compute = |p: &vk::QueueFamilyProperties| {
                         p.queue_count != 0
                             && p.queue_flags
                                 .contains(vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE)
-                    })?;
+                    };
+                    #[cfg(all(windows, feature = "editor-spike"))]
+                    let family = match surface {
+                        Some(surface) => match surface.queue_family(physical, &families) {
+                            Ok(family) => family?,
+                            Err(error) => {
+                                selection_error.get_or_insert(error);
+                                return None;
+                            }
+                        },
+                        None => families.iter().position(graphics_compute)?,
+                    };
+                    #[cfg(not(all(windows, feature = "editor-spike")))]
+                    let family = families.iter().position(graphics_compute)?;
                     let extensions = match instance.enumerate_device_extension_properties(physical)
                     {
                         Ok(extensions) => extensions,
                         Err(error) => {
-                            extension_error.get_or_insert(error);
+                            selection_error.get_or_insert(VulkanError::api(
+                                "enumerate device extensions",
+                            )(error));
                             return None;
                         }
                     };
@@ -651,6 +697,15 @@ impl VulkanRenderer {
                         && !extensions.iter().any(|extension| {
                             CStr::from_ptr(extension.extension_name.as_ptr())
                                 == crate::presentation::extension_name()
+                        })
+                    {
+                        return None;
+                    }
+                    #[cfg(all(windows, feature = "editor-spike"))]
+                    if surface.is_some()
+                        && !extensions.iter().any(|extension| {
+                            CStr::from_ptr(extension.extension_name.as_ptr())
+                                == ash::khr::swapchain::NAME
                         })
                     {
                         return None;
@@ -677,8 +732,15 @@ impl VulkanRenderer {
                     }
                 });
             let Some((physical, capabilities, properties, timestamp_valid_bits)) = selected else {
-                if let Some(source) = extension_error {
-                    return Err(VulkanError::api("enumerate device extensions")(source));
+                if let Some(error) = selection_error {
+                    return Err(error);
+                }
+                #[cfg(all(windows, feature = "editor-spike"))]
+                if surface.is_some() {
+                    return Err(VulkanError::Presentation(
+                        "No R2 Vulkan graphics+compute queue can present to the spike window"
+                            .into(),
+                    ));
                 }
                 return Err(if presentation_target.is_some() {
                     VulkanError::NoPresentationAdapter
@@ -719,6 +781,10 @@ impl VulkanRenderer {
             } else {
                 Vec::new()
             };
+            #[cfg(all(windows, feature = "editor-spike"))]
+            if surface.is_some() {
+                extensions.push(ash::khr::swapchain::NAME.as_ptr());
+            }
             if enable_meshlets {
                 if !capabilities.tier_b || !bindless {
                     return Err(VulkanError::Resource(format!(
@@ -950,6 +1016,8 @@ impl VulkanRenderer {
                     // The slot owns the image and its bound memory. This query
                     // is diagnostic and neither allocates nor submits work.
                     let required_bytes =
+                        // SAFETY: The allocated image belongs to this device and its slot retains
+                        // the handle during the query.
                         unsafe { self.device.get_image_memory_requirements(image.image).size };
                     GraphImageAllocation {
                         resource: resource.clone(),
@@ -980,7 +1048,8 @@ impl VulkanRenderer {
             .find(|plane| plane.resource == resource)
             .ok_or(VulkanError::NoReadback)?;
         let mut bytes = vec![0; plane.size];
-        // The synchronous slot has already completed its transfer-to-host barrier.
+        // SAFETY: The synchronous slot has completed its transfer-to-host barrier.
+        // The readback plane is a range of the staging allocation owned by the slot.
         unsafe {
             staging
                 .memory
@@ -1016,6 +1085,8 @@ impl VulkanRenderer {
         let mut physical = vk::PhysicalDeviceProperties2::default()
             .push_next(&mut v11)
             .push_next(&mut v13);
+        // SAFETY: The selected physical device belongs to this live instance and both property
+        // chain members remain writable.
         unsafe {
             self.instance
                 .get_physical_device_properties2(self.physical, &mut physical)
@@ -1042,6 +1113,8 @@ impl VulkanRenderer {
             );
             return result;
         }
+        // SAFETY: This diagnostic creates and destroys a private, unbound buffer on the live
+        // device. No commands can reference it.
         let requirements = unsafe {
             let buffer = match self.device.create_buffer(
                 &vk::BufferCreateInfo::default()
@@ -1079,17 +1152,22 @@ impl VulkanRenderer {
             );
             return result;
         }
+        // SAFETY: The selected physical device was enumerated from this instance.
         let extensions = unsafe {
             self.instance
                 .enumerate_device_extension_properties(self.physical)
         };
         if extensions.is_ok_and(|extensions| {
+            // SAFETY: Device extension enumeration fills each fixed name array with a NUL-
+            // terminated string.
             extensions.iter().any(|extension| unsafe {
                 CStr::from_ptr(extension.extension_name.as_ptr()) == ash::ext::memory_budget::NAME
             })
         }) {
             let mut budget = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
             let mut memory = vk::PhysicalDeviceMemoryProperties2::default().push_next(&mut budget);
+            // SAFETY: The adapter advertised memory-budget properties. The query writes into the
+            // live properties chain for that physical device.
             unsafe {
                 self.instance
                     .get_physical_device_memory_properties2(self.physical, &mut memory)
@@ -1311,6 +1389,9 @@ impl VulkanRenderer {
             };
             info = info.push_next(&mut dedicated_info);
         }
+        // SAFETY: The memory index came from the resource requirements and device memory
+        // properties. Any dedicated info refers to the live resource and remains available through
+        // allocation.
         let memory = unsafe { self.device.allocate_memory(&info, None) }
             .map_err(VulkanError::api("allocate resource memory"))?;
         Ok(ResourceMemory::Standalone(self.context.clone(), memory))
@@ -1333,6 +1414,9 @@ impl VulkanRenderer {
         usage: vk::BufferUsageFlags,
         device_local: bool,
     ) -> Result<Buffer, VulkanError> {
+        // SAFETY: The new buffer is private to this call until a compatible allocation is bound. It
+        // and its requirements come from the same retained device. The local owner destroys any
+        // unsubmitted buffer on error.
         unsafe {
             let size = size.max(4);
             let buffer = self
@@ -1417,6 +1501,8 @@ impl VulkanRenderer {
         format: vk::Format,
         depth: bool,
     ) -> Result<Image, VulkanError> {
+        // SAFETY: The live instance owns the selected physical device. The image format and
+        // required usage flags are checked before allocation.
         unsafe {
             let props = self
                 .instance
@@ -1474,6 +1560,9 @@ impl VulkanRenderer {
         info: &vk::ImageCreateInfo<'_>,
         aspect: vk::ImageAspectFlags,
     ) -> Result<Image, VulkanError> {
+        // SAFETY: The image info and its chains live through creation. The dedicated or
+        // suballocated memory honors this image's requirements, and the view refers only to its
+        // declared subresources.
         unsafe {
             let image = self
                 .device
@@ -1601,6 +1690,9 @@ impl VulkanRenderer {
             )
         };
         let offset = ring_range.as_ref().map_or(0, |range| range.start);
+        // SAFETY: The reservation is disjoint from pending staging ranges, or the buffer is new.
+        // The host-visible allocation covers offset plus bytes.len() and does not overlap the
+        // source slice.
         unsafe {
             buffer
                 .memory
@@ -1626,6 +1718,9 @@ impl VulkanRenderer {
         allow_indexed: bool,
         geometry: Geometry,
     ) -> Result<Pipeline, VulkanError> {
+        // SAFETY: The compiled SPIR-V, entry-point strings, layout bindings and pipeline creation
+        // arrays remain live until Vulkan consumes them. All modules, layouts and pipelines are
+        // created on this device and unpublished handles are cleaned up locally.
         unsafe {
             let compute = pass.manifest.stage == "compute";
             let profile = if compute { "cs_6_0" } else { "ps_6_0" };
@@ -2531,6 +2626,8 @@ impl VulkanRenderer {
         let timestamps = capture.as_ref().and_then(|capture| capture.as_ref().ok());
         frame_work.cpu_prepare_ms = prepare_started.elapsed().as_secs_f64() * 1000.;
         let recording_started = Instant::now();
+        // SAFETY: This descriptor pool belongs to the reserved slot and all prior commands using
+        // its sets have completed.
         unsafe {
             self.device
                 .reset_descriptor_pool(descriptor_pool, vk::DescriptorPoolResetFlags::empty())
@@ -2588,6 +2685,8 @@ impl VulkanRenderer {
                     vk::PipelineStageFlags::TRANSFER,
                     vk::AccessFlags::TRANSFER_WRITE,
                 );
+                // SAFETY: The command buffer is recording outside rendering. The whole atlas region
+                // fits the retained upload and the image has been transitioned for transfer writes.
                 unsafe {
                     self.device.cmd_copy_buffer_to_image(
                         command,
@@ -2738,6 +2837,8 @@ impl VulkanRenderer {
                         vec![]
                     })
                     .collect();
+                // SAFETY: The live pool belongs to this reserved slot. The selected pipeline's set
+                // layout is valid on the same device.
                 let set = unsafe {
                     self.device
                         .allocate_descriptor_sets(
@@ -2874,6 +2975,9 @@ impl VulkanRenderer {
                 } else {
                     vk::PipelineBindPoint::GRAPHICS
                 };
+                // SAFETY: The descriptor writes match the bound layout and reference resources
+                // retained with this flight. The command buffer is recording on the graphics
+                // family, with pass-specific attachment layouts and dynamic state.
                 unsafe {
                     self.device.update_descriptor_sets(&writes, &[]);
                     self.device
@@ -3063,6 +3167,9 @@ impl VulkanRenderer {
                                 vk::PipelineStageFlags::TRANSFER,
                                 vk::AccessFlags::TRANSFER_WRITE,
                             );
+                            // SAFETY: The copy destination is an allocated color image with
+                            // transfer-destination usage in GENERAL. The full requested range
+                            // belongs to it and the command is outside rendering.
                             unsafe {
                                 self.device.cmd_clear_color_image(
                                     command,
@@ -3136,6 +3243,8 @@ impl VulkanRenderer {
                     height: height as u32,
                     depth: 1,
                 });
+            // SAFETY: The plane covers the mip extent and fits the allocated readback buffer. The
+            // image is in TRANSFER_SRC_OPTIMAL and both allocations are retained by the flight.
             unsafe {
                 self.device.cmd_copy_image_to_buffer(
                     command,
@@ -3146,6 +3255,8 @@ impl VulkanRenderer {
                 );
             }
         }
+        // SAFETY: This slot's command buffer is still recording outside a render pass. The staging
+        // buffer belongs to that slot and the barrier covers the preceding transfer writes.
         unsafe {
             // Make transfer writes available and visible to host reads. Waiting
             // for the queue alone is not the graph's memory dependency contract.
@@ -3353,6 +3464,8 @@ impl VulkanRenderer {
             .as_ref()
             .expect("CPU readback allocation");
         let mut data = vec![0u8; staging.size as usize];
+        // SAFETY: The flight has completed and made transfer writes visible. The host-visible
+        // staging range is initialized and fits the separate output vector.
         unsafe {
             staging
                 .memory
@@ -3457,6 +3570,9 @@ impl Drop for VulkanRenderer {
                         }
                         // Completion of the last graphics signal also covers
                         // its transfer dependency and all earlier submissions.
+                        // SAFETY: This path drops the pinned resources exactly once after observing
+                        // the last graphics signal. That signal also covers the transfer dependency
+                        // and all earlier submissions.
                         unsafe { std::mem::ManuallyDrop::drop(&mut pinned) };
                         Poll::Ready(Ok(()))
                     }
@@ -3992,6 +4108,9 @@ fn transition(
         .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
         .image(image.image)
         .subresource_range(range(image.aspect));
+    // SAFETY: The live image belongs to this device and the command is recording outside rendering.
+    // The tracked access and layout describe its previous use and the barrier covers the requested
+    // aspect.
     unsafe {
         device.cmd_pipeline_barrier(
             command,
@@ -4064,6 +4183,9 @@ fn copy_image(
             height,
             depth: 1,
         });
+    // SAFETY: The two resources are distinct same-format viewport images, both transitioned to
+    // GENERAL with the required transfer access. The copy covers one color layer within both
+    // images.
     unsafe {
         device.cmd_copy_image(
             command,

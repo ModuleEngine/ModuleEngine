@@ -10,9 +10,9 @@
 - [Диагностика поведения ModuleEngine](debugging-skill.md)
 - [Внедрение рабочего процесса ассистента и пилот Serena](assistant-efficiency-20261017.md)
 
-- [ModuleEngine 0.4](../../README.ru.md)
+- [ModuleEngine](../../README.ru.md)
 - [Работа над ModuleEngine](agent-guide.md)
-- [Текущее состояние ModuleEngine](current-status.md)
+- [Текущее состояние ModuleEngine](current-status.md) · [Архив состояния](status-archive.md)
 - [Запуск нативных бенчмарков S1–S5](bench.md) · [Принятая серия R0.2, 21 ноября 2026](bench-r02-20261121.md)
 - [Продуктовая карта по версиям: стабильные конфигурации, самостоятельные авторы и пять игр](product-roadmap.md#map)
 - [Визуальная дорожная карта, собираемая автоматически из статусов задач](roadmap-map.md)
@@ -64,6 +64,7 @@
 ## Runtime, модули и рендеринг
 
 - [ECS-хранилище игрового мира](ecs-world.md)
+- [Опциональная физика Rapier](physics-rapier.md)
 - [Решение о хранилище игрового мира](ecs-storage-decision.md)
 - [Исполняемые системы и авторское расписание](module-execution.md)
 - [Формат проекта 0.4](graph-format.md)
@@ -75,7 +76,7 @@
 - [Custom Rust 0.4](custom-rust.md)
 - [Состояние Rust Custom и самостоятельные workers](custom-state.md)
 - [Повторное использование Custom Rust](custom-program-store.md)
-- [Статические модели, текстуры и материалы](content.md)
+- [Модели, анимация, текстуры и материалы](content.md)
 - [Vulkan и Custom HLSL](gpu-hlsl.md)
 - [Аппаратные уровни Vulkan и кандидат в минимальную карту для Player](hardware-tiers.md)
 - [Добавление модуля](extending.md)

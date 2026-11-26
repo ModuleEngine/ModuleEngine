@@ -60,8 +60,11 @@ impl MeshletDeviceReport {
         let physical = renderer.physical;
         let mut identity = vk::PhysicalDeviceIDProperties::default();
         let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut identity);
+        // SAFETY: The physical device belongs to this live instance; the output chain remains
+        // valid until the query returns.
         unsafe { instance.get_physical_device_properties2(physical, &mut properties) };
         let base = properties.properties;
+        // SAFETY: This instance enumerated the physical device and still owns it.
         let extensions = unsafe { instance.enumerate_device_extension_properties(physical) }
             .map_err(VulkanError::api("read mesh shader device extensions"))?;
         let ext = extensions
@@ -70,6 +73,8 @@ impl MeshletDeviceReport {
         let mesh_shader = ext.map(|ext| {
             let mut features = vk::PhysicalDeviceMeshShaderFeaturesEXT::default();
             let mut limits = vk::PhysicalDeviceMeshShaderPropertiesEXT::default();
+            // SAFETY: The extension is advertised on this device. Each output chain borrows
+            // a separate live value and the calls finish before either borrow is used.
             unsafe {
                 instance.get_physical_device_features2(
                     physical,
@@ -352,7 +357,8 @@ impl MeshletScene {
             segments.iter().map(|bytes| bytes.len() as u64).sum(),
             vk::BufferUsageFlags::TRANSFER_SRC,
         )?;
-        // This mapping is exclusively owned and not yet referenced by commands.
+        // SAFETY: This mapping is exclusively owned and not yet referenced by commands.
+        // The staging allocation covers all segments, which are copied in order without overlap.
         unsafe {
             staging
                 .memory
@@ -418,6 +424,8 @@ impl MeshletScene {
     pub(super) fn record_upload(&self, device: &ash::Device, command: vk::CommandBuffer) {
         let Some(staging) = &self.staging else { return };
         let mut offset = 0;
+        // SAFETY: The caller records with this scene's device. Buffers have transfer usages,
+        // the staged ranges fit, and the flight retains the buffers through completion.
         unsafe {
             for buffer in self.buffers.iter() {
                 device.cmd_copy_buffer(
