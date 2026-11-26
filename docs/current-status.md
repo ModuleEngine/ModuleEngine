@@ -19,6 +19,7 @@
 ## Implemented
 
 - **Editor.** Full with verified sources can change Engine and Project. Team freezes the architecture and allows only the exposed Project changes. Scene, Hierarchy, Inspector and Assets edit the authored project. Game runs a separate Play copy. See [editor workflow](editor-workflow.md) and [distribution](distribution.md).
+- **Mesh shader experiment.** On the fixed S5 view, the original Tier B prototype reduced the median run mean GPU graph time from 4.552 to 2.461 ms. Meshlet preparation took 15.93 seconds. R2.4 is the production path. See the [source-bound comparison](r81-s5-meshlets.md#r81-result) and [decision](decisions.md#r81-meshlet-prototype).
 - **Vulkan editor prototype.** Both painters drew the Editor root on an R2 device and met the timing and text criteria at native 100% and 150% DPI on the Windows reference machine. The R3.2 shell starts with the library painter. See the [measurements and captures](editor-vulkan-spike.md#r31-results).
 - **Physics.** An optional [Rapier step](physics-rapier.md) adds bodies, colliders, joints, collision events and queries at 60 Hz. Scene displays physics geometry and Player selects the native feature from the authored schedule.
 - **glTF animation.** The importer loads joint hierarchies, inverse binds, skin weights and TRS tracks. GameHost loops the first applicable clip and deforms vertex positions on the CPU. The Khronos playback check covers CesiumMan and Fox alongside the static crystal. See [content and verification](content.md#gltf-animation).

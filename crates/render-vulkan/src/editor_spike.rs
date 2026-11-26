@@ -98,8 +98,13 @@ impl EditorDevice {
             instance: instance.clone(),
             raw,
         };
-        let renderer =
-            VulkanRenderer::new_with_instance(resource_root, None, instance, Some(&surface))?;
+        let renderer = VulkanRenderer::new_with_instance(
+            resource_root,
+            None,
+            instance,
+            false,
+            Some(&surface),
+        )?;
         Ok(Self { renderer, surface })
     }
 

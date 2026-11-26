@@ -54,9 +54,19 @@ pub use resident::ResidentScene;
 pub(crate) mod culling;
 pub use culling::{CullingStats, SceneCulling};
 
+#[cfg(feature = "bench")]
+#[path = "meshlet_probe.rs"]
+mod meshlet_probe;
+#[cfg(feature = "bench")]
+pub use meshlet_probe::{
+    MeshletBuildReport, MeshletDeviceReport, MeshletScene, project_meshlet_benchmark_vertex,
+};
+
 pub enum SceneInput<'a> {
     Snapshot(&'a SceneSnapshot),
     Retained(&'a mut ResidentScene),
+    #[cfg(feature = "bench")]
+    Meshlets(&'a mut MeshletScene),
 }
 
 impl SceneInput<'_> {
@@ -64,6 +74,8 @@ impl SceneInput<'_> {
         match self {
             Self::Snapshot(scene) => Ok(scene),
             Self::Retained(scene) => scene.snapshot().map_err(VulkanError::Resource),
+            #[cfg(feature = "bench")]
+            Self::Meshlets(scene) => Ok(&scene.snapshot),
         }
     }
 }
@@ -198,6 +210,31 @@ enum Geometry {
     Expanded,
     Resident,
     Culled,
+    #[cfg(feature = "bench")]
+    Meshlets,
+}
+
+impl Geometry {
+    fn meshlets(self) -> bool {
+        #[cfg(feature = "bench")]
+        {
+            self == Self::Meshlets
+        }
+        #[cfg(not(feature = "bench"))]
+        {
+            false
+        }
+    }
+
+    fn push_stages(self) -> vk::ShaderStageFlags {
+        #[cfg(feature = "bench")]
+        if self.meshlets() {
+            return meshlet_probe::STAGES | vk::ShaderStageFlags::FRAGMENT;
+        }
+        vk::ShaderStageFlags::VERTEX
+            | vk::ShaderStageFlags::FRAGMENT
+            | vk::ShaderStageFlags::COMPUTE
+    }
 }
 
 struct FrameResources {
@@ -386,6 +423,10 @@ struct ProducerFlight {
     materials: Option<Arc<MaterialSet>>,
     _material_upload: Option<Buffer>,
     _scene_buffers: Option<(resident::Buffers, Option<resident::Buffers>)>,
+    #[cfg(feature = "bench")]
+    _meshlet_geometry: Option<Arc<[Buffer; 5]>>,
+    #[cfg(feature = "bench")]
+    _meshlet_staging: Option<Arc<Buffer>>,
     _transfer_timeline: Option<Arc<Timeline>>,
     _pipelines: Vec<Arc<Pipeline>>,
     _culling_pipelines: Option<Arc<culling::Pipelines>>,
@@ -455,6 +496,9 @@ pub struct FrameWork {
     pub culling_mode: Option<SceneCulling>,
     /// A small diagnostic readback, populated only after submission completion.
     pub culling_stats: Option<CullingStats>,
+    #[cfg(feature = "bench")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meshlets: Option<meshlet_probe::MeshletWork>,
     pub vertex_write_bytes: usize,
     /// CPU-to-GPU writes to persistent mesh indices, excluding GPU-local growth copies.
     pub mesh_index_write_bytes: usize,
@@ -516,6 +560,8 @@ pub struct VulkanRenderer {
     culling_pipelines: Option<Arc<culling::Pipelines>>,
     culling_mode: SceneCulling,
     culling_stats: bool,
+    #[cfg(feature = "bench")]
+    meshlet_device: Option<ash::ext::mesh_shader::Device>,
     storage_buffer_limit: u64,
     max_indirect_draws: u32,
     trace: Option<u64>,
@@ -544,16 +590,40 @@ impl VulkanRenderer {
     }
     /// Bind this backend's shader compilation to one explicit package root.
     pub fn new_at(resource_root: std::path::PathBuf) -> Result<Self, VulkanError> {
-        Self::new_at_target(resource_root, None)
+        Self::new_at_target(resource_root, None, false)
     }
+
+    /// R8.1's explicit device creation path. Normal Editor and Player
+    /// constructors leave the optional mesh stages disabled.
+    #[cfg(feature = "bench")]
+    pub fn new_meshlet_benchmark(
+        resource_root: std::path::PathBuf,
+        target: Option<Arc<VulkanPresentationTarget>>,
+        enable_meshlets: bool,
+    ) -> Result<Self, VulkanError> {
+        Self::new_at_target(resource_root, target, enable_meshlets)
+    }
+
+    #[cfg(feature = "bench")]
+    pub fn build_meshlet_probe(&self, scene: SceneSnapshot) -> Result<MeshletScene, VulkanError> {
+        MeshletScene::new(self, scene)
+    }
+
+    #[cfg(feature = "bench")]
+    pub fn meshlet_device_report(&self) -> Result<MeshletDeviceReport, VulkanError> {
+        MeshletDeviceReport::query(self)
+    }
+
     fn new_at_target(
         resource_root: std::path::PathBuf,
         presentation_target: Option<Arc<VulkanPresentationTarget>>,
+        enable_meshlets: bool,
     ) -> Result<Self, VulkanError> {
         Self::new_with_instance(
             resource_root,
             presentation_target,
             Arc::new(InstanceLifetime::new(&[])?),
+            enable_meshlets,
             #[cfg(all(windows, feature = "editor-spike"))]
             None,
         )
@@ -563,6 +633,7 @@ impl VulkanRenderer {
         resource_root: std::path::PathBuf,
         presentation_target: Option<Arc<VulkanPresentationTarget>>,
         owner: Arc<InstanceLifetime>,
+        enable_meshlets: bool,
         #[cfg(all(windows, feature = "editor-spike"))] surface: Option<&editor_spike::Surface>,
     ) -> Result<Self, VulkanError> {
         // SAFETY: The instance owns the enumerated physical devices and Vulkan fills their names
@@ -705,34 +776,44 @@ impl VulkanRenderer {
                 .sampler_anisotropy(bindless)
                 .multi_draw_indirect(capabilities.resident_scene)
                 .draw_indirect_first_instance(capabilities.resident_scene);
-            let extensions = if presentation_target.is_some() {
+            let mut extensions = if presentation_target.is_some() {
                 vec![crate::presentation::extension_name().as_ptr()]
             } else {
                 Vec::new()
             };
             #[cfg(all(windows, feature = "editor-spike"))]
-            let extensions = if surface.is_some() {
-                let mut extensions = extensions;
+            if surface.is_some() {
                 extensions.push(ash::khr::swapchain::NAME.as_ptr());
-                extensions
-            } else {
-                extensions
-            };
+            }
+            if enable_meshlets {
+                if !capabilities.tier_b || !bindless {
+                    return Err(VulkanError::Resource(format!(
+                        "R8.1 meshlets unavailable on {name}: requires task/mesh shaders and indexed materials"
+                    )));
+                }
+                extensions.push(ash::ext::mesh_shader::NAME.as_ptr());
+            }
+            let mut mesh = vk::PhysicalDeviceMeshShaderFeaturesEXT::default()
+                .task_shader(true)
+                .mesh_shader(true);
+            let mut device_info = vk::DeviceCreateInfo::default()
+                .queue_create_infos(&queues)
+                .enabled_extension_names(&extensions)
+                .enabled_features(&features)
+                .push_next(&mut vulkan13)
+                .push_next(&mut vulkan12);
+            if enable_meshlets {
+                device_info = device_info.push_next(&mut mesh);
+            }
             let device = instance
-                .create_device(
-                    physical,
-                    &vk::DeviceCreateInfo::default()
-                        .queue_create_infos(&queues)
-                        .enabled_extension_names(&extensions)
-                        .enabled_features(&features)
-                        .push_next(&mut vulkan13)
-                        .push_next(&mut vulkan12),
-                    None,
-                )
+                .create_device(physical, &device_info, None)
                 .map_err(|source| VulkanError::CreateDevice {
                     name: name.clone(),
                     source,
                 })?;
+            #[cfg(feature = "bench")]
+            let meshlet_device =
+                enable_meshlets.then(|| ash::ext::mesh_shader::Device::new(&instance, &device));
             let context = Arc::new(DeviceLifetime {
                 instance: owner,
                 device: device.clone(),
@@ -819,6 +900,8 @@ impl VulkanRenderer {
                 culling_pipelines: None,
                 culling_mode: SceneCulling::default(),
                 culling_stats: false,
+                #[cfg(feature = "bench")]
+                meshlet_device,
                 storage_buffer_limit: u64::from(properties.limits.max_storage_buffer_range),
                 max_indirect_draws: properties.limits.max_draw_indirect_count,
                 trace,
@@ -873,7 +956,12 @@ impl VulkanRenderer {
             self.presentation_target = None;
             return Ok(());
         };
-        let mut replacement = Self::new_at_target(self.resource_root.clone(), Some(target))?;
+        #[cfg(feature = "bench")]
+        let meshlets = self.meshlet_device.is_some();
+        #[cfg(not(feature = "bench"))]
+        let meshlets = false;
+        let mut replacement =
+            Self::new_at_target(self.resource_root.clone(), Some(target), meshlets)?;
         replacement.detailed_stats = self.detailed_stats;
         replacement.frame_profiling = self.frame_profiling;
         replacement.next_ticket = self.next_ticket;
@@ -941,6 +1029,41 @@ impl VulkanRenderer {
                 })
                 .collect(),
         )
+    }
+
+    /// Reuse the detailed capture of the completed synchronous frame.
+    #[cfg(feature = "bench")]
+    pub fn synchronous_graph_readback(&self, resource: &str) -> Result<Vec<u8>, VulkanError> {
+        let slot = &self.slots[0];
+        let resources = slot
+            .resources
+            .as_ref()
+            .filter(|_| slot.pending.is_none())
+            .ok_or(VulkanError::NoReadback)?;
+        let staging = resources.staging.as_ref().ok_or(VulkanError::NoReadback)?;
+        let plane = resources
+            .key
+            .readback
+            .iter()
+            .find(|plane| plane.resource == resource)
+            .ok_or(VulkanError::NoReadback)?;
+        let mut bytes = vec![0; plane.size];
+        // SAFETY: The synchronous slot has completed its transfer-to-host barrier.
+        // The readback plane is a range of the staging allocation owned by the slot.
+        unsafe {
+            staging
+                .memory
+                .as_ref()
+                .unwrap()
+                .access(staging.size, |mapped| {
+                    std::ptr::copy_nonoverlapping(
+                        mapped.add(plane.offset),
+                        bytes.as_mut_ptr(),
+                        bytes.len(),
+                    );
+                })?;
+        }
+        Ok(bytes)
     }
 
     pub fn set_scene_culling(&mut self, mode: SceneCulling) {
@@ -1612,12 +1735,15 @@ impl VulkanRenderer {
                     bindless_source(pass)
                 }
             });
-            let shader = compile_hlsl_at(
-                &self.resource_root,
-                variant.as_deref().unwrap_or(&pass.source),
-                &pass.manifest.entry,
-                profile,
-            )?;
+            let source = variant.as_deref().unwrap_or(&pass.source);
+            #[cfg(feature = "bench")]
+            let (source, profile) = if geometry.meshlets() {
+                (meshlet_probe::SOURCE, "ps_6_5")
+            } else {
+                (source, profile)
+            };
+            let shader =
+                compile_hlsl_at(&self.resource_root, source, &pass.manifest.entry, profile)?;
             if bindless.is_some() {
                 verify_bindless_shader(pass, &shader.words)?;
             } else {
@@ -1642,11 +1768,9 @@ impl VulkanRenderer {
                     verify_bindless_shader(pass, &indexed.words)?;
                 }
             }
-            // Compile and validate BOTH stages before allocating Vulkan handles.
-            // A rejected vertex candidate cannot leak the fragment/layout handles.
-            let vertex_artifact = if compute {
-                None
-            } else {
+            // Compile geometry stages before allocating Vulkan handles.
+            let mut geometry_artifacts = Vec::with_capacity(2);
+            if !compute && !geometry.meshlets() {
                 let culled_source;
                 let vertex_source = if geometry == Geometry::Culled {
                     culled_source = resident::culled_vertex_source();
@@ -1668,8 +1792,23 @@ impl VulkanRenderer {
                 } else {
                     verify_shader(pass, &artifact.words, true)?;
                 }
-                Some(artifact)
-            };
+                geometry_artifacts.push((vk::ShaderStageFlags::VERTEX, entry, "vs_6_0", artifact));
+            }
+            #[cfg(feature = "bench")]
+            if geometry.meshlets() {
+                for (stage, entry, profile) in [
+                    (vk::ShaderStageFlags::TASK_EXT, "mainTask", "as_6_5"),
+                    (vk::ShaderStageFlags::MESH_EXT, "mainMesh", "ms_6_5"),
+                ] {
+                    let artifact = compile_hlsl_at(
+                        &self.resource_root,
+                        meshlet_probe::SOURCE,
+                        entry,
+                        profile,
+                    )?;
+                    geometry_artifacts.push((stage, entry, profile, artifact));
+                }
+            }
             let inputs = pass
                 .manifest
                 .inputs
@@ -1701,13 +1840,22 @@ impl VulkanRenderer {
                 })
                 .collect();
             if geometry != Geometry::Expanded {
-                let last_binding = if geometry == Geometry::Culled { 5 } else { 4 };
+                let last_binding = if geometry == Geometry::Culled || geometry.meshlets() {
+                    5
+                } else {
+                    4
+                };
+                let stages = if geometry.meshlets() {
+                    vk::ShaderStageFlags::MESH_EXT
+                } else {
+                    vk::ShaderStageFlags::VERTEX
+                };
                 bindings.extend((1..=last_binding).map(|binding| {
                     vk::DescriptorSetLayoutBinding::default()
                         .binding(binding)
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                         .descriptor_count(1)
-                        .stage_flags(vk::ShaderStageFlags::VERTEX)
+                        .stage_flags(stages)
                 }));
             }
             let set_layout = self
@@ -1731,9 +1879,7 @@ impl VulkanRenderer {
             let mut layouts = vec![set_layout];
             layouts.extend(bindless.map(|material| material.layout));
             let push = [vk::PushConstantRange {
-                stage_flags: vk::ShaderStageFlags::VERTEX
-                    | vk::ShaderStageFlags::FRAGMENT
-                    | vk::ShaderStageFlags::COMPUTE,
+                stage_flags: geometry.push_stages(),
                 offset: 0,
                 size: 128,
             }];
@@ -1791,30 +1937,37 @@ impl VulkanRenderer {
                         VulkanError::api("create compute pipeline")(source)
                     })
             } else {
-                let vertex_entry = pass.manifest.vertex_entry.as_deref().unwrap_or("mainVS");
-                let vertex = vertex_artifact.as_ref().unwrap();
-                let vertex_module = self
-                    .device
-                    .create_shader_module(
-                        &vk::ShaderModuleCreateInfo::default().code(&vertex.words),
-                        None,
-                    )
-                    .map_err(VulkanError::api("create vertex shader module"))?;
-                let vertex_module = OwnedShaderModule(&self.device, vertex_module);
-                self.context.name(vertex_module.1, || {
-                    format!("{} vs_6_0 {vertex_entry}", pass.id)
-                });
-                let ve = CString::new(vertex_entry).map_err(|source| VulkanError::ShaderEntry {
-                    stage: "Vertex",
-                    source,
-                })?;
-                let stages = [
-                    vk::PipelineShaderStageCreateInfo::default()
-                        .stage(vk::ShaderStageFlags::VERTEX)
-                        .module(vertex_module.1)
-                        .name(&ve),
-                    stage,
-                ];
+                let geometry_modules = geometry_artifacts
+                    .iter()
+                    .map(|(stage, entry, profile, artifact)| {
+                        let module = self
+                            .device
+                            .create_shader_module(
+                                &vk::ShaderModuleCreateInfo::default().code(&artifact.words),
+                                None,
+                            )
+                            .map_err(VulkanError::api("create geometry shader module"))?;
+                        let module = OwnedShaderModule(&self.device, module);
+                        self.context
+                            .name(module.1, || format!("{} {profile} {entry}", pass.id));
+                        let entry =
+                            CString::new(*entry).map_err(|source| VulkanError::ShaderEntry {
+                                stage: "Geometry",
+                                source,
+                            })?;
+                        Ok((*stage, entry, module))
+                    })
+                    .collect::<Result<Vec<_>, VulkanError>>()?;
+                let stages: Vec<_> = geometry_modules
+                    .iter()
+                    .map(|(stage, entry, module)| {
+                        vk::PipelineShaderStageCreateInfo::default()
+                            .stage(*stage)
+                            .module(module.1)
+                            .name(entry)
+                    })
+                    .chain(std::iter::once(stage))
+                    .collect();
                 let vertex_bindings = [vk::VertexInputBindingDescription {
                     binding: 0,
                     stride: 72,
@@ -1908,10 +2061,8 @@ impl VulkanRenderer {
                     } else {
                         vk::Format::UNDEFINED
                     });
-                let info = vk::GraphicsPipelineCreateInfo::default()
+                let mut info = vk::GraphicsPipelineCreateInfo::default()
                     .stages(&stages)
-                    .vertex_input_state(&vertex_input)
-                    .input_assembly_state(&assembly)
                     .viewport_state(&viewport)
                     .rasterization_state(&raster)
                     .multisample_state(&multi)
@@ -1920,6 +2071,11 @@ impl VulkanRenderer {
                     .dynamic_state(&dynamic)
                     .layout(layout)
                     .push_next(&mut rendering);
+                if !geometry.meshlets() {
+                    info = info
+                        .vertex_input_state(&vertex_input)
+                        .input_assembly_state(&assembly);
+                }
                 self.device
                     .create_graphics_pipelines(vk::PipelineCache::null(), &[info], None)
                     .map(|p| p[0])
@@ -2213,6 +2369,35 @@ impl VulkanRenderer {
                 .iter()
                 .filter(|pass| pass_enabled(pass, overrides))
         };
+        #[cfg(feature = "bench")]
+        let meshlets = match &input {
+            SceneInput::Meshlets(source) => {
+                if self.meshlet_device.is_none() || !Arc::ptr_eq(&self.context, &source.context) {
+                    return Err(VulkanError::Resource(
+                        "R8.1 meshlet geometry belongs to another device".into(),
+                    ));
+                }
+                let mut passes = active_passes().filter(|pass| pass.geometry());
+                let pass = passes
+                    .next()
+                    .filter(|pass| pass.module == "gpu.forward" && passes.next().is_none())
+                    .ok_or_else(|| {
+                        VulkanError::Resource("R8.1 uses one stock Forward scene pass".into())
+                    })?;
+                self.prepare_pipeline(
+                    pass,
+                    meshlet_pipeline_key(&pipeline_key(pass)),
+                    true,
+                    Geometry::Meshlets,
+                )?;
+                Some(&**source)
+            }
+            _ => None,
+        };
+        #[cfg(feature = "bench")]
+        let meshlet_frame = meshlets.is_some();
+        #[cfg(not(feature = "bench"))]
+        let meshlet_frame = false;
         let resident = match &input {
             SceneInput::Retained(source)
                 if self.capabilities.resident_scene
@@ -2237,6 +2422,11 @@ impl VulkanRenderer {
         } else {
             None
         };
+        if meshlet_frame && indexed.is_none() {
+            return Err(VulkanError::Resource(
+                "R8.1 could not bind the indexed Forward materials".into(),
+            ));
+        }
         let atlas_overflow_fallback = resident.is_none() && wants_indexed && indexed.is_none();
         let needs_atlas = active_passes().any(|pass| {
             pass.manifest.scene_materials
@@ -2284,6 +2474,11 @@ impl VulkanRenderer {
         let rects = atlas.as_ref().map_or(&no_rects, |a| &a.atlas.rects);
         let (vertex_bytes, submitted) = match &resident {
             Some(resident) => (Vec::new(), resident.triangles),
+            #[cfg(feature = "bench")]
+            None if meshlet_frame => (
+                Vec::new(),
+                meshlets.unwrap().build_report().source_triangles,
+            ),
             None => geometry::legacy_vertices(scene, rects),
         };
         let readback = if presentation.is_some() {
@@ -2314,7 +2509,7 @@ impl VulkanRenderer {
         } else {
             None
         };
-        if resident.is_none() {
+        if resident.is_none() && !meshlet_frame {
             if vertex
                 .as_ref()
                 .is_none_or(|buffer| buffer.size < vertex_bytes.len() as u64)
@@ -2385,6 +2580,8 @@ impl VulkanRenderer {
         let mut frame_work = FrameWork {
             vertex_write_bytes: vertex_bytes.len(),
             resident_scene: resident.is_some(),
+            #[cfg(feature = "bench")]
+            meshlets: meshlets.map(MeshletScene::work),
             culling_mode: scene_culling.as_ref().map(culling::Frame::mode),
             atlas_upload_bytes: if atlas_needs_upload {
                 atlas.as_ref().unwrap().atlas.rgba.len()
@@ -2443,6 +2640,10 @@ impl VulkanRenderer {
         if let Some(resident) = &resident {
             self.gpu_scene
                 .record(resident, &self.device, command, &mut frame_work);
+        }
+        #[cfg(feature = "bench")]
+        if let Some(meshlets) = meshlets {
+            meshlets.record_upload(&self.device, command);
         }
         if let Some(staging) = &material_upload {
             uploads.record(&self.device, command, staging);
@@ -2548,6 +2749,12 @@ impl VulkanRenderer {
                 }
             } else if atlas_overflow_fallback && enabled && pass.has_bindless_variant() {
                 atlas_pipeline_key(&key)
+            } else {
+                key
+            };
+            #[cfg(feature = "bench")]
+            let key = if meshlet_frame && enabled && pass.geometry() {
+                meshlet_pipeline_key(&key)
             } else {
                 key
             };
@@ -2684,7 +2891,22 @@ impl VulkanRenderer {
                                 .range(buffer.size)
                         })
                     });
-                if let Some(infos) = &buffer_infos {
+                let buffer_infos = buffer_infos.as_ref().map(|infos| infos.as_slice());
+                #[cfg(feature = "bench")]
+                let meshlet_infos: Option<[_; 5]> = meshlets
+                    .filter(|_| pipeline.geometry.meshlets())
+                    .map(|meshlets| {
+                        std::array::from_fn(|i| {
+                            let buffer = &meshlets.buffers[i];
+                            vk::DescriptorBufferInfo::default()
+                                .buffer(buffer.buffer)
+                                .range(buffer.size)
+                        })
+                    });
+                #[cfg(feature = "bench")]
+                let buffer_infos =
+                    buffer_infos.or(meshlet_infos.as_ref().map(|infos| infos.as_slice()));
+                if let Some(infos) = buffer_infos {
                     writes.extend(infos.iter().enumerate().map(|(index, info)| {
                         vk::WriteDescriptorSet::default()
                             .dst_set(set)
@@ -2740,6 +2962,10 @@ impl VulkanRenderer {
                     constants[29] =
                         f32::from_bits(scene_culling.as_ref().unwrap().visible_offset());
                 }
+                #[cfg(feature = "bench")]
+                if pipeline.geometry.meshlets() {
+                    constants[28] = f32::from_bits(meshlets.unwrap().build_report().meshlets);
+                }
                 let mut push_bytes = Vec::with_capacity(128);
                 for value in constants {
                     push_bytes.extend_from_slice(&value.to_ne_bytes());
@@ -2777,9 +3003,7 @@ impl VulkanRenderer {
                     self.device.cmd_push_constants(
                         command,
                         pipeline.layout,
-                        vk::ShaderStageFlags::VERTEX
-                            | vk::ShaderStageFlags::FRAGMENT
-                            | vk::ShaderStageFlags::COMPUTE,
+                        pipeline.geometry.push_stages(),
                         0,
                         &push_bytes,
                     );
@@ -2877,6 +3101,16 @@ impl VulkanRenderer {
                             }],
                         );
                         let draws = match pipeline.geometry {
+                            #[cfg(feature = "bench")]
+                            Geometry::Meshlets => {
+                                self.meshlet_device.as_ref().unwrap().cmd_draw_mesh_tasks(
+                                    command,
+                                    frame_work.meshlets.unwrap().task_groups,
+                                    1,
+                                    1,
+                                );
+                                1
+                            }
                             Geometry::Culled => {
                                 scene_culling.as_ref().unwrap().draw(
                                     &self.device,
@@ -3100,6 +3334,10 @@ impl VulkanRenderer {
             _scene_buffers: resident
                 .as_ref()
                 .map(|r| (r.buffers.clone(), self.gpu_scene.prior_buffers())),
+            #[cfg(feature = "bench")]
+            _meshlet_geometry: meshlets.map(|scene| scene.buffers.clone()),
+            #[cfg(feature = "bench")]
+            _meshlet_staging: meshlets.and_then(|scene| scene.staging.clone()),
             _transfer_timeline: transfer.map(|queue| queue.timeline.clone()),
             _pipelines: self.pipelines.values().cloned().collect(),
             _culling_pipelines: self.culling_pipelines.clone(),
@@ -3152,6 +3390,10 @@ impl VulkanRenderer {
         flight.work = frame_work;
         if let Some(timings) = &mut flight.timings {
             timings.submit_ms = Some(frame_work.cpu_queue_submit_ms);
+        }
+        #[cfg(feature = "bench")]
+        if let SceneInput::Meshlets(scene) = &mut input {
+            scene.staging = None;
         }
         if let Some(resident) = resident {
             let SceneInput::Retained(source) = &mut input else {
@@ -3823,6 +4065,11 @@ fn resident_pipeline_key(default: &str) -> String {
 
 fn culled_pipeline_key(default: &str) -> String {
     format!("{default}:culled")
+}
+
+#[cfg(feature = "bench")]
+fn meshlet_pipeline_key(default: &str) -> String {
+    format!("{default}:meshlets")
 }
 fn atlas_pipeline_key(default: &str) -> String {
     format!("atlas/{default}")
