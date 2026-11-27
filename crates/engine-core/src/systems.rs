@@ -1,5 +1,6 @@
 //! General source-installed executable systems. The graph chooses the schedule;
 //! factories choose behavior. Contracts are validated before any lifecycle hook.
+use crate::tick_data::{NativeTickValue, TickData, TickDataContract};
 use crate::{
     GameEvent, GameInput, GameState, PhysicsQueries, PhysicsQuery, PhysicsQueryError,
     PhysicsQueryResponse,
@@ -103,6 +104,7 @@ pub struct SystemContext<'a> {
     pub input: &'a GameInput,
     pub bindings: &'a BTreeMap<String, String>,
     physics: Option<&'a mut Option<Arc<dyn PhysicsQueries>>>,
+    tick_data: Option<&'a mut World>,
 }
 
 impl<'a> SystemContext<'a> {
@@ -124,7 +126,23 @@ impl<'a> SystemContext<'a> {
             input,
             bindings,
             physics: None,
+            tick_data: None,
         }
+    }
+
+    /// Borrow a package-owned native value within the current tick. Isolated
+    /// contexts have no schedule cache and return None for a portable fallback.
+    pub fn with_tick_data<T: Send + Sync + 'static, R>(
+        &mut self,
+        action: impl FnOnce(&mut Self, &mut T) -> Result<R, String>,
+    ) -> Option<Result<R, String>> {
+        let mut value = self
+            .tick_data
+            .as_mut()?
+            .remove_resource::<NativeTickValue<T>>()?;
+        let result = action(self, &mut value.0);
+        self.tick_data.as_mut().unwrap().insert_resource(value);
+        Some(result)
     }
 
     fn physics_queries(&self) -> Option<&dyn PhysicsQueries> {
@@ -249,6 +267,11 @@ impl<'a> SystemContext<'a> {
 /// A compiled source module. State is explicit, owned by the executor, and can
 /// survive a compatible implementation replacement without restarting Play.
 pub trait ExecutableSystem: Send {
+    /// Opt into one installed native tick-data contract. Other systems receive
+    /// the portable snapshot, including edits made by preceding native nodes.
+    fn tick_data_contribution(&self) -> Option<&str> {
+        None
+    }
     fn initialize(
         &mut self,
         _context: &mut SystemContext<'_>,
@@ -316,6 +339,7 @@ pub struct SystemRegistry {
     module_dependencies: BTreeMap<String, BTreeSet<String>>,
     project_contracts: BTreeMap<String, (ProjectValidator, ProjectPreparer)>,
     game_contributions: BTreeMap<String, crate::GameContribution>,
+    tick_data: BTreeMap<String, TickDataContract>,
     pose_projections: BTreeMap<String, crate::GamePoseProjection>,
     presentation_scopes: BTreeMap<String, crate::GamePresentationScope>,
     capability_metadata: BTreeMap<String, crate::CapabilityMetadata>,
@@ -323,6 +347,31 @@ pub struct SystemRegistry {
 }
 
 impl SystemRegistry {
+    /// Replace this contribution's begin/validation codecs during native
+    /// execution. `read` prepares and validates its typed tick value; `write`
+    /// validates and publishes it before every portable boundary. The existing
+    /// state validator still checks the result of any later foreign edits.
+    pub fn register_tick_data<T: Send + Sync + 'static>(
+        &mut self,
+        contribution: &str,
+        read: fn(&GameState) -> Result<T, String>,
+        write: fn(T, &mut GameState) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let contract = TickDataContract::new(read, write);
+        if !self.game_contributions.contains_key(contribution)
+            || self.tick_data.contains_key(contribution)
+            || self
+                .tick_data
+                .values()
+                .any(|existing| existing.type_id == contract.type_id)
+        {
+            return Err(
+                "Native tick data requires a unique installed contribution and Rust type".into(),
+            );
+        }
+        self.tick_data.insert(contribution.into(), contract);
+        Ok(())
+    }
     pub fn describe_module(
         &mut self,
         id: &str,
@@ -757,6 +806,7 @@ struct ScheduledTick {
     resources: ResourceStore,
     systems: Vec<LiveSystem>,
     physics: Option<Arc<dyn PhysicsQueries>>,
+    tick_data: TickData,
     states: Vec<(Value, bool)>,
     entered: usize,
     result: Result<(), String>,
@@ -780,6 +830,11 @@ impl ScheduledTick {
     fn step_node(&mut self, index: usize) -> Result<(), String> {
         SystemExecutor::refresh_service_resources(&mut self.resources, &self.input, &self.events)?;
         let system = &mut self.systems[index];
+        // Replacements initialize against current portable state, even when
+        // the old implementation belonged to a native contribution.
+        if system.pending.is_some() {
+            self.tick_data.boundary(None, &mut self.game)?;
+        }
         SystemExecutor::activate_replacement(
             system,
             &mut self.game,
@@ -788,6 +843,10 @@ impl ScheduledTick {
             &mut self.resources,
             &mut self.physics,
             &mut self.states[index],
+        )?;
+        self.tick_data.boundary(
+            system.implementation.tick_data_contribution(),
+            &mut self.game,
         )?;
         self.entered = index + 1;
         let mut ctx = SystemContext {
@@ -798,6 +857,7 @@ impl ScheduledTick {
             input: &self.input,
             bindings: &system.node.bindings,
             physics: Some(&mut self.physics),
+            tick_data: self.tick_data.world.as_mut(),
         };
         if !system.initialized {
             let retained = system.preserve_on_initialize.then(|| system.state.clone());
@@ -823,8 +883,9 @@ pub struct SystemExecutor {
     schedule_world: World,
     resources: ResourceStore,
     event_validators: Vec<crate::GameEventValidator>,
-    begin_tick_hooks: Vec<crate::GameTickHook>,
-    state_validators: Vec<crate::GameStateValidator>,
+    begin_tick_hooks: Vec<(String, crate::GameTickHook)>,
+    state_validators: Vec<(String, crate::GameStateValidator)>,
+    tick_data: BTreeMap<String, TickDataContract>,
 }
 
 impl SystemExecutor {
@@ -884,12 +945,22 @@ impl SystemExecutor {
         let begin_tick_hooks = registry
             .active_game_contributions(graph)
             .iter()
-            .map(|contribution| contribution.begin_tick)
+            .map(|contribution| (contribution.id.clone(), contribution.begin_tick))
             .collect();
         let state_validators = registry
             .active_game_contributions(graph)
             .iter()
-            .map(|contribution| contribution.validate_state)
+            .map(|contribution| (contribution.id.clone(), contribution.validate_state))
+            .collect();
+        let tick_data = registry
+            .active_game_contributions(graph)
+            .iter()
+            .filter_map(|contribution| {
+                registry
+                    .tick_data
+                    .get(&contribution.id)
+                    .map(|contract| (contribution.id.clone(), contract.clone()))
+            })
             .collect();
         Ok(Self {
             systems,
@@ -899,6 +970,7 @@ impl SystemExecutor {
             event_validators,
             begin_tick_hooks,
             state_validators,
+            tick_data,
         })
     }
     pub fn step(
@@ -953,8 +1025,15 @@ impl SystemExecutor {
         // accepted branch for host validation and rollback while Bevy owns the
         // candidate. Neither branch clones the underlying Bevy entity rows.
         let mut tick_game = game.checkpoint_tick(validated_world);
-        let result = self.begin_tick_hooks.iter().try_for_each(|hook| {
-            hook(game).map_err(|error| format!("Game contribution begin_tick: {error}"))
+        let mut tick_data = TickData::new(self.tick_data.clone());
+        let result = self.begin_tick_hooks.iter().try_for_each(|(id, hook)| {
+            if self.tick_data.contains_key(id) {
+                tick_data.boundary(Some(id), game)
+            } else {
+                tick_data.boundary(None, game)?;
+                hook(game)
+            }
+            .map_err(|error| format!("Game contribution begin_tick: {error}"))
         });
         std::mem::swap(game, &mut tick_game);
         let mut tick = ScheduledTick {
@@ -965,6 +1044,7 @@ impl SystemExecutor {
             resources: std::mem::take(&mut self.resources),
             systems: std::mem::take(&mut self.systems),
             physics: None,
+            tick_data,
             states,
             entered: 0,
             result,
@@ -986,6 +1066,13 @@ impl SystemExecutor {
         } else {
             Ok(())
         };
+        // Converting the remaining native values is part of staging. Any
+        // conversion failure follows the same rollback path as a failed node.
+        let native_validation = if unwind.is_ok() && tick.result.is_ok() {
+            tick.tick_data.finish(&mut tick.game)
+        } else {
+            Ok(BTreeSet::new())
+        };
         self.systems = tick.systems;
         self.resources = tick.resources;
         *events = tick.events;
@@ -995,9 +1082,9 @@ impl SystemExecutor {
                 .set_executor(SingleThreadedExecutor::default());
             resume_unwind(payload);
         }
-        let mut result = tick
-            .result
-            .and_then(|()| self.validate_and_commit(game, &original, events, transaction));
+        let mut result = tick.result.and(native_validation).and_then(|native| {
+            self.validate_and_commit(game, &original, events, transaction, &native)
+        });
         if result.is_err() {
             let mut rollback_errors = vec![];
             for system in self.systems.iter_mut().take(tick.entered).rev() {
@@ -1057,6 +1144,7 @@ impl SystemExecutor {
                 input,
                 bindings: &system.node.bindings,
                 physics: Some(physics),
+                tick_data: None,
             };
             candidate
                 .implementation
@@ -1137,6 +1225,7 @@ impl SystemExecutor {
         original: &GameState,
         events: &[GameEvent],
         transaction: &mut dyn TickTransaction,
+        native_validation: &BTreeSet<String>,
     ) -> Result<(), String> {
         for system in &mut self.systems {
             system
@@ -1144,7 +1233,10 @@ impl SystemExecutor {
                 .validate_tick()
                 .map_err(|e| format!("System '{}' staged output: {e}", system.node.id))?;
         }
-        for validate in &self.state_validators {
+        for (id, validate) in &self.state_validators {
+            if native_validation.contains(id) {
+                continue;
+            }
             validate(game)
                 .map_err(|error| format!("Game contribution state validation: {error}"))?;
         }

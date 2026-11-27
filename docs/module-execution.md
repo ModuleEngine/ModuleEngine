@@ -15,6 +15,28 @@ the world, resources and events written earlier in that tick. The schedule uses
 the factories available in the selected composition. A Crate Garden composition
 can run without registering ARPG.
 
+Native packages may register a tick-data adapter for an installed game
+contribution with `SystemRegistry::register_tick_data`. Its read callback
+prepares and validates a package-owned value in a tick-scoped Bevy resource.
+Participating systems declare `tick_data_contribution` and borrow the value
+through `SystemContext::with_tick_data`. Its write callback must validate and
+publish the equivalent portable state. While that native value remains active,
+these callbacks replace the contribution's portable begin-tick and final-state
+codecs. A distinct Rust type identifies each adapter.
+
+The stock eight-node ARPG schedule decodes `ArpgFrame` once before the nodes
+and encodes it once after them. It rejects non-finite frame values before
+publication. Every foreign node, including compiled Custom, receives the
+current portable state. Crossing that boundary flushes native values, and a
+later native node reloads and validates the foreign edits. A replacement
+initializes against the current portable state. A final foreign edit still
+passes through the original contribution state validator. Thus a mixed
+schedule may require additional conversions. Typed values belong to one
+executor tick and are discarded on success or rejection. Existing JSON
+keys, saves, Editor access and IPC keep their portable representation.
+The [R1.10 measurement](evidence/r110-arpg/README.md) records the paired
+20-enemy tick comparison and rejection/replay evidence.
+
 ## Why this boundary exists
 
 Gameplay previously required the host to recognize special nodes. `SystemRegistry`

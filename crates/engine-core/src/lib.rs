@@ -24,6 +24,9 @@ mod scenes;
 mod script_settings;
 mod settings;
 mod systems;
+mod tick_data;
+#[cfg(test)]
+mod tick_data_tests;
 mod world;
 
 pub use backend::*;

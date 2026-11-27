@@ -12,7 +12,15 @@ type BuiltinConfiguration = (
 );
 struct NativeSystem(TickFn);
 impl ExecutableSystem for NativeSystem {
+    fn tick_data_contribution(&self) -> Option<&str> {
+        Some("arpg.presentation")
+    }
     fn step(&mut self, ctx: &mut SystemContext<'_>, state: &mut Value) -> Result<(), String> {
+        if let Some(result) =
+            ctx.with_tick_data::<ArpgFrame, _>(|ctx, frame| (self.0)(ctx, frame, state))
+        {
+            return result;
+        }
         let mut frame = read_frame(ctx.game)?;
         frame.ensure_tick(ctx.game);
         (self.0)(ctx, &mut frame, state)?;

@@ -171,8 +171,53 @@ pub(crate) fn read_frame(game: &GameState) -> Result<ArpgFrame, String> {
 }
 
 pub(crate) fn begin_tick(game: &mut GameState) -> Result<(), String> {
+    let frame = prepare_frame(game)?;
+    publish_frame(frame, game)
+}
+
+pub(crate) fn prepare_frame(game: &GameState) -> Result<ArpgFrame, String> {
     let mut frame = read_frame(game)?;
     frame.ensure_tick(game);
+    Ok(frame)
+}
+
+pub(crate) fn publish_frame(frame: ArpgFrame, game: &mut GameState) -> Result<(), String> {
+    // serde_json represents non-finite floats as null. Reject them before
+    // publication so the typed path preserves the portable validator's check.
+    let finite = frame.intentions.values().all(|intent| {
+        intent
+            .movement
+            .iter()
+            .chain(&intent.aim)
+            .all(|value| value.is_finite())
+    }) && frame.telegraphs.iter().all(|visual| {
+        visual
+            .center
+            .iter()
+            .chain(&visual.direction)
+            .all(|value| value.is_finite())
+            && [visual.range, visual.arc, visual.progress]
+                .iter()
+                .all(|value| value.is_finite())
+    }) && frame.attack_visuals.iter().all(|visual| {
+        visual
+            .area
+            .center
+            .iter()
+            .chain(&visual.area.direction)
+            .all(|value| value.is_finite())
+            && [visual.area.range, visual.area.arc, visual.progress]
+                .iter()
+                .all(|value| value.is_finite())
+    }) && frame.hit_visuals.iter().all(|visual| {
+        visual.position.iter().all(|value| value.is_finite())
+            && visual.damage.is_finite()
+            && visual.started_at.is_finite()
+            && visual.expires_at.is_finite()
+    });
+    if !finite {
+        return Err(format!("Invalid {FRAME_KEY}: non-finite frame value"));
+    }
     game.set_arpg(frame)
 }
 
@@ -294,6 +339,51 @@ pub fn legacy_input(input: &GameInput) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typed_frame_publication_rejects_each_nonfinite_category_and_preserves_portable_state() {
+        let frame: ArpgFrame = serde_json::from_value(json!({
+            "intentions":{"1":{"movement":[0,0],"aim":[0,0,0],"attack":false}},
+            "telegraphs":[{"attacker":1,"center":[0,0,0],"direction":[0,1],"range":1,"arc":1,"progress":0}],
+            "attack_visuals":[{"attacker":1,"area":{"center":[0,0,0],"direction":[0,1],"range":1,"arc":1},"progress":0}],
+            "hit_visuals":[{"attacker":1,"target":2,"position":[0,0,0],"damage":1,"started_at":0,"expires_at":1}]
+        })).unwrap();
+        type Mutation = fn(&mut ArpgFrame);
+        // Every float-bearing field is poisoned independently, including both
+        // the hit clock values and each field of the nested melee area.
+        let mutations: &[Mutation] = &[
+            |f| f.intentions.get_mut(&1).unwrap().movement[0] = f32::NAN,
+            |f| f.intentions.get_mut(&1).unwrap().aim[0] = f32::INFINITY,
+            |f| f.telegraphs[0].center[0] = f32::NAN,
+            |f| f.telegraphs[0].direction[0] = f32::NAN,
+            |f| f.telegraphs[0].range = f32::NAN,
+            |f| f.telegraphs[0].arc = f32::NAN,
+            |f| f.telegraphs[0].progress = f32::NAN,
+            |f| f.attack_visuals[0].area.center[0] = f32::NAN,
+            |f| f.attack_visuals[0].area.direction[0] = f32::NAN,
+            |f| f.attack_visuals[0].area.range = f32::NAN,
+            |f| f.attack_visuals[0].area.arc = f32::NAN,
+            |f| f.attack_visuals[0].progress = f32::NAN,
+            |f| f.hit_visuals[0].position[0] = f32::NAN,
+            |f| f.hit_visuals[0].damage = f32::NAN,
+            |f| f.hit_visuals[0].started_at = f64::NAN,
+            |f| f.hit_visuals[0].expires_at = f64::NEG_INFINITY,
+        ];
+        let mut game = state();
+        publish_frame(frame.clone(), &mut game).unwrap();
+        let before = game.clone();
+        for mutate in mutations {
+            let mut invalid = frame.clone();
+            mutate(&mut invalid);
+            assert!(
+                publish_frame(invalid, &mut game)
+                    .unwrap_err()
+                    .contains("non-finite")
+            );
+            assert_eq!(game, before);
+        }
+        assert_eq!(read_frame(&game).unwrap(), frame);
+    }
 
     fn state() -> GameState {
         GameState {
