@@ -677,7 +677,7 @@ pub fn write_full_manifest(
             backend_files.insert(name.into(), hash_file(&root.join(name))?);
         }
     }
-    for name in ["docs", "examples", "scripts", "tools/dxc"] {
+    for name in ["docs", "examples", "scripts", "site", "tools/dxc"] {
         inventory_tree(root, &root.join(name), &mut backend_files)?;
     }
     let sources = files

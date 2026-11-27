@@ -322,7 +322,7 @@ pub fn export_with_package_root(
             return Err(format!("Missing source export requirement: {relative}"));
         }
     }
-    for relative in ["crates", "docs", "examples", "assets", "scripts"] {
+    for relative in ["crates", "docs", "examples", "assets", "scripts", "site"] {
         copy_tree(&root.join(relative), &target.join(relative))?;
     }
     copy_tree(&root.join("tools/dxc"), &target.join("tools/dxc"))?;
@@ -388,7 +388,8 @@ fn validate_destination(root: &Path, target: &Path) -> Result<(), String> {
         return Err("The export folder must differ from the source project folder.".into());
     }
     for copied in [
-        "crates", "docs", "examples", "assets", "scripts", "tools", ".sdk", ".user", ".tools",
+        "crates", "docs", "examples", "assets", "scripts", "site", "tools", ".sdk", ".user",
+        ".tools",
     ] {
         let tree = root.join(copied);
         let tree = if tree.exists() {
@@ -1154,6 +1155,11 @@ mod tests {
             serde_json::from_slice(&fs::read(output.join(".module-engine-package.json")).unwrap())
                 .unwrap();
         for path in [
+            "site/roadmap_map.py",
+            "site/roadmap_map.html",
+            "site/roadmap_world.html",
+            "site/roadmap_moves.js",
+            "site/roadmap_events.py",
             "README.md",
             "README.ru.md",
             "AGENTS.md",
@@ -1166,12 +1172,12 @@ mod tests {
             assert_eq!(
                 fs::read(output.join(path)).unwrap(),
                 fs::read(source_root().join(path)).unwrap(),
-                "Full export must preserve exact public guidance bytes: {path}"
+                "Full export must preserve exact backend file bytes: {path}"
             );
             assert_eq!(
                 package.backend_files.get(path),
                 Some(&hash_file(&source_root().join(path)).unwrap()),
-                "Full backend inventory must pin its public guidance: {path}"
+                "Full backend inventory must pin the exported file: {path}"
             );
         }
         for path in [
@@ -1294,7 +1300,8 @@ mod tests {
     fn export_rejects_copied_trees_and_preserves_nonempty_destination() {
         let root = source_root().canonicalize().unwrap();
         for copied in [
-            "crates", "docs", "examples", "assets", "scripts", "tools", ".sdk", ".user", ".tools",
+            "crates", "docs", "examples", "assets", "scripts", "site", "tools", ".sdk", ".user",
+            ".tools",
         ] {
             assert!(validate_destination(&root, &root.join(copied).join("new export")).is_err());
         }

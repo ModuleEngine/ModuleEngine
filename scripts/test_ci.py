@@ -16,45 +16,91 @@ import ci_workspace_tests
 
 
 class PolicyTests(unittest.TestCase):
-    def test_non_pr_docs_and_gitignore_omit_native_and_package(self):
-        selected = ci_plan.select_non_pr(["docs/current-status.md", "README.md", ".gitignore"])
-        self.assertFalse(selected["native"])
-        self.assertFalse(selected["package"])
+    @staticmethod
+    def tracked():
+        root = Path(__file__).resolve().parent.parent
+        return subprocess.run(["git", "ls-files", "-z"], cwd=root, check=True, capture_output=True
+                              ).stdout.decode("utf-8").split("\0")[:-1]
 
-    def test_source_deleted_renamed_and_unknown_paths_require_both_routes(self):
-        for path in ["crates/editor/src/game_ui.rs", "Cargo.lock", "scripts/verify.py",
-                     "assets/texture.png", "game-project-v4.json", ".cargo/config.toml",
-                     ".github/workflows/ci.yml", "future/new-source"]:
-            self.assertTrue(ci_plan.select_non_pr([path])["native"], path)
-            self.assertTrue(ci_plan.select_non_pr([path])["package"], path)
+    @staticmethod
+    def route(paths, regular=True):
+        with patch.object(ci_plan, "changed_files", return_value=(paths, regular)):
+            return ci_plan.plan("a" * 40)
 
-    def test_pr_documentation_allowlist_and_mixed_changes(self):
-        docs = ["docs/current-status.md", "docs/ru/current-status.md", "README.md",
+    def test_every_tracked_file_has_an_explicit_route(self):
+        rules = ci_plan.load_rules()
+        missing = [path for path in self.tracked() if ci_plan.classify(path, rules) is None]
+        self.assertEqual(missing, [], "Add a rule to .github/ci-routes.json for these paths")
+
+    def test_one_folder_is_one_route_except_documented_readmes(self):
+        rules, folders = ci_plan.load_rules(), {}
+        for path in self.tracked():
+            top = path.split("/", 1)[0] if "/" in path else ""
+            folders.setdefault(top, set()).add(ci_plan.classify(path, rules))
+        self.assertEqual(folders["site"], {"site"})
+        for folder in ("scripts", ".github", ".agents", ".codex", ".config", "tools", "assets"):
+            self.assertEqual(folders.get(folder, {"full"}), {"full"}, folder)
+        # docs/ holds Markdown plus data files; crates/ and examples/ hold only README text beside code.
+        for folder in ("docs", "crates", "examples"):
+            self.assertLessEqual(folders[folder], {"docs", "full"}, folder)
+        self.assertNotIn("outputs", folders)
+        self.assertNotIn("work", folders)
+
+    def test_light_routes_skip_native_and_package(self):
+        docs = ["docs/current-status.md", "docs/ru/current-status.md", "README.md", "AGENTS.md",
                 "crates/player/README.ru.md", "examples/crate-garden/README.md"]
-        for paths, regular, light in [
-            (docs, True, True), (list(ci_plan.ROADMAPS), True, True),
-            (docs, False, False), ([], True, False),
-            *((docs + [extra], True, False) for extra in [
-                "docs/tool.py", "docs/editor-ui-tokens.json", "toolchain-manifest.json",
-                "scripts/linux-toolchain.json", "verification.json", ".github/workflows/ci.yml",
-                "crates/editor/src/main.rs", "future/README.md", "scripts/help.md", ".gitignore",
-                "scripts/roadmap_map.py", "scripts/roadmap_world.html", "scripts/roadmap_moves.js"]),
-        ]:
-            with self.subTest(paths=paths, regular=regular), patch.object(
-                    ci_plan, "changed_files", return_value=(paths, regular)):
-                selected = ci_plan.plan("a" * 40, event="pull_request")
-                self.assertEqual([selected[key] for key in ci_plan.ROUTES], [not light, not light, light])
+        for paths, route in [(docs, "docs"), (docs + ["site/roadmap_map.py"], "site"),
+                             (["site/roadmap_world.html", "site/test_roadmap_map.py"], "site")]:
+            selected = self.route(paths)
+            self.assertEqual((selected["route"], selected["light"], selected["native"], selected["package"]),
+                             (route, True, False, False), paths)
+            self.assertEqual(selected["triggers"], [])
 
-    def test_non_pr_documentation_keeps_ordinary_matrix(self):
-        for event in ("push", "merge_group", "workflow_dispatch"):
-            with patch.object(ci_plan, "changed_files", return_value=(["docs/ci.md"], True)):
-                selected = ci_plan.plan("a" * 40, event=event)
-                self.assertEqual([selected[key] for key in ci_plan.ROUTES], [False, False, False])
+    def test_any_code_unknown_or_irregular_change_runs_the_full_matrix(self):
+        light = ["docs/current-status.md", "site/roadmap_map.py"]
+        for extra in ["crates/editor/src/game_ui.rs", "Cargo.lock", "scripts/verify.py", "scripts/test_ci.py",
+                      "assets/texture.png", "game-project-v4.json", ".cargo/config.toml", "docs/editor-ui-tokens.json",
+                      ".github/workflows/ci.yml", ".github/ci-routes.json", "docs/tool.py", "verify.sh",
+                      "toolchain-manifest.json", "LICENSE-MIT", ".gitignore", "tools/dxc/LICENSE-MS.txt",
+                      "future/new-source", "future/README.md", "work/notes.md", "outputs/report.html",
+                      "crates/editor/src/README.md", "scripts/help.md"]:
+            selected = self.route(light + [extra])
+            self.assertEqual((selected["route"], selected["light"], selected["native"], selected["package"]),
+                             ("full", False, True, True), extra)
+            self.assertEqual(selected["triggers"], [extra])
+        self.assertEqual(self.route(light, regular=False)["route"], "full")
+        self.assertEqual(self.route([])["route"], "full")
+
+    def test_unknown_paths_are_reported_as_unclassified(self):
+        selected = self.route(["docs/a.md", "future/new-source"])
+        self.assertEqual((selected["route"], selected["unclassified"]), ("full", ["future/new-source"]))
+
+    def test_one_rule_for_every_event_uses_the_union_against_the_base(self):
+        # pull_request, merge_group and push all call plan(base); a group or push carries the union of its changes.
+        self.assertEqual(self.route(["docs/ci.md", "docs/ru/ci.md"])["route"], "docs")
+        self.assertEqual(self.route(["docs/ci.md", "crates/core/src/lib.rs"])["route"], "full")
+        import inspect
+        self.assertNotIn("event", inspect.signature(ci_plan.plan).parameters)
+
+    def test_glob_semantics(self):
+        rules = [("a", ci_plan.glob_regex(pattern)) for pattern in ("docs/**/*.md", "*.json", "site/**")]
+        for path, expected in [("docs/a.md", True), ("docs/ru/x/a.md", True), ("docs/a.txt", False),
+                               ("a.json", True), ("dir/a.json", False), ("site/x/y", True), ("sitemap", False)]:
+            self.assertEqual(any(regex.fullmatch(path) for _, regex in rules), expected, path)
+
+    def test_summary_names_the_route_and_the_triggering_files(self):
+        text = ci_plan.summary(self.route(["docs/a.md", "crates/x/src/lib.rs"]))
+        self.assertIn("CI route: `full`", text)
+        self.assertIn("`crates/x/src/lib.rs`", text)
+        self.assertNotIn("`docs/a.md`", text)
+        text = ci_plan.summary(self.route(["site/roadmap_map.py"]))
+        self.assertIn("CI route: `site`", text)
+        self.assertIn("`site/roadmap_map.py`", text)
 
     def test_initial_and_manual_run_require_every_route(self):
         with patch("ci_plan.subprocess.run") as process:
-            self.assertTrue(ci_plan.select_non_pr(ci_plan.changed_files("0" * 40)[0])["native"])
-            self.assertTrue(ci_plan.select_non_pr(ci_plan.changed_files("")[0])["package"])
+            self.assertEqual(ci_plan.select(*ci_plan.changed_files("0" * 40))["route"], "full")
+            self.assertEqual(ci_plan.select(*ci_plan.changed_files(""))["route"], "full")
             process.assert_not_called()
 
     def test_diff_uses_nul_separation_no_rename_and_no_shell(self):
@@ -67,19 +113,20 @@ class PolicyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ci_plan.changed_files("--all")
 
-    def test_diff_failure_never_becomes_docs_only_success(self):
+    def test_diff_failure_never_becomes_a_light_success(self):
         with patch("ci_plan.subprocess.run", side_effect=subprocess.CalledProcessError(1, "git")):
             with self.assertRaises(subprocess.CalledProcessError):
                 ci_plan.changed_files("a" * 40)
 
     def test_gate_rejects_every_non_success_prerequisite(self):
-        for docs, native, package in [(True, False, False), (False, True, True),
-                                      (False, False, False), (False, True, False)]:
-            selected = {"docs_only": str(docs).lower(), "native": str(native).lower(),
-                        "package": str(package).lower()}
-            needs = {job: {"result": "skipped" if docs else "success"} for job in
+        for route in ("docs", "site", "full"):
+            light = route != "full"
+            native = package = not light
+            selected = {"light": str(light).lower(), "native": str(native).lower(),
+                        "package": str(package).lower(), "route": route}
+            needs = {job: {"result": "skipped" if light else "success"} for job in
                      ("workspace", "release", "player", "clippy", "contracts")}
-            for job, enabled in (("documentation", docs), ("native", native), ("package", package)):
+            for job, enabled in (("documentation", True), ("native", native), ("package", package)):
                 needs[job] = {"result": "success" if enabled else "skipped"}
             needs["plan"] = {"result": "success", "outputs": selected}
             ci_plan.check_gate(needs)
@@ -89,7 +136,17 @@ class PolicyTests(unittest.TestCase):
                 for result in {"success", "failure", "skipped", "cancelled", None} - {needs[job]["result"]}:
                     with self.subTest(job=job, result=result), self.assertRaises(ValueError):
                         ci_plan.check_gate({**needs, job: {**needs[job], "result": result}})
-            for invalid in ({}, {**selected, "native": ""}, {**selected, "native": "true", "docs_only": "true"}):
+            if not light:
+                for omitted in (("native",), ("package",), ("native", "package")):
+                    outputs = {**selected, **dict.fromkeys(omitted, "false")}
+                    partial = {**needs, "plan": {"result": "success", "outputs": outputs}}
+                    partial.update({job: {"result": "skipped"} for job in omitted})
+                    with self.subTest(omitted=omitted), self.assertRaises(ValueError):
+                        ci_plan.check_gate(partial)
+            flags = {key: value for key, value in selected.items() if key != "route"}
+            for invalid in ({}, {**selected, "native": ""}, {**selected, "native": "true", "light": "true"},
+                            {**selected, "route": "other"}, {**selected, "route": "full" if light else "site"},
+                            flags):
                 with self.assertRaises(ValueError):
                     ci_plan.check_gate({**needs, "plan": {"result": "success", "outputs": invalid}})
 
@@ -123,7 +180,7 @@ class PolicyTests(unittest.TestCase):
         for job, required in cases.items():
             block = text.split(f"\n  {job}:\n", 1)[1].split("\n\n  ", 1)[0]
             self.assertIn("strategy: " + ("&os_matrix" if job == "workspace" else "*os_matrix"), block)
-            route = job if job in ("native", "package") else "docs_only"
+            route = job if job in ("native", "package") else "light"
             flag = "true" if route == job else "false"
             self.assertIn(f"if: needs.plan.outputs.{route} == '{flag}'", block)
             self.assertEqual([block.index(cmd) for cmd in required], sorted(block.index(cmd) for cmd in required))
@@ -211,57 +268,6 @@ class WorkspaceReportingTests(unittest.TestCase):
             with patch("ci_workspace_tests.subprocess.check_output", return_value=f"{dependency} v0.4.0\n"):
                 with self.assertRaisesRegex(ci_workspace_tests.VerificationError, dependency):
                     ci_workspace_tests.check_minimal_player()
-
-
-class RoadmapRouteTests(unittest.TestCase):
-    EN, RU = ci_plan.ROADMAPS
-
-    @classmethod
-    def roadmaps(cls, en="1.5–2 w", ru="1,5–2 н"):
-        row = "| R1.6 | Work \\| details | Criterion | {} |\n"
-        other = "| R1.7 | More work | Another criterion | {} |\n"
-        heading = "### R1 — Phase\n\n"
-        return {cls.EN: heading + row.format(en) + other.format("2 d"),
-                cls.RU: heading + row.format(ru) + other.format("2 д")}
-
-    def route(self, before, after, paths=None):
-        with patch.object(ci_plan, "changed_files", return_value=(list(before) if paths is None else paths, True)), \
-                patch.object(ci_plan, "read_roadmaps", side_effect=(before, after)):
-            return ci_plan.plan("a" * 40)
-
-    def test_bilingual_status_only_and_estimates(self):
-        for en, ru in [("Done", "Сделано"), ("In progress (1.5–2 w)", "В работе (1,5–2 н)"),
-                       ("3 d", "3 д")]:
-            plan = self.route(self.roadmaps(), self.roadmaps(en, ru))
-            self.assertEqual((plan["docs_only"], plan["native"], plan["package"]), (True, False, False))
-
-    def test_empty_single_path_and_mixed_diff_keep_ordinary_route(self):
-        for paths in ([], [self.EN], [self.EN, self.RU, "docs/current-status.md"],
-                      [self.EN, self.RU, "scripts/roadmap_world.html"], ["<initial-or-manual-run>"],
-                      [".github/workflows/ci.yml"]):
-            self.assertFalse(self.route(self.roadmaps(), self.roadmaps("Done", "Сделано"), paths)["docs_only"], paths)
-
-    def test_non_status_and_ambiguous_edits_keep_ordinary_route(self):
-        before, valid = self.roadmaps(), self.roadmaps("Done", "Сделано")
-        for transform in (lambda text: text.replace("Criterion", "Other criterion"),
-                          lambda text: text.replace("R1.6", "R1.9"),
-                          lambda text: text.replace("Work", "Different task"),
-                          lambda text: text.replace("### R1", "### R3"),
-                          lambda text: text + "| R1.8 | Extra | Check | 2 d |\n",
-                          lambda text: text.splitlines(keepends=True)[0],
-                          lambda text: text.replace("\n", "\r\n")):
-            self.assertFalse(self.route(before, {**valid, self.EN: transform(valid[self.EN])})["docs_only"])
-        self.assertFalse(self.route(before, before)["docs_only"])
-        self.assertFalse(self.route(before, {**before, self.EN: valid[self.EN]})["docs_only"])
-        self.assertFalse(self.route(before, self.roadmaps("Done", "В работе"))["docs_only"])
-        after = {**valid, self.RU: before[self.RU].replace("2 д", "Сделано")}
-        self.assertFalse(self.route(before, after)["docs_only"])
-        self.assertFalse(self.route(None, valid, list(before))["docs_only"])
-
-    def test_invalid_values_fail_instead_of_becoming_todo(self):
-        for status in ("Implemented", "Done-ish", "In progres", "In progress (soon)", "1.5 m", ""):
-            with self.subTest(status=status), self.assertRaisesRegex(ValueError, "R1.6.*unsupported"):
-                self.route(self.roadmaps(), self.roadmaps(status, "В работе"))
 
 
 class DxcRestoreTests(unittest.TestCase):

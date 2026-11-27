@@ -7,8 +7,8 @@ status: `Done`, `In progress`, or an effort estimate for work not started yet.
 The Russian counterpart uses `Сделано`/`Выполнено`/`Готово` and `В работе`.
 
 The script parses both language versions, checks that they agree, and injects
-the statuses into scripts/roadmap_map.html and into the campaign map
-scripts/roadmap_world.html. See docs/roadmap-map.md.
+the statuses into site/roadmap_map.html and into the campaign map
+site/roadmap_world.html. See docs/roadmap-map.md.
 """
 
 from __future__ import annotations
@@ -28,8 +28,8 @@ import roadmap_events
 ROOT = Path(__file__).resolve().parent.parent
 EN_PATH = "docs/product-roadmap.md"
 RU_PATH = "docs/ru/product-roadmap.md"
-TEMPLATE_PATH = "scripts/roadmap_map.html"
-WORLD_TEMPLATE_PATH = "scripts/roadmap_world.html"
+TEMPLATE_PATH = "site/roadmap_map.html"
+WORLD_TEMPLATE_PATH = "site/roadmap_world.html"
 DEFAULT_OUT = "outputs/roadmap/index.html"
 WORLD_DIR = "world"  # the campaign map is written to <dir of --out>/world/index.html
 PLACEHOLDER = "/*@ROADMAP_DATA@*/null"
@@ -318,7 +318,7 @@ def build_world(root: Path, events_path: Path | None = None, repo: str = "") -> 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", default=DEFAULT_OUT, help=f"output HTML (default {DEFAULT_OUT})")
-    parser.add_argument("--events", help="events JSON written by scripts/roadmap_events.py (optional)")
+    parser.add_argument("--events", help="events JSON written by site/roadmap_events.py (optional)")
     parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", ""), help="owner/name for event links")
     parser.add_argument("--check", action="store_true", help="only validate the roadmap; write nothing")
     args = parser.parse_args(argv)

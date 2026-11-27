@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Collect recent GitHub activity for the campaign map (scripts/roadmap_world.html).
+"""Collect recent GitHub activity for the campaign map (site/roadmap_world.html).
 
 Runs at build time only. The workflow passes the job's own GITHUB_TOKEN through the
 environment; the token never reaches the generated page, and neither do author names
 or comment bodies: an event keeps only its kind, time, a short title, an optional
 issue/PR number, the roadmap task it mentions, and a github.com link.
 
-    python scripts/roadmap_events.py --repo owner/name --out events.json
+    python site/roadmap_events.py --repo owner/name --out events.json
 
 A failed or rate-limited API call is not an error: the file is written with fewer
 events (or none) and the page is built without them. See docs/roadmap-map.md.
