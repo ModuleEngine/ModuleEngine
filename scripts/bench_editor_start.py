@@ -14,6 +14,7 @@ import sys
 import time
 
 from bench import COMPARE_ROUNDS, command_output, judge_metric, write_json
+from editor_diagnostics import DiagnosticError, png_evidence
 from review_snapshot import entry
 
 
@@ -30,6 +31,15 @@ def digest(path):
 def fixture_inventory(project):
     return {path.relative_to(project.parent).as_posix(): digest(path)
             for path in sorted(project.parent.rglob("*")) if path.is_file()}
+
+
+def require_diagnostic_editor(editor, root):
+    help_result = subprocess.run([str(editor), "--help"], cwd=root, capture_output=True, timeout=15)
+    # R0.6 includes diagnostic personal settings in its regular build. The
+    # current Editor exposes this same option only in its verification build.
+    if help_result.returncode != 0 or b"module-engine-editor --editor-benchmark " not in help_result.stdout:
+        raise ValueError(f"{editor} does not expose the diagnostic Editor routes. "
+                         "Use a Release build with diagnostic personal settings (verification on current sources).")
 
 
 def toolbar_visible(pixels):
@@ -158,10 +168,14 @@ class Desktop:
                             "monitor": self.user.MonitorFromWindow(hwnd, 0)}
         if (client.right, client.bottom) != CLIENT or dpi != 96:
             return None
-        points = [w.POINT(origin.x + x, origin.y + y) for x in (0, WIDTH - 1) for y in (0, HEIGHT - 1)]
+        # Check the corners of the sampled label band, inside the native border.
+        points = [w.POINT(origin.x + x, origin.y + y) for x in (MENUS[0][0], MENUS[-1][1] - 1)
+                  for y in (6, 20)]
 
         def unobstructed():
-            return all(self.user.WindowFromPoint(point) == hwnd for point in points)
+            visible = all(self.user.WindowFromPoint(point) == hwnd for point in points)
+            self.last_window["label_band_unobstructed"] = visible
+            return visible
 
         if not unobstructed():
             return None
@@ -180,30 +194,39 @@ def measure(desktop, editor, root, fixture, folder):
         "MODULE_ENGINE_CAPTURE_", "MODULE_ENGINE_GUI_", "MODULE_ENGINE_UI_"))
         and key not in ("EFRAME_SCREENSHOT_TO", "MODULE_ENGINE_SHOW_CUSTOM", "MODULE_ENGINE_WINDOW_SYSTEM")}
     env["MODULE_ENGINE_DIAGNOSTIC_USER_ROOT"] = str(personal)
+    # The regular window opens normally. The existing UI capture route closes
+    # it after several frames and a settling delay, after the measured event.
+    capture = folder / "shutdown-frame.png"
+    env["MODULE_ENGINE_UI_SCREENSHOT_TO"] = str(capture)
     with (folder / "stdout.txt").open("wb") as stdout, (folder / "stderr.txt").open("wb") as stderr:
         start = time.perf_counter_ns()
         process = subprocess.Popen([str(editor), str(fixture)], cwd=root, env=env, stdout=stdout, stderr=stderr)
         hwnd = None
         raised = None
+        raise_count = 0
         lower = start
         observed_pixels = None
+        first_frame = False
         forced_close = False
         desktop.last_window = None
         try:
             while time.perf_counter_ns() - start < 30_000_000_000 and process.poll() is None:
                 before = time.perf_counter_ns()
                 hwnd = desktop.window(process.pid)
-                if hwnd and hwnd != raised:
+                covered = desktop.last_window and desktop.last_window.get("label_band_unobstructed") is False
+                if hwnd and (hwnd != raised or covered):
                     # Put the measured window above other applications without
                     # stealing keyboard focus or changing its size/position.
                     if not desktop.user.SetWindowPos(hwnd, w.HWND(-1), 0, 0, 0, 0, 0x13):
                         raise c.WinError(c.get_last_error())
                     raised = hwnd
+                    raise_count += 1
                 pixels = desktop.pixels(hwnd) if hwnd else None
                 after = time.perf_counter_ns()
                 if pixels:
                     observed_pixels = pixels
                 if pixels and toolbar_visible(pixels):
+                    first_frame = True
                     break
                 lower = before
                 time.sleep(0.002)
@@ -214,13 +237,18 @@ def measure(desktop, editor, root, fixture, folder):
                                  f"{desktop.last_window}, {folder}")
         finally:
             if process.poll() is None:
-                if hwnd:
+                if not first_frame and hwnd:
                     desktop.user.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
                 try:
                     process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     forced_close = True
-                    process.terminate()
+                    taskkill = Path(os.environ.get("SystemRoot", "C:/Windows")) / "System32/taskkill.exe"
+                    cleanup = subprocess.run([str(taskkill), "/PID", str(process.pid), "/T", "/F"],
+                                             capture_output=True, timeout=15)
+                    (folder / "cleanup.log").write_bytes(cleanup.stdout + cleanup.stderr)
+                    if cleanup.returncode and process.poll() is None:
+                        process.terminate()
                     process.wait(timeout=5)
     save_bitmap(folder / "first-toolbar.bmp", pixels)
     log = (folder / "stderr.txt").read_text(encoding="utf-8", errors="replace")
@@ -233,8 +261,14 @@ def measure(desktop, editor, root, fixture, folder):
     record = {"lower_ms": (lower - start) / 1e6, "upper_ms": (after - start) / 1e6,
               "exit_code": process.returncode, "forced_close": forced_close,
               "graphics": graphics[0], "adapter": adapter[1], "window": desktop.last_window,
-              "toolbar_sha256": digest(folder / "first-toolbar.bmp")}
+              "toolbar_sha256": digest(folder / "first-toolbar.bmp"), "raise_count": raise_count}
     write_json(folder / "launch.json", record)
+    if forced_close or process.returncode != 0:
+        raise ValueError(f"Editor did not shut down cleanly: {folder}")
+    evidence = png_evidence(capture, folder)
+    if [evidence["width"], evidence["height"]] != list(CLIENT):
+        raise ValueError(f"Unexpected native screenshot dimensions: {folder}")
+    write_json(folder / "shutdown-frame.json", evidence)
     return record
 
 
@@ -257,6 +291,8 @@ def main():
     fixture, output = args.project.resolve(strict=True), args.out.resolve()
     if output.is_relative_to(fixture.parent):
         parser.error("The output directory must be outside the input fixture directory")
+    for editor, root in sides.values():
+        require_diagnostic_editor(editor, root)
     fixture_before = fixture_inventory(fixture)
     output.mkdir(parents=True)
     executables = {name: digest(editor) for name, (editor, _) in sides.items()}
@@ -309,5 +345,5 @@ def main():
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except (OSError, ValueError, subprocess.SubprocessError) as error:
+    except (OSError, ValueError, DiagnosticError, subprocess.SubprocessError) as error:
         sys.exit(str(error))

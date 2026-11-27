@@ -337,7 +337,9 @@ names when appropriate.
 
 Use [the paired Windows startup benchmark](../scripts/bench_editor_start.py)
 with Release executables built from the candidate and the R0.6 source
-`731661c47e181847450e00480e60c0645abd4753`. Retain the build commands, feature
+`731661c47e181847450e00480e60c0645abd4753`. Use `bench` on R0.6 and
+`bench,verification` on the current sources to enable isolated personal
+settings. Retain the build commands, feature
 sets, source revisions and binary hashes. Use each binary's own Full source
 directory and the same disposable project with its scene files. Run on one
 unlocked 100% DPI desktop with room for the default 1580×940 client.
@@ -354,8 +356,10 @@ probe raises only its own root window without activating it and samples the
 desktop until the client displays the File, Edit, Tools and Windows menu
 labels. It retains the first matching toolbar image, the interval from the
 last negative observation to the first positive observation, and the actual
-graphics backend and adapter. Keep the desktop unobstructed and avoid input
-during the series.
+graphics backend and adapter. The Editor's UI capture route takes a later
+snapshot and closes the process normally. This later readback is outside
+the timed interval. A launch without a valid readback or a clean shutdown
+invalidates the series. Keep the desktop unobstructed and avoid input.
 
 After one unscored launch per side, the probe alternates five fresh processes
 per side and submits the first positive observations to the timing rule above,
