@@ -29,7 +29,7 @@ jobs:
     outputs:
       native: ${{ steps.routes.outputs.native }}
       package: ${{ steps.routes.outputs.package }}
-      roadmap_only: ${{ steps.routes.outputs.roadmap_only }}
+      docs_only: ${{ steps.routes.outputs.docs_only }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -46,7 +46,7 @@ jobs:
   checks:
     name: Workspace and selected routes (${{ matrix.os }})
     needs: plan
-    if: needs.plan.outputs.roadmap_only == 'false'
+    if: needs.plan.outputs.docs_only == 'false'
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -157,10 +157,10 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  roadmap_status:
-    name: Roadmap status checks
+  documentation:
+    name: Documentation checks
     needs: plan
-    if: needs.plan.outputs.roadmap_only == 'true'
+    if: needs.plan.outputs.docs_only == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -182,7 +182,7 @@ jobs:
   required:
     name: CI required
     if: always()
-    needs: [plan, checks, roadmap_status]
+    needs: [plan, checks, documentation]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -196,8 +196,8 @@ jobs:
         env:
           CI_PLAN_RESULT: ${{ needs.plan.result }}
           CI_CHECKS_RESULT: ${{ needs.checks.result }}
-          CI_ROADMAP_RESULT: ${{ needs.roadmap_status.result }}
+          CI_DOCUMENTATION_RESULT: ${{ needs.documentation.result }}
           CI_NATIVE: ${{ needs.plan.outputs.native }}
           CI_PACKAGE: ${{ needs.plan.outputs.package }}
-          CI_ROADMAP_ONLY: ${{ needs.plan.outputs.roadmap_only }}
+          CI_DOCS_ONLY: ${{ needs.plan.outputs.docs_only }}
         run: python scripts/ci_plan.py --gate

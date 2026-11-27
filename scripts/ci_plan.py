@@ -9,27 +9,33 @@ import subprocess
 import roadmap_map
 
 ROADMAPS = {roadmap_map.EN_PATH: "en", roadmap_map.RU_PATH: "ru"}
-ROUTES = ("native", "package", "roadmap_only")
+ROUTES = ("native", "package", "docs_only")
 
 
-def select(paths, roadmap_only=False):
+def select_non_pr(paths, docs_only=False):
     # Only documentation-only changes omit the additional native/package routes.
     # Unknown/new source paths fail toward more coverage, not a missed subsystem.
     relevant = not paths or any(not (path.startswith("docs/") or
                                      PurePosixPath(path).suffix.lower() == ".md" or
                                      path in {"LICENSE-MIT", "LICENSE-APACHE", ".gitignore"}) for path in paths)
-    return {"native": relevant, "package": relevant, "roadmap_only": roadmap_only, "paths": paths}
+    return {"native": relevant, "package": relevant, "docs_only": docs_only, "paths": paths}
 
 
-def changed_paths(base, head="HEAD"):
+def changed_files(base, head="HEAD"):
     if not base or base == "0" * 40:
-        return ["<initial-or-manual-run>"]
+        return ["<initial-or-manual-run>"], False
     if not re.fullmatch(r"[a-fA-F0-9]{40}", base):
         raise ValueError("Base must be a full Git SHA")
-    result = subprocess.run(["git", "diff", "--no-ext-diff", "--no-renames", "--name-only", "-z",
+    result = subprocess.run(["git", "diff", "--no-ext-diff", "--no-renames", "--raw", "-z",
                              base, head, "--"], check=True, capture_output=True)
-    return sorted(path.decode("utf-8", errors="surrogateescape")
-                  for path in result.stdout.split(b"\0") if path)
+    fields = result.stdout.split(b"\0")[:-1]
+    paths = []
+    regular = True
+    for i in range(0, len(fields), 2):
+        old_mode, new_mode = fields[i][1:].split()[:2]
+        regular = regular and all(mode in {b"000000", b"100644"} for mode in (old_mode, new_mode))
+        paths.append(fields[i + 1].decode("utf-8", errors="surrogateescape"))
+    return sorted(paths), regular
 
 
 def status_edits(before, after):
@@ -80,26 +86,36 @@ def read_roadmaps(commit):
             for meta, path in marked}
 
 
-def plan(base, head="HEAD"):
-    paths = changed_paths(base, head)
+def documentation_path(path):
+    return (path.startswith("docs/") and path.endswith((".md", ".markdown"))
+            or path in {"AGENTS.md", "README.md", "README.ru.md"}
+            or re.fullmatch(r"(?:crates|examples)/[^/]+/README(?:\.ru)?\.md", path) is not None)
+
+
+def plan(base, head="HEAD", event=""):
+    paths, regular = changed_files(base, head)
+    if event == "pull_request":
+        light = bool(paths) and regular and all(documentation_path(path) for path in paths)
+        return {"native": not light, "package": not light, "docs_only": light, "paths": paths}
+
     if set(paths) != ROADMAPS.keys():
-        return select(paths)
+        return select_non_pr(paths)
     before, after = read_roadmaps(base), read_roadmaps(head)
     if not before or not after:
-        return select(paths)
-    return select(paths, roadmap_only=roadmap_status_only(before, after))
+        return select_non_pr(paths)
+    return select_non_pr(paths, docs_only=roadmap_status_only(before, after))
 
 
-def check_gate(plan_result, checks_result, roadmap_result, selected):
+def check_gate(plan_result, checks_result, documentation_result, selected):
     if plan_result != "success":
         raise ValueError("CI requires successful route selection")
     if set(selected) != set(ROUTES) or any(value not in {"true", "false"} for value in selected.values()):
         raise ValueError("Missing or invalid route selection")
-    if selected["roadmap_only"] == "true":
-        if (selected["native"], selected["package"], checks_result, roadmap_result) != ("false", "false", "skipped", "success"):
-            raise ValueError("Status-only CI requires successful roadmap checks and a skipped OS matrix")
-    elif (checks_result, roadmap_result) != ("success", "skipped"):
-        raise ValueError("Ordinary CI requires success from both OS jobs and skips the status-only job")
+    if selected["docs_only"] == "true":
+        if (selected["native"], selected["package"], checks_result, documentation_result) != ("false", "false", "skipped", "success"):
+            raise ValueError("Documentation CI requires successful roadmap checks and a skipped OS matrix")
+    elif (checks_result, documentation_result) != ("success", "skipped"):
+        raise ValueError("Ordinary CI requires success from both OS jobs and skips the documentation job")
 
 
 def main():
@@ -110,10 +126,10 @@ def main():
     if args.gate:
         selected = {key: os.environ.get("CI_" + key.upper(), "") for key in ROUTES}
         check_gate(os.environ.get("CI_PLAN_RESULT"), os.environ.get("CI_CHECKS_RESULT"),
-                   os.environ.get("CI_ROADMAP_RESULT"), selected)
+                   os.environ.get("CI_DOCUMENTATION_RESULT"), selected)
         print("CI required passed; route selection: " + json.dumps(selected))
         return
-    selected = plan(args.base)
+    selected = plan(args.base, event=os.environ.get("GITHUB_EVENT_NAME", ""))
     print(json.dumps(selected, ensure_ascii=True, indent=2))
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
