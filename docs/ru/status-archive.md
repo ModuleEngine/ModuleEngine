@@ -450,7 +450,7 @@ Launcher и его unit fixtures реализованы отдельно от Ru
 
 [GitHub CI](ci.md) запускает отдельные Windows/Linux проверки `contracts` и `clippy`,
 включая документационные PR, и выбранные native/package
-маршруты; в публичном `myjname/ModuleEngine` для `main` требуется `CI required`,
+маршруты; в публичном `ModuleEngine/ModuleEngine` для `main` требуется `CI required`,
 включая администратора. Новые версии оцениваются по фактическому CI своего SHA,
 не по старому зелёному запуску. Негативный служебный PR подтвердил блокировку merge.
 
@@ -462,7 +462,7 @@ preflight 0.592 с) с существующими прогретыми общи�
 Windows (`outputs/ci-editor-builds-20261017/verification/20261017T015811Z-985d823c/result.json`),
 Ubuntu/WSL (`outputs/ci-editor-builds-20261017/verification/20261017T015921Z-6ef11385/result.json`).
 Это не холодные замеры и не аппаратная приёмка.
-[Hosted-прогон этапов 1/2](https://github.com/myjname/ModuleEngine/actions/runs/38994338494)
+[Hosted-прогон этапов 1/2](https://github.com/ModuleEngine/ModuleEngine/actions/runs/38994338494)
 прошёл Windows/Linux Clippy, contracts, выбранные native/package маршруты и aggregate;
 прежние границы приёмки сохраняются.
 

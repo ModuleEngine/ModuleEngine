@@ -453,7 +453,7 @@ and delivery limitations remain.
 
 [GitHub CI](ci.md) runs separate Windows/Linux `contracts` and `clippy` checks, including
 documentation PRs, and selected native/package
-routes; public `myjname/ModuleEngine` requires `CI required` for `main`,
+routes; public `ModuleEngine/ModuleEngine` requires `CI required` for `main`,
 including administrators. New versions are assessed by the actual CI for their SHA,
 not an old green run. A negative service PR confirmed merge blocking.
 
@@ -465,7 +465,7 @@ preflight 0.592 s), using existing warm shared caches. Reports:
 Windows (`outputs/ci-editor-builds-20261017/verification/20261017T015811Z-985d823c/result.json`),
 Ubuntu/WSL (`outputs/ci-editor-builds-20261017/verification/20261017T015921Z-6ef11385/result.json`).
 These are not cold measurements or hardware acceptance. The
-[stage-1/2 hosted run](https://github.com/myjname/ModuleEngine/actions/runs/38994338494)
+[stage-1/2 hosted run](https://github.com/ModuleEngine/ModuleEngine/actions/runs/38994338494)
 passed Windows/Linux Clippy, contracts, selected native/package routes and the aggregate;
 previous acceptance boundaries remain.
 

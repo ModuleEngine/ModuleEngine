@@ -47,7 +47,7 @@ using current camera and transforms, then tests the remaining bounds. See the
   the review after the readback alignment fix. The reviewer accepted the original
   criteria on the reference Windows configuration. The formatting follow-up and
   main synchronization were reviewed separately, with the final checked PR head
-  `33068733787412b5bc1664c22032c6f34e18fb17`. [PR #43](https://github.com/myjname/ModuleEngine/pull/43) · [Required CI](https://github.com/myjname/ModuleEngine/actions/runs/45127626276)
+  `33068733787412b5bc1664c22032c6f34e18fb17`. [PR #43](https://github.com/ModuleEngine/ModuleEngine/pull/43) · [Required CI](https://github.com/ModuleEngine/ModuleEngine/actions/runs/45127626276)
 - Bench conditions were Windows x64 `26300.10075`, Ryzen 9 3900X, RTX 4080
   SUPER `10de:2702` (16,376 MiB), driver `617.42`, device Vulkan `1.4.351`,
   Rust `1.99.0` (`x86_64-pc-windows-msvc`) and Release Editor with `bench`.
@@ -63,7 +63,7 @@ using current camera and transforms, then tests the remaining bounds. See the
   differed from the reviewed `main` only in the two roadmap files. It did
   not resample the window series. The repeated 36 comparisons and seven
   pairs agreed, with zero Vulkan validation warnings and errors.
-  [Reviewed main](https://github.com/myjname/ModuleEngine/tree/c93f919695b98e93162b045721f0137227b49961)
+  [Reviewed main](https://github.com/ModuleEngine/ModuleEngine/tree/c93f919695b98e93162b045721f0137227b49961)
 - The combined review of 24 November reconciled that Windows result with the
   Linux source review at the same `main` snapshot. It upheld R2.4 on the original
   criteria and identified evidence availability, explicit timing criteria and

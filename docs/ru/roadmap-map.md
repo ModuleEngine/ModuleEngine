@@ -6,7 +6,7 @@
 
 ## Где смотреть
 
-После каждого слияния в `main`, которое затрагивает дорожную карту, [workflow Roadmap map](../../.github/workflows/roadmap.yml) публикует страницу на GitHub Pages: `https://myjname.github.io/ModuleEngine/`. Тот же workflow публикует рядом [карту походов](#карта-походов): `https://myjname.github.io/ModuleEngine/world/`.
+После каждого слияния в `main`, которое затрагивает дорожную карту, [workflow Roadmap map](../../.github/workflows/roadmap.yml) публикует страницу на GitHub Pages: `https://moduleengine.github.io/ModuleEngine/`. Тот же workflow публикует рядом [карту походов](#карта-походов): `https://moduleengine.github.io/ModuleEngine/world/`.
 
 Однократная настройка: в репозитории **Settings → Pages → Build and deployment** выберите в **Source** вариант **GitHub Actions**. До этого задание публикации падает, а сборка и проверка всё равно выполняются.
 

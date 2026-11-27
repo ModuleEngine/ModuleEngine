@@ -7,7 +7,7 @@ with an existing normal native Editor executable. It creates its own fixture, re
 `--editor-ui-check` for workflow checks, and records native WGPU captures. The wrapper
 does not build an Editor and accepts no authored project JSON as input. The Windows
 runs below confirm this bounded route; Linux native capture remains unverified.
-The [stage-1/2 hosted CI run](https://github.com/myjname/ModuleEngine/actions/runs/38994338494)
+The [stage-1/2 hosted CI run](https://github.com/ModuleEngine/ModuleEngine/actions/runs/38994338494)
 passed its Windows/Linux verification routes; it did not run native diagnostic captures.
 
 ## Run

@@ -154,7 +154,7 @@ contracts, выбранный native/package маршрут и artifact check. H
 
 Один локальный repeat не доказывает hosted выигрыш; фактические результаты прогонов
 относятся к своим отчётам. Uncached baseline —
-[PR #6 run 38994338494](https://github.com/myjname/ModuleEngine/actions/runs/38994338494).
+[PR #6 run 38994338494](https://github.com/ModuleEngine/ModuleEngine/actions/runs/38994338494).
 Это руководство не заявляет ускорение cache относительно baseline и не предсказывает
 результат miss/hit. Перенос cache может стоить больше предотвращённой работы.
 Caching не меняет fail-closed aggregate `CI required` или границы полной приёмки.

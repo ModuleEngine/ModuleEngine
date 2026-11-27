@@ -152,7 +152,7 @@ verification artifacts with each report.
 
 A local repeat alone does not establish hosted benefit; actual run results belong
 with their reports. The uncached baseline is
-[PR #6 run 38994338494](https://github.com/myjname/ModuleEngine/actions/runs/38994338494).
+[PR #6 run 38994338494](https://github.com/ModuleEngine/ModuleEngine/actions/runs/38994338494).
 This guide does not claim a cache speedup from that baseline or predict a miss/hit
 result. Cache transfer may cost more than the work it avoids. No change to the
 fail-closed `CI required` aggregate or full acceptance boundaries follows from caching.

@@ -6,7 +6,7 @@ The visual roadmap is an HTML page with the phase map of the [engine rebuild tra
 
 ## Where to see it
 
-After every merge to `main` that touches the roadmap, the [Roadmap map workflow](../.github/workflows/roadmap.yml) publishes the page to GitHub Pages: `https://myjname.github.io/ModuleEngine/`. The same workflow publishes the [campaign map](#campaign-map) next to it at `https://myjname.github.io/ModuleEngine/world/`.
+After every merge to `main` that touches the roadmap, the [Roadmap map workflow](../.github/workflows/roadmap.yml) publishes the page to GitHub Pages: `https://moduleengine.github.io/ModuleEngine/`. The same workflow publishes the [campaign map](#campaign-map) next to it at `https://moduleengine.github.io/ModuleEngine/world/`.
 
 One-time setup: in the repository **Settings → Pages → Build and deployment**, set **Source** to **GitHub Actions**. Until then the deploy job fails while the build and check still run.
 
