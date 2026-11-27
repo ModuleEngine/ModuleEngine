@@ -7,9 +7,10 @@ publish = false
 
 [features]
 default = []
-ui = ["dep:egui"]
+ui = ["dep:egui", "dep:module-engine-game-ui"]
 
 [dependencies]
+module-engine-game-ui = { path = "../game-ui", optional = true }
 module-engine-core = { path = "../engine-core" }
 serde.workspace = true
 serde_json.workspace = true

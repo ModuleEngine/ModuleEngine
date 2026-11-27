@@ -116,6 +116,11 @@ jobs:
       - name: Default Release Editor refuses verification commands
         env: *build_env
         run: cargo test --offline --locked --release -p module-engine-editor --test verification_cli
+      - name: Build the Editor without game packages
+        env: *build_env
+        run: |
+          python scripts/ci_workspace_tests.py --check-game-free-editor
+          cargo build --offline --locked --release -p module-engine-editor --no-default-features
       - *reports
 
   clippy:

@@ -1,95 +1,26 @@
 //! Source-installed UI callbacks selected by the host's active contribution ID.
 use eframe::egui::{self, Rect};
 use module_engine_core::{Camera, GameInput, GameState, GameUiResponse, GameUiStatus};
-use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
-type InputCallback = fn(&egui::Ui, &egui::Response, Rect, Camera, bool) -> GameInput;
-type HudCallback = fn(&mut egui::Ui, Rect, &GameState, Camera, Option<[f32; 3]>) -> bool;
-pub type ControlsCallback =
-    fn(&mut egui::Ui, Rect, &GameState, Camera, Option<[f32; 3]>) -> GameInput;
-pub type StatusControlsCallback =
-    fn(&mut egui::Ui, Rect, &GameState, Camera, Option<[f32; 3]>, &GameUiStatus) -> GameUiResponse;
-type AimCallback = fn(&GameState, &GameInput, bool, bool) -> Option<[f32; 3]>;
-
-pub struct UiContribution {
-    pub id: &'static str,
-    pub input: InputCallback,
-    pub hud: HudCallback,
-    /// Replaces the legacy restart-only HUD when present.
-    pub controls: Option<ControlsCallback>,
-    /// Status-aware source UI; replaces older controls without changing GameInput.
-    pub controls_with_status: Option<StatusControlsCallback>,
-    pub preview_aim: Option<AimCallback>,
-    pub has_input: Option<fn(&GameInput) -> bool>,
-    pub capture_input: Option<fn(&GameState) -> GameInput>,
-}
-
-#[derive(Default)]
-pub struct UiRegistry {
-    contributions: BTreeMap<&'static str, UiContribution>,
-}
-impl UiRegistry {
-    pub fn register(&mut self, contribution: UiContribution) -> Result<(), String> {
-        if contribution.id.is_empty() || self.contributions.contains_key(contribution.id) {
-            return Err(format!(
-                "Invalid or duplicate UI contribution {}",
-                contribution.id
-            ));
-        }
-        self.contributions.insert(contribution.id, contribution);
-        Ok(())
-    }
-    pub fn get(&self, id: Option<&str>) -> Option<&UiContribution> {
-        self.contributions.get(id?)
-    }
-}
+pub use module_engine_game_ui::{
+    ControlsCallback, StatusControlsCallback, UiContribution, UiRegistry,
+};
 
 fn installed() -> &'static UiRegistry {
     static REGISTRY: OnceLock<UiRegistry> = OnceLock::new();
     REGISTRY.get_or_init(|| {
-        let mut registry = UiRegistry::default();
-        // This is the UI composition root. Each installed package supplies its
-        // callbacks; the Player dispatch paths below contain no game rules.
+        let mut registry = UiRegistry::for_systems(
+            crate::composition::installed_systems().expect("Valid installed runtime catalog"),
+        );
         #[cfg(feature = "arpg")]
-        registry
-            .register(UiContribution {
-                id: "arpg.presentation",
-                input: module_engine_arpg::ui::read_input_mode,
-                hud: module_engine_arpg::ui::draw_hud,
-                controls: None,
-                controls_with_status: None,
-                preview_aim: Some(module_engine_arpg::ui::preview_aim),
-                has_input: Some(module_engine_arpg::ui::has_input),
-                capture_input: Some(module_engine_arpg::ui::capture_input),
-            })
-            .expect("Unique installed UI contribution");
+        module_engine_arpg::ui::install(&mut registry)
+            .expect("Unique installed ARPG UI contribution");
         #[cfg(feature = "puzzle")]
-        registry
-            .register(UiContribution {
-                id: "puzzle.presentation",
-                input: module_engine_project_puzzle::ui::read_input_mode,
-                hud: module_engine_project_puzzle::ui::draw_hud,
-                controls: None,
-                controls_with_status: None,
-                preview_aim: None,
-                has_input: Some(module_engine_project_puzzle::ui::has_input),
-                capture_input: None,
-            })
+        module_engine_project_puzzle::ui::install(&mut registry)
             .expect("Unique installed puzzle UI contribution");
         #[cfg(feature = "g1")]
-        registry
-            .register(UiContribution {
-                id: "g1.presentation",
-                input: module_engine_g1::ui::read_input_mode,
-                hud: module_engine_g1::ui::draw_hud,
-                controls: None,
-                controls_with_status: Some(module_engine_g1::ui::draw_controls_with_status),
-                preview_aim: None,
-                has_input: Some(module_engine_g1::ui::has_input),
-                capture_input: None,
-            })
-            .expect("Unique installed G1 UI contribution");
+        module_engine_g1::ui::install(&mut registry).expect("Unique installed G1 UI contribution");
         #[cfg(not(any(feature = "arpg", feature = "puzzle", feature = "g1")))]
         let _ = &mut registry;
         registry
@@ -173,48 +104,6 @@ pub fn draw_hud_for(
     aim: Option<[f32; 3]>,
 ) -> bool {
     draw_controls_for(id, ui, rect, state, camera, aim).restart
-}
-
-impl UiContribution {
-    pub fn draw_controls_with_status(
-        &self,
-        ui: &mut egui::Ui,
-        rect: Rect,
-        state: &GameState,
-        camera: Camera,
-        aim: Option<[f32; 3]>,
-        status: &GameUiStatus,
-    ) -> GameUiResponse {
-        if let Some(callback) = self.controls_with_status {
-            let mut response = callback(ui, rect, state, camera, aim, status);
-            response.close_application &= status.can_close_application;
-            response
-        } else {
-            GameUiResponse {
-                input: self.draw_controls(ui, rect, state, camera, aim),
-                close_application: false,
-            }
-        }
-    }
-    pub fn draw_controls(
-        &self,
-        ui: &mut egui::Ui,
-        rect: Rect,
-        state: &GameState,
-        camera: Camera,
-        aim: Option<[f32; 3]>,
-    ) -> GameInput {
-        if let Some(callback) = self.controls_with_status {
-            callback(ui, rect, state, camera, aim, &GameUiStatus::default()).input
-        } else if let Some(callback) = self.controls {
-            callback(ui, rect, state, camera, aim)
-        } else {
-            GameInput {
-                restart: (self.hud)(ui, rect, state, camera, aim),
-                ..Default::default()
-            }
-        }
-    }
 }
 
 pub fn draw_controls_for(

@@ -6,10 +6,13 @@ license.workspace = true
 publish = false
 
 [features]
+verification = ["dep:module-engine-host"]
 default = []
-ui = ["dep:egui"]
+ui = ["dep:egui", "dep:module-engine-game-ui"]
 
 [dependencies]
+module-engine-host = { path = "../game-host", optional = true }
+module-engine-game-ui = { path = "../game-ui", optional = true }
 module-engine-core = { path = "../engine-core" }
 serde.workspace = true
 serde_json.workspace = true

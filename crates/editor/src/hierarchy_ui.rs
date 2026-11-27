@@ -395,7 +395,7 @@ mod tests {
         editor_ui::configure(&ctx);
         let mut workbench = GameWorkbench::default();
         let mut document = module_engine_core::demo_document(WorldKind::Objects);
-        document.game = Some(module_engine_two_arenas::demo_project());
+        document.game = Some(module_engine_editor_composition::two_arenas::demo_project());
         let before = document.clone();
         let bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300., 80.));
         ctx.run_ui(
@@ -425,7 +425,7 @@ mod tests {
         editor_ui::configure(&ctx);
         let mut workbench = GameWorkbench::default();
         let mut document = module_engine_core::demo_document(WorldKind::Objects);
-        document.game = Some(module_engine_two_arenas::demo_project());
+        document.game = Some(module_engine_editor_composition::two_arenas::demo_project());
         workbench.scene = "arena".into();
         workbench.select(None);
         let before = document.clone();

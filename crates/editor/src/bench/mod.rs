@@ -142,6 +142,18 @@ fn s4_floor(
 
 fn game(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
     let g1 = id == "S1";
+    use module_engine_editor_composition::ProjectTemplate;
+    let template = if g1 {
+        ProjectTemplate::G1
+    } else {
+        ProjectTemplate::TwoArenas
+    };
+    if !template.installed() {
+        return Err(format!(
+            "Benchmark {id} requires the {} template",
+            template.0
+        ));
+    }
     let storage = folder.join("profile");
     let mut host = ui::prepare_host(|| {
         let (document, asset_root, compile_root) = if g1 {
@@ -175,11 +187,15 @@ fn game(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
     let document = serde_json::to_vec(host.accepted_document()).map_err(|e| e.to_string())?;
     let document_sha256 = module_engine_project::hash_bytes(&document);
     let mut input = json!({"fixture":"Two Arenas ARPG source template","input":"idle"});
+    #[cfg(feature = "g1")]
     if g1 {
         // Use the game's normal Play action against the fresh profile.
-        host.step(1. / 60., &module_engine_g1::action_input("g1.play"))?;
-        let view = module_engine_g1::view(host.session.state())?;
-        if view.phase != module_engine_g1::Phase::Playing {
+        host.step(
+            1. / 60.,
+            &module_engine_editor_composition::g1::action_input("g1.play"),
+        )?;
+        let view = module_engine_editor_composition::g1::view(host.session.state())?;
+        if view.phase != module_engine_editor_composition::g1::Phase::Playing {
             return Err("G1 Play action did not enter Playing".into());
         }
         input = json!({"fixture":"Crate Garden source template","input":"Play, then idle","fresh_profile":true});

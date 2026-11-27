@@ -181,3 +181,8 @@ mod tests {
         );
     }
 }
+#[cfg(feature = "ui")]
+pub mod authoring;
+
+#[cfg(feature = "verification")]
+pub mod verification;

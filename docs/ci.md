@@ -99,6 +99,7 @@ Each platform runs separate workspace, default Release Editor build and CLI test
 Clippy, contracts and minimal Player jobs. The plan can also select native and package
 jobs independently. Each job gets its own hosted VM and TEMP. GPU and native tests
 within a job run serially. Windows places Cargo products on a Dev Drive.
+The release job also builds the Editor with `--no-default-features` and rejects game crates in its normal or build dependency tree.
 Top-level workspace builds use rust-lld on Windows and lld on Linux. Release Editor,
 Clippy and minimal Player invocations set the fast linker and `CARGO_PROFILE_DEV_DEBUG=0`.
 The native and Custom SDK proofs retain their audited compiler environment.

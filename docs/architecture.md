@@ -134,13 +134,11 @@ and output path, source or artifact identity, enabled features and result.
 | ARPG / Two Arenas | ARPG owns mechanics, schemas and `arpg.presentation`, including projected aim, HUD and capture input. Two Arenas owns its content and encounter tuning. The Editor's `--game-check` provides the game-specific progression and defeat scenarios. |
 | Neutral and Player | The minimal Player CI build checks the dependency graph with `--no-default-features`. For the Editor split, check the normal/build dependency graphs of the generic Editor and a composed build with an omitted game. In that build, open a neutral project with the usual tools, check that the omitted entries are unavailable, and verify that a project requiring the missing contracts is rejected without changing its data. |
 
-At the R4.1 baseline, Editor still links the concrete games. The Editor wires
-G1's palette, the games supply schema-driven Inspector data, and the Player
-composition code assembles the three game UI contributions. See the [module
-tool registration](../crates/editor/src/panes.rs), [shared presentation
-dispatcher](../crates/player/src/presentations.rs), [Player export
-contracts](engine-profiles.md#экспорт-windows-player) and [minimal Player
-checks](ci.md#что-выполняется).
+The default Editor enables `arpg`, `puzzle` and `g1`. Build a game-free Editor with `cargo build --locked -p module-engine-editor --no-default-features`. Add `--features g1` to select only Crate Garden. CI builds the game-free Editor and checks its normal and build dependencies.
+
+The [Editor composition](../crates/editor-composition/src/lib.rs) installs game-owned templates and tools into the [authoring registry](../crates/game-ui/src/authoring.rs). The File menu enumerates the registered templates. Editor retains control over validation, resource copying and publication. To add a game, declare its optional dependency in the composition package, install its authoring entries there, and register its runtime and presentation in the Player composition. A dependency feature such as `--features module-engine-editor-composition/my-game` selects the new package without editing `crates/editor`. Exportable games also need native feature metadata for Player packaging.
+
+Both shells use the [presentation dispatcher](../crates/player/src/presentations.rs). G1 and Puzzle supply verification logic, and Two Arenas owns the ARPG progression scenario. The existing Editor CLI commands supply application services and validated inputs.
 
 <a id="два-маршрута-исполнения"></a>
 

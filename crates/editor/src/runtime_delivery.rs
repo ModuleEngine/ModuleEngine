@@ -704,7 +704,8 @@ pub(crate) mod tests {
         .unwrap();
         assert!(!team.can_author_engine());
         let game = delivered.game.as_ref().unwrap();
-        let mut draft = module_engine_g1::GridDraft::from_project(game, "level01").unwrap();
+        let mut draft =
+            module_engine_editor_composition::g1::GridDraft::from_project(game, "level01").unwrap();
         draft.width += 1;
         let mut painted = delivered.clone();
         painted.game = Some(draft.into_project(game).unwrap());
@@ -733,7 +734,7 @@ pub(crate) mod tests {
         .unwrap();
         host.step(1. / 60., &GameInput::default()).unwrap();
         assert_eq!(
-            module_engine_g1::view(host.session.state())
+            module_engine_editor_composition::g1::view(host.session.state())
                 .unwrap()
                 .board
                 .width,
@@ -742,7 +743,7 @@ pub(crate) mod tests {
         host.restart().unwrap();
         host.step(1. / 60., &GameInput::default()).unwrap();
         assert_eq!(
-            module_engine_g1::view(host.session.state())
+            module_engine_editor_composition::g1::view(host.session.state())
                 .unwrap()
                 .board
                 .width,

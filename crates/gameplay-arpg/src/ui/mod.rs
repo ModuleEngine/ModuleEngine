@@ -384,3 +384,17 @@ pub fn aim_at(camera: Camera, normalized: [f32; 2], aspect: f32) -> [f32; 3] {
     }
     [eye[0] + ray[0] * t, 0., eye[2] + ray[2] * t]
 }
+
+/// Install this game's presentation into the application composition.
+pub fn install(registry: &mut module_engine_game_ui::UiRegistry) -> Result<(), String> {
+    registry.register(module_engine_game_ui::UiContribution {
+        id: "arpg.presentation",
+        input: read_input_mode,
+        hud: draw_hud,
+        controls: None,
+        controls_with_status: None,
+        preview_aim: Some(preview_aim),
+        has_input: Some(has_input),
+        capture_input: Some(capture_input),
+    })
+}
