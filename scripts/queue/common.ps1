@@ -97,3 +97,28 @@ function Get-QueueCheck([string]$Name) {
 function Get-QueueState {
     Invoke-Pueue status --json | ConvertFrom-Json -AsHashtable -DateKind String
 }
+
+function Get-BenchAdapters([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) { return }
+    Get-ChildItem -LiteralPath $Path -Filter 'run.json' -Recurse -File | ForEach-Object {
+        (Read-QueueJson $_.FullName).results.Values | ForEach-Object {
+            $_.signature.adapter
+            $_.signature.vulkan_device
+            $_.signature.gui_graphics.adapter_name
+            $_.signature.gui_graphics.gl_renderer
+        }
+    } | Where-Object { $_ } | Sort-Object -Unique
+}
+
+function Get-AdapterEvidence([string]$Adapter, [object[]]$Inventory) {
+    if ($Adapter -match 'llvmpipe|lavapipe|swiftshader|warp|microsoft basic render') {
+        return @{ name = $Adapter; kind = 'software'; driver_version = $null }
+    }
+    $matchesByName = @($Inventory | Where-Object {
+        $_.PNPDeviceID -like 'PCI\VEN_*' -and $_.Name -and $Adapter.Contains($_.Name, [StringComparison]::OrdinalIgnoreCase)
+    })
+    if ($matchesByName.Count -eq 1) {
+        return @{ name = $Adapter; kind = 'physical'; driver_version = $matchesByName[0].DriverVersion }
+    }
+    @{ name = $Adapter; kind = 'unverified'; driver_version = $null }
+}

@@ -63,6 +63,7 @@ $report = [ordered]@{
         video_controllers = @()
         render_mode = ($spec.render ?? 'none')
         actual_adapters = @()
+        selected_adapter_evidence = @()
         gpu_evidence = 'not-run'
     }
     artifacts = $artifacts
@@ -218,20 +219,13 @@ try {
             $report.environment.present_mode = $window.surface_mode
         }
         if ($request.check -eq 'bench-once') {
-            $benchReports = Get-ChildItem -LiteralPath (Join-Path $artifacts 'bench') -Filter 'run.json' -Recurse -File -ErrorAction SilentlyContinue
-            $report.environment.actual_adapters = @($benchReports | ForEach-Object {
-                (Read-QueueJson $_.FullName).results.Values | ForEach-Object { $_.adapter }
-            } | Where-Object { $_ } | Sort-Object -Unique)
+            $report.environment.actual_adapters = @(Get-BenchAdapters (Join-Path $artifacts 'bench'))
         }
         if ($report.environment.actual_adapters.Count) {
-            $classes = @($report.environment.actual_adapters | ForEach-Object {
-                $actual = $_
-                if ($actual -match 'llvmpipe|lavapipe|swiftshader|warp|microsoft basic render') { 'software' }
-                elseif ($report.environment.video_controllers | Where-Object {
-                    $_.PNPDeviceID -like 'PCI\VEN_*' -and $_.Name -and $actual.Contains($_.Name, [StringComparison]::OrdinalIgnoreCase)
-                }) { 'physical' }
-                else { 'unverified' }
-            } | Sort-Object -Unique)
+            $report.environment.selected_adapter_evidence = @($report.environment.actual_adapters | ForEach-Object {
+                Get-AdapterEvidence $_ $report.environment.video_controllers
+            })
+            $classes = @($report.environment.selected_adapter_evidence.kind | Sort-Object -Unique)
             $report.environment.gpu_evidence = $classes -join ','
         }
     } catch {

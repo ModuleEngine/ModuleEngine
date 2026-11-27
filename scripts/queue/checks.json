@@ -17,33 +17,39 @@
   "quick": {
     "group": "gpu",
     "timeout_seconds": 3600,
-    "steps": [["python", "-B", "scripts/verify.py", "--profile", "quick", "--output-root", "{artifacts}/verification"]]
+    "snapshot_artifacts": ["outputs/verification"],
+    "steps": [["python", "-B", "scripts/verify.py", "--profile", "quick", "--output-root", "outputs/verification"]]
   },
   "contracts": {
     "group": "gpu",
     "timeout_seconds": 5400,
-    "steps": [["python", "-B", "scripts/verify.py", "--profile", "contracts", "--output-root", "{artifacts}/verification"]]
+    "snapshot_artifacts": ["outputs/verification"],
+    "steps": [["python", "-B", "scripts/verify.py", "--profile", "contracts", "--output-root", "outputs/verification"]]
   },
   "clippy": {
     "group": "gpu",
     "timeout_seconds": 5400,
-    "steps": [["python", "-B", "scripts/verify.py", "--profile", "clippy", "--output-root", "{artifacts}/verification"]]
+    "snapshot_artifacts": ["outputs/verification"],
+    "steps": [["python", "-B", "scripts/verify.py", "--profile", "clippy", "--output-root", "outputs/verification"]]
   },
   "native": {
     "group": "gpu",
     "timeout_seconds": 5400,
-    "steps": [["python", "-B", "scripts/verify.py", "--profile", "native", "--output-root", "{artifacts}/verification"]]
+    "snapshot_artifacts": ["outputs/verification"],
+    "steps": [["python", "-B", "scripts/verify.py", "--profile", "native", "--output-root", "outputs/verification"]]
   },
   "package": {
     "group": "gpu",
     "timeout_seconds": 5400,
-    "steps": [["python", "-B", "scripts/verify.py", "--profile", "package", "--output-root", "{artifacts}/verification"]]
+    "snapshot_artifacts": ["outputs/verification"],
+    "steps": [["python", "-B", "scripts/verify.py", "--profile", "package", "--output-root", "outputs/verification"]]
   },
   "render": {
     "group": "gpu",
     "timeout_seconds": 5400,
     "render": "offscreen",
-    "steps": [["python", "-B", "scripts/verify.py", "--profile", "render", "--require-capabilities", "--output-root", "{artifacts}/verification"]]
+    "snapshot_artifacts": ["outputs/verification"],
+    "steps": [["python", "-B", "scripts/verify.py", "--profile", "render", "--require-capabilities", "--output-root", "outputs/verification"]]
   },
   "window-graph": {
     "group": "gpu",

@@ -103,7 +103,7 @@ $root = 'E:\ModuleEngine-queue'
 $release = git rev-parse HEAD
 $bundle = Join-Path $root "$release.zip"
 $install = Join-Path $root "releases\$release"
-git archive --format=zip --output=$bundle $release scripts/queue scripts/review_snapshot.py site/roadmap_map.py site/roadmap_events.py
+git archive --format=zip --output=$bundle $release scripts/queue scripts/review_snapshot.py site/roadmap_map.py site/roadmap_events.py site/roadmap_moves.js
 Expand-Archive -LiteralPath $bundle -DestinationPath $install
 & "$install\scripts\queue\setup.ps1" -Python 'C:\path\to\python.exe' -RegisterAutostart
 ```
