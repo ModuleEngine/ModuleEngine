@@ -275,12 +275,7 @@ impl SceneViewportState {
     pub fn texture_id(&self) -> Option<egui::TextureId> {
         module_engine_player::ui::presentation_texture_id(&self.texture, &self.gpu_texture)
     }
-    pub fn poll_gpu_presentation(&mut self) -> Result<(), String> {
-        if let Some(bridge) = &self.gpu_bridge {
-            self.gpu_texture.poll(bridge)?;
-        }
-        Ok(())
-    }
+
     fn visible_camera(&self) -> Camera {
         self.displayed_camera.unwrap_or(self.camera)
     }
@@ -815,9 +810,9 @@ impl SceneViewportState {
             );
         }
         let help = if self.gesture.is_some() {
-            "Esc: cancel · release LMB: apply"
+            "Esc: cancel В· release LMB: apply"
         } else {
-            "RMB: WASD fly · Q/E down/up · wheel speed · MMB orbit · Shift+MMB pan · wheel zoom · F focus"
+            "RMB: WASD fly В· Q/E down/up В· wheel speed В· MMB orbit В· Shift+MMB pan В· wheel zoom В· F focus"
         };
         painter.text(
             rect.left_bottom() + Vec2::new(9., -9.),
@@ -845,8 +840,8 @@ impl SceneViewportState {
     fn orientation_controls(&mut self, ui: &mut egui::Ui) {
         use crate::app::editor_ui::{self, Icon};
         let (icon, help) = match self.space {
-            Space::World => (Icon::World, "World axes · click to switch to Local axes"),
-            Space::Local => (Icon::Local, "Local axes · click to switch to World axes"),
+            Space::World => (Icon::World, "World axes В· click to switch to Local axes"),
+            Space::Local => (Icon::Local, "Local axes В· click to switch to World axes"),
         };
         let response = editor_ui::icon_button_sized(
             ui,
@@ -883,7 +878,7 @@ impl SceneViewportState {
             })
             .inner
             .on_hover_text(
-                "Camera flight speed · world units/s · Hold RMB and scroll to change speed",
+                "Camera flight speed В· world units/s В· Hold RMB and scroll to change speed",
             );
         self.overlay_targets
             .insert("CameraSpeed".into(), response.rect);
@@ -904,7 +899,7 @@ impl SceneViewportState {
                 &mut self.snap.rotation_degrees,
                 0.1..=180.,
                 "Rotate: ",
-                "°",
+                "В°",
             ),
             (
                 "ScaleStep",
@@ -932,7 +927,7 @@ impl SceneViewportState {
             let response = editor_ui::icon_button_sized(
                 ui,
                 Icon::Snap,
-                "Snap · enable move, rotate and scale increments",
+                "Snap В· enable move, rotate and scale increments",
                 true,
                 self.snap.enabled,
                 SCENE_TOOL_SIZE,
@@ -959,7 +954,7 @@ impl SceneViewportState {
             let response = editor_ui::icon_button_sized(
                 ui,
                 Icon::Settings,
-                "Snap settings · configure move, rotate and scale increments",
+                "Snap settings В· configure move, rotate and scale increments",
                 true,
                 false,
                 SCENE_TOOL_SIZE,
@@ -1018,9 +1013,9 @@ impl SceneViewportState {
                 .corner_radius(4)
         };
         let tools = [
-            (Tool::Translate, Icon::Move, "Move · G"),
-            (Tool::Rotate, Icon::Rotate, "Rotate · R"),
-            (Tool::Scale, Icon::Scale, "Scale · S"),
+            (Tool::Translate, Icon::Move, "Move В· G"),
+            (Tool::Rotate, Icon::Rotate, "Rotate В· R"),
+            (Tool::Scale, Icon::Scale, "Scale В· S"),
         ];
         let mut frame = false;
         if rect.width() < 400. || rect.height() < 160. {
@@ -1033,7 +1028,7 @@ impl SceneViewportState {
                     .show(&ctx, |ui| {
                         surface().show(ui, |ui| {
                             let (menu, _) = egui::containers::menu::MenuButton::new(format!(
-                                "Scene · {:?}",
+                                "Scene В· {:?}",
                                 self.tool
                             ))
                             .config(
@@ -1061,7 +1056,10 @@ impl SceneViewportState {
                                 }
                                 ui.separator();
                                 if ui
-                                    .add_enabled(can_frame, egui::Button::new("Frame selected · F"))
+                                    .add_enabled(
+                                        can_frame,
+                                        egui::Button::new("Frame selected В· F"),
+                                    )
                                     .clicked()
                                 {
                                     frame = true;
@@ -1134,7 +1132,7 @@ impl SceneViewportState {
                             let response = editor_ui::icon_button_sized(
                                 ui,
                                 Icon::Frame,
-                                "Frame selected · F",
+                                "Frame selected В· F",
                                 can_frame,
                                 false,
                                 SCENE_TOOL_SIZE,

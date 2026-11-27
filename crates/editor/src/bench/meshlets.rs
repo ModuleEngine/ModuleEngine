@@ -306,7 +306,7 @@ pub(super) fn compare_image(root: &Path, output: &Path, fxaa: bool) -> Result<()
     };
 
     let (candidate, candidate_device, candidate_work, candidate_planes, source) = {
-        let mut renderer = VulkanRenderer::new_meshlet_benchmark(root.to_owned(), None, true)
+        let mut renderer = VulkanRenderer::new_meshlet_benchmark(root.to_owned(), true)
             .map_err(|error| error.to_string())?;
         let device = renderer
             .meshlet_device_report()

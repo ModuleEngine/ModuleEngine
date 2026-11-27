@@ -11,10 +11,11 @@ arpg = ["module-engine-editor-composition/arpg"]
 puzzle = ["module-engine-editor-composition/puzzle"]
 g1 = ["module-engine-editor-composition/g1"]
 bench = ["module-engine-vulkan/bench"]
-r31-spike = ["dep:ash", "dep:bytemuck", "dep:egui-ash-renderer", "dep:egui-winit", "dep:winit", "module-engine-vulkan/editor-spike"]
+r31-spike = ["module-engine-native-ui/spike", "dep:egui-winit", "dep:winit"]
 verification = ["module-engine-editor-composition/verification"]
 
 [dependencies]
+module-engine-native-ui = { path = "../native-ui" }
 module-engine-game-ui = { path = "../game-ui" }
 module-engine-editor-composition = { path = "../editor-composition", default-features = false }
 module-engine-player = { path = "../player", features = ["ui", "vulkan", "audio", "persistence", "rapier-physics"] }
@@ -33,9 +34,6 @@ serde_json.workspace = true
 png.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-ash = { version = "0.38", optional = true }
-bytemuck = { version = "1", optional = true }
-egui-ash-renderer = { version = "=0.13.0", optional = true }
 egui-winit = { version = "0.36.2", default-features = false, optional = true }
 winit = { version = "0.30.13", default-features = false, features = ["rwh_06"], optional = true }
 

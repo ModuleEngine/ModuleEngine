@@ -135,7 +135,8 @@ pub(super) mod native_pointer {
             while !window.is_null() {
                 let mut process = 0;
                 GetWindowThreadProcessId(window, &mut process);
-                if process == std::process::id() {
+                // Hidden IME helpers can be created alongside the first visible dock host.
+                if process == std::process::id() && IsWindowVisible(window) != 0 {
                     handles.insert(window as usize);
                 }
                 window = GetWindow(window, 2);

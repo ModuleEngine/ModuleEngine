@@ -186,7 +186,12 @@ def collect(root, metadata_by_platform):
     for key in sorted(packages):
         package = packages[key]
         source = package.get("source") or ""
-        if not source.startswith("registry+"):
+        vendored_painter = (
+            not source and key == ("egui-ash-renderer", "0.13.0")
+            and Path(package["manifest_path"]).resolve() == (root / "crates/vendor/egui-ash-renderer/Cargo.toml").resolve()
+            and (root / "crates/vendor/egui-ash-renderer/LICENSE").is_file()
+        )
+        if not source.startswith("registry+") and not vendored_painter:
             errors.append(f"{key[0]} {key[1]}: unsupported source {source or 'path'}")
         expression = package.get("license")
         if not expression:

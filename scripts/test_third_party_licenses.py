@@ -64,6 +64,18 @@ class RenderTests(unittest.TestCase):
             with self.assertRaises(tpl.PolicyError):
                 tpl.collect(self.root, [metadata(bad)])
 
+    def test_vendored_painter_requires_the_pinned_package_and_its_notice(self):
+        directory = self.root / "crates/vendor/egui-ash-renderer"
+        painter = package(directory, "egui-ash-renderer", "MIT", source=None)
+        painter["version"] = "0.13.0"
+        with self.assertRaises(tpl.PolicyError):
+            tpl.collect(self.root, [metadata(painter)])
+        (directory / "LICENSE").write_text("Upstream MIT notice", encoding="utf-8")
+        self.assertEqual(tpl.collect(self.root, [metadata(painter)]), [painter])
+        painter["version"] = "0.14.0"
+        with self.assertRaises(tpl.PolicyError):
+            tpl.collect(self.root, [metadata(painter)])
+
     def test_git_and_path_sources_fail(self):
         for source in ["git+https://example.com/x", None]:
             bad = package(self.root / "d", "d", "MIT", source=source)

@@ -1,27 +1,39 @@
-use super::{PainterKind, SIZE, VkResultExt, painter::Painter};
+use super::{PainterKind, VkResultExt, painter::Painter};
 use ash::vk;
-use eframe::egui::{TexturesDelta, epaint::ClippedPrimitive};
+use egui::{TexturesDelta, epaint::ClippedPrimitive};
 use module_engine_vulkan::{DeviceCapabilities, EditorDevice, EditorDeviceHandles};
 use serde::Serialize;
-use std::{ffi::CStr, path::Path, time::Instant};
+use std::{ffi::CStr, path::Path, sync::Arc, time::Instant};
 use winit::{
-    raw_window_handle::{HasWindowHandle, RawWindowHandle},
+    raw_window_handle::{HasDisplayHandle, HasWindowHandle},
     window::Window,
 };
 
-pub(super) struct Gpu {
-    // These fields drop in order after GPU work is retired. The caller keeps
-    // the winit window alive until after this owner and its surface drop.
-    painter: Painter,
-    frames: Frames,
-    readback: Option<HostBuffer>,
+pub type PresentedFrame = (Instant, Option<Vec<u8>>);
+
+pub struct Gpu {
+    // Drop swapchains first, then the device-owned root surface and its native window.
+    painter: Arc<std::sync::Mutex<Painter>>,
+    root: WindowFrames,
+    children: std::collections::HashMap<winit::window::WindowId, WindowFrames>,
     owner: EditorDevice,
+    _root_window: Arc<Window>,
+
     pub info: DeviceInfo,
 }
 
+struct WindowFrames {
+    frames: Frames,
+    readback: Option<HostBuffer>,
+    surface: Option<module_engine_vulkan::WindowSurface>,
+    window: Arc<Window>,
+    benchmark: bool,
+    recreate: bool,
+}
+
 #[derive(Clone, Serialize)]
-pub(super) struct DeviceInfo {
-    adapter: String,
+pub struct DeviceInfo {
+    pub adapter: String,
     vendor_id: u32,
     device_id: u32,
     device_uuid: String,
@@ -32,25 +44,39 @@ pub(super) struct DeviceInfo {
     producer_slots: usize,
     swapchain_format: String,
     swapchain_images: usize,
-    present_mode: &'static str,
+    pub present_mode: &'static str,
     ui_frames_in_flight: usize,
 }
 
 impl Gpu {
-    pub fn new(window: &Window, root: &Path, kind: PainterKind) -> Result<Self, String> {
+    pub fn new(
+        window: Arc<Window>,
+        root: &Path,
+        kind: PainterKind,
+        benchmark: bool,
+        meshlets: bool,
+    ) -> Result<Self, String> {
         let handle = window.window_handle().map_err(|e| e.to_string())?;
-        let RawWindowHandle::Win32(handle) = handle.as_raw() else {
-            return Err("R3.1 requires a Win32 window".into());
-        };
-        let hinstance = handle.hinstance.ok_or("Missing Win32 HINSTANCE")?.get();
-        // The application drops this GPU owner before its window, even on failure.
-        let owner = unsafe { EditorDevice::new(root.into(), hinstance, handle.hwnd.get()) }
-            .map_err(|e| e.to_string())?;
+        let display = window.display_handle().map_err(|e| e.to_string())?;
+        // SAFETY: The application drops this GPU owner before its window, even on failure.
+        let owner = unsafe {
+            EditorDevice::for_window(root.into(), display.as_raw(), handle.as_raw(), meshlets)
+        }
+        .map_err(|e| e.to_string())?;
         let handles = owner.handles();
-        if !handles.capabilities.tier_a || handles.producer_slots != 2 {
+        if benchmark && (!handles.capabilities.tier_a || handles.producer_slots != 2) {
             return Err("R3.1 requires the tier A R2 device with two producer slots".into());
         }
-        let frames = Frames::new(&handles)?;
+        let size = window.inner_size();
+        let frames = Frames::new(
+            &handles,
+            vk::Extent2D {
+                width: size.width,
+                height: size.height,
+            },
+            benchmark,
+            vk::SwapchainKHR::null(),
+        )?;
         let painter = Painter::new(&handles, &frames, root, kind)?;
         let mut ids = vk::PhysicalDeviceIDProperties::default();
         let mut driver = vk::PhysicalDeviceDriverProperties::default();
@@ -87,45 +113,228 @@ impl Gpu {
             producer_slots: handles.producer_slots,
             swapchain_format: format!("{:?}", frames.format),
             swapchain_images: frames.images.len(),
-            present_mode: "IMMEDIATE",
+            present_mode: if benchmark {
+                "IMMEDIATE"
+            } else {
+                match frames.mode {
+                    vk::PresentModeKHR::IMMEDIATE => "Immediate",
+                    vk::PresentModeKHR::MAILBOX => "Mailbox",
+                    _ => "Fifo",
+                }
+            },
             ui_frames_in_flight: 1,
         };
         Ok(Self {
-            painter,
-            frames,
-            readback: None,
+            painter: Arc::new(std::sync::Mutex::new(painter)),
+            root: WindowFrames {
+                frames,
+                readback: None,
+                surface: None,
+                window: window.clone(),
+                benchmark,
+                recreate: false,
+            },
+            children: Default::default(),
             owner,
+            _root_window: window,
             info,
         })
     }
 
+    pub fn bridge(&self) -> crate::FrameBridge {
+        crate::FrameBridge {
+            painter: Arc::downgrade(&self.painter),
+            target: Arc::new(self.owner.target()),
+            adapter: self.info.adapter.clone(),
+            present_mode: self.info.present_mode,
+        }
+    }
+
     pub fn paint(
         &mut self,
-        window: &Window,
+        primitives: &[ClippedPrimitive],
+        delta: &mut TexturesDelta,
+        scale: f32,
+        capture: bool,
+    ) -> Result<Option<PresentedFrame>, String> {
+        self.root.paint(
+            &self.owner.handles(),
+            &mut *self
+                .painter
+                .lock()
+                .map_err(|_| "Native painter lock poisoned")?,
+            primitives,
+            delta,
+            scale,
+            capture,
+        )
+    }
+
+    pub(crate) fn attach(&mut self, window: Arc<Window>) -> Result<(), String> {
+        let display = window.display_handle().map_err(|e| e.to_string())?;
+        let handle = window.window_handle().map_err(|e| e.to_string())?;
+        // SAFETY: All winit windows use the same event loop/display. WindowFrames
+        // owns the window and drops the swapchain before the surface and window.
+        let surface = unsafe { self.owner.attach_window(display.as_raw(), handle.as_raw()) }
+            .map_err(|e| e.to_string())?;
+        let mut handles = self.owner.handles();
+        handles.surface = surface.handle();
+        let size = window.inner_size();
+        let frames = Frames::new(
+            &handles,
+            vk::Extent2D {
+                width: size.width,
+                height: size.height,
+            },
+            false,
+            vk::SwapchainKHR::null(),
+        )?;
+        if frames.format != self.root.frames.format {
+            return Err("Detached window requires a different painter attachment format".into());
+        }
+        self.children.insert(
+            window.id(),
+            WindowFrames {
+                frames,
+                readback: None,
+                surface: Some(surface),
+                window,
+                benchmark: false,
+                recreate: false,
+            },
+        );
+        Ok(())
+    }
+
+    pub(crate) fn detach(&mut self, id: winit::window::WindowId) -> Result<(), String> {
+        self.finish()?;
+        self.children.remove(&id);
+        Ok(())
+    }
+
+    pub(crate) fn paint_child(
+        &mut self,
+        id: winit::window::WindowId,
+        primitives: &[ClippedPrimitive],
+        delta: &mut TexturesDelta,
+        scale: f32,
+        capture: bool,
+    ) -> Result<Option<Vec<u8>>, String> {
+        // Root and child share the painter's vertex buffers, descriptors and atlas.
+        self.root.frames.wait()?;
+        let child = self
+            .children
+            .get_mut(&id)
+            .ok_or("Missing native viewport")?;
+        let mut handles = self.owner.handles();
+        handles.surface = child
+            .surface
+            .as_ref()
+            .ok_or("Missing native surface")?
+            .handle();
+        let draw = child.paint(
+            &handles,
+            &mut *self
+                .painter
+                .lock()
+                .map_err(|_| "Native painter lock poisoned")?,
+            primitives,
+            delta,
+            scale,
+            capture,
+        )?;
+        child.frames.wait()?;
+        Ok(draw.and_then(|(_, pixels)| pixels))
+    }
+
+    pub fn extent(&self) -> [u32; 2] {
+        [
+            self.root.frames.extent.width,
+            self.root.frames.extent.height,
+        ]
+    }
+
+    pub fn finish(&self) -> Result<(), String> {
+        let handles = self.owner.handles();
+        let _queue = handles
+            .queue_access
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        // SAFETY: All submissions synchronize through the same device lock.
+        unsafe { self.owner.handles().device.device_wait_idle() }.at("retire native UI device")
+    }
+}
+
+impl WindowFrames {
+    fn paint(
+        &mut self,
+        handles: &EditorDeviceHandles<'_>,
+        painter: &mut Painter,
         primitives: &[ClippedPrimitive],
         delta: &mut TexturesDelta,
         pixels_per_point: f32,
         capture: bool,
-    ) -> Result<(Instant, Option<Vec<u8>>), String> {
+    ) -> Result<Option<PresentedFrame>, String> {
         self.frames.wait()?;
-        self.painter.update_textures(&self.frames, delta)?;
-        if capture {
-            self.readback = Some(
-                self.frames
-                    .host_buffer(pixel_bytes(), vk::BufferUsageFlags::TRANSFER_DST)?,
-            );
+        let _queue = handles
+            .queue_access
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        painter.retire(primitives)?;
+        painter.update_textures(&self.frames, delta)?;
+        drop(_queue);
+        let size = self.window.inner_size();
+        if size.width == 0 || size.height == 0 {
+            return Ok(None);
         }
-        let time = self.frames.draw(
-            window,
-            &mut self.painter,
+        let extent = vk::Extent2D {
+            width: size.width,
+            height: size.height,
+        };
+        if self.recreate || self.frames.extent != extent {
+            if self.benchmark {
+                return Err("R3.1 presentation extent or surface changed".into());
+            }
+            let _queue = handles
+                .queue_access
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            // SAFETY: No queue work may reference the swapchain during recreation.
+            unsafe { handles.device.device_wait_idle() }.at("retire resized surface")?;
+            self.frames = Frames::new(handles, extent, false, self.frames.swapchain)?;
+            self.recreate = false;
+        }
+        if capture {
+            if !self.frames.can_capture {
+                return Err("Window surface does not support transfer-source capture".into());
+            }
+            self.readback = Some(self.frames.host_buffer(
+                pixel_bytes(self.frames.extent)?,
+                vk::BufferUsageFlags::TRANSFER_DST,
+            )?);
+        }
+        let presented = self.frames.draw(
+            handles.queue_access,
+            &self.window,
+            painter,
             primitives,
             pixels_per_point,
             self.readback.as_ref(),
         )?;
+        let Some((time, suboptimal)) = presented else {
+            self.recreate = true;
+            self.frames.wait()?;
+            self.readback = None;
+            return Ok(None);
+        };
+        self.recreate = suboptimal;
+        if suboptimal && self.benchmark {
+            return Err("R3.1 presentation became suboptimal".into());
+        }
         let pixels = if self.readback.is_some() {
             self.frames.wait()?;
             let buffer = self.readback.take().expect("capture buffer");
-            let mut pixels = vec![0; pixel_bytes()];
+            let mut pixels = vec![0; pixel_bytes(self.frames.extent)?];
             buffer.read(&mut pixels)?;
             if self.frames.format == vk::Format::B8G8R8A8_UNORM {
                 for pixel in pixels.as_chunks_mut::<4>().0 {
@@ -136,12 +345,7 @@ impl Gpu {
         } else {
             None
         };
-        Ok((time, pixels))
-    }
-
-    pub fn finish(&self) -> Result<(), String> {
-        // This synchronous benchmark exclusively owns its R2 device and queue.
-        unsafe { self.owner.handles().device.device_wait_idle() }.at("retire R3.1 device")
+        Ok(Some((time, pixels)))
     }
 }
 
@@ -154,10 +358,6 @@ impl Drop for Gpu {
     }
 }
 
-const EXTENT: vk::Extent2D = vk::Extent2D {
-    width: SIZE[0],
-    height: SIZE[1],
-};
 const TIMEOUT_NS: u64 = 3_000_000_000;
 const COLOR: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
     aspect_mask: vk::ImageAspectFlags::COLOR,
@@ -167,8 +367,11 @@ const COLOR: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
     layer_count: 1,
 };
 
-fn pixel_bytes() -> usize {
-    SIZE[0] as usize * SIZE[1] as usize * 4
+fn pixel_bytes(extent: vk::Extent2D) -> Result<usize, String> {
+    (extent.width as usize)
+        .checked_mul(extent.height as usize)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| "Surface capture is too large".into())
 }
 
 struct PresentImage {
@@ -183,6 +386,9 @@ pub(super) struct Frames {
     pub queue: vk::Queue,
     pub pool: vk::CommandPool,
     pub format: vk::Format,
+    extent: vk::Extent2D,
+    mode: vk::PresentModeKHR,
+    can_capture: bool,
     memory: vk::PhysicalDeviceMemoryProperties,
     loader: ash::khr::swapchain::Device,
     swapchain: vk::SwapchainKHR,
@@ -193,28 +399,52 @@ pub(super) struct Frames {
 }
 
 impl Frames {
-    fn new(handles: &EditorDeviceHandles<'_>) -> Result<Self, String> {
+    fn new(
+        handles: &EditorDeviceHandles<'_>,
+        extent: vk::Extent2D,
+        benchmark: bool,
+        old: vk::SwapchainKHR,
+    ) -> Result<Self, String> {
         let device = handles.device;
         let surface = handles.surface_loader;
         let physical = handles.physical;
         let raw = handles.surface;
-        let usage = vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC;
+
         // The surface and physical device were selected from the same live instance.
         unsafe {
             let caps = surface
                 .get_physical_device_surface_capabilities(physical, raw)
                 .at("surface capabilities")?;
+            let extent = if caps.current_extent.width != u32::MAX && !benchmark {
+                caps.current_extent
+            } else {
+                extent
+            };
+            let can_capture = caps
+                .supported_usage_flags
+                .contains(vk::ImageUsageFlags::TRANSFER_SRC);
+            let mut usage = vk::ImageUsageFlags::COLOR_ATTACHMENT;
+            if can_capture {
+                usage |= vk::ImageUsageFlags::TRANSFER_SRC;
+            }
+            let alpha = [
+                vk::CompositeAlphaFlagsKHR::OPAQUE,
+                vk::CompositeAlphaFlagsKHR::INHERIT,
+                vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED,
+                vk::CompositeAlphaFlagsKHR::POST_MULTIPLIED,
+            ]
+            .into_iter()
+            .find(|alpha| caps.supported_composite_alpha.contains(*alpha))
+            .ok_or("Surface lacks a supported composite alpha mode")?;
             if !caps.supported_usage_flags.contains(usage)
-                || !caps
-                    .supported_composite_alpha
-                    .contains(vk::CompositeAlphaFlagsKHR::OPAQUE)
-                || (caps.current_extent.width != u32::MAX && caps.current_extent != EXTENT)
-                || EXTENT.width < caps.min_image_extent.width
-                || EXTENT.width > caps.max_image_extent.width
-                || EXTENT.height < caps.min_image_extent.height
-                || EXTENT.height > caps.max_image_extent.height
+                || (benchmark && !can_capture)
+                || (caps.current_extent.width != u32::MAX && caps.current_extent != extent)
+                || extent.width < caps.min_image_extent.width
+                || extent.width > caps.max_image_extent.width
+                || extent.height < caps.min_image_extent.height
+                || extent.height > caps.max_image_extent.height
             {
-                return Err("Surface cannot present and capture the fixed R3.1 extent".into());
+                return Err("Unsupported Vulkan surface usage or client extent".into());
             }
             let supported = surface
                 .get_physical_device_surface_formats(physical, raw)
@@ -233,12 +463,40 @@ impl Frames {
             let modes = surface
                 .get_physical_device_surface_present_modes(physical, raw)
                 .at("surface modes")?;
-            if !modes.contains(&vk::PresentModeKHR::IMMEDIATE) {
+            if benchmark && !modes.contains(&vk::PresentModeKHR::IMMEDIATE) {
                 return Err(
                     "Surface lacks IMMEDIATE present mode required by the matched series".into(),
                 );
             }
-            let mut image_count = caps.min_image_count.saturating_add(1);
+            let mode = if benchmark {
+                vk::PresentModeKHR::IMMEDIATE
+            } else {
+                match std::env::var("MODULE_ENGINE_GUI_VSYNC").as_deref() {
+                    Ok("off") => [
+                        vk::PresentModeKHR::IMMEDIATE,
+                        vk::PresentModeKHR::MAILBOX,
+                        vk::PresentModeKHR::FIFO,
+                    ]
+                    .into_iter()
+                    .find(|m| modes.contains(m))
+                    .ok_or("No supported Vulkan presentation mode")?,
+                    Ok("on") | Err(std::env::VarError::NotPresent) => {
+                        if modes.contains(&vk::PresentModeKHR::MAILBOX) {
+                            vk::PresentModeKHR::MAILBOX
+                        } else {
+                            vk::PresentModeKHR::FIFO
+                        }
+                    }
+                    _ => return Err("MODULE_ENGINE_GUI_VSYNC must be on or off".into()),
+                }
+            };
+            // Keep one frame slot and the minimum FIFO queue depth for interactive
+            // windows. The R3.1 comparison retains its original surface configuration.
+            let mut image_count = if benchmark || mode != vk::PresentModeKHR::FIFO {
+                caps.min_image_count.saturating_add(1)
+            } else {
+                caps.min_image_count
+            };
             if caps.max_image_count != 0 {
                 image_count = image_count.min(caps.max_image_count);
             }
@@ -250,13 +508,14 @@ impl Frames {
                         .min_image_count(image_count)
                         .image_format(format)
                         .image_color_space(vk::ColorSpaceKHR::SRGB_NONLINEAR)
-                        .image_extent(EXTENT)
+                        .image_extent(extent)
                         .image_array_layers(1)
                         .image_usage(usage)
                         .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
                         .pre_transform(caps.current_transform)
-                        .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-                        .present_mode(vk::PresentModeKHR::IMMEDIATE)
+                        .composite_alpha(alpha)
+                        .old_swapchain(old)
+                        .present_mode(mode)
                         .clipped(true),
                     None,
                 )
@@ -266,6 +525,9 @@ impl Frames {
                 queue: handles.queue,
                 pool: vk::CommandPool::null(),
                 format,
+                extent,
+                mode,
+                can_capture,
                 memory: handles
                     .instance
                     .get_physical_device_memory_properties(physical),
@@ -339,22 +601,29 @@ impl Frames {
 
     fn draw(
         &self,
+        queue_access: &std::sync::Mutex<()>,
         window: &Window,
         painter: &mut Painter,
         primitives: &[ClippedPrimitive],
         pixels_per_point: f32,
         readback: Option<&HostBuffer>,
-    ) -> Result<Instant, String> {
+    ) -> Result<Option<(Instant, bool)>, String> {
         let device = &self.device;
         let command = self.command;
         // The previous frame's fence is signaled. This is the only submitter,
         // all resources are live, and this submission waits for image acquisition
         // before the first color attachment operation.
         unsafe {
-            let (index, acquire_suboptimal) = self
-                .loader
-                .acquire_next_image(self.swapchain, TIMEOUT_NS, self.acquired, vk::Fence::null())
-                .at("acquire swapchain image")?;
+            let acquire = self.loader.acquire_next_image(
+                self.swapchain,
+                TIMEOUT_NS,
+                self.acquired,
+                vk::Fence::null(),
+            );
+            if acquire == Err(vk::Result::ERROR_OUT_OF_DATE_KHR) {
+                return Ok(None);
+            }
+            let (index, acquire_suboptimal) = acquire.at("acquire swapchain image")?;
             let image = &self.images[index as usize];
             device
                 .reset_command_buffer(command, vk::CommandBufferResetFlags::empty())
@@ -371,17 +640,17 @@ impl Frames {
                 image.raw,
                 (
                     vk::ImageLayout::UNDEFINED,
-                    vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-                    vk::AccessFlags2::NONE,
+                    vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                    vk::AccessFlags::empty(),
                 ),
                 (
                     vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-                    vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-                    vk::AccessFlags2::COLOR_ATTACHMENT_READ
-                        | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                    vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                    vk::AccessFlags::COLOR_ATTACHMENT_READ
+                        | vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
                 ),
             );
-            let rect = vk::Rect2D::default().extent(EXTENT);
+            let rect = vk::Rect2D::default().extent(self.extent);
             let color = [vk::RenderingAttachmentInfo::default()
                 .image_view(image.view)
                 .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
@@ -399,19 +668,19 @@ impl Frames {
                     .layer_count(1)
                     .color_attachments(&color),
             );
-            let painted = painter.record(self, command, EXTENT, pixels_per_point, primitives);
+            let painted = painter.record(self, command, self.extent, pixels_per_point, primitives);
             device.cmd_end_rendering(command);
             painted?;
             let color_written = (
                 vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-                vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-                vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
             );
             let before_present = if let Some(buffer) = readback {
                 let transfer_read = (
                     vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                    vk::PipelineStageFlags2::COPY,
-                    vk::AccessFlags2::TRANSFER_READ,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::AccessFlags::TRANSFER_READ,
                 );
                 self.transition(command, image.raw, color_written, transfer_read);
                 device.cmd_copy_image_to_buffer(
@@ -427,19 +696,22 @@ impl Frames {
                         )
                         .image_extent(
                             vk::Extent3D::default()
-                                .width(EXTENT.width)
-                                .height(EXTENT.height)
+                                .width(self.extent.width)
+                                .height(self.extent.height)
                                 .depth(1),
                         )],
                 );
-                let host = [vk::MemoryBarrier2::default()
-                    .src_stage_mask(vk::PipelineStageFlags2::COPY)
-                    .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-                    .dst_stage_mask(vk::PipelineStageFlags2::HOST)
-                    .dst_access_mask(vk::AccessFlags2::HOST_READ)];
-                device.cmd_pipeline_barrier2(
+                let host = [vk::MemoryBarrier::default()
+                    .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                    .dst_access_mask(vk::AccessFlags::HOST_READ)];
+                device.cmd_pipeline_barrier(
                     command,
-                    &vk::DependencyInfo::default().memory_barriers(&host),
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::PipelineStageFlags::HOST,
+                    vk::DependencyFlags::empty(),
+                    &host,
+                    &[],
+                    &[],
                 );
                 transfer_read
             } else {
@@ -451,8 +723,8 @@ impl Frames {
                 before_present,
                 (
                     vk::ImageLayout::PRESENT_SRC_KHR,
-                    vk::PipelineStageFlags2::NONE,
-                    vk::AccessFlags2::NONE,
+                    vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+                    vk::AccessFlags::empty(),
                 ),
             );
             device
@@ -461,6 +733,7 @@ impl Frames {
             device
                 .reset_fences(&[self.fence])
                 .at("reset painter fence")?;
+            let _queue = queue_access.lock().unwrap_or_else(|p| p.into_inner());
             device
                 .queue_submit(
                     self.queue,
@@ -473,36 +746,34 @@ impl Frames {
                 )
                 .at("submit painter frame")?;
             window.pre_present_notify();
-            let suboptimal = self
-                .loader
-                .queue_present(
-                    self.queue,
-                    &vk::PresentInfoKHR::default()
-                        .wait_semaphores(&[image.rendered])
-                        .swapchains(&[self.swapchain])
-                        .image_indices(&[index]),
-                )
-                .at("present painter frame")?;
-            if acquire_suboptimal || suboptimal {
-                return Err("R3.1 presentation became suboptimal".into());
+            let suboptimal = self.loader.queue_present(
+                self.queue,
+                &vk::PresentInfoKHR::default()
+                    .wait_semaphores(&[image.rendered])
+                    .swapchains(&[self.swapchain])
+                    .image_indices(&[index]),
+            );
+            if suboptimal == Err(vk::Result::ERROR_OUT_OF_DATE_KHR) {
+                return Ok(None);
             }
+            Ok(Some((
+                Instant::now(),
+                acquire_suboptimal || suboptimal.at("present painter frame")?,
+            )))
         }
-        Ok(Instant::now())
     }
 
     pub fn transition(
         &self,
         command: vk::CommandBuffer,
         image: vk::Image,
-        source: (vk::ImageLayout, vk::PipelineStageFlags2, vk::AccessFlags2),
-        destination: (vk::ImageLayout, vk::PipelineStageFlags2, vk::AccessFlags2),
+        source: (vk::ImageLayout, vk::PipelineStageFlags, vk::AccessFlags),
+        destination: (vk::ImageLayout, vk::PipelineStageFlags, vk::AccessFlags),
     ) {
-        let barriers = [vk::ImageMemoryBarrier2::default()
+        let barriers = [vk::ImageMemoryBarrier::default()
             .old_layout(source.0)
-            .src_stage_mask(source.1)
             .src_access_mask(source.2)
             .new_layout(destination.0)
-            .dst_stage_mask(destination.1)
             .dst_access_mask(destination.2)
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -511,9 +782,14 @@ impl Frames {
         // Callers record into an owned command buffer outside dynamic rendering.
         // The queue owns the acquired image or the painter's local texture.
         unsafe {
-            self.device.cmd_pipeline_barrier2(
+            self.device.cmd_pipeline_barrier(
                 command,
-                &vk::DependencyInfo::default().image_memory_barriers(&barriers),
+                source.1,
+                destination.1,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &barriers,
             )
         };
     }
@@ -603,6 +879,7 @@ pub(super) struct HostBuffer {
 }
 
 impl HostBuffer {
+    #[cfg(feature = "spike")]
     pub fn write(&self, bytes: &[u8]) -> Result<(), String> {
         self.mapped(bytes.len(), |mapped| {
             // The successful mapping covers the entire source slice and never aliases it.
@@ -619,7 +896,7 @@ impl HostBuffer {
 
     fn mapped(&self, count: usize, copy: impl FnOnce(*mut u8)) -> Result<(), String> {
         if count == 0 || count > self.capacity {
-            return Err("R3.1 painter buffer range is outside its allocation".into());
+            return Err("Native painter buffer range is outside its allocation".into());
         }
         // The buffer owns coherent memory which is unmapped between calls.
         unsafe {

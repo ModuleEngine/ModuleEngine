@@ -32,12 +32,13 @@ pub use instance::validation_error_count;
 pub use module_engine_core::RendererPerformance;
 use presentation::instance;
 pub use retirement::{ProducerRetirementReport, finish_producer_retirements};
-#[cfg(all(windows, feature = "editor-spike"))]
+#[cfg(feature = "window-surface")]
 #[doc(hidden)]
-pub use vulkan::editor_spike::{EditorDevice, EditorDeviceHandles};
+pub use vulkan::editor_spike::{EditorDevice, EditorDeviceHandles, Surface as WindowSurface};
 pub use vulkan::{
     CullingStats, FrameWork, RenderGraphValidator, ResidentScene, SceneCulling, SceneInput,
-    VertexAllocation, VulkanRenderer, validate_overrides, validate_overrides_at,
+    VertexAllocation, VulkanRenderer, WindowFrame, WindowTarget, validate_overrides,
+    validate_overrides_at,
 };
 #[cfg(feature = "bench")]
 pub use vulkan::{
@@ -147,10 +148,6 @@ mod error {
             "No Vulkan 1.3 graphics+compute adapter with dynamic rendering; a compatible GPU driver is required"
         )]
         NoAdapter,
-        #[error(
-            "No matching GUI adapter with Vulkan 1.3 dynamic rendering and external-memory import"
-        )]
-        NoPresentationAdapter,
         #[error("Vulkan {operation}: {source:?}")]
         Api {
             operation: &'static str,

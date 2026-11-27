@@ -346,26 +346,31 @@ impl FrameRenderer for VulkanFrameRenderer {
         &mut self,
         target: Option<Arc<dyn module_engine_core::PresentationTarget>>,
     ) -> Result<(), RendererError> {
-        let target = target
-            .map(|target| {
-                let target = target
-                    .as_any()
-                    .downcast_ref::<crate::presentation::VulkanPresentationTarget>()
-                    .ok_or(RendererError::Unsupported(
-                        "Vulkan renderer requires a VulkanPresentationTarget",
-                    ))?;
-                Ok::<_, RendererError>(Arc::new(crate::presentation::VulkanPresentationTarget {
-                    identity: target.identity.clone(),
-                    allocator: target.allocator.clone(),
-                }))
-            })
-            .transpose()?;
+        if let Some(window) = target
+            .as_ref()
+            .and_then(|t| t.as_any().downcast_ref::<crate::WindowTarget>())
+        {
+            let mut backend = self
+                .backend
+                .lock()
+                .map_err(|_| RendererError::Unavailable("Vulkan device lock is poisoned"))?;
+            backend
+                .set_window_target(window)
+                .map_err(RendererError::backend)?;
+            self.name = format!("Vulkan / {}", backend.device_name());
+            return Ok(());
+        }
+        if target.is_some() {
+            return Err(RendererError::Unsupported(
+                "Vulkan renderer requires a same-device window target",
+            ));
+        }
         let mut backend = self
             .backend
             .lock()
             .map_err(|_| RendererError::Unavailable("Vulkan device lock is poisoned"))?;
         backend
-            .set_presentation_target(target)
+            .clear_window_target()
             .map_err(RendererError::backend)?;
         self.name = format!("Vulkan / {}", backend.device_name());
         Ok(())

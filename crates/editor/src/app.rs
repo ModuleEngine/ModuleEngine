@@ -177,29 +177,7 @@ impl Editor {
         {
             self.runtime_error = Some(error.into());
         }
-        let producer_error = self.game_workbench.poll_gpu_presentation().err();
-        let Some(bridge) = &self.gpu_bridge else {
-            if let Some(error) = producer_error {
-                self.status = error;
-            }
-            return;
-        };
-        let mut error = self.gpu_texture.poll(bridge).err().or(producer_error);
-        // Hidden panes still own pending copies. Reap them even if no new source
-        // frame exists, otherwise a shared producer pool can never become free.
-        for pane in self
-            .engine_panes
-            .values_mut()
-            .chain(self.project_panes.values_mut())
-        {
-            if let Err(problem) = pane.gpu_texture.poll(bridge) {
-                error = Some(problem);
-            }
-            if let Err(problem) = pane.scene_view.poll_gpu_presentation() {
-                error = Some(problem);
-            }
-        }
-        if let Some(error) = error {
+        if let Err(error) = self.game_workbench.poll_gpu_presentation() {
             self.status = error;
         }
     }
@@ -266,7 +244,33 @@ impl Editor {
         self.seed_capture_pane();
     }
     #[cfg(feature = "verification")]
-    pub fn show_verification_view(&mut self, view: &str) {
+    pub fn show_verification_view(&mut self, view: &str) -> Result<(), String> {
+        if let Some(label) = view.strip_prefix("pane:") {
+            if self.can_author_engine() {
+                self.workspace = WorkspaceKind::Engine;
+            }
+            let kind = self
+                .available_editors()
+                .into_iter()
+                .find(|descriptor| descriptor.label == label)
+                .ok_or_else(|| format!("Unavailable verification pane: {label}"))?
+                .editor;
+            self.open_window(kind);
+            let active = self.active_window();
+            let layout = match self.workspace {
+                WorkspaceKind::Engine => &self.engine_layout,
+                WorkspaceKind::Project => &self.project_layout,
+            };
+            if !layout
+                .panes()
+                .into_iter()
+                .any(|(id, editor)| Some(id) == active && editor == kind)
+            {
+                return Err(format!("Requested pane did not open: {label}"));
+            }
+            eprintln!("Verification active pane: {label}");
+            return Ok(());
+        }
         match view {
             "detached-scene" => {
                 self.workspace = WorkspaceKind::Project;
@@ -375,6 +379,7 @@ impl Editor {
             _ => {}
         }
         self.seed_capture_pane();
+        Ok(())
     }
     #[cfg(test)]
     pub fn new(document: GraphDocument, path: PathBuf) -> Self {
@@ -2254,7 +2259,7 @@ impl Editor {
         );
         let target = self.library_graph_context();
         if let Some((id, _, label)) = &target {
-            ui.label(format!("Adding to: {label} · pane {id}"));
+            ui.label(format!("Adding to: {label} В· pane {id}"));
         } else {
             ui.label("Open Module Graph and select a graph to add nodes.");
         }
@@ -2267,9 +2272,9 @@ impl Editor {
         let descriptors = self.module_choices(path);
         let gpu_scope = self.is_gpu_graph_scope(path);
         ui.weak(if gpu_scope {
-            "GPU render pipeline · typed resources"
+            "GPU render pipeline В· typed resources"
         } else {
-            "Root composition · module contracts"
+            "Root composition В· module contracts"
         });
         egui::ScrollArea::vertical()
             .max_height(if gpu_scope { 360.0 } else { 420.0 })
@@ -2312,7 +2317,7 @@ impl Editor {
             };
             for (kind, meaning) in pins {
                 ui.horizontal(|ui| {
-                    ui.colored_label(canvas::type_color(kind), "●");
+                    ui.colored_label(canvas::type_color(kind), "в—Џ");
                     ui.label(RichText::new(kind).monospace().size(12.0));
                 });
                 ui.label(
@@ -2378,7 +2383,7 @@ impl Editor {
             );
         }
         if self.preview_builder.is_pending() {
-            ui.label("Building GPU candidate in the background…");
+            ui.label("Building GPU candidate in the backgroundвЂ¦");
         }
         if let Some(error) = &self.preview_builder.error {
             ui.colored_label(
@@ -2416,7 +2421,7 @@ impl Editor {
                         Ok(true) => {
                             self.runtime_error = None;
                             self.stats = format!(
-                                "{} objects · t = {:.2} s",
+                                "{} objects В· t = {:.2} s",
                                 runtime.object_count(),
                                 self.time
                             );
@@ -2468,7 +2473,7 @@ impl Editor {
                 .color(Color32::from_rgb(130, 153, 183)),
         );
         ui.label(
-            RichText::new("LMB: orbit · wheel: distance")
+            RichText::new("LMB: orbit В· wheel: distance")
                 .size(12.0)
                 .color(Color32::from_rgb(126, 140, 163)),
         );
@@ -2527,7 +2532,7 @@ impl Editor {
     }
 
     fn file_panel(&mut self, ui: &mut egui::Ui) {
-        ui.label(egui::RichText::new("Project data — expanded JSON").strong());
+        ui.label(egui::RichText::new("Project data вЂ” expanded JSON").strong());
         ui.label("Includes loaded scene bodies for editing. Save writes separate scene files when external storage is enabled.");
         ui.horizontal(|ui| {
             ui.heading("Graph text description");
@@ -2707,7 +2712,7 @@ impl Editor {
         }
         ui.label(
             RichText::new(
-                "One source · the graph edits Rust · unsupported constructs remain as text",
+                "One source В· the graph edits Rust В· unsupported constructs remain as text",
             )
             .size(12.0)
             .color(Color32::from_rgb(144, 161, 185)),
@@ -2959,7 +2964,7 @@ impl Editor {
                 );
             } else if pending {
                 ui.label(
-                    "Unapplied parameters — retained across views. Apply or Discard before saving.",
+                    "Unapplied parameters вЂ” retained across views. Apply or Discard before saving.",
                 );
             }
             let response = ui.add_enabled(
@@ -3127,8 +3132,8 @@ impl Editor {
     }
 }
 
-impl eframe::App for Editor {
-    fn raw_input_hook(&mut self, ctx: &egui::Context, _input: &mut egui::RawInput) {
+impl Editor {
+    fn native_input(&mut self, ctx: &egui::Context, _input: &mut egui::RawInput) {
         // Native focus/minimize events also arrive when eframe skips root UI.
         if self.area_drag.is_some() {
             self.update_area_drag(ctx);
@@ -3136,11 +3141,11 @@ impl eframe::App for Editor {
         #[cfg(feature = "verification")]
         self.workflow_capture_input(_input);
     }
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn native_ui(&mut self, ui: &mut egui::Ui, _window: &impl eframe::wgpu::rwh::HasWindowHandle) {
         #[cfg(windows)]
         {
-            use eframe::wgpu::rwh::{HasWindowHandle, RawWindowHandle};
-            if let Ok(handle) = _frame.window_handle()
+            use eframe::wgpu::rwh::RawWindowHandle;
+            if let Ok(handle) = _window.window_handle()
                 && let RawWindowHandle::Win32(handle) = handle.as_raw()
             {
                 let window = handle.hwnd.get() as usize;
@@ -3168,6 +3173,24 @@ impl eframe::App for Editor {
         self.game_workbench
             .set_background_game(true, Some(ui.ctx()));
         self.draw(ui);
+    }
+}
+
+impl eframe::App for Editor {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        self.native_input(ctx, input);
+    }
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        self.native_ui(ui, frame);
+    }
+}
+
+impl module_engine_native_ui::NativeApp for Editor {
+    fn raw_input(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        self.native_input(ctx, input);
+    }
+    fn ui(&mut self, ui: &mut egui::Ui, window: &module_engine_native_ui::Window) {
+        self.native_ui(ui, window);
     }
 }
 
@@ -3275,7 +3298,7 @@ fn graph_connection_error(
             .ok_or("Input pin was not found.")?;
         if output.data_type != input.data_type {
             return Err(format!(
-                "Incompatible pins: {} → {}.",
+                "Incompatible pins: {} в†’ {}.",
                 output.data_type, input.data_type
             ));
         }
@@ -3297,7 +3320,7 @@ fn graph_connection_error(
                 || output.samples != input.samples
             {
                 return Err(format!(
-                    "Incompatible GPU resources: {} / {} / {} / {} samples → {} / {} / {} / {} samples.",
+                    "Incompatible GPU resources: {} / {} / {} / {} samples в†’ {} / {} / {} / {} samples.",
                     output.semantic,
                     output.format,
                     output.extent,
@@ -3772,7 +3795,12 @@ mod tests {
 
         let toolbar = |editor: &mut Editor, ui: &mut egui::Ui| editor.draw_workflow_toolbar(ui);
         click_test_panel(&mut editor, &ctx, "File", toolbar);
-        click_test_panel(&mut editor, &ctx, "Review Custom Rust permission…", toolbar);
+        click_test_panel(
+            &mut editor,
+            &ctx,
+            "Review Custom Rust permissionвЂ¦",
+            toolbar,
+        );
         assert!(editor.workflow.blocks_document_edits());
         test_panel_frame(&mut editor, &ctx, vec![], modal).drop_without_applying_deltas();
         click_test_panel(&mut editor, &ctx, "Allow compilation", modal);
@@ -4090,12 +4118,12 @@ mod tests {
         let beta = test_panel_frame(&mut editor, &ctx, vec![], inspector);
         text_center(&beta, "Linked template source: Beta");
         let draft_was_visible = beta.shapes.iter().any(|shape| {
-            matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Inspector drafts · unapplied")
+            matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Inspector drafts В· unapplied")
         });
         click_test_panel(&mut editor, &ctx, "Alpha", hierarchy);
         assert!(
             linked_template_control(&mut editor, &ctx, "0.68").is_some(),
-            "Alpha lost the unapplied value after Alpha → Beta → Alpha (draft visible at Beta: {draft_was_visible})"
+            "Alpha lost the unapplied value after Alpha в†’ Beta в†’ Alpha (draft visible at Beta: {draft_was_visible})"
         );
         assert!(draft_was_visible);
         assert!(editor.has_unsaved_work());

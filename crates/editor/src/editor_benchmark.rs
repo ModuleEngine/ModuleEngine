@@ -3,8 +3,9 @@
 use super::editor_workflow::Command;
 use super::{Editor, EditorType, WorkspaceKind, dock, panes};
 use crate::distribution::Distribution;
-use eframe::{App, egui};
+use eframe::egui;
 use module_engine_core::GraphDocument;
+use module_engine_native_ui::{NativeApp, Window};
 use serde::Serialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -45,19 +46,22 @@ pub fn run(
     let folder = folder.canonicalize().map_err(|error| error.to_string())?;
     let outcome = Arc::new(Mutex::new(None));
     let returned = Arc::clone(&outcome);
-    let options = module_engine_player::ui::native_options(
-        egui::ViewportBuilder::default()
-            .with_inner_size([1920., 1080.])
-            .with_min_inner_size([1200., 720.])
-            .with_position([0., 0.]),
-    )?;
-    eframe::run_native(
-        "ModuleEngine / Native Editor benchmark",
-        options,
-        Box::new(move |cc| {
-            let gui_graphics = module_engine_player::ui::report_graphics(cc);
-            super::configure_style(&cc.egui_ctx);
-            let bridge = module_engine_player::ui::presentation_bridge(cc)?;
+    let viewport = egui::ViewportBuilder::default()
+        .with_title("ModuleEngine / Native Editor benchmark")
+        .with_inner_size([1920., 1080.])
+        .with_min_inner_size([1200., 720.])
+        .with_position([0., 0.]);
+    module_engine_native_ui::run(
+        distribution.package_root.clone(),
+        viewport,
+        move |ctx, window, native_bridge| {
+            let gui_graphics = module_engine_player::ui::window_graphics(window, &native_bridge);
+            super::configure_style(ctx);
+            let bridge = Some(Arc::new(
+                module_engine_player::gpu_presentation::GpuPresentationBridge::window(
+                    native_bridge,
+                ),
+            ));
             let mut editor = Editor::new_native_with_diagnostic_personal_root(
                 document.clone(),
                 path.clone(),
@@ -81,22 +85,15 @@ pub fn run(
                     .engine_panes
                     .insert(id, panes::PaneMemory::new(snapshot, &editor.document));
             }
-            let native_window = cc.winit_window().cloned();
-            let physical_size: Box<dyn Fn() -> Option<[u32; 2]>> = match native_window {
-                Some(window) => {
-                    let scale = window.scale_factor() as f32;
-                    cc.egui_ctx
-                        .send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
-                            1920. / scale,
-                            1080. / scale,
-                        )));
-                    Box::new(move || Some(window.inner_size().into()))
-                }
-                None => Box::new(|| None),
-            };
-            let monitor = cc
-                .winit_window()
-                .and_then(|window| window.current_monitor());
+            let scale = window.scale_factor() as f32;
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                1920. / scale,
+                1080. / scale,
+            )));
+            let owned = window.clone();
+            let physical_size: Box<dyn Fn() -> Option<[u32; 2]>> =
+                Box::new(move || Some(owned.inner_size().into()));
+            let monitor = window.current_monitor();
             let monitor_pixels = monitor
                 .as_ref()
                 .map(|monitor| <[u32; 2]>::from(monitor.size()));
@@ -104,6 +101,7 @@ pub fn run(
                 .as_ref()
                 .and_then(|monitor| monitor.refresh_rate_millihertz());
             Ok(Box::new(NativeEditorBenchmark {
+                previous_ui_seconds: None,
                 editor,
                 original: document,
                 project_path: path,
@@ -141,9 +139,8 @@ pub fn run(
                 refresh_millihertz,
                 gui_graphics,
             }))
-        }),
-    )
-    .map_err(module_engine_player::ui::gui_startup_error)?;
+        },
+    )?;
     returned
         .lock()
         .map_err(|_| "Native Editor benchmark result lock poisoned".to_string())?
@@ -258,6 +255,7 @@ impl Readiness {
 }
 
 struct NativeEditorBenchmark {
+    previous_ui_seconds: Option<f32>,
     editor: Editor,
     original: GraphDocument,
     project_path: PathBuf,
@@ -504,7 +502,7 @@ impl NativeEditorBenchmark {
             "phase_summaries":summaries,"frames":self.samples,
             "scripted_egui_input_focus":true,
             "native_focus_scope":"focused_frames records native RawInput focus before the harness supplies focus for its synthetic pointer stream; no external physical input claim",
-            "measurement_scope":"editor_handler_ms times the real Editor::ui call, all open native editor panes and completed-frame texture enqueue. Game simulation and Game Vulkan rendering run on their persistent worker; the independent authored Scene viewport still renders on demand. Frame interval is Editor callback start-to-start, including previous egui texture upload/draw, present/vsync and scheduling. framework_cpu_ms is eframe previous-frame CPU, including GUI rendering but excluding vsync waiting. No headless/FPS substitute or display scanout timing. Only actual middle-button pointer moves that changed graph pan are sampled; preparation, warmup and drag acquisition are excluded. Last render durations/texture presence are diagnostics, not proof of one fresh GPU render per sample."
+            "measurement_scope":"editor_handler_ms times the real Editor::ui call, all open native editor panes and completed-frame texture enqueue. Game simulation and Game Vulkan rendering run on their persistent worker; the independent authored Scene viewport still renders on demand. Frame interval is Editor callback start-to-start, including previous egui texture upload/draw, present/vsync and scheduling. framework_cpu_ms is previous-frame wall time from root input processing through egui tessellation, excluding root Vulkan painting and presentation. No headless/FPS substitute or display scanout timing. Only actual middle-button pointer moves that changed graph pan are sampled; preparation, warmup and drag acquisition are excluded. Last render durations/texture presence are diagnostics, not proof of one fresh GPU render per sample."
         });
         report["preparation_activities"] = serde_json::json!(activities);
         let result = serde_json::to_vec_pretty(&report).map_err(|error|error.to_string())
@@ -516,8 +514,11 @@ impl NativeEditorBenchmark {
     }
 }
 
-impl App for NativeEditorBenchmark {
-    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+impl NativeApp for NativeEditorBenchmark {
+    fn frame_prepared(&mut self, elapsed: std::time::Duration) {
+        self.previous_ui_seconds = Some(elapsed.as_secs_f32());
+    }
+    fn raw_input(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
         if !self.finished && self.started.elapsed().as_secs() >= 45 {
             self.finish(Some(
                 "45-second watchdog: preparation or native frames did not complete",
@@ -527,9 +528,6 @@ impl App for NativeEditorBenchmark {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         ctx.request_repaint();
-    }
-
-    fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
         // Ignore external clicks/keys during this scripted diagnostic so no
         // project commands, text edits or layout changes can be triggered.
         self.native_focused = input.focused;
@@ -578,10 +576,10 @@ impl App for NativeEditorBenchmark {
             self.drag_held = false;
             self.drag_steps = 0;
         }
-        self.editor.raw_input_hook(ctx, input);
+        self.editor.native_input(ctx, input);
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, window: &Window) {
         if self.finished {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
             return;
@@ -592,7 +590,7 @@ impl App for NativeEditorBenchmark {
         if new_frame {
             self.last_ui_frame = Some(ui_frame);
             self.total_ui_frames += 1;
-            self.complete_previous(start, frame.info().cpu_usage);
+            self.complete_previous(start, self.previous_ui_seconds);
             if self.phase == Phase::StoppedPan && self.measured[0] == MEASURED_FRAMES {
                 self.phase = Phase::WarmupPlay;
                 self.editor.dispatch_command(Command::PlayPause, ui.ctx());
@@ -635,7 +633,7 @@ impl App for NativeEditorBenchmark {
         self.pointer = Some(egui::pos2(rect.left() + 64., rect.bottom() - 100.));
         let before = self.graph_pan();
         let handler_started = Instant::now();
-        self.editor.ui(ui, frame);
+        self.editor.native_ui(ui, window);
         let handler_ms = handler_started.elapsed().as_secs_f64() * 1000.;
         self.editor.personal_dirty = false;
         let after = self.graph_pan();
@@ -753,7 +751,7 @@ impl App for NativeEditorBenchmark {
         ui.ctx().request_repaint();
     }
 
-    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+    fn on_exit(&mut self) {
         if !self.finished {
             self.finish(Some(
                 "Native Editor window closed before all measured frames completed",

@@ -1,6 +1,4 @@
-use crate::presentation::{
-    DeviceLifetime, PresentationPool, SharedImage, VulkanPresentationTarget,
-};
+use crate::presentation::DeviceLifetime;
 use crate::{
     DeviceCapabilities,
     frames::{Completion, FramePools, Timeline},
@@ -39,11 +37,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(all(windows, feature = "editor-spike"))]
+#[cfg(feature = "window-surface")]
 #[path = "editor_spike.rs"]
 pub(crate) mod editor_spike;
 #[path = "materials.rs"]
 mod materials;
+#[cfg(feature = "window-surface")]
+#[path = "window_diagnostic.rs"]
+mod window_diagnostic;
 use materials::{MaterialLayout, MaterialSet};
 
 #[path = "resident.rs"]
@@ -416,7 +417,7 @@ struct ProducerFlight {
     completion: Completion,
     serial: u64,
     work: FrameWork,
-    shared: Option<Arc<SharedImage>>,
+    window_output: Option<String>,
     resources: FrameResources,
     atlas: Option<AtlasGpu>,
     _upload: Option<StagingUpload>,
@@ -535,6 +536,64 @@ pub struct VertexAllocation {
 
 const VERTEX_BUFFER_MULTIPLIER: u64 = 2;
 
+#[derive(Clone)]
+struct RenderDevice {
+    meshlets: bool,
+    context: Arc<DeviceLifetime>,
+    physical: vk::PhysicalDevice,
+    capabilities: DeviceCapabilities,
+    timestamp_valid_bits: u32,
+}
+
+/// The window and its Scene/Game producers share this logical device and queues.
+#[derive(Clone)]
+pub struct WindowTarget(RenderDevice);
+impl WindowTarget {
+    pub fn renderer(&self, root: std::path::PathBuf) -> Result<VulkanRenderer, VulkanError> {
+        let mut renderer = VulkanRenderer::on_device(root, &self.0, self.0.meshlets, None)?;
+        renderer.window_target = true;
+        Ok(renderer)
+    }
+}
+impl module_engine_core::PresentationTarget for WindowTarget {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// Owns the actual graph output until the UI has retired all sampling draws.
+pub struct WindowFrame {
+    image: Image,
+    size: [usize; 2],
+    context: Arc<DeviceLifetime>,
+}
+impl WindowFrame {
+    pub fn view(&self) -> vk::ImageView {
+        self.image.view
+    }
+    pub fn image(&self) -> vk::Image {
+        self.image.image
+    }
+    pub fn size(&self) -> [usize; 2] {
+        self.size
+    }
+    pub fn belongs_to(&self, target: &WindowTarget) -> bool {
+        Arc::ptr_eq(&self.context, &target.0.context)
+    }
+}
+impl std::fmt::Debug for WindowFrame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WindowFrame")
+            .field("size", &self.size)
+            .finish_non_exhaustive()
+    }
+}
+impl module_engine_core::GpuFrame for WindowFrame {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 pub struct VulkanRenderer {
     resource_root: std::path::PathBuf,
     context: Arc<DeviceLifetime>,
@@ -544,8 +603,8 @@ pub struct VulkanRenderer {
     memory: vk::PhysicalDeviceMemoryProperties,
     queue: vk::Queue,
     family: u32,
-    presentation_target: Option<Arc<VulkanPresentationTarget>>,
-    presentation_slots: PresentationPool<SharedImage>,
+    window_target: bool,
+    window_frames: Vec<Arc<WindowFrame>>,
     slots: Vec<FrameSlot>,
     serial: u64,
     timeline: Option<Arc<Timeline>>,
@@ -590,7 +649,7 @@ impl VulkanRenderer {
     }
     /// Bind this backend's shader compilation to one explicit package root.
     pub fn new_at(resource_root: std::path::PathBuf) -> Result<Self, VulkanError> {
-        Self::new_at_target(resource_root, None, false)
+        Self::new_headless(resource_root, false)
     }
 
     /// R8.1's explicit device creation path. Normal Editor and Player
@@ -598,10 +657,9 @@ impl VulkanRenderer {
     #[cfg(feature = "bench")]
     pub fn new_meshlet_benchmark(
         resource_root: std::path::PathBuf,
-        target: Option<Arc<VulkanPresentationTarget>>,
         enable_meshlets: bool,
     ) -> Result<Self, VulkanError> {
-        Self::new_at_target(resource_root, target, enable_meshlets)
+        Self::new_headless(resource_root, enable_meshlets)
     }
 
     #[cfg(feature = "bench")]
@@ -614,27 +672,24 @@ impl VulkanRenderer {
         MeshletDeviceReport::query(self)
     }
 
-    fn new_at_target(
+    fn new_headless(
         resource_root: std::path::PathBuf,
-        presentation_target: Option<Arc<VulkanPresentationTarget>>,
         enable_meshlets: bool,
     ) -> Result<Self, VulkanError> {
         Self::new_with_instance(
             resource_root,
-            presentation_target,
             Arc::new(InstanceLifetime::new(&[])?),
             enable_meshlets,
-            #[cfg(all(windows, feature = "editor-spike"))]
+            #[cfg(feature = "window-surface")]
             None,
         )
     }
 
     fn new_with_instance(
         resource_root: std::path::PathBuf,
-        presentation_target: Option<Arc<VulkanPresentationTarget>>,
         owner: Arc<InstanceLifetime>,
         enable_meshlets: bool,
-        #[cfg(all(windows, feature = "editor-spike"))] surface: Option<&editor_spike::Surface>,
+        #[cfg(feature = "window-surface")] surface: Option<&editor_spike::Surface>,
     ) -> Result<Self, VulkanError> {
         // SAFETY: The instance owns the enumerated physical devices and Vulkan fills their names
         // with terminated strings. Device creation uses queried queues/features, borrowed create
@@ -651,15 +706,6 @@ impl VulkanRenderer {
             let selected = candidates
                 .into_iter()
                 .filter_map(|physical| {
-                    if let Some(target) = &presentation_target
-                        && !crate::presentation::matches_adapter(
-                            &instance,
-                            physical,
-                            &target.identity,
-                        )
-                    {
-                        return None;
-                    }
                     let properties = instance.get_physical_device_properties(physical);
                     if properties.api_version < vk::API_VERSION_1_3 {
                         return None;
@@ -670,7 +716,7 @@ impl VulkanRenderer {
                             && p.queue_flags
                                 .contains(vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE)
                     };
-                    #[cfg(all(windows, feature = "editor-spike"))]
+                    #[cfg(feature = "window-surface")]
                     let family = match surface {
                         Some(surface) => match surface.queue_family(physical, &families) {
                             Ok(family) => family?,
@@ -681,7 +727,7 @@ impl VulkanRenderer {
                         },
                         None => families.iter().position(graphics_compute)?,
                     };
-                    #[cfg(not(all(windows, feature = "editor-spike")))]
+                    #[cfg(not(feature = "window-surface"))]
                     let family = families.iter().position(graphics_compute)?;
                     let extensions = match instance.enumerate_device_extension_properties(physical)
                     {
@@ -693,15 +739,7 @@ impl VulkanRenderer {
                             return None;
                         }
                     };
-                    if presentation_target.is_some()
-                        && !extensions.iter().any(|extension| {
-                            CStr::from_ptr(extension.extension_name.as_ptr())
-                                == crate::presentation::extension_name()
-                        })
-                    {
-                        return None;
-                    }
-                    #[cfg(all(windows, feature = "editor-spike"))]
+                    #[cfg(feature = "window-surface")]
                     if surface.is_some()
                         && !extensions.iter().any(|extension| {
                             CStr::from_ptr(extension.extension_name.as_ptr())
@@ -735,18 +773,14 @@ impl VulkanRenderer {
                 if let Some(error) = selection_error {
                     return Err(error);
                 }
-                #[cfg(all(windows, feature = "editor-spike"))]
+                #[cfg(feature = "window-surface")]
                 if surface.is_some() {
                     return Err(VulkanError::Presentation(
-                        "No R2 Vulkan graphics+compute queue can present to the spike window"
+                        "No R2 Vulkan graphics+compute queue can present to the native window"
                             .into(),
                     ));
                 }
-                return Err(if presentation_target.is_some() {
-                    VulkanError::NoPresentationAdapter
-                } else {
-                    VulkanError::NoAdapter
-                });
+                return Err(VulkanError::NoAdapter);
             };
             let name = CStr::from_ptr(properties.device_name.as_ptr())
                 .to_string_lossy()
@@ -776,12 +810,8 @@ impl VulkanRenderer {
                 .sampler_anisotropy(bindless)
                 .multi_draw_indirect(capabilities.resident_scene)
                 .draw_indirect_first_instance(capabilities.resident_scene);
-            let mut extensions = if presentation_target.is_some() {
-                vec![crate::presentation::extension_name().as_ptr()]
-            } else {
-                Vec::new()
-            };
-            #[cfg(all(windows, feature = "editor-spike"))]
+            let mut extensions = Vec::new();
+            #[cfg(feature = "window-surface")]
             if surface.is_some() {
                 extensions.push(ash::khr::swapchain::NAME.as_ptr());
             }
@@ -811,30 +841,64 @@ impl VulkanRenderer {
                     name: name.clone(),
                     source,
                 })?;
-            #[cfg(feature = "bench")]
-            let meshlet_device =
-                enable_meshlets.then(|| ash::ext::mesh_shader::Device::new(&instance, &device));
             let context = Arc::new(DeviceLifetime {
                 instance: owner,
-                device: device.clone(),
+                device,
+                queue_access: Default::default(),
             });
+            let selected = RenderDevice {
+                meshlets: enable_meshlets,
+                context,
+                physical,
+                capabilities,
+                timestamp_valid_bits,
+            };
+            Self::on_device(resource_root, &selected, enable_meshlets, trace)
+        }
+    }
+
+    fn on_device(
+        resource_root: std::path::PathBuf,
+        selected: &RenderDevice,
+        _enable_meshlets: bool,
+        trace: Option<u64>,
+    ) -> Result<Self, VulkanError> {
+        let RenderDevice {
+            context,
+            physical,
+            capabilities,
+            timestamp_valid_bits,
+            ..
+        } = selected.clone();
+        let instance = context.instance.raw.clone();
+        let device = context.device.clone();
+        let family = capabilities.graphics_family;
+        let modern = capabilities.use_modern_device();
+        let transfer_family = capabilities.dedicated_transfer_family.filter(|_| modern);
+        let bindless = capabilities.bindless_materials;
+        // SAFETY: The selected device retains this instance and its physical
+        // device; its queue families and enabled features were queried at creation.
+        unsafe {
+            let properties = instance.get_physical_device_properties(physical);
+            let name = CStr::from_ptr(properties.device_name.as_ptr())
+                .to_string_lossy()
+                .into_owned();
+            #[cfg(feature = "bench")]
+            let meshlet_device =
+                _enable_meshlets.then(|| ash::ext::mesh_shader::Device::new(&instance, &device));
             let material_layout = bindless
                 .then(|| MaterialLayout::new(&context, capabilities.max_material_anisotropy))
                 .transpose()?
                 .map(Arc::new);
-            if presentation_target.is_some() {
-                crate::presentation::validate_external_format(&context, physical, 1, 1)?;
-            }
             let queue = device.get_device_queue(family, 0);
             #[cfg(debug_assertions)]
             eprintln!(
-                "Vulkan debug device: {name}, type={:?}, API={}.{}.{}, driver={:#x}, queue={family}, GUI interop={}",
+                "Vulkan debug device: {name}, type={:?}, API={}.{}.{}, driver={:#x}, queue={family}",
                 properties.device_type,
                 vk::api_version_major(properties.api_version),
                 vk::api_version_minor(properties.api_version),
                 vk::api_version_patch(properties.api_version),
                 properties.driver_version,
-                presentation_target.is_some()
             );
             context.name(device.handle(), || format!("ModuleEngine device ({name})"));
             context.name(queue, || {
@@ -863,14 +927,13 @@ impl VulkanRenderer {
             }
             if let Some(trace) = trace {
                 eprintln!(
-                    "Vulkan device renderer={trace} adapter={name:?} driver={:#x} tier_a={} tier_b={} tier_c={} timeline={modern} bindless_materials={bindless} graphics_family={family} transfer_family={} slots={} present={}",
+                    "Vulkan device renderer={trace} adapter={name:?} driver={:#x} tier_a={} tier_b={} tier_c={} timeline={modern} bindless_materials={bindless} graphics_family={family} transfer_family={} slots={}",
                     properties.driver_version,
                     capabilities.tier_a,
                     capabilities.tier_b,
                     capabilities.tier_c,
                     transfer_family.unwrap_or(family),
                     slots.len(),
-                    presentation_target.is_some(),
                 );
             }
             Ok(Self {
@@ -881,8 +944,8 @@ impl VulkanRenderer {
                 memory,
                 queue,
                 family,
-                presentation_target,
-                presentation_slots: PresentationPool::default(),
+                window_target: false,
+                window_frames: Vec::new(),
                 slots,
                 serial: 0,
                 timeline,
@@ -933,35 +996,32 @@ impl VulkanRenderer {
     /// Installing a different GUI device is transactional: prepare a compatible
     /// backend before retiring the accepted one. Outstanding leases are never
     /// invalidated, and target churn cannot multiply the four-slot pool.
-    pub fn set_presentation_target(
-        &mut self,
-        target: Option<Arc<VulkanPresentationTarget>>,
-    ) -> Result<(), VulkanError> {
-        if match (&self.presentation_target, &target) {
-            (None, None) => true,
-            (Some(a), Some(b)) => {
-                a.identity == b.identity && Arc::ptr_eq(&a.allocator, &b.allocator)
-            }
-            _ => false,
-        } {
-            return Ok(());
-        }
-        if self.presentation_slots.busy() {
+    fn require_idle_presentation_target(&self) -> Result<(), VulkanError> {
+        if self.slots.iter().any(|slot| slot.pending.is_some())
+            || self
+                .window_frames
+                .iter()
+                .any(|frame| Arc::strong_count(frame) > 1)
+        {
             return Err(VulkanError::Presentation(
                 "GPU presentation target still has leased frames".into(),
             ));
         }
-        let Some(target) = target else {
-            self.presentation_slots.clear();
-            self.presentation_target = None;
+        Ok(())
+    }
+
+    pub fn set_window_target(&mut self, target: &WindowTarget) -> Result<(), VulkanError> {
+        if self.window_target && Arc::ptr_eq(&self.context, &target.0.context) {
             return Ok(());
-        };
-        #[cfg(feature = "bench")]
-        let meshlets = self.meshlet_device.is_some();
-        #[cfg(not(feature = "bench"))]
-        let meshlets = false;
-        let mut replacement =
-            Self::new_at_target(self.resource_root.clone(), Some(target), meshlets)?;
+        }
+        self.require_idle_presentation_target()?;
+        let mut replacement = Self::on_device(
+            self.resource_root.clone(),
+            &target.0,
+            target.0.meshlets,
+            self.trace,
+        )?;
+        replacement.window_target = true;
         replacement.detailed_stats = self.detailed_stats;
         replacement.frame_profiling = self.frame_profiling;
         replacement.next_ticket = self.next_ticket;
@@ -969,6 +1029,15 @@ impl VulkanRenderer {
             replacement.prepare(graph, sources)?;
         }
         *self = replacement;
+        Ok(())
+    }
+
+    pub fn clear_window_target(&mut self) -> Result<(), VulkanError> {
+        if self.window_target {
+            self.require_idle_presentation_target()?;
+            self.window_frames.clear();
+            self.window_target = false;
+        }
         Ok(())
     }
     pub fn diagnostics(&self) -> &[String] {
@@ -2130,7 +2199,7 @@ impl VulkanRenderer {
             return Err(VulkanError::ProducerBusy);
         }
         self.render_output(
-            scene, camera, width, height, graph, sources, overrides, None, 0,
+            scene, camera, width, height, graph, sources, overrides, false, 0,
         )
         .and_then(|frame| frame.ok_or(VulkanError::NoReadback))
     }
@@ -2179,7 +2248,7 @@ impl VulkanRenderer {
         {
             return Err(VulkanError::Viewport);
         }
-        let Some(target) = self.presentation_target.clone() else {
+        if !self.window_target {
             // No presentation target is the explicit legacy/readback mode used
             // by headless callers. A rejected requested target never falls back.
             return self
@@ -2200,31 +2269,21 @@ impl VulkanRenderer {
             self.performance.gpu_busy_skips += 1;
             return Ok(RenderSubmission::Busy);
         };
-        let size = [width as u32, height as u32];
-        let context = self.context.clone();
-        let physical = self.physical;
-        let memory = self.memory;
-        let Some(slot) = self.presentation_slots.reserve(size, || {
-            let shared = target
-                .allocator
-                .allocate(size[0], size[1])
-                .map_err(VulkanError::Presentation)?;
-            SharedImage::import(context, physical, &memory, size[0], size[1], shared)
-        })?
-        else {
+        // The UI can retain a displayed image through resize, an outstanding
+        // draw, or a hidden pane. Backpressure bounds those leases plus producers.
+        if self
+            .window_frames
+            .iter()
+            .filter(|frame| Arc::strong_count(frame) > 1)
+            .count()
+            + self.slots.iter().filter(|s| s.pending.is_some()).count()
+            >= 4
+        {
             self.performance.gpu_busy_skips += 1;
             return Ok(RenderSubmission::Busy);
-        };
+        }
         self.render_output(
-            scene,
-            camera,
-            width,
-            height,
-            graph,
-            sources,
-            overrides,
-            Some(&slot),
-            index,
+            scene, camera, width, height, graph, sources, overrides, true, index,
         )?;
         Ok(RenderSubmission::Pending(self.next_ticket))
     }
@@ -2273,11 +2332,6 @@ impl VulkanRenderer {
                 flight.serial
             );
         }
-        let shared = flight
-            .shared
-            .as_ref()
-            .expect("native producer shared image");
-        shared.completed();
         if let Some(culling) = &flight.resources.culling {
             flight.work.culling_stats = culling.completed()?;
         }
@@ -2286,11 +2340,26 @@ impl VulkanRenderer {
         } else {
             self.performance.gpu_presentation_frames += 1;
             self.performance.gpu_presentation_bytes += (flight.size[0] * flight.size[1] * 4) as u64;
+            let output = flight
+                .window_output
+                .as_ref()
+                .expect("presented flight output");
+            let image = flight
+                .resources
+                .images
+                .remove(output)
+                .expect("recorded graph output");
+            let gpu = Arc::new(WindowFrame {
+                image,
+                size: flight.size,
+                context: self.context.clone(),
+            });
+            self.window_frames.push(gpu.clone());
             Some(Frame {
                 width: flight.size[0],
                 height: flight.size[1],
                 rgba: Vec::new(),
-                gpu: Some(shared.frame()),
+                gpu: Some(gpu),
                 stats: flight.stats,
                 timings: flight
                     .timings
@@ -2328,7 +2397,7 @@ impl VulkanRenderer {
         graph: &Graph,
         sources: &BTreeMap<String, String>,
         overrides: &RenderOverrides,
-        presentation: Option<&Arc<SharedImage>>,
+        direct: bool,
         index: usize,
     ) -> Result<Option<Frame>, VulkanError> {
         if let Some(error) = &self.producer_error {
@@ -2481,7 +2550,7 @@ impl VulkanRenderer {
             ),
             None => geometry::legacy_vertices(scene, rects),
         };
-        let readback = if presentation.is_some() {
+        let readback = if direct {
             Vec::new()
         } else {
             frame_readback(&plan, width, height, self.detailed_stats)
@@ -2541,10 +2610,29 @@ impl VulkanRenderer {
             .as_mut()
             .map(|r| std::mem::take(&mut r.images))
             .unwrap_or_default();
-        if images.is_empty() {
+        let recycled = if direct {
+            let pos = self
+                .window_frames
+                .iter()
+                .position(|f| Arc::strong_count(f) == 1 && f.size == [width, height]);
+            let result = pos
+                .and_then(|i| Arc::into_inner(self.window_frames.swap_remove(i)))
+                .map(|f| f.image);
+            self.window_frames.retain(|f| Arc::strong_count(f) > 1);
+            result
+        } else {
+            None
+        };
+        if let Some(image) = recycled {
+            images.insert(plan.output.clone(), image);
+        }
+        {
             for pass in &plan.passes {
                 for spec in &pass.manifest.outputs {
                     let id = pass.resource(&spec.name);
+                    if images.contains_key(&id) {
+                        continue;
+                    }
                     let image =
                         self.image(width as u32, height as u32, format(&spec.format)?, false)?;
                     self.context.name(image.image, || id.clone());
@@ -2553,6 +2641,9 @@ impl VulkanRenderer {
                 }
                 if pass.geometry() {
                     let id = format!("{}.__hardware_depth", pass.id);
+                    if images.contains_key(&id) {
+                        continue;
+                    }
                     let image =
                         self.image(width as u32, height as u32, vk::Format::D32_SFLOAT, true)?;
                     self.context.name(image.image, || id.clone());
@@ -2566,7 +2657,7 @@ impl VulkanRenderer {
             &images.keys().map(String::as_str).collect(),
             &readback,
         )?;
-        let new_staging = if reused.is_none() && presentation.is_none() {
+        let new_staging = if reused.is_none() && !direct {
             let last = readback.last().expect("final color readback");
             Some(self.buffer(last.end() as u64, vk::BufferUsageFlags::TRANSFER_DST)?)
         } else {
@@ -3199,7 +3290,7 @@ impl VulkanRenderer {
         if let Some(timestamps) = timestamps {
             timestamps.end(command, 0);
         }
-        if let Some(shared) = presentation {
+        if direct {
             let output = images
                 .get_mut(&plan.output)
                 .ok_or(VulkanError::Presentation(
@@ -3214,11 +3305,10 @@ impl VulkanRenderer {
                 &self.device,
                 command,
                 output,
-                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::AccessFlags::TRANSFER_READ,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+                vk::AccessFlags::SHADER_READ,
             );
-            shared.record_copy(command, output.image, self.family);
         }
         for plane in &readback {
             let image = images.get_mut(&plane.resource).unwrap();
@@ -3260,7 +3350,7 @@ impl VulkanRenderer {
         unsafe {
             // Make transfer writes available and visible to host reads. Waiting
             // for the queue alone is not the graph's memory dependency contract.
-            if presentation.is_none() {
+            if !direct {
                 let staging = staging.unwrap();
                 let host_read = vk::BufferMemoryBarrier::default()
                     .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
@@ -3304,7 +3394,7 @@ impl VulkanRenderer {
                 culling: scene_culling,
             }
         };
-        let ticket = if presentation.is_some() {
+        let ticket = if direct {
             self.next_ticket
                 .checked_add(1)
                 .ok_or(VulkanError::TicketExhausted)?
@@ -3325,7 +3415,7 @@ impl VulkanRenderer {
             completion,
             serial,
             work: frame_work,
-            shared: presentation.cloned(),
+            window_output: direct.then(|| plan.output.clone()),
             resources,
             atlas,
             _upload: atlas_upload,
@@ -3430,7 +3520,7 @@ impl VulkanRenderer {
         }
         let flight = self.slots[index].pending.as_mut().unwrap();
         self.last_frame_work = Some(frame_work);
-        if presentation.is_some() {
+        if direct {
             self.next_ticket = ticket;
             self.performance.gpu_submissions += 1;
             return Ok(None);
@@ -3545,7 +3635,7 @@ impl Drop for VulkanRenderer {
             _pipelines: std::mem::take(&mut self.pipelines),
             _context: self.context.clone(),
         };
-        self.presentation_slots.clear();
+        self.window_frames.clear();
         if bundle.slots.iter().any(|slot| slot.pending.is_some()) {
             let trace = self.trace;
             let mut pinned = std::mem::ManuallyDrop::new(bundle);

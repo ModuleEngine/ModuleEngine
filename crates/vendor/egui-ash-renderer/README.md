@@ -1,0 +1,190 @@
+# egui-ash-renderer
+
+[![Version](https://img.shields.io/crates/v/egui-ash-renderer.svg)](https://crates.io/crates/egui-ash-renderer)
+[![Docs.rs](https://docs.rs/egui-ash-renderer/badge.svg)](https://docs.rs/egui-ash-renderer)
+[![Build Status](https://github.com/adrien-ben/egui-ash-renderer/workflows/Build/badge.svg)](https://github.com/adrien-ben/egui-ash-renderer/actions)
+[![Publish Status](https://github.com/adrien-ben/egui-ash-renderer/workflows/Publish/badge.svg)](https://github.com/adrien-ben/egui-ash-renderer/actions)
+
+A Vulkan renderer for [egui][egui] using [Ash][ash].
+
+This is meant to add support for egui in your existing Vulkan/ash applications. Not a full eframe integration for Vulkan/ash.
+
+![screenshot](capture.png)
+
+## Compatibility
+
+| crate  | egui         | ash          | gpu-allocator (feature) | vk-mem (feature) |
+|--------|--------------|--------------|-------------------------|------------------|
+| 0.13.0 | 0.36         | 0.38         | 0.28                    | 0.5              |
+| 0.12.0 | 0.35         | 0.38         | 0.28                    | 0.5              |
+| 0.11.0 | 0.33         | 0.38         | 0.28                    | 0.5              |
+| 0.10.0 | 0.33         | 0.38         | 0.28                    | 0.5              |
+| 0.9.0  | 0.32         | 0.38         | 0.27                    | 0.4              |
+| 0.8.0  | [0.26, 0.31] | 0.38         | 0.27                    | 0.4              |
+| 0.7.0  | [0.26, 0.30] | 0.38         | 0.27                    | 0.4              |
+| 0.6.0  | [0.26, 0.29] | 0.38         | 0.27                    | 0.4              |
+| 0.5.0  | [0.26, 0.28] | 0.38         | 0.27                    | 0.4              |
+| 0.4.0  | [0.26, 0.28] | [0.34, 0.37] | [0.25, 0.26]            | 0.3              |
+
+## How it works
+
+The renderer records drawing command to a command buffer supplied by the application. Here is a little breakdown of the features of this crate and how they work.
+
+### Vertex/Index buffers
+
+The renderer creates a vertex buffer and a index buffer that will be updated every time
+`Renderer::cmd_draw` is called. If the vertex/index count is more than what the buffers can
+actually hold then the buffers are resized (actually destroyed then re-created).
+
+### Frames in flight
+
+The renderer support having multiple frames in flight. You need to specify the number of frames
+during initialization of the renderer. The renderer manages one vertex and index buffer per frame.
+
+### No draw call execution
+
+The `Renderer::cmd_draw` only record commands to a command buffer supplied by the application. It does not submit anything to the gpu.
+
+### sRGB/Linear framebuffer
+
+You can indicate wether you will target an sRGB framebuffer or not by passing the option `srgb_framebuffer` when initializing the renderer.
+When you target an sRGB framebuffer, the fragment shader will output linear color values, otherwise it will convert the colors to sRGB.
+
+### Managed textures
+
+Textures managed by egui must be kept in sync with the renderer. To do so, the user should call `Renderer::set_texture` and
+`Renderer::free_texture`. The former must be call before submitting the command buffer for rendering and the latter must be
+called after rendering is complete. Example:
+
+```rust
+let output = egui_ctx.run(raw_input, |ui| {
+    // ui code ..
+});
+
+// before rendering the ui
+for (id, deltas) in output.textures_delta.set.drain() {
+    for delta in deltas {
+        renderer.set_texture(queue, command_pool, id, &delta).unwrap();
+    }
+}
+
+// rendering code goes here .. (calling cmd_draw, submitting the command buffer, waiting for rendering to be finished...)
+
+// after the rendering is done
+for id in output.textures_delta.free.drain() {
+    renderer.free_texture(id);
+}
+```
+
+> If you have multiple frames in flight you might want to hold a set of textures to free for each frame and call
+`Renderer::free_texture` after waiting for the fence of the previous frame.
+
+### Custom textures
+
+You can also render used managed textures in egui. You just need to call `Renderer::add_user_texture` and pass a
+`vk::DescriptorSet` compatible with the layout used in the renderer's graphics pipeline
+(see [create_vulkan_descriptor_set_layout](./src/renderer/vulkan.rs)). This will return a `egui::TextureId` that you
+can use in your ui code. Example:
+
+```rust
+let user_texture_set: vk::DescriptorSet = ...;
+let texture_id = renderer.add_user_texture(user_texture_set);
+
+let output = egui_ctx.run(raw_input, |ui| {
+    let egui_texture = SizedTexture {
+        id: texture_id,
+        size: Vec2 {
+            x: 128.0,
+            y: 128.0,
+        },
+    };
+
+    egui::Image::new(egui_texture).ui(ui);
+});
+
+// When the texture won't be used anymore you can remove it from the renderer
+renderer.remove_user_texture(texture_id);
+```
+
+Here is an [example using egui managed and user managed textures](./examples/textures.rs).
+
+## Allocators
+
+GPU memory allocations are made using allocators. An allocator in any type that implements [`allocator::Allocator`]. You can use one of
+the provided allocators or implement your own.
+
+### Default allocator
+
+Default allocator using [vkAllocatorMemory][vk-allocate-memory] for each allocation. Created with [`Renderer::with_default_allocator`].
+
+### GPU Allocator
+
+Uses [gpu-allocator][gpu-allocator] to handle gpu memory. Created with [`Renderer::with_gpu_allocator`] which takes
+a `Arc<Mutex<gpu_allocator::vulkan::Allocator>>`. Requires the `gpu-allocator` feature.
+
+### VkMem Allocator
+
+Uses [vk-mem-rs][vk-mem-rs] to handle gpu memory. Created with [`Renderer::with_vk_mem_allocator`] which takes
+a `Arc<vk_mem::Allocator>`. Requires the `vk-mem` feature.
+
+### Custom allocator
+
+You can pass your own allocator using [`Renderer::with_allocator`].
+
+Here is [an example of custom delegating allocator](./examples/common/renderer.rs).
+
+## Render mode
+
+The renderer supports rendering with a render pass or using dynamic rendering. It is done by passing `RenderMode` when creating the renderer.
+
+## Features
+
+- **gpu-allocator** : Allow [gpu-allocator][gpu-allocator] allocator usage.
+- **vk-mem** : Allow [vk-mem-rs][vk-mem-rs] allocator usage.
+
+## Integration
+
+You can find an example of integration with [winit][winit] in the [common module](examples/common/mod.rs) of the examples.
+
+```rust
+// Example with default allocator
+let renderer : Renderer<DefaultAllocator> = Renderer::with_default_allocator(
+    &vk_instance,
+    vk_physical_device,
+    vk_device.clone(),
+    vk_render_pass,
+    Options::default(),
+).unwrap();
+```
+
+## Examples
+
+You can run a set of examples by running the following command:
+
+```sh
+# If you want to enable validation layers
+export VK_LAYER_PATH=$VULKAN_SDK/Bin
+export VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation
+
+# Or with Powershell
+$env:VK_LAYER_PATH = "$env:VULKAN_SDK\Bin"
+$env:VK_INSTANCE_LAYERS = "VK_LAYER_KHRONOS_validation"
+
+# If you changed the shader code (you'll need glslangValidator on you PATH)
+# There is also a PowerShell version (compile_shaders.ps1)
+./scripts/compile_shaders.sh
+
+# Run an example
+cargo run --example <example>
+
+# Example can be one of the following value:
+# - demo
+# - textures
+```
+
+[egui]: https://github.com/emilk/egui
+[ash]: https://github.com/MaikKlein/ash
+[gpu-allocator]: https://github.com/Traverse-Research/gpu-allocator
+[vk-mem-rs]: https://github.com/gwihlidal/vk-mem-rs
+[winit]: https://github.com/rust-windowing/winit
+[vk-allocate-memory]: https://registry.khronos.org/VulkanSC/specs/1.0-extensions/man/html/vkAllocateMemory.html

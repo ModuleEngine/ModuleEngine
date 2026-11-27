@@ -25,7 +25,9 @@ const FRAME_BUDGET_MS: f64 = 1000. / 60.;
 mod image_trace;
 #[path = "present_mode.rs"]
 mod present_mode;
-pub use present_mode::{benchmark_present_mode, observe_benchmark_present_mode};
+pub use present_mode::{
+    benchmark_present_mode, observe_benchmark_present_mode, record_window_mode,
+};
 
 fn physical_game_size(rect: Rect, scale: f32, minimized: bool) -> [u32; 2] {
     if minimized || !rect.is_positive() || !scale.is_finite() || scale <= 0. {
@@ -92,19 +94,6 @@ fn benchmark_frame_count(value: Option<&str>) -> Result<usize, String> {
                 "MODULE_ENGINE_BENCHMARK_FRAMES must be an integer from 120 to 2400".into()
             }),
     }
-}
-
-/// Native Vulkan modules receive an explicit endpoint from the actual window;
-/// software-only builds and the explicit Glow diagnostic keep CPU presentation.
-pub fn presentation_bridge(
-    cc: &eframe::CreationContext<'_>,
-) -> Result<Option<Arc<GpuPresentationBridge>>, String> {
-    #[cfg(feature = "vulkan")]
-    if let Some(state) = &cc.wgpu_render_state {
-        return GpuPresentationBridge::new(state.clone()).map(|bridge| Some(Arc::new(bridge)));
-    }
-    let _ = cc;
-    Ok(None)
 }
 
 /// Shared window presentation policy for Editor, Player, and native diagnostics.
@@ -355,6 +344,35 @@ pub struct GuiGraphicsInfo {
     pub gl_renderer: Option<String>,
 }
 
+pub fn window_graphics(
+    window: &module_engine_native_ui::Window,
+    bridge: &module_engine_native_ui::FrameBridge,
+) -> GuiGraphicsInfo {
+    use eframe::wgpu::rwh::{HasDisplayHandle, RawDisplayHandle};
+    let info = GuiGraphicsInfo {
+        renderer: "Ash",
+        backend: Some("Vulkan".into()),
+        adapter_name: Some(bridge.adapter.clone()),
+        window_system: window.display_handle().ok().map(|h| {
+            match h.as_raw() {
+                RawDisplayHandle::Wayland(_) => "Wayland",
+                RawDisplayHandle::Xlib(_) | RawDisplayHandle::Xcb(_) => "X11",
+                RawDisplayHandle::Windows(_) => "Windows",
+                _ => "Other",
+            }
+            .into()
+        }),
+        requested_renderer: Some("Ash".into()),
+        requested_gpu_backend: Some("Vulkan".into()),
+        requested_window_system: Some(
+            std::env::var("MODULE_ENGINE_WINDOW_SYSTEM").unwrap_or_else(|_| "auto".into()),
+        ),
+        ..Default::default()
+    };
+    eprintln!("ModuleEngine GUI initialized: {info:?}");
+    info
+}
+
 /// Record the initialized adapter and display handle separately from requests.
 pub fn report_graphics(cc: &eframe::CreationContext<'_>) -> GuiGraphicsInfo {
     use eframe::wgpu::rwh::{HasDisplayHandle, RawDisplayHandle};
@@ -436,11 +454,10 @@ fn prepare_on_host_thread<T: Send>(
 
 pub fn run_host(mut host: GameHost) -> Result<(), String> {
     let title = host.accepted_document().name.clone();
-    let options = native_options(
-        egui::ViewportBuilder::default()
-            .with_inner_size([1280., 720.])
-            .with_min_inner_size([800., 450.]),
-    )?;
+    let viewport = egui::ViewportBuilder::default()
+        .with_title(title)
+        .with_inner_size([1280., 720.])
+        .with_min_inner_size([800., 450.]);
     // eframe's diagnostic capture exits after two UI frames, which can both
     // precede the first fixed tick. Advance the real simulation once so a
     // capture can verify the HUD for an authored combat fixture.
@@ -458,23 +475,22 @@ pub fn run_host(mut host: GameHost) -> Result<(), String> {
             }
         }
     }
-    eframe::run_native(
-        &title,
-        options,
-        Box::new(move |cc| {
-            report_graphics(cc);
-            configure_style(&cc.egui_ctx);
-            let mut player = Player::new_native(host, cc, None)?;
+    module_engine_native_ui::run(
+        host.backend_root.clone(),
+        viewport,
+        move |ctx, window, bridge| {
+            configure_style(ctx);
+            window_graphics(window, &bridge);
+            let bridge = Arc::new(GpuPresentationBridge::window(bridge));
+            let mut player = Player::new_with_target(host, ctx, None, Some(bridge.target()));
+            player.gpu_bridge = Some(bridge);
+            player.request_viewport(window.inner_size().into());
             if std::env::var_os("EFRAME_SCREENSHOT_TO").is_some() {
-                // The two-frame diagnostic must capture actual pixels. Wait
-                // only in this explicit startup diagnostic, before UI begins;
-                // interactive Player always starts with nonblocking snapshots.
                 player.prepare_capture()?;
             }
             Ok(Box::new(player))
-        }),
+        },
     )
-    .map_err(gui_startup_error)
 }
 
 /// Measure the shipping Player path including framework texture upload and
@@ -490,48 +506,35 @@ pub fn run_benchmark_host(mut host: GameHost, folder: &Path) -> Result<(), Strin
     let model_paths: BTreeSet<_> = host.session.asset_bindings().into_values().collect();
     let outcome = Arc::new(Mutex::new(None));
     let returned = Arc::clone(&outcome);
-    let options = native_options(
-        egui::ViewportBuilder::default()
-            .with_inner_size([1920., 1080.])
-            .with_min_inner_size([640., 360.])
-            .with_decorations(false)
-            .with_position([0., 0.]),
-    )?;
-    observe_benchmark_present_mode();
-    eframe::run_native(
-        "ModuleEngine / Native Player benchmark",
-        options,
-        Box::new(move |cc| {
-            let gui_graphics = report_graphics(cc);
-            configure_style(&cc.egui_ctx);
-            let window = cc.winit_window().cloned();
-            let physical_size: Box<dyn Fn() -> Option<[u32; 2]>> = match window {
-                Some(window) => {
-                    // NativeOptions sizes are egui points; request physical
-                    // 1080p after the actual monitor DPI becomes available.
-                    let scale = window.scale_factor() as f32;
-                    cc.egui_ctx
-                        .send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(
-                            1920. / scale,
-                            1080. / scale,
-                        )));
-                    Box::new(move || Some(window.inner_size().into()))
-                }
-                None => Box::new(|| None),
-            };
-            let monitor = cc
-                .winit_window()
-                .and_then(|window| window.current_monitor());
-            let monitor_size = monitor
-                .as_ref()
-                .map(|monitor| <[u32; 2]>::from(monitor.size()));
-            let refresh_millihertz = monitor
-                .as_ref()
-                .and_then(|monitor| monitor.refresh_rate_millihertz());
+    let viewport = egui::ViewportBuilder::default()
+        .with_title("ModuleEngine / Native Player benchmark")
+        .with_inner_size([1920., 1080.])
+        .with_min_inner_size([640., 360.])
+        .with_decorations(false)
+        .with_position([0., 0.]);
+    module_engine_native_ui::run(
+        host.backend_root.clone(),
+        viewport,
+        move |ctx, window, bridge| {
+            configure_style(ctx);
+            let scale = window.scale_factor() as f32;
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(
+                1920. / scale,
+                1080. / scale,
+            )));
+            let monitor = window.current_monitor();
+            let monitor_size = monitor.as_ref().map(|m| m.size().into());
+            let refresh_millihertz = monitor.as_ref().and_then(|m| m.refresh_rate_millihertz());
+            let window_for_size = window.clone();
+            let physical_size: Box<dyn Fn() -> Option<[u32; 2]>> =
+                Box::new(move || Some(window_for_size.inner_size().into()));
+            let gui_graphics = window_graphics(window, &bridge);
+            present_mode::record_window_mode(bridge.present_mode);
             let benchmark_started = Instant::now();
-            Ok(Box::new(Player::new_native(
+            let bridge = Arc::new(GpuPresentationBridge::window(bridge));
+            let mut player = Player::new_with_target(
                 host,
-                cc,
+                ctx,
                 Some(NativeBenchmark {
                     frame_profiling,
                     target_frames,
@@ -563,10 +566,13 @@ pub fn run_benchmark_host(mut host: GameHost, folder: &Path) -> Result<(), Strin
                     finished: false,
                     gui_graphics,
                 }),
-            )?))
-        }),
-    )
-    .map_err(gui_startup_error)?;
+                Some(bridge.target()),
+            );
+            player.gpu_bridge = Some(bridge);
+            player.request_viewport(window.inner_size().into());
+            Ok(Box::new(player))
+        },
+    )?;
     returned
         .lock()
         .map_err(|_| "Benchmark result lock poisoned".to_string())?
@@ -575,6 +581,7 @@ pub fn run_benchmark_host(mut host: GameHost, folder: &Path) -> Result<(), Strin
 }
 
 struct Player {
+    previous_ui_seconds: Option<f32>,
     worker: GameWorker,
     snapshot: Option<Arc<GameSnapshot>>,
     texture: Option<egui::TextureHandle>,
@@ -604,27 +611,6 @@ impl Player {
             height: size[1] as usize,
         });
         self.requested_viewport = Some(size);
-    }
-    fn new_native(
-        host: GameHost,
-        cc: &eframe::CreationContext<'_>,
-        benchmark: Option<NativeBenchmark>,
-    ) -> Result<Self, String> {
-        let bridge = presentation_bridge(cc)?;
-        let target = bridge.as_ref().map(|bridge| bridge.target());
-        let mut player = Self::new_with_target(host, &cc.egui_ctx, benchmark, target);
-        player.gpu_bridge = bridge;
-        if let Some(window) = cc.winit_window() {
-            let size: [u32; 2] = window.inner_size().into();
-            player
-                .pending_commands
-                .push_front(WorkerCommand::SetViewport {
-                    width: size[0] as usize,
-                    height: size[1] as usize,
-                });
-            player.requested_viewport = Some(size);
-        }
-        Ok(player)
     }
     fn prepare_capture(&mut self) -> Result<(), String> {
         let deadline = Instant::now() + std::time::Duration::from_secs(10);
@@ -658,6 +644,7 @@ impl Player {
         target: Option<Arc<dyn module_engine_core::PresentationTarget>>,
     ) -> Self {
         Self {
+            previous_ui_seconds: None,
             worker: GameWorker::spawn_with_presentation_target(
                 host,
                 target,
@@ -741,8 +728,8 @@ pub fn update_render_diagnostic(
         }
     }
 }
-impl eframe::App for Player {
-    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+impl Player {
+    fn update_logic(&mut self, ctx: &egui::Context) {
         // eframe skips `ui` for a minimized native window. Suspend render work
         // here; restoration requests the actual canvas again in `ui`.
         if ctx.input(|i| i.viewport().minimized == Some(true)) {
@@ -780,14 +767,10 @@ impl eframe::App for Player {
         ctx.request_repaint();
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, native_frame: &mut eframe::Frame) {
+    fn draw_native(&mut self, ui: &mut egui::Ui, cpu_usage: Option<f32>) {
         let now = Instant::now();
         let ui_frame = ui.ctx().cumulative_frame_nr();
         let new_frame = self.last_ui_frame != Some(ui_frame);
-        let gpu_poll_error = self
-            .gpu_bridge
-            .as_deref()
-            .and_then(|bridge| self.gpu_texture.poll(bridge).err());
         let snapshot = self.worker.latest();
         self.snapshot = snapshot.clone();
         if !self.worker.is_alive() {
@@ -797,7 +780,7 @@ impl eframe::App for Player {
             self.last_ui_frame = Some(ui_frame);
             if let Some(benchmark) = &mut self.benchmark {
                 benchmark.observe_arm_key(ui, now);
-                benchmark.complete_previous(now, native_frame.info().cpu_usage);
+                benchmark.complete_previous(now, cpu_usage);
                 if benchmark.samples.len() >= benchmark.target_frames
                     && benchmark.game_frames.len() >= benchmark.target_frames
                 {
@@ -842,7 +825,7 @@ impl eframe::App for Player {
                     let mut conversion_ms = 0.;
                     let mut fresh_frame = false;
                     let mut observed_at = None;
-                    let mut presentation_error = gpu_poll_error.clone();
+                    let mut presentation_error = None;
                     if let Some(snapshot) = &snapshot {
                         if let Some(frame) = &snapshot.frame
                             && self
@@ -995,7 +978,7 @@ impl eframe::App for Player {
                     ui.painter().text(
                         rect.center(),
                         egui::Align2::CENTER_CENTER,
-                        "Preparing first game frame…",
+                        "Preparing first game frameР В Р вЂ Р В РІР‚С™Р вЂ™Р’В¦",
                         egui::FontId::proportional(18.),
                         Color32::WHITE,
                     );
@@ -1069,7 +1052,7 @@ impl eframe::App for Player {
                             rect.right_bottom() - Vec2::splat(16.),
                             egui::Align2::RIGHT_BOTTOM,
                             format!(
-                                "Simulation: {:.1} ms / tick · backlog {:.0} ms",
+                                "Simulation: {:.1} ms / tick Р В РІР‚в„ўР вЂ™Р’В· backlog {:.0} ms",
                                 snapshot.last_step_ms,
                                 snapshot.backlog_seconds * 1000.
                             ),
@@ -1099,7 +1082,7 @@ impl eframe::App for Player {
                         rect.center(),
                         egui::Align2::CENTER_CENTER,
                         if snapshot.as_ref().is_some_and(|s| s.fault.is_some()) {
-                            format!("Simulation paused: {error}\nR — restart")
+                            format!("Simulation paused: {error}\nR Р В Р вЂ Р В РІР‚С™Р Р†Р вЂљРЎСљ restart")
                         } else {
                             error.clone()
                         },
@@ -1115,14 +1098,14 @@ impl eframe::App for Player {
                     .order(egui::Order::Foreground)
                     .anchor(egui::Align2::LEFT_BOTTOM,Vec2::new(12.,-12.))
                     .show(ui.ctx(),|ui|{egui::Frame::popup(ui.style()).show(ui,|ui|{
-                        ui.label("Benchmark waiting · play normally, then press F9 to start measurement (120 s limit)");
+                        ui.label("Benchmark waiting Р В РІР‚в„ўР вЂ™Р’В· play normally, then press F9 to start measurement (120 s limit)");
                     });});
             }
         }
         ui.ctx().request_repaint();
     }
 
-    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+    fn shutdown(&mut self) {
         self.worker.shutdown();
         if let Some(benchmark) = &mut self.benchmark
             && !benchmark.finished
@@ -1133,6 +1116,32 @@ impl eframe::App for Player {
                 Some("Native Player closed before all measured frames completed"),
             );
         }
+    }
+}
+impl eframe::App for Player {
+    fn logic(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        self.update_logic(ctx);
+    }
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        self.draw_native(ui, frame.info().cpu_usage);
+    }
+    fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
+        self.shutdown();
+    }
+}
+
+impl module_engine_native_ui::NativeApp for Player {
+    fn frame_prepared(&mut self, elapsed: std::time::Duration) {
+        self.previous_ui_seconds = Some(elapsed.as_secs_f32());
+    }
+    fn ui(&mut self, ui: &mut egui::Ui, _: &module_engine_native_ui::Window) {
+        self.update_logic(ui.ctx());
+        if !ui.ctx().input(|i| i.viewport().minimized == Some(true)) {
+            self.draw_native(ui, self.previous_ui_seconds);
+        }
+    }
+    fn on_exit(&mut self) {
+        self.shutdown();
     }
 }
 struct NativeFrameSample {

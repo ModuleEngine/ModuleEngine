@@ -6,6 +6,8 @@
 
 **25 November 2026.** The [Cargo workspace version](../Cargo.toml) is `0.4.0`. The owner closed milestone 0.4.2 on 17 November. The current priority is the [R engine rebuild](product-roadmap.md#rebuild). Work on 0.5 and new UI features remains paused until the core R1, R3 and R4 phases are accepted. The [roadmap](product-roadmap.md#map) tracks stage decisions separately from the version printed by Editor and Player.
 
+Editor and Player use the shared Vulkan shell. The root and detached windows present Scene and Game graph images on the same device. The [Player contract](player.md) describes image lifetime and diagnostic checks.
+
 <a id="цели-и-границы"></a>
 
 ## Goals and boundaries

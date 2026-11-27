@@ -1,13 +1,10 @@
 //! Matched native editor UI benchmark. Both painters use the same Win32 host.
-mod gpu;
-mod painter;
-mod thin;
 
 use crate::{app::Editor, distribution, engine_profiles, host, project};
-use ash::vk;
+
 use eframe::egui::{self, epaint::Primitive};
-use gpu::{DeviceInfo, Gpu};
 use module_engine_core::{WorldKind, demo_document, make_edge};
+use module_engine_native_ui::{DeviceInfo, Gpu, PainterKind};
 use serde::Serialize;
 use std::{
     fs,
@@ -27,24 +24,6 @@ const SIZE: [u32; 2] = [1580, 940];
 const WARMUP: usize = 30;
 const SAMPLES: usize = 240;
 const BUDGET_MS: f64 = 1000. / 60.;
-
-#[derive(Clone, Copy, Serialize)]
-enum PainterKind {
-    #[serde(rename = "ash")]
-    Library,
-    #[serde(rename = "thin")]
-    Thin,
-}
-
-trait VkResultExt<T> {
-    fn at(self, operation: &str) -> Result<T, String>;
-}
-
-impl<T> VkResultExt<T> for Result<T, vk::Result> {
-    fn at(self, operation: &str) -> Result<T, String> {
-        self.map_err(|e| format!("R3.1 Vulkan {operation}: {e:?}"))
-    }
-}
 
 pub(crate) fn run(
     args: &[String],
@@ -228,7 +207,7 @@ impl Drop for FrameTextures {
 
 struct Session {
     gpu: Gpu,
-    window: Window,
+    window: std::sync::Arc<Window>,
     context: egui::Context,
     input: egui_winit::State,
     viewport: egui::ViewportInfo,
@@ -254,7 +233,8 @@ impl Session {
                     .with_visible(false),
             )
             .map_err(|e| e.to_string())?;
-        let gpu = Gpu::new(&window, root, kind)?;
+        let window = std::sync::Arc::new(window);
+        let gpu = Gpu::new(window.clone(), root, kind, true, false)?;
         let context = egui::Context::default();
         crate::app::configure_style(&context);
         let mut viewport = egui::ViewportInfo::default();
@@ -341,13 +321,10 @@ impl Session {
         }
         let updates = textures.0.set.values().map(|deltas| deltas.len()).sum();
         let prepared = Instant::now();
-        let (presented, image) = self.gpu.paint(
-            &self.window,
-            &primitives,
-            &mut textures.0,
-            pixels_per_point,
-            capture,
-        )?;
+        let (presented, image) = self
+            .gpu
+            .paint(&primitives, &mut textures.0, pixels_per_point, capture)?
+            .ok_or("R3.1 surface could not present the measured frame")?;
         self.present_count += 1;
         if let Some(image) = image {
             self.gpu.finish()?;

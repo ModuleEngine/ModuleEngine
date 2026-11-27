@@ -931,6 +931,31 @@ const NATIVE_FILES: &[&str] = &[
     "crates/editor-composition/Cargo.toml",
     "crates/editor-composition/src/lib.rs",
     "crates/editor-composition/tests/support/independent.rs",
+    "crates/render-vulkan/src/window_diagnostic.rs",
+    "crates/native-ui/Cargo.toml",
+    "crates/vendor/egui-ash-renderer/Cargo.toml",
+    "crates/vendor/egui-ash-renderer/LICENSE",
+    "crates/vendor/egui-ash-renderer/src/error.rs",
+    "crates/vendor/egui-ash-renderer/src/lib.rs",
+    "crates/vendor/egui-ash-renderer/src/renderer/allocator/default.rs",
+    "crates/vendor/egui-ash-renderer/src/renderer/allocator/gpu.rs",
+    "crates/vendor/egui-ash-renderer/src/renderer/allocator/vkmem.rs",
+    "crates/vendor/egui-ash-renderer/src/renderer/allocator.rs",
+    "crates/vendor/egui-ash-renderer/src/renderer/vulkan.rs",
+    "crates/vendor/egui-ash-renderer/src/renderer.rs",
+    "crates/vendor/egui-ash-renderer/src/shaders/shader.frag",
+    "crates/vendor/egui-ash-renderer/src/shaders/shader.frag.spv",
+    "crates/vendor/egui-ash-renderer/src/shaders/shader.vert",
+    "crates/vendor/egui-ash-renderer/src/shaders/shader.vert.spv",
+    "crates/native-ui/src/gpu.rs",
+    "crates/native-ui/src/lib.rs",
+    "crates/native-ui/src/offscreen.rs",
+    "crates/native-ui/src/painter.rs",
+    "crates/native-ui/src/sampled.rs",
+    "crates/native-ui/src/shell.rs",
+    "crates/native-ui/src/thin.hlsl",
+    "crates/native-ui/src/thin.rs",
+    "crates/native-ui/src/viewports.rs",
     "crates/game-ui/Cargo.toml",
     "crates/game-ui/src/lib.rs",
     "crates/game-ui/src/authoring.rs",
@@ -1119,6 +1144,11 @@ fn native_source_path(path: &str) -> bool {
             | "assets/engine-contracts/v0.4.0.json"
             | "crates/editor/assets/editor.ico"
     ) || (path.starts_with("crates/") && (path.ends_with(".rs") || path.ends_with("Cargo.toml")))
+        || (path.starts_with("crates/vendor/egui-ash-renderer/")
+            && (path.ends_with(".spv")
+                || path.ends_with(".frag")
+                || path.ends_with(".vert")
+                || path.ends_with("/LICENSE")))
         || path.ends_with(".hlsl")
         || path.ends_with(".hlsli")
 }

@@ -116,16 +116,16 @@ class LauncherTests(unittest.TestCase):
             Path(argv[1]).write_bytes(b"changed fixture")
         if self.mode == "exe-modified":
             self.editor.write_bytes(b"changed executable")
-        backend = "Dx12" if verify.PLATFORM == "windows" else "Vulkan"
+        backend = "Vulkan"
         window = "Windows" if verify.PLATFORM == "windows" else "X11"
         if self.mode == "wrong-backend":
             backend = "Gl"
         if self.mode == "wrong-window":
             window = "Wayland" if verify.PLATFORM == "windows" else "Windows"
-        err.write_text('ModuleEngine GUI initialized: GuiGraphicsInfo { renderer: "Wgpu", backend: Some("' + backend
+        err.write_text('ModuleEngine GUI initialized: GuiGraphicsInfo { renderer: "Ash", backend: Some("' + backend
                        + '"), adapter_name: Some("test adapter"), window_system: Some("' + window
-                       + '"), requested_renderer: Some("Wgpu"), requested_gpu_backend: Some("'
-                       + ("DX12" if verify.PLATFORM == "windows" else "Vulkan")
+                       + '"), requested_renderer: Some("Ash"), requested_gpu_backend: Some("'
+                       + "Vulkan"
                        + '"), requested_window_system: Some("auto"), gl_vendor: None, gl_renderer: None }\n', encoding="utf-8")
         if self.mode == "missing-graphics":
             err.write_bytes(b"ModuleEngine GUI requested: Wgpu\n")

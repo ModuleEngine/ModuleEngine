@@ -50,6 +50,13 @@ pub fn observe_benchmark_present_mode() {
     }
 }
 
+pub fn record_window_mode(mode: &'static str) {
+    let mut seen = OBSERVER.0.lock().unwrap();
+    if !seen.contains(&mode) {
+        seen.push(mode);
+    }
+}
+
 #[derive(Serialize)]
 pub struct BenchmarkPresentMode {
     pub effective_present_mode: Option<&'static str>,
@@ -62,10 +69,13 @@ pub fn benchmark_present_mode() -> BenchmarkPresentMode {
     let (effective_present_mode, effective_present_mode_unavailable_reason) =
         match observed_present_modes.as_slice() {
             [mode] => (Some(*mode), None),
-            [] => (None, Some("No wgpu surface present mode was observed")),
+            [] => (
+                None,
+                Some("No initialized surface present mode was observed"),
+            ),
             _ => (
                 None,
-                Some("wgpu selected multiple present modes during the run"),
+                Some("Multiple present modes were observed during the run"),
             ),
         };
     BenchmarkPresentMode {
