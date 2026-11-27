@@ -92,6 +92,7 @@ Linux full `native` запускает offscreen tests с software Vulkan, бе�
 Editor, Clippy, contracts и минимальный Player. План может отдельно включить native
 и package. У каждого задания своя hosted VM и TEMP. Внутри задания тесты GPU и
 native выполняются последовательно. В Windows Cargo собирает продукты на Dev Drive.
+Задание release также собирает Editor с `--no-default-features` и проверяет отсутствие игровых пакетов в дереве обычных и сборочных зависимостей.
 Сборки workspace используют rust-lld в Windows и lld в Linux. Вызовы Release Editor,
 Clippy и минимального Player используют быстрый линкер и `CARGO_PROFILE_DEV_DEBUG=0`.
 Проверки native и Custom SDK сохраняют проверяемое окружение компилятора.

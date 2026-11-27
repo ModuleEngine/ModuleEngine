@@ -7,7 +7,7 @@ publish = false
 
 [features]
 default = []
-ui = ["dep:eframe", "dep:winit", "dep:log", "module-engine-arpg?/ui", "module-engine-project-puzzle?/ui", "module-engine-g1?/ui"]
+ui = ["dep:module-engine-game-ui", "dep:eframe", "dep:winit", "dep:log", "module-engine-arpg?/ui", "module-engine-project-puzzle?/ui", "module-engine-g1?/ui"]
 arpg = ["dep:module-engine-arpg"]
 puzzle = ["dep:module-engine-project-puzzle"]
 g1 = ["dep:module-engine-g1"]
@@ -17,6 +17,7 @@ persistence = ["module-engine-host-services/persistence"]
 rapier-physics = ["dep:module-engine-physics-rapier"]
 
 [dependencies]
+module-engine-game-ui = { path = "../game-ui", optional = true }
 module-engine-core = { path = "../engine-core" }
 module-engine-host = { path = "../game-host" }
 module-engine-host-services = { path = "../host-services", default-features = false }

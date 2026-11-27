@@ -4,6 +4,10 @@ use super::*;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+#[cfg(test)]
+#[path = "../../editor-composition/tests/support/independent.rs"]
+mod independent_fixture;
+
 pub type ModulePanelFactory = fn(&mut egui::Ui, &GraphDocument, &ModuleRegistry);
 /// A completed authoring gesture proposes a candidate; Editor owns publication.
 pub type ModuleToolFactory =
@@ -364,6 +368,33 @@ impl Editor {
         Ok(crate::host::composition_at(&root)?
             .activity(&self.document)?
             .modules)
+    }
+
+    pub(super) fn install_authoring_tools(
+        &mut self,
+        authoring: &module_engine_game_ui::authoring::AuthoringRegistry,
+    ) -> Result<(), String> {
+        for tool in authoring.tools() {
+            self.register_stateful_module_tool(
+                tool.pane_id,
+                tool.owner,
+                tool.label,
+                tool.engine_only,
+                tool.draw,
+            )?;
+            self.describe_module_panel(
+                tool.pane_id,
+                module_engine_core::CapabilityMetadata::new(
+                    tool.label,
+                    tool.description,
+                    module_engine_core::CapabilityOwner::Project,
+                    module_engine_core::CapabilityKind::EditorTool,
+                    tool.package,
+                )
+                .configured_by([module_engine_core::CapabilityConfiguration::ModuleTool]),
+            )?;
+        }
+        Ok(())
     }
 
     pub fn register_module_panel(
@@ -1507,6 +1538,129 @@ mod tests {
     use super::*;
 
     #[test]
+    fn independent_source_game_uses_generic_template_tool_save_and_reopen() {
+        let current = crate::game_host::demo_document();
+        let (sources, initial) = crate::app::tests::isolated_editor(current.clone());
+        let distribution = initial.distribution.as_ref().unwrap().clone();
+        let composition = module_engine_player::composition_with(sources.path(), |_, systems| {
+            independent_fixture::install(systems)
+        })
+        .unwrap();
+        let mut missing = module_engine_game_ui::UiRegistry::for_systems(
+            &module_engine_core::SystemRegistry::builtin(),
+        );
+        assert!(independent_fixture::install_presentation(&mut missing).is_err());
+        let mut presentations =
+            module_engine_game_ui::UiRegistry::for_systems(&composition.systems);
+        independent_fixture::install_presentation(&mut presentations).unwrap();
+        assert!(
+            presentations
+                .get(Some(independent_fixture::PRESENTATION_ID))
+                .is_some()
+        );
+        let _installed =
+            crate::host::world_fixture::Installation::with_composition(sources.path(), composition);
+        let registry = independent_fixture::authoring();
+        let template = crate::workspace_files::ProjectTemplate(independent_fixture::TEMPLATE_ID);
+        assert!(
+            module_engine_editor_composition::authoring()
+                .template(template.0)
+                .is_err()
+        );
+        let candidate = crate::workspace_files::template_document_with_registry(
+            &current,
+            template,
+            &distribution,
+            crate::engine_profiles::EngineChoice::Selected(
+                crate::engine_profiles::ProfileKind::Neutral,
+            ),
+            &registry,
+        )
+        .unwrap();
+        let mut editor = Editor::new(candidate.clone(), sources.path().join("independent.json"));
+        editor.install_authoring_tools(&registry).unwrap();
+        assert!(
+            editor
+                .available_editors()
+                .iter()
+                .any(|entry| entry.editor == EditorType::Extension(independent_fixture::PANE_ID))
+        );
+        let history_before = editor.history.entries().len();
+        let context = egui::Context::default();
+        context
+            .run_ui(egui::RawInput::default(), |ui| {
+                editor.module_extension_panel(ui, independent_fixture::PANE_ID)
+            })
+            .drop_without_applying_deltas();
+        assert_eq!(editor.document, candidate);
+        assert_eq!(editor.history.entries().len(), history_before);
+        let saved = crate::workspace_files::save_as(
+            &sources.path().join("independent.json"),
+            &sources.path().join("projects/independent/project.json"),
+            &editor.document,
+            &distribution,
+        )
+        .unwrap();
+        let reopened = crate::project::read(&saved.path).unwrap();
+        assert_eq!(reopened.game, saved.document.game);
+        assert!(
+            reopened
+                .game
+                .as_ref()
+                .unwrap()
+                .execution
+                .stages
+                .iter()
+                .flat_map(|stage| &stage.nodes)
+                .any(|node| node.module == independent_fixture::OWNER)
+        );
+        let mut omitted = Editor::new(reopened, saved.path);
+        assert!(
+            !omitted
+                .available_editors()
+                .iter()
+                .any(|entry| entry.editor == EditorType::Extension(independent_fixture::PANE_ID))
+        );
+        omitted.install_authoring_tools(&registry).unwrap();
+        assert!(
+            omitted
+                .available_editors()
+                .iter()
+                .any(|entry| entry.editor == EditorType::Extension(independent_fixture::PANE_ID))
+        );
+    }
+
+    #[test]
+    fn missing_source_extension_keeps_persisted_pane_identity() {
+        let document = crate::game_host::demo_document();
+        let layout = DockLayout::single(EditorType::Extension(890));
+        let mut memories =
+            BTreeMap::from([(1, PaneMemory::new(PaneSnapshot::default(), &document))]);
+        let base = crate::project::source_root().join(".work/test-temp");
+        let fixture =
+            module_engine_script::TestArtifactGuard::new(&base, "omitted-source-pane").unwrap();
+        let path = fixture.path().join("layout.json");
+        save(&path, &layout, &mut memories, &document).unwrap();
+        let (restored, _) = load(&path, WorkspaceKind::Project, &document).unwrap();
+        assert_eq!(restored.panes(), vec![(1, EditorType::Extension(890))]);
+        let (_sources, mut editor) = crate::app::tests::isolated_editor(document);
+        assert!(
+            !editor
+                .available_editors()
+                .iter()
+                .any(|entry| entry.editor == EditorType::Extension(890))
+        );
+        let before = editor.document.clone();
+        let context = egui::Context::default();
+        context
+            .run_ui(egui::RawInput::default(), |ui| {
+                editor.module_extension_panel(ui, 890)
+            })
+            .drop_without_applying_deltas();
+        assert_eq!(editor.document, before);
+    }
+
+    #[test]
     fn personal_camera_speeds_roundtrip_independently_and_legacy_layouts_default() {
         let document = crate::game_host::demo_document();
         let before = serde_json::to_value(&document).unwrap();
@@ -1915,7 +2069,7 @@ mod tests {
         use super::super::editor_workflow::Command;
         for command in [
             Command::Open,
-            Command::NewG1,
+            Command::NewTemplate(crate::workspace_files::ProjectTemplate::G1),
             Command::Quit,
             Command::Check,
             Command::ExportPlayer,
@@ -2122,7 +2276,7 @@ mod tests {
         context: &egui::Context,
         events: Vec<egui::Event>,
     ) -> (egui::Rect, egui::Pos2) {
-        let board = module_engine_g1::GridDraft::from_project(
+        let board = module_engine_editor_composition::g1::GridDraft::from_project(
             editor.document.game.as_ref().unwrap(),
             "level01",
         )
@@ -2240,7 +2394,7 @@ mod tests {
             .find(|object| {
                 object
                     .components
-                    .get(module_engine_g1::CELL)
+                    .get(module_engine_editor_composition::g1::CELL)
                     .is_some_and(|cell| cell["kind"] == "goal")
             })
             .unwrap()
@@ -2252,7 +2406,7 @@ mod tests {
             .find(|object| {
                 object
                     .components
-                    .get(module_engine_g1::CELL)
+                    .get(module_engine_editor_composition::g1::CELL)
                     .is_some_and(|cell| cell["kind"] == "pawn")
             })
             .unwrap();
@@ -2296,10 +2450,10 @@ mod tests {
         );
         let game = accepted.game.as_ref().unwrap();
         assert!(
-            module_engine_g1::GridDraft::from_project(game, "level01")
+            module_engine_editor_composition::g1::GridDraft::from_project(game, "level01")
                 .unwrap()
                 .walls
-                .contains(&module_engine_g1::Cell::new(1, 1))
+                .contains(&module_engine_editor_composition::g1::Cell::new(1, 1))
         );
         assert_eq!(game.execution, authored.game.as_ref().unwrap().execution);
         assert_eq!(
@@ -2449,7 +2603,7 @@ mod tests {
             .find(|object| {
                 object
                     .components
-                    .get(module_engine_g1::CELL)
+                    .get(module_engine_editor_composition::g1::CELL)
                     .is_some_and(|cell| cell["kind"] == "pawn")
             })
             .unwrap();

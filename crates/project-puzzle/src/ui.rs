@@ -137,6 +137,20 @@ fn restart_rect(rect: Rect) -> Rect {
     )
 }
 
+/// Install this game's presentation into the application composition.
+pub fn install(registry: &mut module_engine_game_ui::UiRegistry) -> Result<(), String> {
+    registry.register(module_engine_game_ui::UiContribution {
+        id: "puzzle.presentation",
+        input: read_input_mode,
+        hud: draw_hud,
+        controls: None,
+        controls_with_status: None,
+        preview_aim: None,
+        has_input: Some(has_input),
+        capture_input: None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

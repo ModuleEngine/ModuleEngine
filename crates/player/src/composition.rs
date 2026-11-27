@@ -63,6 +63,32 @@ fn catalogs_at(
     }
     #[cfg(not(feature = "vulkan"))]
     let _ = (root, &mut modules);
+    let systems = if features == &compiled_features() {
+        installed_systems()?.clone()
+    } else {
+        systems_for_features(features)?
+    };
+    Ok((modules, systems))
+}
+
+/// Shared source catalog. Registering factories performs no asset or GPU setup.
+pub(crate) fn installed_systems() -> Result<&'static SystemRegistry, String> {
+    static SYSTEMS: std::sync::OnceLock<Result<SystemRegistry, String>> =
+        std::sync::OnceLock::new();
+    SYSTEMS
+        .get_or_init(|| systems_for_features(&compiled_features()))
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
+fn systems_for_features(features: &BTreeSet<String>) -> Result<SystemRegistry, String> {
+    #[cfg(not(any(
+        feature = "arpg",
+        feature = "puzzle",
+        feature = "g1",
+        feature = "rapier-physics"
+    )))]
+    let _ = features;
     let mut systems = SystemRegistry::builtin();
     crate::source_modules::install(&mut systems)?;
     #[cfg(feature = "arpg")]
@@ -84,7 +110,7 @@ fn catalogs_at(
     systems.register(custom_system_descriptor(), |_| {
         Err("Rust Custom requires a host-bound compiled instance".into())
     })?;
-    Ok((modules, systems))
+    Ok(systems)
 }
 
 pub fn service_registry() -> Result<HostServiceRegistry, String> {

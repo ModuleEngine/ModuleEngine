@@ -1,5 +1,5 @@
 //! Application creation presets. Concrete game data belongs to its project.
-use module_engine_core::{GameProject, GraphDocument, WorldKind};
+use module_engine_core::{GraphDocument, WorldKind};
 use module_engine_vulkan::RenderPath;
 
 fn starter_engine() -> GraphDocument {
@@ -9,7 +9,10 @@ fn starter_engine() -> GraphDocument {
 }
 
 pub fn demo_document() -> GraphDocument {
-    let mut document = module_engine_two_arenas::document(starter_engine());
+    let mut document = (module_engine_editor_composition::authoring()
+        .template("two-arenas")
+        .expect("Installed Two Arenas template")
+        .populate)(starter_engine());
     crate::engine_profiles::finish_template(
         &mut document,
         crate::engine_profiles::ProfileKind::Arpg,
@@ -21,20 +24,20 @@ pub fn demo_document() -> GraphDocument {
 
 pub fn puzzle_document() -> GraphDocument {
     source_game_document(
-        module_engine_project_puzzle::project(),
+        "puzzle",
         "ModuleEngine / Crate puzzle",
         crate::engine_profiles::ProfileKind::Puzzle,
     )
 }
 pub fn g1_document() -> GraphDocument {
     source_game_document(
-        module_engine_g1::project(),
+        "g1",
         "Crate Garden",
         crate::engine_profiles::ProfileKind::G1,
     )
 }
 fn source_game_document(
-    game: GameProject,
+    template: &str,
     name: &str,
     profile: crate::engine_profiles::ProfileKind,
 ) -> GraphDocument {
@@ -58,7 +61,10 @@ fn source_game_document(
         .retain(|edge| ids.contains(&edge.from_node) && ids.contains(&edge.to_node));
     document.custom_sources.clear();
     document.name = name.into();
-    document.game = Some(game);
+    document = (module_engine_editor_composition::authoring()
+        .template(template)
+        .expect("Installed source game template")
+        .populate)(document);
     crate::engine_profiles::finish_template(
         &mut document,
         profile,

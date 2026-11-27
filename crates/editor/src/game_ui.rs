@@ -15,16 +15,16 @@ use crate::{
 };
 use eframe::egui::{self, Color32, Vec2};
 pub use hierarchy_ui::{HierarchyAction, SceneMenuAction};
-#[cfg(test)]
-use module_engine_arpg::{ArpgInput, ExecutionGraphExt, GameInputExt};
 use module_engine_core::*;
+#[cfg(test)]
+use module_engine_editor_composition::arpg::{ArpgInput, ExecutionGraphExt, GameInputExt};
+#[cfg(test)]
+use module_engine_editor_composition::two_arenas::ProjectExt;
 #[cfg(any(test, feature = "verification"))]
 use module_engine_script::ProgramStoreStats;
 use module_engine_script::{
     CompiledProgramStore, CompiledScript, JobLease, ScriptCompiler, ScriptKind,
 };
-#[cfg(test)]
-use module_engine_two_arenas::ProjectExt;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -4062,10 +4062,12 @@ mod tests {
             .edges
             .retain(|edge| matches!(edge.from_node.as_str(), "world" | "extract" | "renderer"));
         document.custom_sources.clear();
-        document.game = Some(module_engine_g1::project());
-        let composition =
-            CompositionContext::new(ModuleRegistry::builtin(), module_engine_g1::registry())
-                .unwrap();
+        document.game = Some(module_engine_editor_composition::g1::project());
+        let composition = CompositionContext::new(
+            ModuleRegistry::builtin(),
+            module_engine_editor_composition::g1::registry(),
+        )
+        .unwrap();
         composition
             .capture_lock(
                 &document,
@@ -4150,7 +4152,7 @@ mod tests {
                         .unwrap()
                         .state
                         .module_data
-                        .contains_key(module_engine_g1::VIEW_KEY)
+                        .contains_key(module_engine_editor_composition::g1::VIEW_KEY)
                 );
                 workbench.tick(0., true).unwrap();
                 let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -4173,7 +4175,7 @@ mod tests {
                         .session
                         .state()
                         .module_data
-                        .contains_key(module_engine_g1::VIEW_KEY)
+                        .contains_key(module_engine_editor_composition::g1::VIEW_KEY)
                 );
                 workbench.tick(1. / 60., true).unwrap();
                 workbench.tick(0., false).unwrap();
@@ -7466,7 +7468,7 @@ pub fn update(ctx: &mut ScriptContext) {
             60.
         );
         restored
-            .validate_with_registry(&module_engine_arpg::registry())
+            .validate_with_registry(&module_engine_editor_composition::arpg::registry())
             .unwrap();
     }
     #[test]

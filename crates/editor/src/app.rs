@@ -622,22 +622,14 @@ impl Editor {
             false,
             panes::participating_modules_panel,
         );
-        if let Err(error) = editor.register_stateful_module_tool(
-            110,
-            "g1.rules",
-            "Crate Garden Level Palette",
-            false,
-            module_engine_g1::grid_ui::draw_tool,
-        ) {
+        if let Err(error) =
+            editor.install_authoring_tools(module_engine_editor_composition::authoring())
+        {
             editor.status = error;
         }
         let _ = editor.describe_module_panel(100, module_engine_core::CapabilityMetadata::new(
             "Participating Modules", "Inspect the actual participating module contracts; this panel does not activate them.",
             module_engine_core::CapabilityOwner::Engine, module_engine_core::CapabilityKind::EditorTool, env!("CARGO_PKG_NAME"),
-        ).configured_by([module_engine_core::CapabilityConfiguration::ModuleTool]));
-        let _ = editor.describe_module_panel(110, module_engine_core::CapabilityMetadata::new(
-            "Crate Garden Level Palette", "Paint this game's board, walls, crates and goals; propose validated authored edits through the existing tool lifecycle.",
-            module_engine_core::CapabilityOwner::Project, module_engine_core::CapabilityKind::EditorTool, "module-engine-g1",
         ).configured_by([module_engine_core::CapabilityConfiguration::ModuleTool]));
         editor.load_personal_layouts();
         if let Err(error) = editor.scripts.set_asset_root(&editor.project_asset_root()) {

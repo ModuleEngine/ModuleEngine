@@ -12,13 +12,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ProjectTemplate {
-    Empty,
-    TwoArenas,
-    Puzzle,
-    G1,
-}
+pub use module_engine_editor_composition::ProjectTemplate;
 #[derive(Clone, Debug)]
 pub struct SavedProject {
     pub path: PathBuf,
@@ -142,6 +136,22 @@ pub fn template_document_with_choice(
     distribution: &Distribution,
     choice: crate::engine_profiles::EngineChoice,
 ) -> Result<GraphDocument, String> {
+    template_document_with_registry(
+        current,
+        template,
+        distribution,
+        choice,
+        module_engine_editor_composition::authoring(),
+    )
+}
+
+pub(super) fn template_document_with_registry(
+    current: &GraphDocument,
+    template: ProjectTemplate,
+    distribution: &Distribution,
+    choice: crate::engine_profiles::EngineChoice,
+    authoring: &module_engine_game_ui::authoring::AuthoringRegistry,
+) -> Result<GraphDocument, String> {
     use crate::engine_profiles::EngineChoice;
     use module_engine_project::EngineProfile;
     distribution.validate_document(current)?;
@@ -191,8 +201,8 @@ pub fn template_document_with_choice(
     }
     document.asset_manifest = serde_json::Value::Null;
     document.project = Default::default();
-    document.game = Some(match template {
-        ProjectTemplate::Empty => {
+    if template == ProjectTemplate::Empty {
+        document.game = Some({
             let mut game = GameProject::empty();
             game.entry_scene = "scene".into();
             game.scenes = BTreeMap::from([(
@@ -216,31 +226,33 @@ pub fn template_document_with_choice(
                 }
             }
             game
+        });
+        document.name = "New project".into();
+    } else {
+        let entry = authoring.template(template.0)?;
+        if !composition.module_versions().contains_key(entry.owner) {
+            return Err(format!(
+                "Project template owner '{}' is not installed",
+                entry.owner
+            ));
         }
-        ProjectTemplate::TwoArenas => {
-            let content = module_engine_two_arenas::document(document.clone());
-            for (id, source) in content.custom_sources {
-                if document.custom_sources.contains_key(&id)
-                    && !distribution.can_edit_custom_source(&id, current)
-                {
-                    return Err(format!(
-                        "Project source '{id}' conflicts with an Engine-owned source"
-                    ));
-                }
-                document.custom_sources.insert(id, source);
+        let content = (entry.populate)(document.clone());
+        for (id, source) in content.custom_sources {
+            if document.custom_sources.get(&id) == Some(&source) {
+                continue;
             }
-            content.game.unwrap()
+            if document.custom_sources.contains_key(&id)
+                && !distribution.can_edit_custom_source(&id, current)
+            {
+                return Err(format!(
+                    "Project source '{id}' conflicts with an Engine-owned source"
+                ));
+            }
+            document.custom_sources.insert(id, source);
         }
-        ProjectTemplate::Puzzle => module_engine_project_puzzle::project(),
-        ProjectTemplate::G1 => module_engine_g1::project(),
-    });
-    document.name = match template {
-        ProjectTemplate::Empty => "New project",
-        ProjectTemplate::TwoArenas => "Two arenas",
-        ProjectTemplate::Puzzle => "Crate puzzle",
-        ProjectTemplate::G1 => "Crate Garden",
+        document.game = content.game;
+        document.name = entry.label.into();
     }
-    .into();
     document.properties.active.objects.clear();
     document.properties.active.components.clear();
     document.properties.inactive.objects.clear();
@@ -424,16 +436,24 @@ fn new_template_resources(
     distribution: &Distribution,
     template: ProjectTemplate,
 ) -> Result<(PathBuf, BTreeMap<String, PathBuf>), String> {
-    let resource_root = match template {
-        ProjectTemplate::TwoArenas => distribution.package_root.clone(),
-        ProjectTemplate::G1 if distribution.can_author_engine() => {
-            distribution.package_root.join("examples/crate-garden")
+    use module_engine_game_ui::authoring::TemplateResources;
+    let resources = if template == ProjectTemplate::Empty {
+        TemplateResources::CurrentProject
+    } else {
+        module_engine_editor_composition::authoring()
+            .template(template.0)?
+            .resources
+    };
+    let resource_root = match resources {
+        TemplateResources::Package => distribution.package_root.clone(),
+        TemplateResources::Example(path) if distribution.can_author_engine() => {
+            distribution.package_root.join(path)
         }
         _ => source_root.to_path_buf(),
     }
     .canonicalize()
     .map_err(|e| e.to_string())?;
-    if template == ProjectTemplate::G1 {
+    if matches!(resources, TemplateResources::Example(_)) {
         // The same read-only indexer used by Assets discovers stable IDs and
         // glTF palette dependencies before normal transactional publication.
         let composition = crate::host::composition_at(&distribution.package_root)?;
@@ -451,7 +471,7 @@ fn new_template_resources(
             ));
         }
     }
-    let files = if matches!(template, ProjectTemplate::TwoArenas | ProjectTemplate::G1) {
+    let files = if !matches!(resources, TemplateResources::CurrentProject) {
         collect_resources(document, &resource_root, &distribution.package_root)?
     } else {
         BTreeMap::new()

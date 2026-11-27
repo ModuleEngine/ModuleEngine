@@ -1,0 +1,22 @@
+[package]
+name = "module-engine-editor-composition"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+default = ["arpg", "puzzle", "g1"]
+arpg = ["dep:module-engine-arpg", "dep:module-engine-two-arenas", "module-engine-player/arpg"]
+puzzle = ["dep:module-engine-project-puzzle", "module-engine-player/puzzle"]
+g1 = ["dep:module-engine-g1", "module-engine-player/g1"]
+verification = ["module-engine-two-arenas?/verification", "module-engine-project-puzzle?/verification", "module-engine-g1?/verification"]
+
+[dependencies]
+module-engine-core = { path = "../engine-core" }
+module-engine-game-ui = { path = "../game-ui" }
+module-engine-player = { path = "../player", default-features = false, features = ["ui"] }
+module-engine-arpg = { path = "../gameplay-arpg", features = ["ui"], optional = true }
+module-engine-two-arenas = { path = "../example-two-arenas", features = ["ui"], optional = true }
+module-engine-project-puzzle = { path = "../project-puzzle", features = ["ui"], optional = true }
+module-engine-g1 = { path = "../project-g1", features = ["ui"], optional = true }

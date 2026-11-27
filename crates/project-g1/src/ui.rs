@@ -866,6 +866,20 @@ fn complete(ui: &mut egui::Ui, c: Canvas, rect: Rect, view: &View, input: &mut G
     );
 }
 
+/// Install this game's presentation into the application composition.
+pub fn install(registry: &mut module_engine_game_ui::UiRegistry) -> Result<(), String> {
+    registry.register(module_engine_game_ui::UiContribution {
+        id: "g1.presentation",
+        input: read_input_mode,
+        hud: draw_hud,
+        controls: None,
+        controls_with_status: Some(draw_controls_with_status),
+        preview_aim: None,
+        has_input: Some(has_input),
+        capture_input: None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

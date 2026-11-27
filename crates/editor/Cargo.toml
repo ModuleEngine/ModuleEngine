@@ -6,20 +6,22 @@ license.workspace = true
 publish = false
 
 [features]
+default = ["arpg", "puzzle", "g1"]
+arpg = ["module-engine-editor-composition/arpg"]
+puzzle = ["module-engine-editor-composition/puzzle"]
+g1 = ["module-engine-editor-composition/g1"]
 bench = ["module-engine-vulkan/bench"]
 r31-spike = ["dep:ash", "dep:bytemuck", "dep:egui-ash-renderer", "dep:egui-winit", "dep:winit", "module-engine-vulkan/editor-spike"]
-verification = []
+verification = ["module-engine-editor-composition/verification"]
 
 [dependencies]
-module-engine-player = { path = "../player", features = ["ui", "arpg", "puzzle", "g1", "vulkan", "audio", "persistence", "rapier-physics"] }
+module-engine-game-ui = { path = "../game-ui" }
+module-engine-editor-composition = { path = "../editor-composition", default-features = false }
+module-engine-player = { path = "../player", features = ["ui", "vulkan", "audio", "persistence", "rapier-physics"] }
 module-engine-host = { path = "../game-host" }
 module-engine-host-services = { path = "../host-services", features = ["audio", "persistence"] }
 module-engine-core = { path = "../engine-core" }
 module-engine-physics-rapier = { path = "../physics-rapier", features = ["debug-draw"] }
-module-engine-arpg = { path = "../gameplay-arpg", features = ["ui"] }
-module-engine-two-arenas = { path = "../example-two-arenas" }
-module-engine-project-puzzle = { path = "../project-puzzle", features = ["ui"] }
-module-engine-g1 = { path = "../project-g1", features = ["ui"] }
 module-engine-custom = { path = "../custom-rust" }
 module-engine-vulkan = { path = "../render-vulkan" }
 module-engine-script = { path = "../runtime-script" }
@@ -42,3 +44,7 @@ eframe = { workspace = true, features = ["wayland", "x11"] }
 libc = "0.2"
 
 
+
+[dev-dependencies]
+# Integration fixtures exercise the complete reference composition.
+module-engine-editor-composition = { path = "../editor-composition" }

@@ -19,9 +19,7 @@ use std::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
     NewEmpty,
-    NewArenas,
-    NewPuzzle,
-    NewG1,
+    NewTemplate(workspace_files::ProjectTemplate),
     UpdateEngineContracts,
     Open,
     Save,
@@ -1136,9 +1134,10 @@ impl Editor {
             Command::ExportSource | Command::ExportTeam | Command::UpdateEngineContracts => {
                 self.can_author_engine()
             }
-            Command::NewEmpty | Command::NewArenas | Command::NewPuzzle | Command::NewG1 => {
-                self.document.game.is_some() || self.can_author_engine()
+            Command::NewTemplate(template) => {
+                template.installed() && (self.document.game.is_some() || self.can_author_engine())
             }
+            Command::NewEmpty => self.document.game.is_some() || self.can_author_engine(),
             Command::ExportPlayer => self.document.game.is_some(),
             Command::Undo => self.history_dirty || self.history.can_undo(),
             Command::Redo => self.history.can_redo(),
@@ -1183,16 +1182,7 @@ impl Editor {
             Command::NewEmpty => {
                 self.request_action(Action::New(workspace_files::ProjectTemplate::Empty), ctx)
             }
-            Command::NewArenas => self.request_action(
-                Action::New(workspace_files::ProjectTemplate::TwoArenas),
-                ctx,
-            ),
-            Command::NewPuzzle => {
-                self.request_action(Action::New(workspace_files::ProjectTemplate::Puzzle), ctx)
-            }
-            Command::NewG1 => {
-                self.request_action(Action::New(workspace_files::ProjectTemplate::G1), ctx)
-            }
+            Command::NewTemplate(template) => self.request_action(Action::New(template), ctx),
             Command::UpdateEngineContracts => {
                 let backend = self
                     .distribution
@@ -1301,12 +1291,7 @@ impl Editor {
                             "Use current configuration",
                         );
                         ui.add_enabled_ui(self.can_author_engine(), |ui| {
-                            for kind in [
-                                ProfileKind::Neutral,
-                                ProfileKind::Arpg,
-                                ProfileKind::Puzzle,
-                                ProfileKind::G1,
-                            ] {
+                            for kind in ProfileKind::installed() {
                                 ui.radio_value(
                                     &mut self.workflow.new_engine_choice,
                                     EngineChoice::Selected(kind),
@@ -1319,14 +1304,12 @@ impl Editor {
                     if self.menu_item(ui, Command::NewEmpty, "Empty scene", "Ctrl+N") {
                         commands.push(Command::NewEmpty);
                     }
-                    if self.menu_item(ui, Command::NewArenas, "Two arenas example", "") {
-                        commands.push(Command::NewArenas);
-                    }
-                    if self.menu_item(ui, Command::NewPuzzle, "Crate puzzle example", "") {
-                        commands.push(Command::NewPuzzle);
-                    }
-                    if self.menu_item(ui, Command::NewG1, "Crate Garden (G1)", "") {
-                        commands.push(Command::NewG1);
+                    for template in module_engine_editor_composition::authoring().templates() {
+                        let command =
+                            Command::NewTemplate(workspace_files::ProjectTemplate(template.id));
+                        if self.menu_item(ui, command, template.menu_label, "") {
+                            commands.push(command);
+                        }
                     }
                 });
                 if self.menu_item(ui, Command::Open, "Open Project…", "Ctrl+O") {
@@ -2180,7 +2163,7 @@ pub(crate) mod workflow_tests {
             let path = root.join("project.json");
             let mut document = demo_document(WorldKind::Objects);
             if game {
-                document.game = Some(module_engine_two_arenas::demo_project());
+                document.game = Some(module_engine_editor_composition::two_arenas::demo_project());
             }
             crate::engine_profiles::finish_template(
                 &mut document,
