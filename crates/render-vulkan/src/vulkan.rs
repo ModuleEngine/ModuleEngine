@@ -2325,7 +2325,7 @@ impl VulkanRenderer {
                         .is_some_and(|submission| submission.waiting(Instant::now()))
             })
         {
-            self.performance.gpu_busy_skips += 1;
+            // Waiting for the UI is a scheduling decision, independent of GPU capacity.
             return Ok(RenderSubmission::Busy);
         }
         let Some(index) = self.slots.iter().position(|slot| slot.pending.is_none()) else {

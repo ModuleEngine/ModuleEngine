@@ -269,7 +269,7 @@
     "crates/render-vulkan/src/retirement.rs": "cd17fce523a7bbc340de707a5cf95171467c8ebc82f546da735f014e36852b27",
     "crates/render-vulkan/src/staging.rs": "3ae4ce9c49e625154a1f97318e87c9360cdeb01caa36ed28ba3bc8edc5ed2e3e",
     "crates/render-vulkan/src/transfer.rs": "9d98264bc1f7f4400d4a013f6bd98bba6be8798ae79acbcd2a5c2079b270737e",
-    "crates/render-vulkan/src/vulkan.rs": "6026848d1fe033554368fb99a3bceaca4c970f95abe86441db3180a33341dd23",
+    "crates/render-vulkan/src/vulkan.rs": "38ea23517b8ad07fd58c197fddbaacac891ad596362c3e135637a4207158f433",
     "crates/render-vulkan/src/window_diagnostic.rs": "bd0bd3cd7bd8b2516dafb4c4640446fa2de4cf50454a19f380b0dc3db52701d1",
     "crates/runtime-script/Cargo.toml": "218cd7a1b0129895951094339fdf9239fb9acef0c9b8c1708fd54c09719381d8",
     "crates/runtime-script/src/cache_context.rs": "d576e8a22992c3b41524918fb7dd89a8e967dc23e3172714053af480f7e50d01",
