@@ -3829,33 +3829,34 @@ impl Drop for VulkanRenderer {
             let trace = self.trace;
             let mut pinned = std::mem::ManuallyDrop::new(bundle);
             crate::retirement::retire(move || {
-                let flights = pinned.slots.iter().filter_map(|slot| slot.pending.as_ref());
-                if let Some(error) = flights.clone().find_map(|flight| flight.failure.clone()) {
-                    return Poll::Ready(Err(error));
-                }
-                let last = flights.max_by_key(|flight| flight.serial).unwrap();
-                match last.completion.ready() {
-                    Ok(false) => Poll::Pending,
-                    Err(source) => Poll::Ready(Err(VulkanError::ProducerUnconfirmed {
-                        operation: "producer retirement",
-                        source,
-                    })),
-                    Ok(true) => {
-                        if let Some(trace) = trace {
-                            eprintln!(
-                                "Vulkan retirement complete renderer={trace} serial={}",
-                                last.serial
-                            );
-                        }
-                        // Completion of the last graphics signal also covers
-                        // its transfer dependency and all earlier submissions.
-                        // SAFETY: This path drops the pinned resources exactly once after observing
-                        // the last graphics signal. That signal also covers the transfer dependency
-                        // and all earlier submissions.
-                        unsafe { std::mem::ManuallyDrop::drop(&mut pinned) };
-                        Poll::Ready(Ok(()))
+                let mut ready = true;
+                let mut last_serial = 0;
+                for flight in pinned.slots.iter().filter_map(|slot| slot.pending.as_ref()) {
+                    if let Some(error) = &flight.failure {
+                        return Poll::Ready(Err(error.clone()));
                     }
+                    match flight.completion.ready() {
+                        Ok(done) => ready &= done,
+                        Err(source) => {
+                            return Poll::Ready(Err(VulkanError::ProducerUnconfirmed {
+                                operation: "producer retirement",
+                                source,
+                            }));
+                        }
+                    }
+                    last_serial = last_serial.max(flight.serial);
                 }
+                if !ready {
+                    return Poll::Pending;
+                }
+                if let Some(trace) = trace {
+                    eprintln!("Vulkan retirement complete renderer={trace} serial={last_serial}");
+                }
+                // SAFETY: Every pending slot has confirmed completion, which
+                // also covers that slot's semaphore waits and earlier batches.
+                // Different slots can complete on independent queues.
+                unsafe { std::mem::ManuallyDrop::drop(&mut pinned) };
+                Poll::Ready(Ok(()))
             });
         }
     }
