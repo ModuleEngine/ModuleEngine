@@ -2,7 +2,8 @@
 //! script-state lock is performed by the UI-facing methods in this module.
 use crate::activity::ActivitySnapshot;
 use crate::game_host::{
-    GameHost, PendingPresentationIdentity, PresentationProvenance, RenderedPresentation,
+    GameHost, InterpolatedPresentationAttempt, PendingPresentationIdentity, PresentationProvenance,
+    RenderedPresentation,
 };
 use crate::game_wait::{DeadlineWait, WakeSignal};
 use module_engine_core::RendererPerformance;
@@ -1275,7 +1276,16 @@ impl Actor {
             .map_or(Ok(()), |target| {
                 self.host.set_presentation_target(Some(target.clone()))
             })
-            .and_then(|()| self.host.try_render_interpolated(width, height, alpha));
+            .and_then(|()| {
+                self.host
+                    .attempt_interpolated_presentation(width, height, alpha)
+            });
+        if !playing && matches!(result, Ok(InterpolatedPresentationAttempt::Busy)) {
+            // The renderer did not accept the requested frame. Retry on the
+            // short presentation interval even while simulation is stopped.
+            self.next_render = Some(Instant::now() + PRESENTATION_INTERVAL);
+            return false;
+        }
         if self.host.has_pending_presentation() {
             self.pending_render_deadline = Some(render_deadline);
             self.pending_frame_settings = Some(settings.clone());
@@ -1286,7 +1296,7 @@ impl Actor {
             interval,
         ));
         match result {
-            Ok(Some(rendered)) => {
+            Ok(InterpolatedPresentationAttempt::Ready(rendered)) => {
                 if let Err(error) = self.accept_rendered(rendered, settings) {
                     self.render_error = Some(error);
                 } else if self.presentation_phase.armed.is_some() {
@@ -1294,7 +1304,9 @@ impl Actor {
                 }
                 true
             }
-            Ok(None) => false,
+            Ok(
+                InterpolatedPresentationAttempt::NoFrame | InterpolatedPresentationAttempt::Busy,
+            ) => false,
             Err(error) => {
                 let changed = self.render_error.as_ref() != Some(&error);
                 self.render_error = Some(error);
@@ -1593,6 +1605,43 @@ mod tests {
             height: 100,
         });
         actor
+    }
+
+    #[test]
+    fn stopped_worker_retries_a_busy_camera_change_before_the_idle_grid() {
+        let (host, draws, _temp) = crate::game_host::presentation_tests::gpu_settings_host();
+        let mut actor = actor_with_host(host);
+        assert!(!actor.playing);
+        assert!(actor.render_if_due());
+        let last_good = actor.frame.as_ref().unwrap().clone();
+        let previous_camera = actor.frame_presentation.as_ref().unwrap().camera;
+        let idle_deadline = Instant::now() + STOPPED_PRESENTATION_INTERVAL;
+        actor.next_render = Some(idle_deadline);
+
+        actor.host.camera.yaw += 0.5;
+        draws.lock().unwrap().busy = true;
+        assert!(!actor.render_if_due());
+        assert_eq!(draws.lock().unwrap().attempts, 2);
+        assert!(Arc::ptr_eq(actor.frame.as_ref().unwrap(), &last_good));
+        assert_eq!(
+            actor.frame_presentation.as_ref().unwrap().camera,
+            previous_camera
+        );
+        assert!(
+            actor
+                .presentation_wait()
+                .is_some_and(|wait| wait <= PRESENTATION_INTERVAL)
+        );
+
+        draws.lock().unwrap().busy = false;
+        actor.next_render = Some(Instant::now());
+        assert!(actor.render_if_due());
+        assert_eq!(draws.lock().unwrap().attempts, 3);
+        assert_eq!(
+            actor.frame_presentation.as_ref().unwrap().camera,
+            actor.host.camera
+        );
+        assert!(!Arc::ptr_eq(actor.frame.as_ref().unwrap(), &last_good));
     }
 
     #[test]
