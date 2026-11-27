@@ -71,7 +71,9 @@ The queue checks its own checkout before and after the command. Ignored build
 outputs and installed tools have separate provenance. The configured timeout
 covers the commands after materialization and capability preparation; the
 Windows job includes descendants, waits for the job to empty and terminates
-the whole job on timeout.
+the whole job on timeout. When the check has exited and the only remaining
+members are verified MSVC telemetry uploaders (VCTIP), the runner closes those
+processes and records their IDs in the task log.
 
 Window routes require the logged-in user's unlocked interactive desktop.
 Keep it available until the job finishes. Adapter names are taken from the

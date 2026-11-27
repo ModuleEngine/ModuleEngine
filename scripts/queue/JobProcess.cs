@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -14,6 +15,7 @@ public static class QueueJob
     private const uint KillOnClose = 0x2000;
     private const int ExtendedLimits = 9;
     private const int BasicAccounting = 1;
+    private const int BasicProcessIdList = 3;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct BasicLimits
@@ -65,11 +67,19 @@ public static class QueueJob
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool QueryInformationJobObject(SafeFileHandle job, int kind, out Accounting info, int size, IntPtr written);
     [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool QueryInformationJobObject(SafeFileHandle job, int kind, IntPtr info, int size, out int written);
+    [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool AssignProcessToJobObject(SafeFileHandle job, IntPtr process);
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool TerminateJobObject(SafeFileHandle job, uint exitCode);
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool TerminateProcess(IntPtr process, uint exitCode);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool TerminateProcess(SafeProcessHandle process, uint exitCode);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool IsProcessInJob(SafeProcessHandle process, SafeFileHandle job, out bool isMember);
+    [DllImport("kernel32.dll")]
+    private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool GetExitCodeProcess(IntPtr process, out uint exitCode);
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -135,10 +145,74 @@ public static class QueueJob
         return result.Append('\\', slashes * 2).Append('"').ToString();
     }
 
-    private static bool HasProcesses(SafeFileHandle job)
+    private static uint ActiveProcessCount(SafeFileHandle job)
     {
         Require(QueryInformationJobObject(job, BasicAccounting, out var state, Marshal.SizeOf<Accounting>(), IntPtr.Zero));
-        return state.ActiveProcesses > 0;
+        return state.ActiveProcesses;
+    }
+
+    private static HashSet<int> LiveJobMembers(SafeFileHandle job)
+    {
+        const int headerSize = 2 * sizeof(int);
+        int capacity = headerSize + 32 * IntPtr.Size;
+        var buffer = Marshal.AllocHGlobal(capacity);
+        try
+        {
+            if (!QueryInformationJobObject(job, BasicProcessIdList, buffer, capacity, out int written) || written < headerSize)
+                return null;
+            int listed = Marshal.ReadInt32(buffer, sizeof(int));
+            if (listed < 0 || listed != Marshal.ReadInt32(buffer) || listed > (written - headerSize) / IntPtr.Size)
+                return null;
+            var members = new HashSet<int>();
+            for (int i = 0; i < listed; i++)
+                members.Add(Marshal.ReadIntPtr(buffer, headerSize + i * IntPtr.Size).ToInt32());
+            return members;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+    private static void StopLinkerTelemetry(SafeFileHandle job, FileStream log)
+    {
+        // The MSVC uploader can remain in the job after Cargo and all tests exit.
+        // Verify the complete remaining set and leave every normal descendant alone.
+        var members = LiveJobMembers(job);
+        if (members == null || members.Count == 0) return;
+        var uploaders = new List<Process>();
+        try
+        {
+            foreach (int id in members)
+            {
+                var process = Process.GetProcessById(id);
+                uploaders.Add(process);
+                if (!string.Equals(process.ProcessName, "vctip", StringComparison.OrdinalIgnoreCase) ||
+                    !IsProcessInJob(process.SafeHandle, job, out bool isMember) || !isMember) return;
+                var image = process.MainModule;
+                if (image == null ||
+                    !image.FileName.Contains(@"\VC\Tools\MSVC\", StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(image.FileVersionInfo.OriginalFilename, "vctip.exe", StringComparison.OrdinalIgnoreCase) ||
+                    image.FileVersionInfo.CompanyName != "Microsoft Corporation") return;
+            }
+            var currentMembers = LiveJobMembers(job);
+            if (currentMembers == null || !members.SetEquals(currentMembers)) return;
+            foreach (var process in uploaders)
+            {
+                // Use the same handle that proved membership, even if the PID is later reused.
+                if (!TerminateProcess(process.SafeHandle, 0)) continue;
+                log.Seek(0, SeekOrigin.End);
+                log.Write(Encoding.UTF8.GetBytes($"\r\nQueue closed MSVC VCTIP (PID {process.Id}) after the check exited.\r\n"));
+                log.Flush();
+            }
+        }
+        catch (ArgumentException) { /* A listed PID exited before inspection. */ }
+        catch (InvalidOperationException) { /* A listed process exited during inspection. */ }
+        catch (Win32Exception) { /* Leave unverified processes attached to the deadline. */ }
+        finally
+        {
+            foreach (var process in uploaders) process.Dispose();
+        }
     }
 
     public static int? Run(string exe, string[] args, string cwd, string logPath, TimeSpan timeout)
@@ -175,13 +249,19 @@ public static class QueueJob
             }
             Require(ResumeThread(child.Thread) != uint.MaxValue);
             var elapsed = Stopwatch.StartNew();
+            var nextTelemetryCheck = TimeSpan.Zero;
             bool timedOut = false;
-            while (HasProcesses(job))
+            while (ActiveProcessCount(job) > 0)
             {
                 if (!timedOut && elapsed.Elapsed >= timeout)
                 {
                     Require(TerminateJobObject(job, 124));
                     timedOut = true;
+                }
+                else if (!timedOut && elapsed.Elapsed >= nextTelemetryCheck)
+                {
+                    nextTelemetryCheck = elapsed.Elapsed + TimeSpan.FromSeconds(1);
+                    if (WaitForSingleObject(child.Process, 0) == 0) StopLinkerTelemetry(job, log);
                 }
                 Thread.Sleep(50);
             }
