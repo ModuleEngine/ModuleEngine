@@ -237,7 +237,7 @@ Otherwise the editor could be polished for months before discovering that a real
 | --- | --- | --- | --- | --- |
 | V0.9a.1 | One real episode: arena, hero, one opponent, obstacle, checkpoint, with a redistributable model and clips. | Hero skeleton and clips play in the gameplay camera; asset licenses recorded; readability agreed from the game camera. | R7.1, R7.5 | 1 w |
 | V0.9a.2 | Execution foundations: dash and projectile with independent cooldowns on the existing melee; movement and collision through Rapier. | Tests for miss, hit, wall and stop; the technical module reports events and combat decides damage. | R6.2, R7.3 | 1.5–2 w |
-| V0.9a.3 | Behavior graph with a text source and visible active state, edited during paused Play. | Compatible state kept, incompatible change offers reset, error keeps the accepted version. | R7.4, R1.5 | 1–1.5 w |
+| V0.9a.3 | Behavior graph with a text source and visible active state, edited during paused Play. | Both animation and behavior graphs execute in gameplay. While Play is paused, edit an animation transition and an enemy condition, then resume and check the changes and Undo. Compatible state is kept, incompatible changes offer reset, and errors keep the accepted version. | R7.4, R1.5 | 1–1.5 w |
 | V0.9a.4 | Close the loop through Player: telegraph, outcome, death, checkpoint return, early 20-enemy load. | S2 frame p95 [not worse](bench.md#not-worse) than R0.6 with animated enemies; a tester plays without schema help. | R6.3, R7.2 | 1 w |
 | V0.9a.5 | Second independent composition without XP or loot. | Same combat in a second project, no Core/Host change; G1 regressions pass. | V0.5.2, V0.9a.2 | 3–5 d |
 
@@ -267,7 +267,7 @@ One encounter shows how to extend the engine. Only a full game demonstrates that
 
 | ID | Action | Measurable criterion | Depends on | Effort / status |
 | --- | --- | --- | --- | --- |
-| V0.9b.1 | Three locations, melee/ranged/heavy enemies, boss with three attacks and two phases, set up in the project. | Each element authored through project tools, not hardcoded; boss phases covered by tests. | V0.9a.5 | 2–3 w |
+| V0.9b.1 | Three locations, melee/ranged/heavy enemies, boss with three attacks and two phases, set up in the project. | Each element authored through project tools, not hardcoded; boss phases covered by tests. | V0.9a.1, V0.9a.2, V0.9a.3, V0.9a.4, V0.9a.5 | 2–3 w |
 | V0.9b.2 | Progression: experience, level-up choice, pickups, bonuses, weapon/armor/amulet slots. | Data → UI → save route works; inventory pauses the game; equipment visible. | V0.9b.1 | 2 w |
 | V0.9b.3 | User journey and saves: hints, start, victory, replay, checkpoint restart. | Death and exit keep XP and items; only the unfinished encounter repeats; playthrough measured at 20–30 min. | V0.9b.2 | 1.5 w |
 | V0.9b.4 | Delivery and cost. | Mean and p95 distinguishable-frame interval ≤16.667 ms at 1080p with 20 enemies; edit reaches relocated Player; G1 checks rerun. | V0.9b.3, V0.5.4 | 1 w |
@@ -296,9 +296,9 @@ Basis: [G2 decisions](#g2-agreement), [portfolio/game gates](portfolio-roadmap.m
 | ID | Action | Measurable criterion | Depends on | Effort / status |
 | --- | --- | --- | --- | --- |
 | V1.0.1 | Assemble the handoff candidate: shortcut, EN/RU docs, neutral example, G1/G2, restoration description, previous stable set, known limits. | Real shortcut, Full, Team and Player checked, not only a build EXE. | V0.8.1, V0.9b.4 | 1 w |
-| V1.0.2 | Independent attempts: owner plus four developers (two game authors, two extension authors), goals without button instructions. | Each reaches the shared and the role task without observer hints; stopping points recorded. | V1.0.1 | 2 w (people) |
+| V1.0.2 | Independent attempts: owner plus four developers (two game authors, two extension authors), goals without button instructions. | On the shared U1–U3 tasks, the owner and at least 3 of 4 developers pass without observer hints. The mandatory role operations pass for 2 of 2 participants in each role. A separate recipient runs U6 in the clean environment under the [original protocol](#usability). Record stopping points. Data safety, A/B isolation and Team restrictions apply to every attempt. | V1.0.1 | 2 w (people) |
 | V1.0.3 | Fix stopping points; repeat revised routes with a new participant. | Each fixed route passes with a new person in that role. | V1.0.2 | 1–2 w |
-| V1.0.4 | Release scope: clean Windows G1/G2 delivery, update and rollback, budgets. | No data loss or rights violation; startup/gameplay budgets not worse than R0.6; undeclared platforms marked. | V1.0.3, V0.8.3 | 1 w |
+| V1.0.4 | Release scope: clean Windows G1/G2 delivery, update and rollback, budgets. | No data loss or rights violation. Existing mandatory gameplay and startup budgets apply. Compare metrics measured in R0.6 under the [not-worse rule](bench.md#not-worse). R0.6 has no open-to-first-frame measurement. Use a comparable pair under the R3.5 method with the same start and end events. V1.0.4 stays open without that pair. Verify every declared platform and record the boundaries for undeclared ones. | V1.0.3, V0.8.3 | 1 w |
 
 1. **Assemble a handoff candidate.** Ordinary launch, public EN/RU documentation, a neutral example, G1/G2, restoration description, previous stable set and known limitations. Check the real shortcut, Full, Team and Player, not only an EXE in a build directory.
 2. **Give people goals, not button instructions.** The owner plus four developers not previously involved in implementation: two game authors and two extension authors. Each has legitimate rights and delivered help, without observer hints or a specially highlighted route. Start with a shared task, then their role-specific task.
@@ -402,7 +402,7 @@ Five games on five incomparable forks prove less than five games on one foundati
 | ID | Action | Measurable criterion | Depends on | Effort / status |
 | --- | --- | --- | --- | --- |
 | V1.3.x.1 | Choose a common release; verified migration of copies for each game. | Old pinned instances still work; refusal leaves a cell open and changes nothing. | V0.6.4, V0.8.4 | 1 w |
-| V1.3.x.2 | Five deliveries on that release. | Per game: reused modules, alternate composition, edit route, saves, target hardware, budget, clean launch. | V1.1.3, V1.2.3, V1.3.3 | 2–3 w |
+| V1.3.x.2 | Five deliveries on that release. | Per game: reused modules, alternate composition, edit route, saves, target hardware, budget, clean launch. | V1.1.3, V1.2.3, V1.3.3, V1.3.x.1 | 2–3 w |
 | V1.3.x.3 | Coverage check and decision. | Five accepted games across 2D, 2.5D, spatial 3D, pixel art, stylization, realism; owner decides to stop or pick one question. | V1.3.x.2 | 2–3 d |
 | V1.3.x.4 | G6–G10 only for a new question; not planned. | Each needs a named question first. | V1.3.x.3 | not scheduled |
 
