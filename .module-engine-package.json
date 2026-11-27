@@ -248,7 +248,7 @@
     "crates/render-vulkan/Cargo.toml": "0172920720f3d1d6046b1349713df84f0423ce8a38182de82cd0405aa0ba06dc",
     "crates/render-vulkan/examples/gpu_benchmark.rs": "33ecf9ed986d37f393dabfb587b9045dd57e23a4540d704339710fe4cdc7fb2c",
     "crates/render-vulkan/examples/gpu_selfcheck.rs": "cb89287fa052c61773ca3f6a05a5112f5684a4768d71028213f55973b4359a8b",
-    "crates/render-vulkan/examples/image_quality_check.rs": "e0644b261cf66bf0ea8c4c4ac72276b7d5048c7e5f4490e191b322ce4283bd13",
+    "crates/render-vulkan/examples/image_quality_check.rs": "9c291c8dd4d20d250e23a202f71e2a3051a2165e3f12860814c1a1b1b445054d",
     "crates/render-vulkan/examples/ssao_check.rs": "cb53e8f054855084d0dbe34773ce29155e3a1a8785d140332e6eca16ab075205",
     "crates/render-vulkan/src/adapter.rs": "b506870d98868fa5ef16e11354a29d16b2c6ed706e61a38e9e2400a867005621",
     "crates/render-vulkan/src/capabilities.rs": "4688e030282e781fef84124b82ca983a39e04310b239b75331b38966a96b36d5",

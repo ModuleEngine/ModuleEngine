@@ -48,7 +48,12 @@ fn compare(reference: &Path, candidate: &Path, report: &Path) -> Result<(), Stri
     }
     let mut maximum = 0;
     let mut different = 0;
-    for (a, b) in expected.chunks_exact(4).zip(actual.chunks_exact(4)) {
+    for (a, b) in expected
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(actual.as_chunks::<4>().0)
+    {
         let delta = a.iter().zip(b).map(|(&x, &y)| x.abs_diff(y)).max().unwrap();
         maximum = maximum.max(delta);
         different += usize::from(delta != 0);
