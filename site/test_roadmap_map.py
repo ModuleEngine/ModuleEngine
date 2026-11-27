@@ -159,7 +159,7 @@ class LiveRoadmapTest(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("node"), "Node.js is needed to run the page model")
 class PageModelTest(unittest.TestCase):
-    """Runs the data part of scripts/roadmap_map.html (between @model markers) in Node."""
+    """Runs the data part of site/roadmap_map.html (between @model markers) in Node."""
 
     def model(self, en_text, ru_text):
         merged = roadmap_map.merge(roadmap_map.parse(en_text, "en"), roadmap_map.parse(ru_text, "ru"))
@@ -391,7 +391,7 @@ class WorldBuildTest(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("node"), "Node.js is needed to run the page model")
 class WorldModelTest(unittest.TestCase):
-    """Runs the data part of scripts/roadmap_world.html (between @model markers) in Node."""
+    """Runs the data part of site/roadmap_world.html (between @model markers) in Node."""
 
     def model(self, en_text, ru_text):
         merged = roadmap_map.merge(roadmap_map.parse(en_text, "en"), roadmap_map.parse(ru_text, "ru"))

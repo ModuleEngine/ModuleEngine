@@ -2,23 +2,70 @@
 import argparse
 import json
 import os
-from pathlib import PurePosixPath
+from pathlib import Path
 import re
 import subprocess
 
-import roadmap_map
+ROUTES_FILE = Path(__file__).resolve().parent.parent / ".github" / "ci-routes.json"
+ROUTES = ("native", "package", "light")
+LIGHT_ROUTES = ("docs", "site")
 
-ROADMAPS = {roadmap_map.EN_PATH: "en", roadmap_map.RU_PATH: "ru"}
-ROUTES = ("native", "package", "docs_only")
+
+def glob_regex(pattern):
+    """Translate a route glob: '*' stays in one directory, '**' crosses directories."""
+    out, i = [], 0
+    while i < len(pattern):
+        if pattern.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif pattern[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        else:
+            out.append(re.escape(pattern[i]))
+            i += 1
+    return re.compile("".join(out))
 
 
-def select_non_pr(paths, docs_only=False):
-    # Only documentation-only changes omit the additional native/package routes.
-    # Unknown/new source paths fail toward more coverage, not a missed subsystem.
-    relevant = not paths or any(not (path.startswith("docs/") or
-                                     PurePosixPath(path).suffix.lower() == ".md" or
-                                     path in {"LICENSE-MIT", "LICENSE-APACHE", ".gitignore"}) for path in paths)
-    return {"native": relevant, "package": relevant, "docs_only": docs_only, "paths": paths}
+def load_rules(path=ROUTES_FILE):
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    rules = []
+    for rule in data["rules"]:
+        if rule["route"] not in data["routes"]:
+            raise ValueError("Unknown route in " + str(path) + ": " + rule["route"])
+        rules.extend((rule["route"], glob_regex(pattern)) for pattern in rule["paths"])
+    return rules
+
+
+def classify(path, rules=None):
+    """Return the route of the first matching rule, or None when no rule matches."""
+    for route, regex in rules if rules is not None else load_rules():
+        if regex.fullmatch(path):
+            return route
+    return None
+
+
+def select(paths, regular=True, rules=None):
+    """Route a set of changed paths. Anything unknown, irregular or empty runs the full matrix."""
+    rules = load_rules() if rules is None else rules
+    routes = {path: classify(path, rules) for path in paths}
+    triggers = sorted(path for path, route in routes.items() if route not in LIGHT_ROUTES)
+    if not paths or not regular:
+        route = "full"
+        reason = "no changed files in the diff" if not paths else "a changed file is not a regular, non-executable file"
+    elif triggers:
+        route = "full"
+        reason = "files outside the light routes"
+    else:
+        route = "site" if "site" in routes.values() else "docs"
+        reason = "only " + route + " files changed"
+    light = route in LIGHT_ROUTES
+    return {"native": not light, "package": not light, "light": light, "route": route,
+            "reason": reason, "paths": sorted(paths), "triggers": triggers,
+            "unclassified": sorted(path for path, found in routes.items() if found is None)}
 
 
 def changed_files(base, head="HEAD"):
@@ -38,72 +85,26 @@ def changed_files(base, head="HEAD"):
     return sorted(paths), regular
 
 
-def status_edits(before, after):
-    """Return task IDs for a nonempty status-cell-only edit, or None."""
-    old_lines = before.splitlines(keepends=True)
-    new_lines = after.splitlines(keepends=True)
-    if len(old_lines) != len(new_lines):
-        return None
-    rows = {i: cells for i, _, cells in roadmap_map.task_rows(before)}
-    ids = [roadmap_map.plain(cells[0]) for cells in rows.values()]
-    if len(set(ids)) != len(ids):
-        return None
-    changed = set()
-    for i, (old, new) in enumerate(zip(old_lines, new_lines)):
-        if old == new:
-            continue
-        if i not in rows or len(rows[i]) != 4:
-            return None
-        # Keep every character outside the last cell, including line endings.
-        old_pipes = [m.start() for m in re.finditer(r"(?<!\\)\|", old)]
-        new_pipes = [m.start() for m in re.finditer(r"(?<!\\)\|", new)]
-        if len(old_pipes) != 5 or len(new_pipes) != 5:
-            return None
-        start, end = old_pipes[-2:]
-        new_start, new_end = new_pipes[-2:]
-        if (old[:start + 1] != new[:new_start + 1] or old[end:] != new[new_end:]
-                or roadmap_map.plain(old[start + 1:end]) == roadmap_map.plain(new[new_start + 1:new_end])):
-            return None
-        changed.add(roadmap_map.plain(rows[i][0]))
-    return changed or None
-
-
-def roadmap_status_only(before, after):
-    edits = [status_edits(before[path], after[path]) for path in ROADMAPS]
-    if not edits[0] or edits[0] != edits[1]:
-        return False
-    en, ru = [roadmap_map.parse(after[path], lang) for path, lang in ROADMAPS.items()]
-    return not roadmap_map.compare(en, ru)
-
-
-def read_roadmaps(commit):
-    result = subprocess.run(["git", "ls-tree", "-z", commit, "--", *ROADMAPS], check=True, capture_output=True)
-    marked = [entry.split(b"\t", 1) for entry in result.stdout.split(b"\0") if entry]
-    if len(marked) != len(ROADMAPS) or any(not meta.startswith(b"100644 blob ") for meta, _ in marked):
-        return None
-    return {path.decode("utf-8"): subprocess.run(["git", "cat-file", "blob", meta.split()[-1].decode("ascii")],
-                                               check=True, capture_output=True).stdout.decode("utf-8")
-            for meta, path in marked}
-
-
-def documentation_path(path):
-    return (path.startswith("docs/") and path.endswith((".md", ".markdown"))
-            or path in {"AGENTS.md", "README.md", "README.ru.md"}
-            or re.fullmatch(r"(?:crates|examples)/[^/]+/README(?:\.ru)?\.md", path) is not None)
-
-
-def plan(base, head="HEAD", event=""):
+def plan(base, head="HEAD"):
+    """One routing rule for every event. On pull_request, merge_group and push the diff runs from the event's
+    base SHA, so a merge group or a push is the union of every change it carries: any code means the full matrix."""
     paths, regular = changed_files(base, head)
-    if event == "pull_request":
-        light = bool(paths) and regular and all(documentation_path(path) for path in paths)
-        return {"native": not light, "package": not light, "docs_only": light, "paths": paths}
+    return select(paths, regular)
 
-    if set(paths) != ROADMAPS.keys():
-        return select_non_pr(paths)
-    before, after = read_roadmaps(base), read_roadmaps(head)
-    if not before or not after:
-        return select_non_pr(paths)
-    return select_non_pr(paths, docs_only=roadmap_status_only(before, after))
+
+def summary(selected, limit=40):
+    lines = ["### CI route: `" + selected["route"] + "`", "",
+             "Reason: " + selected["reason"] + ". Changed files: " + str(len(selected["paths"])) + ".", ""]
+    shown = selected["triggers"] if selected["route"] == "full" and selected["triggers"] else selected["paths"]
+    title = "Files that selected the full matrix" if shown is selected["triggers"] else "Changed files"
+    if shown:
+        lines += ["**" + title + "**", ""]
+        lines += ["- `" + path + "`" for path in shown[:limit]]
+        if len(shown) > limit:
+            lines.append("- ... and " + str(len(shown) - limit) + " more")
+    if selected["unclassified"]:
+        lines += ["", "No rule in `.github/ci-routes.json` for: " + ", ".join("`" + p + "`" for p in selected["unclassified"][:limit])]
+    return "\n".join(lines) + "\n"
 
 
 CORE_JOBS = ("workspace", "release", "clippy", "contracts", "player")
@@ -113,13 +114,16 @@ def check_gate(needs):
     if needs.get("plan", {}).get("result") != "success":
         raise ValueError("CI requires successful route selection")
     selected = needs["plan"].get("outputs", {})
-    if set(selected) != set(ROUTES) or any(value not in {"true", "false"} for value in selected.values()):
+    flags = {key: value for key, value in selected.items() if key != "route"}
+    if set(flags) != set(ROUTES) or any(value not in {"true", "false"} for value in flags.values()):
         raise ValueError("Missing or invalid route selection")
-    docs = selected["docs_only"] == "true"
-    if docs and any(selected[key] == "true" for key in ("native", "package")):
-        raise ValueError("Documentation-only plan selected a native route")
-    expected = {key: not docs for key in CORE_JOBS}
-    expected.update(documentation=docs, native=selected["native"] == "true", package=selected["package"] == "true")
+    if selected.get("route") not in {*LIGHT_ROUTES, "full"} or (selected["route"] in LIGHT_ROUTES) != (flags["light"] == "true"):
+        raise ValueError("Route name does not match the light/full selection")
+    light = flags["light"] == "true"
+    if light and any(flags[key] == "true" for key in ("native", "package")):
+        raise ValueError("Light plan selected a native route")
+    expected = {key: not light for key in CORE_JOBS}
+    expected.update(documentation=True, native=flags["native"] == "true", package=flags["package"] == "true")
     if set(needs) != {"plan", *expected}:
         raise ValueError("Missing or unexpected prerequisite job")
     for job, required in expected.items():
@@ -137,13 +141,18 @@ def main():
         check_gate(json.loads(os.environ["CI_NEEDS"]))
         print("CI required passed")
         return
-    selected = plan(args.base, event=os.environ.get("GITHUB_EVENT_NAME", ""))
+    selected = plan(args.base)
     print(json.dumps(selected, ensure_ascii=True, indent=2))
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
         with open(output, "a", encoding="utf-8") as stream:
             for key in ROUTES:
                 stream.write(key + "=" + str(selected[key]).lower() + "\n")
+            stream.write("route=" + selected["route"] + "\n")
+    report = os.environ.get("GITHUB_STEP_SUMMARY")
+    if report:
+        with open(report, "a", encoding="utf-8") as stream:
+            stream.write(summary(selected))
 
 
 if __name__ == "__main__":

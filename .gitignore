@@ -1,13 +1,10 @@
+# Local working data and generated reports are never committed (see AGENTS.md).
+/outputs/
+/work/
+/scripts/__pycache__/
+/site/__pycache__/
 /target/
 /.work/
-/work/verification/
-/work/verification-tests/
-/work/review-snapshot-tests/
-/work/rollout-20261017/
-/work/docs-i18n-20261017/
-/scripts/__pycache__/
-/outputs/*
-!/outputs/moduleengine-roadmap.html
 /exports/
 /.tools/
 /.history/
@@ -24,42 +21,3 @@
 *.tmp-*
 *.backup-*
 *.module-engine-project.json
-/work/workflow-efficiency-20261017/
-
-# Generated native verification targets and captured inventory output.
-# Keep authored plans and research notes in work/ visible.
-/work/ct[cCdDnN][0-9][0-9]/
-/work/gpuCold[0-9][0-9]/
-/work/gpuColdA[0-9][0-9]/
-/work/gs[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/
-/work/gsasync[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/
-/work/pc[0-9A-Fa-f]*-[0-9][0-9]/
-/work/pfCFin[0-9][0-9]/
-/work/pfCold[0-9][0-9]/
-/work/pfDiag[0-9][0-9]/
-/work/editor-diagnostics-tests/
-/work/editor-cyrillic-inventory-raw.txt
-
-# Local implementation probes and acceptance scratch data for the 0.4 editor work.
-# Durable contracts and review summaries are recorded in docs/.
-/work/area-host-parity-042/
-/work/independent-product-audit-20261115/
-/work/native-panes-042/
-/work/release-041/
-/work/release-041-menu/
-/work/release-042/
-/work/resize-jitter-042/
-/work/roadmap-map/
-/work/ssao-042/
-/work/ui-density-042/
-/work/window-icon-042/
-/work/window-icon-original-042/
-/work/*.review-new
-/work/*.review-old
-/work/finalize-hierarchy-scenes-docs.py
-/work/format-hierarchy-scenes.py
-/work/hierarchy-scenes-catalog.py
-/work/hierarchy-scenes-docs.py
-/work/node_drafts.rs
-/work/ui-*.py
-/work/ui-f-node-test.txt

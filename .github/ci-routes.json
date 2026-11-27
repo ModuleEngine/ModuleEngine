@@ -1,0 +1,18 @@
+{
+  "comment": "One folder = one CI route. The first matching rule wins; a path that matches no rule runs the full matrix. scripts/test_ci.py requires every tracked file to match a rule. '*' stays inside one directory, '**' crosses directories.",
+  "routes": {
+    "docs": "Documentation text only: the light Documentation and site checks, no Cargo build.",
+    "site": "Roadmap and site generator (site/): the light Documentation and site checks, no Cargo build.",
+    "full": "Engine, tooling, workflows, verification data and anything else: the full Windows and Linux matrix."
+  },
+  "rules": [
+    {"route": "docs", "paths": ["docs/**/*.md", "docs/**/*.markdown", "AGENTS.md", "README.md", "README.ru.md",
+                                "crates/*/README.md", "crates/*/README.ru.md",
+                                "examples/*/README.md", "examples/*/README.ru.md"]},
+    {"route": "site", "paths": ["site/**"]},
+    {"route": "full", "paths": [".github/**", ".agents/**", ".codex/**", ".config/**",
+                                "crates/**", "assets/**", "examples/**", "scripts/**", "tools/**", "docs/**",
+                                "*.json", "*.toml", "*.lock", "*.ps1", "*.sh", "*.txt",
+                                "LICENSE-*", ".gitattributes", ".gitignore"]}
+  ]
+}

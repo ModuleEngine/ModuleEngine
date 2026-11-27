@@ -20,7 +20,8 @@ ModuleEngine is a modular Rust engine and native editor. Core owns shared contra
 
 - Continue in the existing checkout. Do not create development copies, worktrees, or clones without a corresponding request. Full/Team/Player acceptance packages are verification deliveries.
 - Establish the initial diff before editing. Preserve unrelated user changes, authored JSON, assets, layout, Recent, Engine bindings, and SDK metadata. Use separate fixtures for destructive scenarios; do not replace the authored project with them.
-- Store intermediate material in `work/`, and completed builds and reports in `outputs/`. Do not clear shared caches or replace a published EXE to prepare a check.
+- Store intermediate material in `work/`, and completed builds and reports in `outputs/`. Both folders are local and ignored: never commit them; move anything durable into `docs/`, `scripts/` or another tracked folder. Do not clear shared caches or replace a published EXE to prepare a check.
+- One folder is one CI route ([routes](.github/ci-routes.json), [CI](docs/ci.md)): `docs/` text, `site/` generator, everything else full. Do not mix kinds in a folder (for example a roadmap generator in `scripts/`), and add a rule for every new top-level folder; `scripts/test_ci.py` fails on an unrouted file.
 
 <a id="инварианты-изменений"></a>
 
