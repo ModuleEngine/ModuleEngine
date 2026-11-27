@@ -152,13 +152,16 @@ impl EditorDevice {
     }
 
     pub fn target(&self) -> super::WindowTarget {
-        super::WindowTarget(super::RenderDevice {
-            meshlets: self.meshlets,
-            context: self.renderer.context.clone(),
-            physical: self.renderer.physical,
-            capabilities: self.renderer.capabilities,
-            timestamp_valid_bits: self.renderer.timestamp_valid_bits,
-        })
+        super::WindowTarget {
+            device: super::RenderDevice {
+                meshlets: self.meshlets,
+                context: self.renderer.context.clone(),
+                physical: self.renderer.physical,
+                capabilities: self.renderer.capabilities,
+                timestamp_valid_bits: self.renderer.timestamp_valid_bits,
+            },
+            scheduling: super::WindowScheduling::Default,
+        }
     }
 
     pub fn handles(&self) -> EditorDeviceHandles<'_> {

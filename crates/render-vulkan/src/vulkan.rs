@@ -547,11 +547,27 @@ struct RenderDevice {
 
 /// The window and its Scene/Game producers share this logical device and queues.
 #[derive(Clone)]
-pub struct WindowTarget(RenderDevice);
+pub struct WindowTarget {
+    device: RenderDevice,
+    scheduling: WindowScheduling,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WindowScheduling {
+    Default,
+    UiFirst,
+}
+
 impl WindowTarget {
+    pub fn prioritize_ui(mut self) -> Self {
+        self.scheduling = WindowScheduling::UiFirst;
+        self
+    }
+
     pub fn renderer(&self, root: std::path::PathBuf) -> Result<VulkanRenderer, VulkanError> {
-        let mut renderer = VulkanRenderer::on_device(root, &self.0, self.0.meshlets, None)?;
-        renderer.window_target = true;
+        let mut renderer =
+            VulkanRenderer::on_device(root, &self.device, self.device.meshlets, None)?;
+        renderer.window_target = Some(self.scheduling);
         Ok(renderer)
     }
 }
@@ -566,7 +582,23 @@ pub struct WindowFrame {
     image: Image,
     size: [usize; 2],
     context: Arc<DeviceLifetime>,
+    ui_submission: Option<UiSubmission>,
 }
+
+struct UiSubmission {
+    ready_at: Instant,
+    submitted: AtomicBool,
+}
+
+impl UiSubmission {
+    fn waiting(&self, now: Instant) -> bool {
+        // Give the shell a chance to draw, even when the next producer is due.
+        // An unpainted or minimized viewport may never sample this image.
+        now.duration_since(self.ready_at) < Duration::from_millis(50)
+            && !self.submitted.load(Ordering::Acquire)
+    }
+}
+
 impl WindowFrame {
     pub fn view(&self) -> vk::ImageView {
         self.image.view
@@ -578,7 +610,14 @@ impl WindowFrame {
         self.size
     }
     pub fn belongs_to(&self, target: &WindowTarget) -> bool {
-        Arc::ptr_eq(&self.context, &target.0.context)
+        Arc::ptr_eq(&self.context, &target.device.context)
+    }
+
+    /// Release the scheduling hold after submitting a draw on the shared queue.
+    pub fn note_ui_submission(&self) {
+        if let Some(submission) = &self.ui_submission {
+            submission.submitted.store(true, Ordering::Release);
+        }
     }
 }
 impl std::fmt::Debug for WindowFrame {
@@ -603,7 +642,7 @@ pub struct VulkanRenderer {
     memory: vk::PhysicalDeviceMemoryProperties,
     queue: vk::Queue,
     family: u32,
-    window_target: bool,
+    window_target: Option<WindowScheduling>,
     window_frames: Vec<Arc<WindowFrame>>,
     slots: Vec<FrameSlot>,
     serial: u64,
@@ -954,7 +993,7 @@ impl VulkanRenderer {
                 memory,
                 queue,
                 family,
-                window_target: false,
+                window_target: None,
                 window_frames: Vec::new(),
                 slots,
                 serial: 0,
@@ -1021,17 +1060,18 @@ impl VulkanRenderer {
     }
 
     pub fn set_window_target(&mut self, target: &WindowTarget) -> Result<(), VulkanError> {
-        if self.window_target && Arc::ptr_eq(&self.context, &target.0.context) {
+        if self.window_target.is_some() && Arc::ptr_eq(&self.context, &target.device.context) {
+            self.window_target = Some(target.scheduling);
             return Ok(());
         }
         self.require_idle_presentation_target()?;
         let mut replacement = Self::on_device(
             self.resource_root.clone(),
-            &target.0,
-            target.0.meshlets,
+            &target.device,
+            target.device.meshlets,
             self.trace,
         )?;
-        replacement.window_target = true;
+        replacement.window_target = Some(target.scheduling);
         replacement.detailed_stats = self.detailed_stats;
         replacement.frame_profiling = self.frame_profiling;
         replacement.next_ticket = self.next_ticket;
@@ -1043,10 +1083,10 @@ impl VulkanRenderer {
     }
 
     pub fn clear_window_target(&mut self) -> Result<(), VulkanError> {
-        if self.window_target {
+        if self.window_target.is_some() {
             self.require_idle_presentation_target()?;
             self.window_frames.clear();
-            self.window_target = false;
+            self.window_target = None;
         }
         Ok(())
     }
@@ -2258,7 +2298,7 @@ impl VulkanRenderer {
         {
             return Err(VulkanError::Viewport);
         }
-        if !self.window_target {
+        let Some(scheduling) = self.window_target else {
             // No presentation target is the explicit legacy/readback mode used
             // by headless callers. A rejected requested target never falls back.
             return self
@@ -2274,6 +2314,19 @@ impl VulkanRenderer {
             {
                 let _ = self.poll_presented(flight.ticket)?;
             }
+        }
+        if scheduling == WindowScheduling::UiFirst
+            && self.window_frames.last().is_some_and(|frame| {
+                frame.size == [width, height]
+                    && Arc::strong_count(frame) > 1
+                    && frame
+                        .ui_submission
+                        .as_ref()
+                        .is_some_and(|submission| submission.waiting(Instant::now()))
+            })
+        {
+            self.performance.gpu_busy_skips += 1;
+            return Ok(RenderSubmission::Busy);
         }
         let Some(index) = self.slots.iter().position(|slot| slot.pending.is_none()) else {
             self.performance.gpu_busy_skips += 1;
@@ -2359,6 +2412,12 @@ impl VulkanRenderer {
                 image,
                 size: flight.size,
                 context: self.context.clone(),
+                ui_submission: (self.window_target == Some(WindowScheduling::UiFirst)).then(|| {
+                    UiSubmission {
+                        ready_at: Instant::now(),
+                        submitted: AtomicBool::new(false),
+                    }
+                }),
             });
             self.window_frames.push(gpu.clone());
             Some(Frame {
@@ -4451,6 +4510,20 @@ mod tests {
     use super::*;
     use crate::{RenderPath, custom_compute_manifest, default_graph, demo_custom_compute_source};
     use module_engine_core::{ObjectsWorld, WorldProvider, make_edge};
+
+    #[test]
+    fn window_ui_hold_ends_on_submission_or_deadline() {
+        let ready_at = Instant::now();
+        let submission = UiSubmission {
+            ready_at,
+            submitted: AtomicBool::new(false),
+        };
+        assert!(submission.waiting(ready_at + Duration::from_millis(49)));
+        assert!(!submission.waiting(ready_at + Duration::from_millis(50)));
+        submission.submitted.store(true, Ordering::Release);
+        assert!(!submission.waiting(ready_at));
+    }
+
     #[test]
     fn failed_partial_native_allocations_release_owned_handles_and_device_recovers() {
         crate::requires_capabilities!(Vulkan, Dxc);

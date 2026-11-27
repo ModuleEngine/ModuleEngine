@@ -65,7 +65,7 @@ impl FrameBridge {
 pub(crate) struct Binding {
     pub token: Weak<()>,
     pub set: vk::DescriptorSet,
-    pub _lease: Arc<dyn GpuFrame>,
+    pub lease: Arc<dyn GpuFrame>,
 }
 
 /// One descriptor pool serves all graph views drawn by the window painter.
