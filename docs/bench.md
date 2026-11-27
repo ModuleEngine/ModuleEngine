@@ -338,7 +338,7 @@ rule and borderline rerun stay in force. The [recorded samples and calculation](
 identify each input report, its hash, the measured arrays and the excluded runs.
 
 **Declared presentation change.** When the presentation path itself is the
-change under test (R2.6: the current WGPU path against the direct Vulkan
+change under test (R2.6: the R0.6 WGPU path against the direct Vulkan
 swapchain), declare each field that may differ between the sides:
 `--declare-change gui_graphics.backend` (also `gui_graphics.renderer`,
 `gui_graphics.requested_renderer`, `gui_graphics.requested_gpu_backend`; the
@@ -347,6 +347,14 @@ reported (non-null) in every run on both sides and identical across all runs of 
 `compare.json` and `compare.md`, and every other field stays strict: a
 different adapter, resolution, workload or effective present mode is still
 incomparable. Without the option the comparison is fully strict.
+
+Use the following pair for R2.6. The blocking frame interval remains
+UI-observed. The candidate's `window_swapchain` report includes the measured
+calls and intervals on the actual window surface.
+
+```sh
+python scripts/bench.py --no-profiling --compare 731661c47e181847450e00480e60c0645abd4753 --scenes S1,S2 --declare-change gui_graphics.backend --declare-change gui_graphics.renderer --declare-change gui_graphics.requested_renderer --declare-change gui_graphics.requested_gpu_backend
+```
 
 **Not covered yet: R3.5 open-to-first-frame.** The launcher does not measure
 editor start to first frame, and the R0.6 report has no such value, so a

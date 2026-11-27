@@ -11,6 +11,30 @@ use winit::{
 
 pub type PresentedFrame = (Instant, Option<Vec<u8>>);
 
+/// Successful submission to the window, with CPU time through presentation.
+#[derive(Clone, Copy, Debug)]
+pub struct WindowPresentation {
+    pub time: Instant,
+    pub pixels: [u32; 2],
+    pub present_mode: &'static str,
+    pub paint_elapsed: std::time::Duration,
+    /// A software presentation worker accepts the request asynchronously.
+    pub present_elapsed: Option<std::time::Duration>,
+}
+
+pub(crate) struct WindowPaint {
+    pub presentation: WindowPresentation,
+    pub pixels: Option<Vec<u8>>,
+}
+
+fn present_mode_name(mode: vk::PresentModeKHR) -> &'static str {
+    match mode {
+        vk::PresentModeKHR::IMMEDIATE => "Immediate",
+        vk::PresentModeKHR::MAILBOX => "Mailbox",
+        _ => "Fifo",
+    }
+}
+
 pub struct Gpu {
     // Drop swapchains first, then the device-owned root surface and its native window.
     painter: Arc<std::sync::Mutex<Painter>>,
@@ -117,11 +141,7 @@ impl Gpu {
             present_mode: if benchmark {
                 "IMMEDIATE"
             } else {
-                match frames.mode {
-                    vk::PresentModeKHR::IMMEDIATE => "Immediate",
-                    vk::PresentModeKHR::MAILBOX => "Mailbox",
-                    _ => "Fifo",
-                }
+                present_mode_name(frames.mode)
             },
             ui_frames_in_flight: 1,
         };
@@ -169,6 +189,17 @@ impl Gpu {
         scale: f32,
         capture: bool,
     ) -> Result<Option<PresentedFrame>, String> {
+        self.paint_observed(primitives, delta, scale, capture)
+            .map(|draw| draw.map(|draw| (draw.presentation.time, draw.pixels)))
+    }
+
+    pub(crate) fn paint_observed(
+        &mut self,
+        primitives: &[ClippedPrimitive],
+        delta: &mut TexturesDelta,
+        scale: f32,
+        capture: bool,
+    ) -> Result<Option<WindowPaint>, String> {
         self.root.paint(
             &self.owner.handles(),
             &mut *self
@@ -257,7 +288,7 @@ impl Gpu {
             capture,
         )?;
         child.frames.wait()?;
-        Ok(draw.and_then(|(_, pixels)| pixels))
+        Ok(draw.and_then(|draw| draw.pixels))
     }
 
     pub(crate) fn software_present_busy(&self) -> bool {
@@ -306,7 +337,8 @@ impl WindowFrames {
         delta: &mut TexturesDelta,
         pixels_per_point: f32,
         capture: bool,
-    ) -> Result<Option<PresentedFrame>, String> {
+    ) -> Result<Option<WindowPaint>, String> {
+        let started = Instant::now();
         if !capture
             && delta.is_empty()
             && self
@@ -377,7 +409,8 @@ impl WindowFrames {
         // Submission has signalled (or will signal) the per-image semaphore.
         // If presentation fails, retire the slot before attempting another draw.
         self.recreate = true;
-        if !capture && let Some(worker) = self.software_present.as_mut() {
+        let presenting = Instant::now();
+        let synchronous = if !capture && let Some(worker) = self.software_present.as_mut() {
             self.window.pre_present_notify();
             worker.submit(PresentRequest {
                 swapchain: self.frames.swapchain,
@@ -385,6 +418,7 @@ impl WindowFrames {
                 index,
             })?;
             self.recreate = suboptimal;
+            false
         } else {
             match self
                 .frames
@@ -398,7 +432,8 @@ impl WindowFrames {
                     return Ok(None);
                 }
             }
-        }
+            true
+        };
         let time = Instant::now();
         if self.recreate && self.benchmark {
             return Err("R3.1 presentation became suboptimal".into());
@@ -417,7 +452,16 @@ impl WindowFrames {
         } else {
             None
         };
-        Ok(Some((time, pixels)))
+        Ok(Some(WindowPaint {
+            presentation: WindowPresentation {
+                time,
+                pixels: [self.frames.extent.width, self.frames.extent.height],
+                present_mode: present_mode_name(self.frames.mode),
+                paint_elapsed: time.duration_since(started),
+                present_elapsed: synchronous.then(|| time.duration_since(presenting)),
+            },
+            pixels,
+        }))
     }
 }
 

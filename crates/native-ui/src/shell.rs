@@ -17,6 +17,8 @@ use winit::{
 pub trait NativeApp {
     /// Root input processing through tessellation, excluding the root Vulkan paint.
     fn frame_prepared(&mut self, _elapsed: std::time::Duration) {}
+    /// Root paint reached the presentation queue or its software worker.
+    fn frame_presented(&mut self, _frame: crate::WindowPresentation) {}
     fn on_exit(&mut self) {}
     fn raw_input(&mut self, _ctx: &Context, _input: &mut RawInput) {}
     fn ui(&mut self, ui: &mut egui::Ui, window: &Window);
@@ -161,10 +163,11 @@ impl<A: NativeApp> Session<A> {
         let presented =
             viewports
                 .gpu
-                .paint(&shapes, &mut textures, output.pixels_per_point, capture);
+                .paint_observed(&shapes, &mut textures, output.pixels_per_point, capture);
         textures.clear();
         let presented = presented?;
-        if let Some((_, pixels)) = &presented {
+        if let Some(draw) = &presented {
+            self.app.frame_presented(draw.presentation);
             self.presented_frames += 1;
             if capture_file {
                 let path = self.capture_path.take().expect("armed window capture");
@@ -176,7 +179,11 @@ impl<A: NativeApp> Session<A> {
                 encoder.set_depth(png::BitDepth::Eight);
                 let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
                 writer
-                    .write_image_data(pixels.as_deref().ok_or("Missing window capture pixels")?)
+                    .write_image_data(
+                        draw.pixels
+                            .as_deref()
+                            .ok_or("Missing window capture pixels")?,
+                    )
                     .map_err(|e| e.to_string())?;
                 writer.finish().map_err(|e| e.to_string())?;
                 event_loop.exit();
@@ -195,7 +202,8 @@ impl<A: NativeApp> Session<A> {
                     egui::Event::Paste(text)
                 }
                 ActionRequested::Screenshot(user_data) => {
-                    let Some((_, Some(pixels))) = &presented else {
+                    let Some(pixels) = presented.as_ref().and_then(|draw| draw.pixels.as_ref())
+                    else {
                         continue;
                     };
                     let [w, h] = viewports.gpu.extent();

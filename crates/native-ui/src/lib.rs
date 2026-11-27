@@ -13,7 +13,7 @@ pub use winit::window::Window;
 mod thin;
 
 use ash::vk;
-pub use gpu::{DeviceInfo, Gpu};
+pub use gpu::{DeviceInfo, Gpu, WindowPresentation};
 use serde::Serialize;
 
 #[derive(Clone, Copy, Serialize)]
