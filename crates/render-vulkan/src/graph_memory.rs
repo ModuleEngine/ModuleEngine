@@ -78,7 +78,11 @@ impl VulkanRenderer {
             let interval = key.lifetimes.get(name).copied().filter(|_| {
                 self.capabilities.synchronization2 && key.leased_output.as_ref() != Some(name)
             });
-            let format = format(format_name)?;
+            let format = if *depth {
+                vk::Format::D32_SFLOAT
+            } else {
+                format(format_name)?
+            };
             let image = self.create_viewport_image(
                 width,
                 height,

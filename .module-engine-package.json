@@ -258,7 +258,7 @@
     "crates/render-vulkan/src/frames.rs": "d5d6b8bca82bb6815f15eca64d590e7c2a6e2b8dabcff992eb268692a0bdef11",
     "crates/render-vulkan/src/geometry.rs": "36ca3a852544de0440825722d2697a05cafbf3e4a59e3dda5f620f465529e032",
     "crates/render-vulkan/src/graph.rs": "c90419c5ecb1ef078120cdd94ecdc486371f4e2eb0faf0823ece3f308ee7adf9",
-    "crates/render-vulkan/src/graph_memory.rs": "9ea0e63fcee79d9b92cc429e44bcd84f8ce676ea2688305fef981e225e090143",
+    "crates/render-vulkan/src/graph_memory.rs": "1e617b1e31fca423eafb67dd843022ca7d81c99b1a71b2b357b7f25eefb9365d",
     "crates/render-vulkan/src/graph_record.rs": "6cfc620f30c4962c32a1c3842ffe996a43e733d56fae1c7011a1faeb8af51085",
     "crates/render-vulkan/src/lib.rs": "3923f0aeb26d5144254aaab5a44da94989dd806da9e2356eda72449d5730a5b3",
     "crates/render-vulkan/src/materials.rs": "203a38bd4621b738fd5c28d895d8cf91b4b76f494ce6cabfcb644b292c629333",
