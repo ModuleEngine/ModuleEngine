@@ -329,9 +329,9 @@ Phase numbers R0–R10 are planning labels, not versions. Effort is a rough rang
 
 <a id="rebuild-status"></a>
 
-**Accepted by 26 November 2026.** R1 is accepted. RV-D.1–RV-D.8, the R1.9 S3 optimisation, the [R3.1 painter comparison](editor-vulkan-spike.md#r31-results), the R4.1 editor extension contract, the R6.1 Rapier step, R7.1 glTF import and CPU animation playback, and the [R8.1 S5 prototype](r81-s5-meshlets.md#r81-result) are complete at the checked `main` snapshot. The [final Windows and Linux CI](https://github.com/myjname/ModuleEngine/actions/runs/45771712793) passed at `f8bc9ac`.
+**Accepted by 26 November 2026.** R1 is accepted. RV-D.1–RV-D.8, the R1.9 S3 optimisation, the [R3.1 painter comparison](editor-vulkan-spike.md#r31-results), the R4.1 editor extension contract, the R6.1 Rapier step, R7.1 glTF import and CPU animation playback, and the [R8.1 S5 prototype](r81-s5-meshlets.md#r81-result) are complete at the checked `main` snapshot. The [final Windows and Linux CI](https://github.com/ModuleEngine/ModuleEngine/actions/runs/45771712793) passed at `f8bc9ac`.
 
-**Next by dependency.** R6.2, R3.2, R4.2, R7.2 and R8.2 are available. The map automatically lists R6.2 first, and no next start has been approved. R2.5 has cleared its technical prerequisites and remains paused. R3 and R4 are the remaining acceptance gates for the 0.5 milestone on `main` and new UI work. The tested audio scenario and both Practice Arena examples are preserved on the [separate 0.5 audio branch at `c199903`](https://github.com/myjname/ModuleEngine/commit/c19990396a9c5be43309f9d102a992385555d81e).
+**Next by dependency.** R6.2, R3.2, R4.2, R7.2 and R8.2 are available. The map automatically lists R6.2 first, and no next start has been approved. R2.5 has cleared its technical prerequisites and remains paused. R3 and R4 are the remaining acceptance gates for the 0.5 milestone on `main` and new UI work. The tested audio scenario and both Practice Arena examples are preserved on the [separate 0.5 audio branch at `c199903`](https://github.com/ModuleEngine/ModuleEngine/commit/c19990396a9c5be43309f9d102a992385555d81e).
 
 **Relation to the version route.** On 21 November 2026 the owner paused the 0.5 brief and new UI work until R1, R3 and R4 are accepted, because they change the world storage, the editor shell and the editor/game boundary that 0.5 would build on. The track does not replace any milestone: R5 is the technical base for [1.3](#real), R6–R7 supply the physics and skeleton that [0.9a](#combat) and the [G2 decisions](#g2-agreement) need, and every phase keeps the G1 and ARPG budgets from [release decisions](#decision) as regression gates. Ray tracing and mesh shaders are optional hardware tiers: G1/G3-style packages must never require them.
 
@@ -417,9 +417,9 @@ In that snapshot, the combined p99 of 1,200 standalone S3 ECS tick samples
 was 1.688 ms. Per-run p99 was 2.071, 1.510, 1.584, 1.515 and 1.635 ms. All four
 samples above 2 ms fell in the first run, with a maximum of 2.322 ms.
 
-R1.8 was accepted in [PR #39](https://github.com/myjname/ModuleEngine/pull/39)
+R1.8 was accepted in [PR #39](https://github.com/ModuleEngine/ModuleEngine/pull/39)
 at `6ba445c2ffa9baef46a51131cf0073610fb34067`, which includes the S3 changes
-from [PR #38](https://github.com/myjname/ModuleEngine/pull/38). The standalone
+from [PR #38](https://github.com/ModuleEngine/ModuleEngine/pull/38). The standalone
 S3 ECS tick p99 was 0.7939 ms across 1,200 samples, with a maximum of 0.9590 ms.
 S2 tick p95 improved from 3.7197 to 3.5307 ms. S1 and S2 met the 60 FPS gate in
 all five pairs, and S1 peak working set was 330.105 MiB against a 1 GiB limit.

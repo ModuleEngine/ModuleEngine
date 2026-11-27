@@ -141,16 +141,16 @@ There are no secrets, `pull_request_target`, privileged PR execution, or
 unprepared self-hosted jobs. All external actions are pinned to full commit SHAs.
 Fresh CI tools are downloaded only inside an explicitly started hosted job.
 
-For [myjname/ModuleEngine](https://github.com/myjname/ModuleEngine), public
+For [ModuleEngine/ModuleEngine](https://github.com/ModuleEngine/ModuleEngine), public
 access is enabled by the owner's decision. `main` has required PRs, an up-to-date branch,
 **`CI required` with GitHub Actions app ID 15368**, administrator protection, and resolution
 of review discussions; force pushes and branch deletion are prohibited. Required human approvals = 0:
 separate independent AI review is not presented as approval from another GitHub account.
-In [service PR #2](https://github.com/myjname/ModuleEngine/pull/2), an invalid base SHA
+In [service PR #2](https://github.com/ModuleEngine/ModuleEngine/pull/2), an invalid base SHA
 caused planning failure, a skipped matrix, and failed aggregate; GitHub showed
 `mergeable_state=blocked`. The PR was closed without merging. This proves prerequisite
 failure, not a separate artificial Rust-test failure. Actual results
-for each version must be checked in its [CI run](https://github.com/myjname/ModuleEngine/actions).
+for each version must be checked in its [CI run](https://github.com/ModuleEngine/ModuleEngine/actions).
 
 <a id="локальная-проверка-политики"></a>
 

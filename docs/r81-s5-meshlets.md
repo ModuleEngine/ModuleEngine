@@ -132,7 +132,7 @@ Release and Debug Editor SHA-256 were
 `5a38bfcf1a04b88baaa1d0bec3cba5775b4a84e5744c6099e7c5ee8a71d98291`
 and `c836e56d9ce35ec92ce4ffd3d2db7b91d2c5d9d46c90fbcc695f3dcc5f7af73b`.
 The queue retained both executables, the original logs and samples, and the
-failed comparisons with the previous gate. [Implementation and review](https://github.com/myjname/ModuleEngine/pull/56)
+failed comparisons with the previous gate. [Implementation and review](https://github.com/ModuleEngine/ModuleEngine/pull/56)
 
 The result supports continued Tier B experiments using precomputed geometry.
 The measured build cost is too high for ordinary scene loading. Keep the

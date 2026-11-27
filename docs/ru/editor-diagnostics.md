@@ -8,7 +8,7 @@ fixture, использует прежний `--editor-ui-check` для workflow
 WGPU captures. Wrapper не собирает Editor и не принимает авторский JSON проекта.
 Приведённые ниже Windows-прогоны подтверждают этот ограниченный маршрут; Linux
 native capture ещё не проверен.
-[Hosted CI этапов 1/2](https://github.com/myjname/ModuleEngine/actions/runs/38994338494)
+[Hosted CI этапов 1/2](https://github.com/ModuleEngine/ModuleEngine/actions/runs/38994338494)
 прошёл свои Windows/Linux-маршруты проверок; native diagnostic captures он не запускал.
 
 ## Запуск
