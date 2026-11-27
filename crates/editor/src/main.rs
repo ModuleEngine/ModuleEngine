@@ -86,6 +86,22 @@ impl Drop for FinishSerialRenderTest {
     }
 }
 
+// Linux nextest runs each libtest case in a separate process. Even a graph-only
+// Editor fixture can start a Mesa preview. Join after *all* locals on the named
+// test thread have dropped, including any other Editor or Game worker it owns.
+#[cfg(all(test, target_os = "linux"))]
+fn register_isolated_editor_teardown() {
+    thread_local! {
+        static FINISH: FinishSerialRenderTest = const { FinishSerialRenderTest };
+    }
+    if std::env::var("NEXTEST_EXECUTION_MODE").as_deref() == Ok("process-per-test")
+        && let Ok(case) = std::env::var("NEXTEST_TEST_NAME")
+        && std::thread::current().name() == Some(case.as_str())
+    {
+        FINISH.with(|_| {});
+    }
+}
+
 #[cfg(test)]
 macro_rules! requires_editor_vulkan {
     () => {

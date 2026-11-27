@@ -118,25 +118,12 @@ trial также отключил caching из-за известного loader 
 policy допускает только точный проверенный контекст выше. Ни такой допуск, ни локальный
 repeat не доказывают Linux cache hit или чистый hosted выигрыш; реальные CI результаты
 остаются в отчётах своих прогонов.
-Workflow использует один объединённый restore/save action `actions/cache` v6,
-закреплённый на `55cc8345863c7cc4c66a329aec7e433d2d1c52a9`. Допустимы только пути:
-
-- `$CARGO_HOME/registry` и `$CARGO_HOME/git`;
-- `target/debug` и `target/release`;
-- `target/<verified-native-host>/debug` и `target/<verified-native-host>/release`.
-
-Custom worker и `sdk-v3` namespaces, авторские/root данные, сгенерированные fixtures,
-`.tools`, отчёты и credentials не входят в этот cache scope. Это не резервная копия
-SDK, Custom-program-store или пользовательского проекта. Изменение списка требует
-повторной проверки этих границ.
-
-Compatibility prefix хеширует проверенные verbose Rust/Cargo identity, native host,
-runner OS/architecture/image и пути, toolchain pins, lockfile, manifests и profiles,
-CI/verification policy и защищённые configuration inputs. Скрипт также включает
-консервативные source-policy inputs, в том числе исходники Core/runtime-script.
-Exact key дополняется source SHA. Restore prefix только один: полный compatibility
-prefix без более широкого fallback между несовместимыми контекстами. Miss или отказ
-cache admission означает обычный прогон без cache.
+Общая подготовка CI вызывает `Swatinem/rust-cache` с проверенным префиксом
+совместимости из `ci_cache.py`. Префикс включает образ ОС, пути и версии
+компиляторов, настройки Python, закреплённые зависимости и политику проверок.
+На каждой ОС все задания могут восстановить зависимости Cargo, а записывает их
+только workspace. Кеширование каталогов target и bin выключено. Рабочие процессы
+Custom, SDK, проекты и отчёты остаются в пределах отдельной VM.
 
 После restore по-прежнему выполняются каждый locked dependency fetch, Clippy,
 contracts, выбранный native/package маршрут и artifact check. Hit не пропускает

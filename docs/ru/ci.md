@@ -46,13 +46,13 @@ package. Неизвестные исходные пути, пустой diff, п
 
 | Runner | Обычная матрица | При изменении исходников |
 | --- | --- | --- |
-| `windows-2022` | Workspace, минимальный Player, Python unit checks, [проверка лицензий](licensing.md#third-party-code), `contracts`, `clippy` | `native-tools`, затем `package` |
-| `ubuntu-24.04` | Workspace на Mesa lavapipe с закреплённым DXC, точечная проверка без DXC, минимальный Player, Python unit checks, [проверка лицензий](licensing.md#third-party-code), `contracts`, `clippy` | `native` на Mesa lavapipe, затем `package` |
+| `windows-2025` | Workspace, минимальный Player, Python unit checks, [проверка лицензий](licensing.md#third-party-code), `contracts`, `clippy` | `native-tools` и `package` |
+| `ubuntu-24.04` | Workspace на Mesa lavapipe с закреплённым DXC, точечная проверка без DXC, минимальный Player, Python unit checks, [проверка лицензий](licensing.md#third-party-code), `contracts`, `clippy` | `native` на Mesa lavapipe и `package` |
 
-Оба задания выполняют `cargo fetch --locked` перед `cargo test --workspace --locked`.
-Команда workspace запускает обычные модульные, интеграционные и документационные
-тесты и записывает по пакетам число пройденных, упавших, игнорируемых и пропущенных
-из-за отсутствия возможностей тестов. Сбой обычного теста или отсутствие кеша
+Каждое задание Rust загружает закреплённые зависимости. Задание workspace
+выполняет обычные тесты через закреплённый cargo-nextest, а doc-тесты через Cargo.
+Результаты JUnit и doc-тестов объединяются по пакетам с указанием причин
+пропуска тестов из-за отсутствующей возможности. Сбой обычного теста или отсутствие кеша
 Custom SDK проваливает задание. На Linux тесты миграции и восстановления Vulkan
 после сбоя выделения, а также сценарии редактора для первой подготовки Scene и
 восстановления и применения Rust-кода при скрытой Game должны пройти в workspace
@@ -88,9 +88,13 @@ Linux full `native` запускает offscreen tests с software Vulkan, бе�
 интерактивную desktop приёмку. `package` использует минимальные Cargo fixtures,
 не настоящий game export. Linux CI передаёт `--require-capabilities`, чтобы отсутствие Vulkan/DXC провалило обязательную offscreen-проверку.
 
-Две платформы выполняются параллельно на отдельных hosted VM; команды внутри
-каждой VM выполняются последовательно. Каждый job получает новый hosted checkout
-и отдельные caches/TEMP; авторский рабочий каталог разработчика не используется.
+На каждой ОС отдельно запускаются workspace, сборка и проверка CLI обычного Release
+Editor, Clippy, contracts и минимальный Player. План может отдельно включить native
+и package. У каждого задания своя hosted VM и TEMP. Внутри задания тесты GPU и
+native выполняются последовательно. В Windows Cargo собирает продукты на Dev Drive.
+Сборки workspace используют rust-lld в Windows и lld в Linux. Вызовы Release Editor,
+Clippy и минимального Player используют быстрый линкер и `CARGO_PROFILE_DEV_DEBUG=0`.
+Проверки native и Custom SDK сохраняют проверяемое окружение компилятора.
 Rust version/native target берутся из существующих Windows/Linux manifests.
 Перед offline launcher CI явно устанавливает pinned Rust с компонентами `rustfmt` и `clippy` и делает
 `cargo fetch --locked`. Linux-матрица устанавливает системные библиотеки для
@@ -110,9 +114,9 @@ snapshot fixture на длинном TEMP; тест и его критерии �
 Отчёты и command logs из `outputs/verification` публикуются как artifact для
 каждой платформы даже после отказа; если проверка не стартовала, GitHub job log
 содержит ошибку подготовки. Retention 14 дней. Full source/artifact hashes и
-scope остаются в обычном `result.json` launcher. Консервативный объединённый Cargo
-cache восстанавливает только допустимые dependency/workspace build paths; все проверки
-сохраняются. [Замеры и границы cache](build-verification-performance.md) определяют
+scope остаются в обычном `result.json` launcher. У заданий каждой ОС общий кеш
+зависимостей. Имя артефакта включает задание, ОС и номер попытки.
+[Замеры и границы cache](build-verification-performance.md) определяют
 совместимые keys и оценку полного hosted времени, включая стоимость restore/save.
 
 ## Включение обязательности

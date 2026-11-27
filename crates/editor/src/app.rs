@@ -465,6 +465,8 @@ impl Editor {
             std::sync::Arc<module_engine_player::gpu_presentation::GpuPresentationBridge>,
         >,
     ) -> Self {
+        #[cfg(all(test, target_os = "linux"))]
+        crate::register_isolated_editor_teardown();
         let mut canvas = CanvasState::new("engine-graph");
         canvas.zoom = 0.82;
         let (registry, initial_status) = match distribution

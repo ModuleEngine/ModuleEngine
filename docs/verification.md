@@ -184,6 +184,8 @@ and repeat reports do not establish hosted cache benefit or Editor cold-start.
 
 ## CI
 
+Each OS runs workspace, Release Editor, Clippy, contracts and minimal Player as separate jobs. Selected native and package jobs also run in parallel. The required check verifies each job result against the plan.
+
 [GitHub Actions and the required check](ci.md) run separate `contracts` and `clippy` plans/checks on Windows and
 Linux for source changes, including native/package routes. Documentation-only PRs use the link and roadmap checks. Before offline
 checks, CI explicitly restores pinned Rust with `rustfmt`/`clippy` and locked dependencies. Enforcing

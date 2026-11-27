@@ -116,25 +116,11 @@ first Linux trial also disabled caching for setup-python's known loader path.
 The revised policy admits only the exact verified context above. Neither that
 admission nor a local repeat proves a Linux cache hit or a net hosted gain; actual
 CI outcomes remain attached to their run reports.
-The workflow uses one combined `actions/cache` v6 restore/save action, pinned to
-`55cc8345863c7cc4c66a329aec7e433d2d1c52a9`. Allowed paths are only:
-
-- `$CARGO_HOME/registry` and `$CARGO_HOME/git`;
-- `target/debug` and `target/release`;
-- `target/<verified-native-host>/debug` and `target/<verified-native-host>/release`.
-
-Custom worker and `sdk-v3` namespaces, authored/root data, generated fixtures,
-`.tools`, reports and credentials are outside this cache scope. It is not an SDK,
-Custom-program-store or user-project backup. Changing the list requires checking
-these boundaries again.
-
-The compatibility prefix hashes the verified verbose Rust/Cargo identity, native
-host, runner OS/architecture/image and paths, toolchain pins, lockfile, manifests
-and profiles, CI/verification policy and guarded configuration inputs. The script
-also includes its conservative source-policy inputs, including Core/runtime-script
-sources. The exact key appends the source SHA. There is one restore prefix: the
-complete compatibility prefix, with no broader fallback across incompatible
-contexts. A miss or rejected cache admission is an ordinary uncached run.
+Shared CI setup calls `Swatinem/rust-cache` with the verified compatibility prefix
+from `ci_cache.py`. The prefix binds the OS image, compiler paths and versions,
+Python context, dependency pins and verification policy. All jobs on an OS can
+restore Cargo dependencies. Only the workspace job saves them. Target and bin
+caching are disabled. Custom workers, SDKs, projects and reports stay on their VM.
 
 Every locked dependency fetch, Clippy, contracts, selected native/package route and
 artifact check still runs after restoration. A hit does not skip a verification

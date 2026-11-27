@@ -15,6 +15,7 @@ HOSTS = {"Windows": "x86_64-pc-windows-msvc", "Linux": "x86_64-unknown-linux-gnu
 SAFE_CARGO = {"CARGO_HOME", "CARGO_INCREMENTAL", "CARGO_TERM_COLOR"}
 POLICIES = {"Cargo.lock", "Cargo.toml", "engine-sdk.json", "toolchain-manifest.json", "rust-toolchain",
             "rust-toolchain.toml", "verify.ps1", "verify.sh", ".github/workflows/ci.yml",
+            ".github/actions/ci-setup/action.yml", ".config/nextest.toml",
             "scripts/verify.py", "scripts/verification.json", "scripts/ci_plan.py",
             "scripts/ci_linux_dxc.py", "scripts/ci_workspace_tests.py", "scripts/python_runtime.py",
             "scripts/linux-toolchain.json", "scripts/test_ci.py"}
