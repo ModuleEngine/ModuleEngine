@@ -236,11 +236,12 @@ pub(super) fn template_document_with_registry(
                 entry.owner
             ));
         }
-        let content = (entry.populate)(document.clone());
+        // A template supplies Project sources. Inherited Engine sources stay in
+        // the destination, so every returned ID must pass the ownership check.
+        let mut input = document.clone();
+        input.custom_sources.clear();
+        let content = (entry.populate)(input);
         for (id, source) in content.custom_sources {
-            if document.custom_sources.get(&id) == Some(&source) {
-                continue;
-            }
             if document.custom_sources.contains_key(&id)
                 && !distribution.can_edit_custom_source(&id, current)
             {
@@ -2304,6 +2305,47 @@ mod tests {
         );
         cleanup(&root);
     }
+    #[test]
+    fn template_cannot_claim_an_identical_engine_owned_source() {
+        use module_engine_game_ui::authoring::{AuthoringRegistry, ProjectTemplateContribution};
+        const ENGINE_SOURCE: &str = "fn value(_ctx: &ScriptContext) -> f64 { 7.0 }";
+        let mut current = document();
+        current
+            .custom_sources
+            .insert("engine-source".into(), ENGINE_SOURCE.into());
+        let (_sources, team) = distribution(&current, DistributionProfile::Team);
+        let original = current.clone();
+        let reference = module_engine_editor_composition::authoring()
+            .template("two-arenas")
+            .unwrap();
+        let mut registry = AuthoringRegistry::default();
+        registry
+            .register_template(ProjectTemplateContribution {
+                id: "conflict",
+                populate: |mut document| {
+                    document
+                        .custom_sources
+                        .insert("engine-source".into(), ENGINE_SOURCE.into());
+                    document
+                },
+                ..*reference
+            })
+            .unwrap();
+        let error = template_document_with_registry(
+            &current,
+            ProjectTemplate("conflict"),
+            &team,
+            crate::engine_profiles::EngineChoice::InheritCurrent,
+            &registry,
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("conflicts with an Engine-owned source"),
+            "{error}"
+        );
+        assert_eq!(current, original);
+    }
+
     #[test]
     fn templates_keep_engine_and_custom_ids_and_team_baseline_on_new_project() {
         let root = fixture();

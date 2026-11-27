@@ -101,7 +101,7 @@
     "crates/editor/src/ui_capture.rs": "adec9c71022e8480c769896a82df51c4526822efdd18ced73a3d6bbc628224af",
     "crates/editor/src/verification.rs": "06d516d715a264821e7103c898644d7cd5467d055862bec607639e6959cdc065",
     "crates/editor/src/window_navigation.rs": "4ebce1d6a40e6bfdb9e5920ded189a473213e10666bad40c0ccbcf0041245fc1",
-    "crates/editor/src/workspace_files.rs": "8ad35bffe83afa24cd2e54b88faa791a2ed9cba90f5851bd2c05f3a086db6b0e",
+    "crates/editor/src/workspace_files.rs": "79f12a6bb747aff77c2d26534de00edb673275d9f0819b058555dada53f4baa9",
     "crates/editor/src/workspaces.rs": "4293130406822c82f7bc3274eb0683025f710bd89b78bd5f84dc88dcd87ad298",
     "crates/editor/tests/verification_cli.rs": "1159aba512ac4ca01d2fb191a3abb6b7aac60f51a42385d3de03df3411b603c3",
     "crates/engine-content/Cargo.toml": "dce2d280ed9cbce12e1f8eccd18f18c63908369caedef5418c4e5a06392dcb31",
