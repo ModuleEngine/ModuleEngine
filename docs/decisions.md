@@ -147,6 +147,8 @@ belongs to the R3.3 resource and synchronization contract.
 See the [Windows results](editor-vulkan-spike.md#r31-results) and
 [library API for caller-owned textures](https://docs.rs/egui-ash-renderer/0.13.0/egui_ash_renderer/struct.Renderer.html#method.add_user_texture).
 
+The R3.2–R3.3 Editor and Player windows require a Vulkan device to paint the UI, including a Player built with only the `ui` feature. Window creation reports an error if no compatible device is available. Game-graph Vulkan renderer registration still depends on the `vulkan` feature and the project’s module selection. Headless builds without `ui` do not require a UI device.
+
 <a id="рабочие-допущения"></a>
 
 ## Working Assumptions

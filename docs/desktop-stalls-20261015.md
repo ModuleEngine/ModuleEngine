@@ -34,7 +34,7 @@ An empty eframe window without a project, GameHost, or Vulkan reproduced the pro
 
 ## Change and comparison
 
-`E:\ModuleEngine\crates\player\src\ui.rs` sets the shared Editor/Player policy: Windows GUI defaults to WGPU, explicitly selecting DX12. `MODULE_ENGINE_GUI_BACKEND=glow` remains available for diagnostics. The initialized adapter is recorded separately from the requested backend. Editor integration: `E:\ModuleEngine\crates\editor\src\main.rs`; reference empty window: `E:\ModuleEngine\crates\editor\examples\desktop_presentation_probe.rs`. Dependencies were updated in `Cargo.toml`/`Cargo.lock`.
+`E:\ModuleEngine\crates\player\src\ui.rs` set the shared Editor/Player policy in the October snapshot: Windows GUI defaults to WGPU, explicitly selecting DX12. `MODULE_ENGINE_GUI_BACKEND=glow` remains available for diagnostics. The initialized adapter is recorded separately from the requested backend. Editor integration: `E:\ModuleEngine\crates\editor\src\main.rs`; reference empty window: `E:\ModuleEngine\crates\editor\examples\desktop_presentation_probe.rs`. Dependencies were updated in `Cargo.toml`/`Cargo.lock`.
 
 Editor supports native screenshots through `MODULE_ENGINE_UI_SCREENSHOT_TO` (`crates/editor/src/ui_capture.rs`), retaining WGPU. In this report's 15 October 2026 source snapshot, the legacy `EFRAME_SCREENSHOT_TO` selected Glow when no backend was specified and rejected explicitly selected WGPU. That automatic selection is historical: the current Windows/Linux GUI retains WGPU unless `MODULE_ENGINE_GUI_BACKEND=glow` is explicitly requested; otherwise legacy capture returns an error. See the [current GUI and capture policy](linux-support.md). Remove both screenshot variables for ordinary launch.
 

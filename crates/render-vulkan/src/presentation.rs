@@ -6,7 +6,7 @@ use std::sync::Arc;
 pub(crate) struct DeviceLifetime {
     pub instance: Arc<InstanceLifetime>,
     pub device: ash::Device,
-    pub queue_access: std::sync::Mutex<()>,
+    pub queue_access: std::sync::Arc<std::sync::Mutex<()>>,
 }
 impl DeviceLifetime {
     pub(crate) fn name(&self, _object: impl vk::Handle, _name: impl FnOnce() -> String) {

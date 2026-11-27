@@ -15,3 +15,5 @@ glslangValidator -V shader.frag -o shader.frag.spv
 ```sh
 cargo run --locked -p module-engine-player --features ui,vulkan --example gpu_presentation_check -- work/window-pixels.json --window
 ```
+
+Проверка также удерживает четыре аренды при смене размера и сравнивает три текселя после двух частичных обновлений текстуры egui. В реестре ей соответствует `native-window-graph-pixels`. Для сверки SPIR-V вершинного шейдера используйте `glslangValidator -V shader.vert -o shader.vert.spv`.

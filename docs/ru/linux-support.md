@@ -2,7 +2,7 @@
 
 [English](../linux-support.md) | [Русский](linux-support.md) | [Документация](README.md)
 
-GUI Editor и Player используют общую политику: **Windows — WGPU/DX12, Linux — WGPU/Vulkan**. Игровой рендерер — отдельный Vulkan-модуль. Наличие одного API у GUI не определяет формат игрового графа. Windows-исправление зависаний DWM сохранено; диагностический Glow включается только явно.
+Editor и Player открывают окна через winit и рисуют egui через Ash/Vulkan на Windows и Linux. Граф игры определяется выбранными модулями проекта.
 
 Проверки политики с Linux-флагом на Windows не заменяют native сборку и запуск. В существующую Ubuntu/WSL2 по отдельному разрешению установлены native Rust/Cargo, C-компилятор, pkg-config и DXC. [Текущее состояние](current-status.md) связывает завершённые исправления и открытые границы с последующими проверками; [linux-support-20261015.md](linux-support-20261015.md) описывает первый прогон и сохраняется как история.
 
@@ -69,7 +69,7 @@ MODULE_ENGINE_WINDOW_SYSTEM=x11 sh run.sh /path/to/linux-project-v4.json
 MODULE_ENGINE_WINDOW_SYSTEM=auto sh run.sh /path/to/linux-project-v4.json
 ```
 
-Auto использует выбор winit: непустой Wayland environment имеет приоритет. После неудачного подключения к Wayland автоматический повтор через X11 не обещается. При ошибке проверьте `WAYLAND_DISPLAY`, `WAYLAND_SOCKET`, `XDG_RUNTIME_DIR` и `DISPLAY` либо явно выберите X11. Неисправная конфигурация сообщает причину; скрытой замены WGPU на Glow нет.
+Auto использует выбор winit: непустой Wayland environment имеет приоритет. После неудачного подключения к Wayland автоматический повтор через X11 не обещается. При ошибке проверьте `WAYLAND_DISPLAY`, `WAYLAND_SOCKET`, `XDG_RUNTIME_DIR` и `DISPLAY` либо явно выберите X11. При ошибке выводится причина. Выбранная оконная система должна быть доступна.
 
 В обнаруженном WSLg `WAYLAND_DISPLAY=wayland-0`, но сокет лежит в `/mnt/wslg/runtime-dir/wayland-0`, а `XDG_RUNTIME_DIR=/run/user/0` на него не указывает. Для отдельного процесса допустим абсолютный путь:
 
@@ -94,7 +94,7 @@ MODULE_ENGINE_PROBE_SECONDS=5 MODULE_ENGINE_WINDOW_SYSTEM=x11 \
 
 Запуск с `--target` без `CARGO_TARGET_DIR` использует стандартный `target/<host>`; при необходимости задайте ту же переменную, что в `run.sh`. Не запускайте одновременно несколько GPU-проверок.
 
-Логи различают `requested` параметры и фактически `initialized` adapter/backend/window-system. `WGPU_BACKEND` не переопределяет Windows DX12 или Linux Vulkan. `MODULE_ENGINE_GUI_BACKEND=glow` — явная диагностика, требующая отдельного решения на машине с прежним DWM-дефектом. `EFRAME_SCREENSHOT_TO` больше не включает Glow неявно: для Editor используйте `MODULE_ENGINE_UI_SCREENSHOT_TO` с WGPU. Исторический DWM-отчёт описывает прежнее поведение capture.
+В журнале окна указаны запрошенный и фактический backend, адаптер и оконная система. Обычный запуск принимает незаданную переменную MODULE_ENGINE_GUI_BACKEND или значение ash. Для снимка Editor используется MODULE_ENGINE_UI_SCREENSHOT_TO. Исторический пример desktop_presentation_probe сравнивает Glow и WGPU отдельно.
 
 ## DXC, пакеты и процессы
 

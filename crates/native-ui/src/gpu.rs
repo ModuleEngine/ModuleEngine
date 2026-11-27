@@ -29,6 +29,7 @@ struct WindowFrames {
     window: Arc<Window>,
     benchmark: bool,
     recreate: bool,
+    software_present: Option<SoftwarePresent>,
 }
 
 #[derive(Clone, Serialize)]
@@ -124,6 +125,16 @@ impl Gpu {
             },
             ui_frames_in_flight: 1,
         };
+        let software_present =
+            if !benchmark && properties.device_type == vk::PhysicalDeviceType::CPU {
+                Some(SoftwarePresent::new(
+                    &frames,
+                    handles.queue_access.clone(),
+                    window.clone(),
+                )?)
+            } else {
+                None
+            };
         Ok(Self {
             painter: Arc::new(std::sync::Mutex::new(painter)),
             root: WindowFrames {
@@ -133,6 +144,7 @@ impl Gpu {
                 window: window.clone(),
                 benchmark,
                 recreate: false,
+                software_present,
             },
             children: Default::default(),
             owner,
@@ -201,6 +213,7 @@ impl Gpu {
                 window,
                 benchmark: false,
                 recreate: false,
+                software_present: None,
             },
         );
         Ok(())
@@ -247,6 +260,15 @@ impl Gpu {
         Ok(draw.and_then(|(_, pixels)| pixels))
     }
 
+    pub(crate) fn software_present_busy(&self) -> bool {
+        self.children.is_empty()
+            && self
+                .root
+                .software_present
+                .as_ref()
+                .is_some_and(SoftwarePresent::busy)
+    }
+
     pub fn extent(&self) -> [u32; 2] {
         [
             self.root.frames.extent.width,
@@ -254,18 +276,27 @@ impl Gpu {
         ]
     }
 
-    pub fn finish(&self) -> Result<(), String> {
+    pub fn finish(&mut self) -> Result<(), String> {
+        let presentation = self.root.complete_present();
         let handles = self.owner.handles();
         let _queue = handles
             .queue_access
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         // SAFETY: All submissions synchronize through the same device lock.
-        unsafe { self.owner.handles().device.device_wait_idle() }.at("retire native UI device")
+        unsafe { self.owner.handles().device.device_wait_idle() }.at("retire native UI device")?;
+        presentation
     }
 }
 
 impl WindowFrames {
+    fn complete_present(&mut self) -> Result<(), String> {
+        if let Some(worker) = self.software_present.as_mut() {
+            self.recreate |= worker.complete()?;
+        }
+        Ok(())
+    }
+
     fn paint(
         &mut self,
         handles: &EditorDeviceHandles<'_>,
@@ -275,6 +306,16 @@ impl WindowFrames {
         pixels_per_point: f32,
         capture: bool,
     ) -> Result<Option<PresentedFrame>, String> {
+        if !capture
+            && delta.is_empty()
+            && self
+                .software_present
+                .as_ref()
+                .is_some_and(SoftwarePresent::busy)
+        {
+            return Ok(None);
+        }
+        self.complete_present()?;
         self.frames.wait()?;
         let _queue = handles
             .queue_access
@@ -315,20 +356,41 @@ impl WindowFrames {
         }
         let presented = self.frames.draw(
             handles.queue_access,
-            &self.window,
             painter,
             primitives,
             pixels_per_point,
             self.readback.as_ref(),
         )?;
-        let Some((time, suboptimal)) = presented else {
+        let Some((index, suboptimal)) = presented else {
             self.recreate = true;
             self.frames.wait()?;
             self.readback = None;
             return Ok(None);
         };
         self.recreate = suboptimal;
-        if suboptimal && self.benchmark {
+        if !capture && let Some(worker) = self.software_present.as_mut() {
+            self.window.pre_present_notify();
+            worker.submit(PresentRequest {
+                swapchain: self.frames.swapchain,
+                rendered: self.frames.images[index as usize].rendered,
+                index,
+            })?;
+        } else {
+            match self
+                .frames
+                .present(handles.queue_access, &self.window, index)?
+            {
+                Some(suboptimal) => self.recreate |= suboptimal,
+                None => {
+                    self.recreate = true;
+                    self.frames.wait()?;
+                    self.readback = None;
+                    return Ok(None);
+                }
+            }
+        }
+        let time = Instant::now();
+        if self.recreate && self.benchmark {
             return Err("R3.1 presentation became suboptimal".into());
         }
         let pixels = if self.readback.is_some() {
@@ -346,6 +408,124 @@ impl WindowFrames {
             None
         };
         Ok(Some((time, pixels)))
+    }
+}
+
+struct PresentRequest {
+    swapchain: vk::SwapchainKHR,
+    rendered: vk::Semaphore,
+    index: u32,
+}
+
+/// CPU Vulkan drivers can block the caller of queue_present for an entire graph
+/// frame. One worker presents the root surface while winit continues to deliver input.
+struct SoftwarePresent {
+    sender: Option<std::sync::mpsc::SyncSender<PresentRequest>>,
+    results: std::sync::mpsc::Receiver<Result<bool, String>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    busy: Arc<std::sync::atomic::AtomicBool>,
+    outstanding: bool,
+}
+
+impl SoftwarePresent {
+    fn new(
+        frames: &Frames,
+        lock: Arc<std::sync::Mutex<()>>,
+        window: Arc<Window>,
+    ) -> Result<Self, String> {
+        let (sender, requests) = std::sync::mpsc::sync_channel::<PresentRequest>(1);
+        let (results_tx, results) = std::sync::mpsc::channel();
+        let busy = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let running = busy.clone();
+        let loader = frames.loader.clone();
+        let queue = frames.queue;
+        let thread = std::thread::Builder::new()
+            .name("software-vulkan-present".into())
+            .spawn(move || {
+                while let Ok(req) = requests.recv() {
+                    let result = present_image(
+                        &loader,
+                        &lock,
+                        queue,
+                        req.swapchain,
+                        req.rendered,
+                        req.index,
+                    )
+                    .map(|status| status.unwrap_or(true));
+                    running.store(false, std::sync::atomic::Ordering::Release);
+                    if results_tx.send(result).is_err() {
+                        break;
+                    }
+                    window.request_redraw();
+                }
+            })
+            .map_err(|e| format!("Start software presentation worker: {e}"))?;
+        Ok(Self {
+            sender: Some(sender),
+            results,
+            thread: Some(thread),
+            busy,
+            outstanding: false,
+        })
+    }
+
+    fn busy(&self) -> bool {
+        self.busy.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    fn submit(&mut self, request: PresentRequest) -> Result<(), String> {
+        self.busy.store(true, std::sync::atomic::Ordering::Release);
+        self.sender
+            .as_ref()
+            .expect("live presentation worker")
+            .send(request)
+            .map_err(|_| "Software presentation worker stopped")?;
+        self.outstanding = true;
+        Ok(())
+    }
+
+    fn complete(&mut self) -> Result<bool, String> {
+        if !self.outstanding {
+            return Ok(false);
+        }
+        self.outstanding = false;
+        self.results
+            .recv()
+            .map_err(|_| "Software presentation worker disconnected")?
+    }
+}
+
+impl Drop for SoftwarePresent {
+    fn drop(&mut self) {
+        self.sender.take();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn present_image(
+    loader: &ash::khr::swapchain::Device,
+    queue_access: &std::sync::Mutex<()>,
+    queue: vk::Queue,
+    swapchain: vk::SwapchainKHR,
+    rendered: vk::Semaphore,
+    index: u32,
+) -> Result<Option<bool>, String> {
+    let _queue = queue_access.lock().unwrap_or_else(|p| p.into_inner());
+    // SAFETY: The frame owner retains the acquired image and semaphore until the call returns.
+    let result = unsafe {
+        loader.queue_present(
+            queue,
+            &vk::PresentInfoKHR::default()
+                .wait_semaphores(&[rendered])
+                .swapchains(&[swapchain])
+                .image_indices(&[index]),
+        )
+    };
+    match result {
+        Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => Ok(None),
+        other => other.map(Some).at("present painter frame"),
     }
 }
 
@@ -602,12 +782,11 @@ impl Frames {
     fn draw(
         &self,
         queue_access: &std::sync::Mutex<()>,
-        window: &Window,
         painter: &mut Painter,
         primitives: &[ClippedPrimitive],
         pixels_per_point: f32,
         readback: Option<&HostBuffer>,
-    ) -> Result<Option<(Instant, bool)>, String> {
+    ) -> Result<Option<(u32, bool)>, String> {
         let device = &self.device;
         let command = self.command;
         // The previous frame's fence is signaled. This is the only submitter,
@@ -745,22 +924,25 @@ impl Frames {
                     self.fence,
                 )
                 .at("submit painter frame")?;
-            window.pre_present_notify();
-            let suboptimal = self.loader.queue_present(
-                self.queue,
-                &vk::PresentInfoKHR::default()
-                    .wait_semaphores(&[image.rendered])
-                    .swapchains(&[self.swapchain])
-                    .image_indices(&[index]),
-            );
-            if suboptimal == Err(vk::Result::ERROR_OUT_OF_DATE_KHR) {
-                return Ok(None);
-            }
-            Ok(Some((
-                Instant::now(),
-                acquire_suboptimal || suboptimal.at("present painter frame")?,
-            )))
+            Ok(Some((index, acquire_suboptimal)))
         }
+    }
+
+    fn present(
+        &self,
+        queue_access: &std::sync::Mutex<()>,
+        window: &Window,
+        index: u32,
+    ) -> Result<Option<bool>, String> {
+        window.pre_present_notify();
+        present_image(
+            &self.loader,
+            queue_access,
+            self.queue,
+            self.swapchain,
+            self.images[index as usize].rendered,
+            index,
+        )
     }
 
     pub fn transition(

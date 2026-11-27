@@ -96,7 +96,7 @@ fn benchmark_frame_count(value: Option<&str>) -> Result<usize, String> {
     }
 }
 
-/// Shared window presentation policy for Editor, Player, and native diagnostics.
+/// Historical eframe presentation policy for the standalone desktop diagnostic.
 /// The GUI uses WGPU/DX12 on Windows and WGPU/Vulkan on Linux. This does not
 /// select the game's renderer. Glow requires an explicit diagnostic request.
 /// `MODULE_ENGINE_WINDOW_SYSTEM=auto|wayland|x11` selects Linux window creation
@@ -224,13 +224,17 @@ fn gui_policy_for(
     let renderer = match requested_renderer {
         Some("glow") => eframe::Renderer::Glow,
         Some("wgpu") => eframe::Renderer::Wgpu,
-        Some(_) => return Err("MODULE_ENGINE_GUI_BACKEND must be glow or wgpu".into()),
+        Some(_) => {
+            return Err(
+                "The eframe diagnostic expects MODULE_ENGINE_GUI_BACKEND=glow or wgpu".into(),
+            );
+        }
         None if platform == GuiPlatform::Other => eframe::Renderer::Glow,
         None => eframe::Renderer::Wgpu,
     };
     if legacy_capture && renderer == eframe::Renderer::Wgpu {
         return Err(
-            "EFRAME_SCREENSHOT_TO only supports explicit MODULE_ENGINE_GUI_BACKEND=glow diagnostics; it does not change the normal WGPU backend. Unset EFRAME_SCREENSHOT_TO and use the Editor's MODULE_ENGINE_UI_SCREENSHOT_TO for a native WGPU screenshot."
+            "EFRAME_SCREENSHOT_TO only supports explicit MODULE_ENGINE_GUI_BACKEND=glow diagnostics; use MODULE_ENGINE_UI_SCREENSHOT_TO for a native Editor screenshot."
                 .into(),
         );
     }

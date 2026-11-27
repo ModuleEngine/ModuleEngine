@@ -9,7 +9,7 @@ A Vulkan renderer for [egui][egui] using [Ash][ash].
 
 This is meant to add support for egui in your existing Vulkan/ash applications. Not a full eframe integration for Vulkan/ash.
 
-![screenshot](capture.png)
+![screenshot](https://github.com/adrien-ben/egui-ash-renderer/blob/539e66dad39cebc75e01748093159cb9b554e06b/capture.png)
 
 ## Compatibility
 
@@ -106,7 +106,7 @@ let output = egui_ctx.run(raw_input, |ui| {
 renderer.remove_user_texture(texture_id);
 ```
 
-Here is an [example using egui managed and user managed textures](./examples/textures.rs).
+Here is an [example using egui managed and user managed textures](https://github.com/adrien-ben/egui-ash-renderer/blob/539e66dad39cebc75e01748093159cb9b554e06b/examples/textures.rs).
 
 ## Allocators
 
@@ -131,7 +131,7 @@ a `Arc<vk_mem::Allocator>`. Requires the `vk-mem` feature.
 
 You can pass your own allocator using [`Renderer::with_allocator`].
 
-Here is [an example of custom delegating allocator](./examples/common/renderer.rs).
+Here is [an example of custom delegating allocator](https://github.com/adrien-ben/egui-ash-renderer/blob/539e66dad39cebc75e01748093159cb9b554e06b/examples/common/renderer.rs).
 
 ## Render mode
 
@@ -144,7 +144,7 @@ The renderer supports rendering with a render pass or using dynamic rendering. I
 
 ## Integration
 
-You can find an example of integration with [winit][winit] in the [common module](examples/common/mod.rs) of the examples.
+You can find an example of integration with [winit][winit] in the [common module](https://github.com/adrien-ben/egui-ash-renderer/blob/539e66dad39cebc75e01748093159cb9b554e06b/examples/common/mod.rs) of the examples.
 
 ```rust
 // Example with default allocator

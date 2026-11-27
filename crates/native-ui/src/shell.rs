@@ -285,6 +285,12 @@ impl<A: NativeApp, F: FnOnce(&Context, &Arc<Window>, crate::FrameBridge) -> Resu
         let response = s.input.on_window_event(&s.window, &event);
         match event {
             WindowEvent::RedrawRequested => {
+                if s.info.events.is_empty()
+                    && s.input.egui_input().events.is_empty()
+                    && s.viewports.borrow().gpu.software_present_busy()
+                {
+                    return;
+                }
                 if let Err(e) = s.redraw(&self.context, event_loop) {
                     self.error = Some(e);
                     event_loop.exit();

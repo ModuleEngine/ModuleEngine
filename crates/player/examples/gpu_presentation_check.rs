@@ -1,5 +1,5 @@
 //! Explicit offscreen native verification, never an interactive fallback.
-//! Usage: gpu_presentation_check <report.json> [--png]
+//! Usage: gpu_presentation_check <report.json> [--png | --window]
 use eframe::egui;
 use module_engine_core::{
     Camera, Frame, FrameRenderer, Graph, GraphDocument, ModuleRegistry, ObjectsWorld,
@@ -96,7 +96,7 @@ fn presented(
 fn main() {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     let Some(report_path) = args.first().map(PathBuf::from) else {
-        eprintln!("Usage: gpu_presentation_check <report.json> [--png]");
+        eprintln!("Usage: gpu_presentation_check <report.json> [--png | --window]");
         std::process::exit(2);
     };
     if args.iter().any(|arg| arg == "--window") {

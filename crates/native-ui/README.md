@@ -15,3 +15,5 @@ Run the window check from the repository root on a graphical desktop. It renders
 ```sh
 cargo run --locked -p module-engine-player --features ui,vulkan --example gpu_presentation_check -- work/window-pixels.json --window
 ```
+
+The window check also holds four leases across resize and verifies three texels after two partial egui texture updates. Its verification registry entry is `native-window-graph-pixels`. Verify the vertex SPIR-V with `glslangValidator -V shader.vert -o shader.vert.spv`.

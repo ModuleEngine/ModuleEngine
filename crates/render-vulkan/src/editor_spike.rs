@@ -76,7 +76,7 @@ pub struct EditorDevice {
 }
 
 pub struct EditorDeviceHandles<'a> {
-    pub queue_access: &'a std::sync::Mutex<()>,
+    pub queue_access: &'a std::sync::Arc<std::sync::Mutex<()>>,
     pub instance: &'a ash::Instance,
     pub device: &'a ash::Device,
     pub physical: vk::PhysicalDevice,

@@ -643,6 +643,16 @@ pub struct VulkanRenderer {
     #[cfg(test)]
     allocations: std::sync::Arc<AllocationCounts>,
 }
+fn has_window_frame_capacity<T>(frames: &[Arc<T>], in_flight: usize) -> bool {
+    const MAX_LIVE_WINDOW_FRAMES: usize = 4;
+    frames
+        .iter()
+        .filter(|frame| Arc::strong_count(frame) > 1)
+        .count()
+        + in_flight
+        < MAX_LIVE_WINDOW_FRAMES
+}
+
 impl VulkanRenderer {
     pub fn new() -> Result<Self, VulkanError> {
         Self::new_at(crate::compiler::resource_root())
@@ -2271,14 +2281,10 @@ impl VulkanRenderer {
         };
         // The UI can retain a displayed image through resize, an outstanding
         // draw, or a hidden pane. Backpressure bounds those leases plus producers.
-        if self
-            .window_frames
-            .iter()
-            .filter(|frame| Arc::strong_count(frame) > 1)
-            .count()
-            + self.slots.iter().filter(|s| s.pending.is_some()).count()
-            >= 4
-        {
+        if !has_window_frame_capacity(
+            &self.window_frames,
+            self.slots.iter().filter(|s| s.pending.is_some()).count(),
+        ) {
             self.performance.gpu_busy_skips += 1;
             return Ok(RenderSubmission::Busy);
         }
@@ -4429,6 +4435,19 @@ impl RenderGraphValidator {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn window_frame_budget_counts_held_images_and_pending_writes() {
+        let pool: Vec<_> = (0..4).map(std::sync::Arc::new).collect();
+        let mut consumers = pool.clone();
+        assert!(!super::has_window_frame_capacity(&pool, 0));
+        consumers.pop();
+        assert!(super::has_window_frame_capacity(&pool, 0));
+        assert!(!super::has_window_frame_capacity(&pool, 1));
+        drop(consumers);
+        assert!(super::has_window_frame_capacity(&pool, 3));
+        assert!(!super::has_window_frame_capacity(&pool, 4));
+    }
+
     use super::*;
     use crate::{RenderPath, custom_compute_manifest, default_graph, demo_custom_compute_source};
     use module_engine_core::{ObjectsWorld, WorldProvider, make_edge};
