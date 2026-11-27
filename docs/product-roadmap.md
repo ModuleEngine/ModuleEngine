@@ -55,7 +55,7 @@ Basis: [current status](current-status.md), [G1 evidence and acceptance boundari
 
 ## Next brief — 0.5 composition and understandable dependencies
 
-**Entry.** The owner closed 0.4.2 on 17 November 2026. Before implementation, define a separate brief from the [agreed 0.5 scope](#compose): current capabilities, examples with/without audio, rights and actual Player-composition evidence. The 0.5 milestone remains paused on `main`.
+**Entry.** The owner closed 0.4.2 on 17 November 2026. V0.5.0 may audit existing behavior before R3 acceptance and the owner's separate go. Implementation of 0.5 and new UI work remain paused until both. The separate brief follows the [agreed 0.5 scope](#compose): current capabilities, examples with and without audio, rights and actual Player-composition evidence.
 
 1. Preserve the working UI and authored data. Reconcile stage 4 with implemented 2A and complete only confirmed gaps instead of repeating a redesign.
 2. In Full, show the audio consumer and removal consequences. First refuse clearly while the request is needed; after removing the request, carry the change through UI, runtime and a real Player package. Provide restoration of previous values.
@@ -106,11 +106,23 @@ Original detailed brief: [0.4.2 plan](release-042-plan.md). The protocol above i
 
 ## 0.5 — I assemble what I need and understand the consequences
 
-**Status — paused by the owner on 21 November 2026 until the [engine rebuild track](#rebuild) phases R1, R3 and R4 are accepted. It follows a separate brief.**
+**Status — implementation and new UI work remain paused. R1 and R4 are accepted. Start only after R3 is accepted and the owner gives a separate go for the 0.5 brief. V0.5.0 may audit existing behavior before that decision.**
 
 Disabling a button while retaining its service, resource requirement and Player dependency does not remove unnecessary engine capabilities.
 
-**Entry and dependencies.** The owner has closed 0.4.2; preserve the 0.4.1 route. Define a separate 0.5 brief from the agreed scope below; this does not gate parallel G1/G2 checks. Reconcile stage 4 with 2A, then cover existing capabilities in stage 5 and the dependency map in stage 6.
+**Entry and dependencies.** The owner has closed 0.4.2. Preserve the 0.4.1 route. V0.5.0 is preparatory verification of existing behavior and can precede R3 acceptance and the separate decision to start. The separate 0.5 brief follows the scope below. The parallel G1 and G2 checks retain their own entry conditions.
+
+**Plan items (revised 27 November 2026).** `V` marks the version route; effort is a rough guess for one developer. The former items 1 and 2 are replaced by an audit: 2A already covers the window/project split and PR #67 (R4.2–R4.3) already selects linked games.
+
+| ID | Action | Measurable criterion | Depends on | Effort / status |
+| --- | --- | --- | --- | --- |
+| V0.5.0 | Audit existing behavior: the Open/Recent, hidden-draft, Cancel and error transitions against 2A, and how an author finds input, audio and the other existing functions for the actual composition and rights. | Record the observed routes and confirmed gaps for both parts of the audit. Each failing route has an automated or scripted check. No new UI or 0.5 implementation is part of the audit. | 2A | 2–3 d |
+| V0.5.1 | Read-only map “who uses this / what stops working”, built from the Overview data. | For the two reference projects (with and without audio) the map matches the actual service requests; test. | R4.3 | Paused · 1 w |
+| V0.5.2 | Refuse removal of a needed capability with the consumer named; after the request is removed, apply as a whole with Undo; inactivation keeps values. | First attempt changes no file; Undo restores the previous values exactly; Full only. | V0.5.1 | Paused · 1–1.5 w |
+| V0.5.3 | Minimal package without an audio request. | The export has no operative audio settings, no service start, no optional audio feature and no unneeded WAV; checked in CI. | V0.5.2, R6.3 | Paused · 3–5 d |
+| V0.5.4 | Run the parallel [G1 clean-Windows card](product-roadmap-checks.md#g1--player--clean-windows). | Pass only when the delivered Player runs on clean Windows without the checkout, Editor or compiler, a level is completed with the expected sound, and progress is restored on relaunch after exit. Verify the changed wall from the card. “Not checked” leaves this result and acceptance that depends on it open. | none | Paused · 2–3 d |
+
+Do the audio part after R6.3 (`kira`): the tested audio scenario on branch `c199903` uses the current WinMM mixer, so doing it earlier means rewriting it. The numbered scope below stays as the description of intent.
 
 1. **Remove confusion between windows and projects.** Compare 4.1–4.5 with implemented 2A: Scene edits the authored world, Game runs a copy, changing layouts does not change project or rights. Complete only failing transitions: Open/Recent, hidden drafts, Cancel and errors opening another project.
 2. **Give each existing function one understandable home.** For input, show available actions and their game bindings; for audio, output and game-event-to-WAV bindings; for world, import and game packages, their real tools. A game author sees task-relevant capabilities by default. Full separately exposes installed but unused capabilities. Label unknown state explicitly.
@@ -132,6 +144,15 @@ This first directly demonstrates the freedom to decline an update. A copied JSON
 
 **Entry and dependencies.** Use compatible, verified variants from 0.4.1/0.5. First change configuration within one installed version. Native-code replacement is a separate 0.8 experiment.
 
+**Plan items (revised 27 November 2026).** Much of the mechanism already exists: format 4 stores `engine_lock` and `module_versions`, **Publish Engine profile** is explicit, `--migrate-copy` never overwrites, and Open/Save/Play/export never update silently ([engine profiles](engine-profiles.md)). The open work is the end-to-end A/B proof.
+
+| ID | Action | Measurable criterion | Depends on | Effort / status |
+| --- | --- | --- | --- | --- |
+| V0.6.1 | Passport = existing `engine_lock` plus a view of what is saved and what changed only in memory. | One document; no second version database; test. | R1 | 2 d |
+| V0.6.2 | Script two independent projects A and B with separate scene folders and test saves. | Record the composition, reference gameplay frame and scenario for both games. Record hashes of A's authored files as supplemental evidence for the A/B check. | V0.6.1 | 4–5 d |
+| V0.6.3 | Apply and save a compatible rendering change to B only, then roll B back. | After changing B, reopen, rebuild and launch A without a migration. Verify A's composition, reference gameplay frame and scenario against its baseline. Then roll back B and launch and verify both games. B recovers its frame and controlled assets, and A's composition, frame and scenario and both games' progress remain as expected. A's authored-file hashes supplement these checks. | V0.6.2 | 1 w |
+| V0.6.4 | Refusal and write-failure cases on a copy. | No partial activation; last working point preserved. | V0.6.3 | 3–4 d |
+
 1. **Record a known working point.** Its passport contains engine version/sources, profile and exact module/schema/SDK versions, settings, graphs, assets, tools, build target and results. Reuse existing `engine_lock`, bindings, manifests and checks instead of creating a second version database. Explain what is saved and what has only changed in memory.
 2. **Create two independent projects.** Use existing inheritance to create A and B from one configuration on a supported compatible template. Use separate authored-scene folders and test player-save profiles; establish separation from actual paths. Preserve reference states for both games.
 3. **Offer a change only to B.** Choose a compatible rendering change; show “this project,” graph differences, affected settings/assets and required rebuilds. Project changes, local-foundation publication and Save are distinct actions. Distribute nothing to other projects. Opening an old game does not update it.
@@ -152,6 +173,15 @@ The owner needs control beyond a catalogue of existing buttons. An external auth
 
 **Entry and dependencies.** Clear selection from 0.5 and a way to pin the starting variant. Work can begin with G2's first real consumer while environment restoration proceeds.
 
+**Plan items (revised 27 November 2026).** Samples such as `gpu-custom-raster`, `gpu-custom-compute` and `crate-garden` and [extending](extending.md) exist, but there is no one-page route, no registration-point inventory and no handoff to an outside author.
+
+| ID | Action | Measurable criterion | Depends on | Effort / status |
+| --- | --- | --- | --- | --- |
+| V0.7.1 | Two reproducible samples (HLSL post effect, Rust module) with a one-page “place → build → disable”. | An unfamiliar programmer builds and disables each from the page alone. | R2.5 | 1 w |
+| V0.7.2 | Minimum extension contract and registration-point inventory. | Document plus a test that Core and shared Host contain no game names. | V0.7.1 | 3–4 d |
+| V0.7.3 | Whole route and replacement: compatible and incompatible pass. | Compatible keeps neighbours and parameters; incompatible names the input and keeps the old result. | V0.7.2 | 1–1.5 w |
+| V0.7.4 | Deep replacement of Deferred lighting evaluation. | Stepped lighting with geometry and output preserved. | V0.7.3, R5.2 | 1 w |
+
 1. **Provide two short reproducible samples.** For a technical artist, a custom HLSL pass with a visible difference, such as posterization. To prove a deeper replacement, use one controlled chain: replace Deferred lighting evaluation from geometry data with stepped lighting while preserving geometry and output. If an input contract is missing, record and extend that specific seam; a post-effect alone does not close this check. For a programmer, provide a small independent Rust module with a parameter and observable reaction. Supply sources, sample data, SDK version and one page: “where to put it → how to build → how to disable.”
 2. **Describe the minimum extension contract.** Each sample names owner, inputs/outputs, dependencies, data version, errors and preservation on disabling. Distinguish a library, service and executable system. Show allowed registration/build points for a native module; JSON cannot install absent code. UI indicates when rebuild is needed and when a candidate may be applied without restart.
 3. **Connect the whole route.** Register the implementation, provide its description/parameter, expose it in the appropriate editor context, execute, save and include it in the selected Player. Connect any needed editing tool through the existing contract; do not add a game-name condition to Core.
@@ -171,6 +201,15 @@ Basis: [source extensions](extending.md), [GPU graph and HLSL](gpu-hlsl.md), [pr
 Delivering Player is simpler than restoring an author's environment. This milestone separately tests both operations and replacement of the native implementation itself.
 
 **Entry and dependencies.** A/B passports from 0.6, a verified module and its build boundaries from 0.7. Begin the first clean-machine trial earlier against 0.4.
+
+**Plan items (revised 27 November 2026).** `scripts/bootstrap.ps1` already checks (doctor) and restores pinned Rust and DXC with hashes ([toolchain](toolchain.md)). There is no configuration archive, no launcher and no check of MSVC, SDK or driver.
+
+| ID | Action | Measurable criterion | Depends on | Effort / status |
+| --- | --- | --- | --- | --- |
+| V0.8.1 | Configuration description: folder or archive with relative paths, sources, packages, assets, tools. | Restores on a copy without the original checkout; missing items are listed first. | V0.6.1 | 1 w |
+| V0.8.2 | Launcher or ordinary-entry restore with MSVC, SDK, driver checks; never “latest”. | Concrete correction and retry; working install intact. | V0.8.1 | 1 w |
+| V0.8.3 | Handoff to another developer on a clean Windows machine. | Colleague restores, edits, builds, delivers Team and Player; second launch needs no author. | V0.8.2 | 3–4 d + PC |
+| V0.8.4 | Experiment: native-code change v1→v2 for B only. | Verified copy conversion or refusal before publication; A stays on v1; rollback works. | V0.7.3, R1.7 | 1–1.5 w |
 
 1. **Define the configuration description's promise.** One entry points to preserved complete sources, exact packages/SDK/backend, assets, tools and build rules. Separate included material, material obtainable from pinned links and OS prerequisites. The first format is a verified folder/archive with relative paths, without an extension server. Old dependencies must remain available: a hash does not replace their bytes.
 2. **Make restoration understandable.** From ordinary editor entry or a small launcher, choose the description; show found/missing inputs before changing anything. Reuse existing `doctor` and `bootstrap -Restore` for pinned tools. Separately check MSVC/Windows SDK, driver, permissions and required file/network access. Provide a concrete correction and retry without damaging the working installation. Do not silently download “latest.”
@@ -196,7 +235,7 @@ Otherwise the editor could be polished for months before discovering that a real
 
 1. **Take one real episode and assets.** A small arena, hero, one opponent, obstacle and checkpoint. Select a model/clips distributable with the source project; define skeleton, import, pose transition, hit event and weapon attachment. Agree readability from the gameplay camera, not merely the importer preview.
 2. **Build execution foundations on that episode.** Movement/collision, melee hit, interruptible action, dash and projectile with independent cooldowns. The technical module plays the clip and reports an event; combat mechanics decide who takes damage; values and appearance belong to the game. Check miss, hit, wall and stopping.
-3. **Let the author control the actual encounter.** Animation and behavior graphs each have a text source and visible active state. During paused Play, change a transition/condition. Preserve compatible state, offer explicit reset for incompatibility, retain the accepted version on error. A static mockup does not count.
+3. **Let the author control the actual encounter.** Animation and behavior graphs each have a text source and visible active state. During paused Play, change a transition/condition. Preserve compatible state, offer explicit reset for incompatibility, retain the accepted version on error. A static mockup does not count. The animation graph is tracked as [R7.4](#rebuild); the behavior graph stays here.
 4. **Close the loop through Player.** Audio/visual telegraph, combat outcome, death and checkpoint return. Build Player and let someone play without explaining its schemas. Compare the trial encounter with a 20-active-enemy load early, before multiplying content.
 5. **Obtain a second independent composition.** The same shared combat works in a second project with fixed stats and no XP/loot systems, mandatory fields or dependencies. Finish and verify required reusable first-goal G2 contracts before full campaign production. Run affected G1 regressions.
 
@@ -333,7 +372,7 @@ Phase numbers R0–R10 are planning labels, not versions. Effort is a rough rang
 
 **Step 4 accepted by 27 November 2026.** [PR #67](https://github.com/ModuleEngine/ModuleEngine/pull/67) completed R4.2–R4.3. The Editor builds without games or with a selected game. A fourth game integrated without edits to `crates/editor`, and its input and HUD were checked offscreen. [PR #68](https://github.com/ModuleEngine/ModuleEngine/pull/68) completed R1.10. In paired headless Windows Release runs, the median of the mean tick times fell from 980.00 to 559.55 µs. Late rejection and retry were verified. [Measurements and scope](evidence/r110-arpg/README.md).
 
-**Next by dependency.** R6.2, R3.2, R7.2 and R8.2 are available. The map automatically lists R6.2 first, and no next start has been approved. Step 5 (R3.2 and R3.3) has not started. R2.5 has cleared its technical prerequisites and remains paused. R3 is the remaining acceptance gate for the 0.5 milestone on `main` and new UI work. The tested audio scenario and both Practice Arena examples are preserved on the [separate 0.5 audio branch at `c199903`](https://github.com/ModuleEngine/ModuleEngine/commit/c19990396a9c5be43309f9d102a992385555d81e).
+**Next by dependency.** R6.2, R3.2, R7.2 and R8.2 are available. The map automatically lists R6.2 first, and no next start has been approved. Step 5 (R3.2 and R3.3) has not started. R2.5 has cleared its technical prerequisites and remains paused. V0.5.0 may audit existing behavior before R3 acceptance and the owner's separate go. Implementation of 0.5 on `main` and new UI work remain paused until both. The tested audio scenario and both Practice Arena examples are preserved on the [separate 0.5 audio branch at `c199903`](https://github.com/ModuleEngine/ModuleEngine/commit/c19990396a9c5be43309f9d102a992385555d81e).
 
 **Relation to the version route.** On 21 November 2026 the owner paused the 0.5 brief and new UI work until R1, R3 and R4 are accepted, because they change the world storage, the editor shell and the editor/game boundary that 0.5 would build on. The track does not replace any milestone: R5 is the technical base for [1.3](#real), R6–R7 supply the physics and skeleton that [0.9a](#combat) and the [G2 decisions](#g2-agreement) need, and every phase keeps the G1 and ARPG budgets from [release decisions](#decision) as regression gates. Ray tracing and mesh shaders are optional hardware tiers: G1/G3-style packages must never require them.
 
@@ -520,7 +559,7 @@ Each fix starts with a regression test that fails on the current code and runs i
 | R2.3 | GPU-resident scene: one mesh pool (shared vertex/index buffers) uploaded once per mesh; instance buffer with transforms and material indices updated from R1.6 deltas; material buffer. Remove the CPU vertex transform in `geometry.rs`. | Upload bytes per frame proportional to changed objects; S3 CPU frame ≤1 ms. | Done |
 | R2.4 | GPU culling and indirect drawing: compute frustum culling, `vkCmdDrawIndexedIndirectCount`, then two-phase Hi-Z occlusion culling. | Draw calls per pass do not grow with object count; S3 scaled to 100,000 instances keeps 60 FPS at 1080p on the [R0.4 reference GPU](hardware-tiers.md#reference-gpu). | Done |
 | R2.5 | Render graph v2: automatic barriers with synchronization2, transient resource aliasing, async compute queue. Existing graph documents load unchanged; built-in passes (forward, gbuffer, deferred, SSAO, FXAA, tonemap, color encode) are migrated. | Existing graph and custom-pass tests pass; built-ins match the old images within the `image_quality_check` tolerance; transient memory on S4 is at least 30 % lower. | Paused · 2–3 w |
-| R2.6 | Game swapchain for Player: present modes, frame pacing, resize, prepared for HDR output. | Player S1/S2 run directly on the swapchain; frame-time p95 [not worse](bench.md#not-worse) than R0.6. | 1 w |
+| R2.6 | Game swapchain for Player: present modes, frame pacing, resize. HDR output itself is [R10.2](#rebuild). | Player S1/S2 run directly on the swapchain; frame-time p95 [not worse](bench.md#not-worse) than R0.6. | 1 w |
 | R2.7 | Parity and switch: the old renderer behind a feature flag until S1/S2 pass, then removal. | S1/S2 gates pass on the new renderer; old code deleted; independent review. | 0.5–1 w |
 
 <a id="rebuild-r3"></a>
@@ -578,7 +617,7 @@ Each fix starts with a regression test that fails on the current code and runs i
 | R7.1 | Import glTF skins, joints and animation clips (the importer rejects them today). | Khronos skinned samples (CesiumMan, Fox) import and play. | Done |
 | R7.2 | GPU skinning in compute, writing into the mesh pool, so culling, shadows and later ray-tracing refits see the skinned pose. | 50 skinned characters on S2 within the frame budget. | 1 w |
 | R7.3 | Animation runtime: clip sampling, blending, additive layers, root motion, events on frames. | Attack and dodge timing from the G2 decisions 24–25 can be driven by animation events. | 1 w |
-| R7.4 | Animation state graph with both a visual editor and a text file, applied during paused Play (G2 decisions 22 and 26). | Owner edits a transition while paused and sees it after resuming. | 1–1.5 w |
+| R7.4 | Animation state graph with both a visual editor and a text file, applied during paused Play (G2 decisions 22 and 26). This is also the animation-graph task of [0.9a](#combat) step 3; it is tracked only here. | Owner edits a transition while paused and sees it after resuming. | 1–1.5 w |
 | R7.5 | Equipment swaps that change the hero's appearance (G2 decision 14) through attached meshes on joints. | Changing weapon/armor changes the rendered hero. | 2–3 d |
 
 <a id="rebuild-r8"></a>
@@ -614,7 +653,7 @@ Each fix starts with a regression test that fails on the current code and runs i
 | # | Task | Acceptance | Effort |
 | --- | --- | --- | --- |
 | R10.1 | Temporal upscaling: AMD FSR (open source) through FFI on top of R5.5 TAA inputs; NVIDIA DLSS through Streamline as an optional plugin. | Render at 67 % resolution with quality comparable to native TAA; ≥30 % frame-time gain on S4 with RT. | 1–2 w |
-| R10.2 | HDR display output (scRGB/HDR10) with a separate SDR path. | Correct output on an HDR monitor; SDR unchanged. | 3–4 d |
+| R10.2 | HDR display output (scRGB/HDR10) with a separate SDR path, including the HDR-ready swapchain moved out of R2.6. | Correct output on an HDR monitor; SDR unchanged. | 3–4 d |
 | R10.3 | GPU particles in compute with sorting and lighting. | 100,000 particles ≤1 ms. | 1 w |
 | R10.4 | Variable-rate shading where the GPU supports it. | ≥10 % gain on S4 without visible artifacts, or the feature is dropped. | 3–4 d |
 | R10.5 | Texture and mesh streaming with a residency budget. | S5 runs within a fixed VRAM budget without stalls. | 1–2 w |
@@ -632,7 +671,7 @@ Each fix starts with a regression test that fails on the current code and runs i
 - R0 → R2.1 → R2.2 → R2.3 (also needs R1.6) → R2.4 → R2.5 → R2.6 → R2.7.
 - [Review fixes](#rebuild-rv): R0 → RV-A → RV-B.1–RV-B.3 → R2.5 (RV-B.4 may close separately); RV-A → RV-C (RV-C.3 before R2.5, RV-C.4 before all of R6); RV-D is optional and taken alongside related work.
 - R2.1 → R3, in parallel with the rest of R2.
-- R1 + R3 + R4 accepted → resume the 0.5 brief and UI work.
+- R1 + R3 + R4 accepted and a separate owner go → resume 0.5 implementation and new UI work.
 - R1 + R4 + R6 accepted → [AI-assisted live authoring](#ai-authoring) AI-A → AI-B (outside this track's effort totals).
 - R2 → R5 → R9 and R10; R2.4 → R8; R1 + R2.3 → R7 → skinned refit in R9.1.
 
@@ -644,7 +683,9 @@ Each fix starts with a regression test that fails on the current code and runs i
 | Whole track | R0–R10 | about 44–71 weeks (11–17 months) |
 | Review fixes | RV-A, RV-B, RV-C | about 3–4 weeks, outside the R0–R10 total; optional RV-D about 2–3 weeks more |
 
-The first useful checkpoint is after R2 + R5: a GPU-driven renderer with PBR and shadows, about 4.5–7 months in (R0, R1, R2 and R5). 0.5 and UI work resume after R1, R3 and R4; R5–R10 can then continue in parallel with the version route, and R6–R7 should land before [0.9a](#combat) needs them. Replace these estimates with measured throughput after R0 and again after R2.
+The first useful checkpoint is after R2 + R5: a GPU-driven renderer with PBR and shadows, about 4.5–7 months in (R0, R1, R2 and R5). 0.5 implementation and new UI work resume after R1, R3 and R4 are accepted and the owner gives a separate go; R5–R10 can then continue in parallel with the version route, and R6–R7 should land before [0.9a](#combat) needs them. Replace these estimates with measured throughput after R0 and again after R2.
+
+**Version route 0.5–0.8.** The revised plan items V0.5.0–V0.8.4 add about 15 weeks of one developer's work (0.5 about 4 w, 0.6 about 3 w, 0.7 about 4 w, 0.8 about 4 w); this is a rough guess before measured throughput. Order: V0.5.0 → V0.5.1 → V0.5.2 in parallel with V0.6.1–V0.6.2; V0.5.3 after R6.3; V0.7.1 after R2.5; V0.8 after V0.6; V0.7.4 after R5.2. V0.5.0 may audit existing behavior before R3 acceptance and the owner's separate go. 0.5 implementation and new UI work remain paused until both. V0.6.1–V0.6.2 do not require new UI.
 
 **Stop conditions.** If an R1.1 or R3.1 spike misses its criterion, stop and record the alternative before migrating. If a phase breaks an S1/S2 gate or an authored-data invariant, it returns for correction while the previous path stays active. A modern feature without a consumer or that misses its cost budget is dropped rather than kept as an unused subsystem.
 
