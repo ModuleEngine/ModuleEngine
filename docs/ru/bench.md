@@ -82,6 +82,31 @@ box-фильтром до 256 px по стороне, чтобы они поме
 [Эталон S4 для R2.5](evidence/r25-s4/README.md) содержит изображения Forward
 и Deferred при 1080p и замер соответствующей памяти изображений графа.
 
+<a id="r25-checks"></a>
+
+## R2.5. Сравнение S4
+
+Запустите оба штатных графа по [опубликованным условиям захвата при 1080p](evidence/r25-s4/README.md).
+Сравнение декодированных RGBA8 использует записанный кадр 000 для Forward и
+031 для Deferred. `image_quality_check --compare` пишет число изменившихся
+пикселей и максимальную разницу канала в новый JSON-отчёт. Сопоставление
+на эталонном адаптере требует точных пикселей.
+
+```text
+cargo run --locked --release -p module-engine-vulkan --example image_quality_check -- --compare docs/evidence/r25-s4/forward-000.png <forward-capture>/frame-000.png <new-forward-report.json>
+cargo run --locked --release -p module-engine-vulkan --example image_quality_check -- --compare docs/evidence/r25-s4/deferred-031.png <deferred-capture>/frame-031.png <new-deferred-report.json>
+python -B scripts/s4_graph_memory.py <forward-capture>/graph-memory.json --reference docs/evidence/r25-s4/forward-memory.json --minimum-reduction 30
+python -B scripts/s4_graph_memory.py <deferred-capture>/graph-memory.json --reference docs/evidence/r25-s4/deferred-memory.json --minimum-reduction 30
+```
+
+Замер памяти требует одинаковых имён и форматов изображений. Он объединяет
+их привязанные диапазоны в завершённом слоте, включая аппаратную глубину и
+закодированный выход. Сохраните манифесты захвата, сырые диапазоны, отчёты о
+сравнении изображений, логи validation и хеши сборок. `asynchronous_compute`
+в отчёте диапазонов кандидата показывает, какой путь использовался.
+Повторите проверку с `MODULE_ENGINE_GRAPH_COMPUTE=graphics` для контроля с
+одной очередью.
+
 <a id="r23-scene-checks"></a>
 
 ## Загрузки сцены и время R2.3

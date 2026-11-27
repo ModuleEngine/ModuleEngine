@@ -21,6 +21,8 @@ pub struct DeviceCapabilities {
     pub max_material_anisotropy: f32,
     pub graphics_family: u32,
     pub dedicated_transfer_family: Option<u32>,
+    /// Candidate async compute queue as [family, index].
+    pub async_compute_queue: Option<[u32; 2]>,
 }
 
 impl DeviceCapabilities {
@@ -145,6 +147,9 @@ impl DeviceCapabilities {
                 1.0
             },
             graphics_family,
+            async_compute_queue: (synchronization2 && core12.timeline_semaphore != 0)
+                .then(|| async_compute_queue(graphics_family, families))
+                .flatten(),
             dedicated_transfer_family: families
                 .iter()
                 .position(|family| {
@@ -160,5 +165,47 @@ impl DeviceCapabilities {
 
     pub(crate) fn use_modern_device(self) -> bool {
         self.tier_a && self.timeline_semaphore
+    }
+}
+
+fn async_compute_queue(
+    graphics_family: u32,
+    families: &[vk::QueueFamilyProperties],
+) -> Option<[u32; 2]> {
+    families
+        .iter()
+        .position(|family| {
+            family.queue_count != 0
+                && family.queue_flags.contains(vk::QueueFlags::COMPUTE)
+                && !family.queue_flags.contains(vk::QueueFlags::GRAPHICS)
+        })
+        .map(|family| [family as u32, 0])
+        .or_else(|| {
+            (families[graphics_family as usize].queue_count > 1).then_some([graphics_family, 1])
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selects_a_distinct_compute_queue_when_available() {
+        let family = |flags, count| {
+            vk::QueueFamilyProperties::default()
+                .queue_flags(flags)
+                .queue_count(count)
+        };
+        let graphics = vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE;
+        let shared = family(graphics, 2);
+        let single = family(graphics, 1);
+        let compute = family(vk::QueueFlags::COMPUTE, 1);
+        let transfer = family(vk::QueueFlags::TRANSFER, 1);
+        assert_eq!(
+            async_compute_queue(0, &[shared, transfer, compute]),
+            Some([2, 0])
+        );
+        assert_eq!(async_compute_queue(1, &[transfer, shared]), Some([1, 1]));
+        assert_eq!(async_compute_queue(0, &[single, transfer]), None);
     }
 }

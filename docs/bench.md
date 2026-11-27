@@ -77,6 +77,30 @@ The Player example `gpu_presentation_check` exercises native interop and
 checks that two in-flight material versions produce their individual reference
 pixels while the second submission reuses the unchanged texture.
 
+<a id="r25-checks"></a>
+
+## R2.5 S4 comparison
+
+Run both stock graphs using the [published 1080p capture conditions](evidence/r25-s4/README.md).
+The decoded RGBA8 comparison uses the recorded Forward frame 000 and Deferred
+frame 031. `image_quality_check --compare` writes the changed pixel count and
+maximum channel delta to a new JSON report. The comparison on the reference
+adapter requires exact pixels.
+
+```text
+cargo run --locked --release -p module-engine-vulkan --example image_quality_check -- --compare docs/evidence/r25-s4/forward-000.png <forward-capture>/frame-000.png <new-forward-report.json>
+cargo run --locked --release -p module-engine-vulkan --example image_quality_check -- --compare docs/evidence/r25-s4/deferred-031.png <deferred-capture>/frame-031.png <new-deferred-report.json>
+python -B scripts/s4_graph_memory.py <forward-capture>/graph-memory.json --reference docs/evidence/r25-s4/forward-memory.json --minimum-reduction 30
+python -B scripts/s4_graph_memory.py <deferred-capture>/graph-memory.json --reference docs/evidence/r25-s4/deferred-memory.json --minimum-reduction 30
+```
+
+The memory check requires the same named images and formats. It unions
+their bound ranges within the completed slot, including hardware depth and
+the encoded output. Keep the capture manifests, raw ranges, image reports,
+validation logs and executable hashes. `asynchronous_compute` in each
+candidate range report records the route actually used. Repeat with
+`MODULE_ENGINE_GRAPH_COMPUTE=graphics` for the single-queue control.
+
 <a id="r23-scene-checks"></a>
 
 ## R2.3 scene uploads and timing

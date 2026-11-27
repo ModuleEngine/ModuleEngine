@@ -20,16 +20,82 @@ fn png(path: &Path, frame: &Frame) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+fn decode_rgba8(path: &Path) -> Result<([u32; 2], Vec<u8>), String> {
+    let read = || -> Result<_, Box<dyn std::error::Error>> {
+        let file = std::io::BufReader::new(fs::File::open(path)?);
+        let mut reader = png::Decoder::new(file).read_info()?;
+        let size = reader
+            .output_buffer_size()
+            .ok_or("Invalid PNG buffer size")?;
+        let mut data = vec![0; size];
+        let frame = reader.next_frame(&mut data)?;
+        if frame.color_type != png::ColorType::Rgba || frame.bit_depth != png::BitDepth::Eight {
+            return Err("Expected an RGBA8 frame".into());
+        }
+        data.truncate(frame.buffer_size());
+        Ok(([frame.width, frame.height], data))
+    };
+    read().map_err(|error| format!("Decode {}: {error}", path.display()))
+}
+
+fn compare(reference: &Path, candidate: &Path, report: &Path) -> Result<(), String> {
+    let (extent, expected) = decode_rgba8(reference)?;
+    let (actual_extent, actual) = decode_rgba8(candidate)?;
+    if extent != actual_extent {
+        return Err(format!(
+            "Reference extent {extent:?} differs from candidate {actual_extent:?}"
+        ));
+    }
+    let mut maximum = 0;
+    let mut different = 0;
+    for (a, b) in expected.chunks_exact(4).zip(actual.chunks_exact(4)) {
+        let delta = a.iter().zip(b).map(|(&x, &y)| x.abs_diff(y)).max().unwrap();
+        maximum = maximum.max(delta);
+        different += usize::from(delta != 0);
+    }
+    let value = json!({
+        "reference": reference,
+        "candidate": candidate,
+        "render_pixels": extent,
+        "max_channel_delta": maximum,
+        "changed_pixels": different,
+        "channel_tolerance": 0,
+        "passed": different == 0,
+    });
+    let file = fs::File::options()
+        .write(true)
+        .create_new(true)
+        .open(report)
+        .map_err(|error| format!("Create {}: {error}", report.display()))?;
+    serde_json::to_writer_pretty(file, &value).map_err(|error| error.to_string())?;
+    if different != 0 {
+        return Err(format!(
+            "{different} different pixels; maximum channel delta {maximum}"
+        ));
+    }
+    println!("{}", report.display());
+    Ok(())
+}
+
 fn main() -> Result<(), String> {
-    let output = std::path::PathBuf::from(
-        std::env::args()
-            .nth(1)
-            .ok_or("Provide a new output directory")?,
-    );
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if let [flag, reference, candidate, report] = args.as_slice()
+        && flag == "--compare"
+    {
+        return compare(
+            Path::new(reference),
+            Path::new(candidate),
+            Path::new(report),
+        );
+    }
+    let [folder] = args.as_slice() else {
+        return Err("Usage: image_quality_check <new-directory> or --compare <reference.png> <candidate.png> <new-report.json>".into());
+    };
+    let output = Path::new(folder);
     if output.exists() {
         return Err("Image diagnostic requires a new directory".into());
     }
-    fs::create_dir_all(&output).map_err(|e| e.to_string())?;
+    fs::create_dir_all(output).map_err(|e| e.to_string())?;
     let mut objects = (0..6)
         .map(|index| WorldObject {
             id: index + 1,

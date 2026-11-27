@@ -136,7 +136,7 @@ fn s4_floor(
         .ok_or("S4 benchmark has no completed synchronous graph allocations")?;
     write(
         &folder.join("graph-memory.json"),
-        &json!({"graph": format!("{path:?}"), "slot": 0, "render_pixels": SIZE, "images": allocations}),
+        &json!({"graph": format!("{path:?}"), "slot": 0, "render_pixels": SIZE, "images": allocations, "asynchronous_compute": renderer.last_frame_work().unwrap().asynchronous_compute}),
     )
 }
 

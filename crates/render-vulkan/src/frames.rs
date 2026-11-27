@@ -72,6 +72,7 @@ impl Drop for CommandPool {
 pub(crate) struct FramePools {
     pub graphics: CommandPool,
     pub transfer: Option<CommandPool>,
+    pub compute: Option<CommandPool>,
     pub descriptors: vk::DescriptorPool,
     context: Arc<DeviceLifetime>,
 }
@@ -81,9 +82,13 @@ impl FramePools {
         context: &Arc<DeviceLifetime>,
         graphics_family: u32,
         transfer_family: Option<u32>,
+        compute_family: Option<u32>,
     ) -> Result<Self, VulkanError> {
         let graphics = CommandPool::new(context, graphics_family)?;
         let transfer = transfer_family
+            .map(|family| CommandPool::new(context, family))
+            .transpose()?;
+        let compute = compute_family
             .map(|family| CommandPool::new(context, family))
             .transpose()?;
         let sizes = [
@@ -116,6 +121,7 @@ impl FramePools {
         Ok(Self {
             graphics,
             transfer,
+            compute,
             descriptors,
             context: context.clone(),
         })
@@ -178,7 +184,21 @@ impl Timeline {
         value: u64,
         wait: Option<&Timeline>,
     ) -> Result<(), vk::Result> {
-        let wait_info = wait.map(|timeline| timeline.point(value));
+        let wait = wait.map(|timeline| (timeline, value));
+        self.submit_waiting(queue, command, value, wait.as_slice())
+    }
+
+    pub fn submit_waiting(
+        &self,
+        queue: vk::Queue,
+        command: vk::CommandBuffer,
+        value: u64,
+        waits: &[(&Timeline, u64)],
+    ) -> Result<(), vk::Result> {
+        let wait_info: Vec<_> = waits
+            .iter()
+            .map(|(timeline, value)| timeline.point(*value))
+            .collect();
         let signal = [self.point(value)];
         let command = [vk::CommandBufferSubmitInfo::default().command_buffer(command)];
         let submit = vk::SubmitInfo2::default()
@@ -263,6 +283,28 @@ impl Completion {
                 unsafe { context.device.queue_submit(queue, &[submit], *fence) }
             }
         }
+    }
+
+    /// Join a completed producer on the graphics queue before publishing the
+    /// image. Later graphics submissions see its writes even across families.
+    pub fn join_compute(
+        &self,
+        queue: vk::Queue,
+        timeline: &Timeline,
+        value: u64,
+    ) -> Result<(), vk::Result> {
+        let Self::Fence { context, fence } = self else {
+            unreachable!("compute join owns an unsignalled fence");
+        };
+        let wait = [timeline.point(value)];
+        let submit = [vk::SubmitInfo2::default().wait_semaphore_infos(&wait)];
+        let _queue = context
+            .queue_access
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        // SAFETY: The fence and timeline are retained with the flight. The
+        // producer signal is complete, so the join introduces no queue stall.
+        unsafe { context.device.queue_submit2(queue, &submit, *fence) }
     }
 
     pub fn ready(&self) -> Result<bool, vk::Result> {

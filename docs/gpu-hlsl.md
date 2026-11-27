@@ -126,6 +126,41 @@ In the explicit CPU/diagnostic route, the readback buffer prefers `HOST_VISIBLE 
 
 The renderer is measured separately with `cargo run --locked --release -p module-engine-vulkan --example gpu_benchmark`: 20 imported textured models, the complete standard Forward/SSAO/tonemap/FXAA/encoding chain, 1920×1080, 10 warm-up frames and 120 measured frames. On RTX 4080 SUPER after the readback-memory fix, the mean was 3.11 ms, p95 3.98 ms. This is a diagnostic renderer measurement with CPU readback, without game subsystems or egui output; a separate complete measurement corresponds to the finished Player criterion. JSON is written to `.work/gpu-benchmark.json`.
 
+<a id="r25-graph"></a>
+
+## R2.5 graph image lifetime and execution
+
+The renderer derives image uses from the existing pass manifest, graph links
+and ordered resource commands. Raster attachments, sampled and storage
+images, bypass copies, explicit clear/copy and output consumers keep their
+current formats and HLSL bindings. With synchronization2 the recorder emits
+image barriers at the use sites and a memory barrier between images sharing
+one backing range. A device without synchronization2 uses legacy Vulkan
+barriers and separate ranges.
+
+A frame slot can bind device-local viewport images to the same range when
+the lifetimes are disjoint, their memory requirements have a common
+device-local type and neither requires dedicated memory. Uses in the same
+pass overlap. Explicit unprofiled diagnostic copies take each plane at its
+last use. With timestamp profiling the copies stay after the timed graph.
+The native window output has a separate allocation and stays alive through
+the painter's final GPU use, with independent lifetimes for other frame slots.
+
+When synchronization2, timeline semaphores and a distinct compute queue are
+available, the compute suffix after the last raster pass runs on that
+queue. A compute-only family is preferred, followed by a second queue in
+the graphics family. Cross-family graph images and diagnostic staging
+buffers use concurrent sharing. The compute submission waits for the
+graphics prefix. Completed window frames join the graphics queue before
+publication, and cancelled frames retire through the producer completion.
+The compatible route uses the combined graphics+compute queue. Profiling
+uses that queue so timestamps come from one domain.
+
+`MODULE_ENGINE_GRAPH_COMPUTE=graphics` selects the single-queue control.
+`MODULE_ENGINE_RENDER_GRAPH=legacy` selects the prior execution mode for
+the R2 parity comparison. See the [S4 capture and memory check](bench.md#r25-checks)
+and [Vulkan synchronization rules](https://docs.vulkan.org/spec/latest/chapters/synchronization.html).
+
 ## Native GPU presentation
 
 The normal native Vulkan viewport publishes an opaque GPU frame lease instead of CPU pixels. Windows bridges the separate Vulkan producer to WGPU/DX12 through shared D3D12 resources; Linux bridges separate Vulkan devices through dedicated OPAQUE_FD memory and requires exact device and driver UUIDs. The GUI bridge copies and premultiplies RGBA8 on the GPU into its own native `Rgba8Unorm` texture, preserving the byte rounding of the previous egui conversion without sRGB decoding. Normal presentation performs no pixel readback to CPU and no CPU texture upload. Unsupported or failed interop reports an error and preserves the last good image; it does not silently select CPU transfer.
