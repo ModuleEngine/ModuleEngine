@@ -879,6 +879,9 @@ pub fn package_compile_root() -> Result<PathBuf, String> {
 }
 
 const NATIVE_FILES: &[&str] = &[
+    "crates/engine-core/src/tick_data.rs",
+    "crates/engine-core/src/tick_data_tests.rs",
+    "crates/game-host/examples/r110_arpg.rs",
     "engine-sdk.json",
     "assets/engine-contracts/v0.4.0.json",
     "crates/editor/src/engine_profiles.rs",
