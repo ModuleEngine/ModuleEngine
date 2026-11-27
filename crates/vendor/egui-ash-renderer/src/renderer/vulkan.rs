@@ -423,7 +423,7 @@ mod texture {
                 ..Default::default()
             };
             let (staging_buffer, staging_buffer_mem) =
-                texture.cmd_update(device, command_buffer, allocator, region, data)?;
+                texture.cmd_update(device, command_buffer, allocator, region, data, false)?;
 
             Ok((texture, staging_buffer, staging_buffer_mem))
         }
@@ -439,7 +439,7 @@ mod texture {
         ) -> RendererResult<()> {
             let (staging_buff, staging_mem) =
                 execute_one_time_commands(device, queue, command_pool, |buffer| {
-                    self.cmd_update(device, buffer, allocator, region, data)
+                    self.cmd_update(device, buffer, allocator, region, data, true)
                 })??;
 
             allocator.destroy_buffer(device, staging_buff, staging_mem)?;
@@ -454,6 +454,7 @@ mod texture {
             allocator: &mut A,
             region: vk::Rect2D,
             data: &[u8],
+            initialized: bool,
         ) -> RendererResult<(vk::Buffer, A::Allocation)> {
             let (buffer, buffer_mem) = create_and_fill_buffer(
                 device,
@@ -465,8 +466,21 @@ mod texture {
             // Transition the image layout and copy the buffer into the image
             // and transition the layout again to be readable from fragment shader.
             {
+                let (layout, stage, access) = if initialized {
+                    (
+                        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                        vk::PipelineStageFlags::FRAGMENT_SHADER,
+                        vk::AccessFlags::SHADER_READ,
+                    )
+                } else {
+                    (
+                        vk::ImageLayout::UNDEFINED,
+                        vk::PipelineStageFlags::TOP_OF_PIPE,
+                        vk::AccessFlags::empty(),
+                    )
+                };
                 let mut barrier = vk::ImageMemoryBarrier::default()
-                    .old_layout(vk::ImageLayout::UNDEFINED)
+                    .old_layout(layout)
                     .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
                     .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -478,13 +492,13 @@ mod texture {
                         base_array_layer: 0,
                         layer_count: 1,
                     })
-                    .src_access_mask(vk::AccessFlags::empty())
+                    .src_access_mask(access)
                     .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
 
                 unsafe {
                     device.cmd_pipeline_barrier(
                         command_buffer,
-                        vk::PipelineStageFlags::TOP_OF_PIPE,
+                        stage,
                         vk::PipelineStageFlags::TRANSFER,
                         vk::DependencyFlags::empty(),
                         &[],

@@ -2112,7 +2112,7 @@ impl GameWorkbench {
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                "Preparing the first frameвЂ¦",
+                "Preparing the first frame…",
                 egui::FontId::proportional(14.),
                 Color32::LIGHT_GRAY,
             );
@@ -2254,9 +2254,9 @@ impl GameWorkbench {
         ui.add_sized(
             [ui.available_width(), 28.],
             egui::Label::new(if pending {
-                "Inspector drafts В· unapplied"
+                "Inspector drafts · unapplied"
             } else {
-                "Inspector drafts В· none"
+                "Inspector drafts · none"
             })
             .truncate(),
         );
@@ -2270,7 +2270,7 @@ impl GameWorkbench {
             ui.label("Select an object in Scene or Hierarchy.");
         }
         if self.play_session {
-            ui.label("Play В· editing is available after Stop");
+            ui.label("Play · editing is available after Stop");
         }
         egui::ScrollArea::vertical().show(ui,|ui|{
             if let Some(id)=self.selected && let Some(entity)=resolved.iter().find(|entity|entity.object.id==id).cloned(){
@@ -2310,7 +2310,7 @@ impl GameWorkbench {
                     if object.prefab!=before{link_template(object,&entity,&templates);}
                     let visible=self.component_drafts.keys().filter(|name|active.contains(*name)&&schemas.schema(name).is_some()).cloned().collect::<Vec<_>>();
                     for name in visible{let schema=schemas.schema(&name).unwrap();ui.add_space(16.);ui.push_id(&name,|ui|{egui::CollapsingHeader::new(egui::RichText::new(&schema.label).size(16.).strong()).default_open(true).show(ui,|ui|{
-                        ui.small(format!("{} В· contract {}",schema.owner_module,schema.version));
+                        ui.small(format!("{} · contract {}",schema.owner_module,schema.version));
                         ui.small(component_origin(object,prefab,&name));
                         let draft=self.component_drafts.get_mut(&name).unwrap();component_editor(ui,schema,draft,&attached,&fields);let value=draft.clone();
                         ui.horizontal_wrapped(|ui|{
@@ -2328,7 +2328,7 @@ impl GameWorkbench {
                                 if ui.button("Inherit defaults").clicked(){reset_component(object,prefab,&name);let accepted=schemas.resolve_component(&name,&component_value(object,prefab,&name));self.inspector_drafts.accept(&name,Some(accepted),&mut self.component_drafts);}
                             }else if ui.button("Remove component").clicked(){reset_component(object,prefab,&name);self.inspector_drafts.accept(&name,None,&mut self.component_drafts);}
                         });
-                        ui.small(if self.inspector_drafts.changed(&name,&self.component_drafts){"Local draft В· not yet applied"}else{"Fields match authored values"});
+                        ui.small(if self.inspector_drafts.changed(&name,&self.component_drafts){"Local draft · not yet applied"}else{"Fields match authored values"});
                     });});}
                     egui::ComboBox::from_id_salt("add-game-component").selected_text("+ Component from active modules").show_ui(ui,|ui|{
                         for name in active{if let Some(schema)=schemas.schema(name)&&!self.component_drafts.contains_key(name)&&ui.button(&schema.label).clicked(){self.component_drafts.insert(name.clone(),schema.defaults.clone());}}
@@ -2453,12 +2453,12 @@ impl GameWorkbench {
         {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label("Game Rust: waiting to apply between game ticksвЂ¦");
+                ui.label("Game Rust: waiting to apply between game ticks…");
             });
         } else if self.game_preparation.is_some() {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label("Preparing Game to apply RustвЂ¦");
+                ui.label("Preparing Game to apply Rust…");
             });
         } else if !self.has_game_host() || instances == 0 {
             ui.label("Game Custom is not ready yet. Preparation diagnostics are shown below and in operation status.");
@@ -2499,7 +2499,7 @@ impl GameWorkbench {
                 ui.label(if previous == 0 {
                     format!("Game: current source is compiled in {current} instances.")
                 } else {
-                    format!("Game: previous compiled version вЂ” {previous} instances, current вЂ” {current}.")
+                    format!("Game: previous compiled version — {previous} instances, current — {current}.")
                 });
             }
         } else if let Some(host) = &self.host {
@@ -2526,7 +2526,7 @@ impl GameWorkbench {
                 ui.label(if previous == 0 {
                     format!("Game: current source is compiled in {current} instances.")
                 } else {
-                    format!("Game: previous compiled version вЂ” {previous} instances, current вЂ” {current}.")
+                    format!("Game: previous compiled version — {previous} instances, current — {current}.")
                 });
             }
         }
@@ -2786,7 +2786,7 @@ impl GameWorkbench {
             for (i,stage) in draft.stages.iter_mut().enumerate(){ui.horizontal(|ui|{ui.add(egui::TextEdit::singleline(&mut stage.name).desired_width(120.));if ui.button("Earlier").clicked(){stage_move=Some((i,false));}
 if ui.button("Later").clicked(){stage_move=Some((i,true));}
 if ui.button("Delete stage").clicked(){stage_delete=Some(i);}});
-                for (j,node) in stage.nodes.iter().enumerate(){ui.horizontal(|ui|{if ui.selectable_label(self.systems.selected.as_deref()==Some(&node.id),format!("{} В· {}",node.id,node.module)).clicked(){self.systems.select_only(Some(node.id.clone()));}
+                for (j,node) in stage.nodes.iter().enumerate(){ui.horizontal(|ui|{if ui.selectable_label(self.systems.selected.as_deref()==Some(&node.id),format!("{} · {}",node.id,node.module)).clicked(){self.systems.select_only(Some(node.id.clone()));}
 if ui.small_button("Earlier").clicked(){node_move=Some((i,j,false));}
 if ui.small_button("Later").clicked(){node_move=Some((i,j,true));}});}
             }
@@ -2797,7 +2797,7 @@ if let Some(i)=stage_delete{draft.stages.remove(i);}
             if ui.button("Replace after constraints with displayed linear order").clicked(){linear_after(&mut draft);}
             ui.label("Moving nodes does not erase authored after constraints. Adjust them explicitly or use the linear-order action.");
             ui.separator();let mut remove=None;
-            for (i,resource) in draft.resources.iter_mut().enumerate(){ui.horizontal(|ui|{ui.add(egui::TextEdit::singleline(&mut resource.name).desired_width(105.));ui.add(egui::TextEdit::singleline(&mut resource.data_type).desired_width(105.));ui.checkbox(&mut resource.external,"external");if ui.small_button("Г—").clicked(){remove=Some(i);}});}
+            for (i,resource) in draft.resources.iter_mut().enumerate(){ui.horizontal(|ui|{ui.add(egui::TextEdit::singleline(&mut resource.name).desired_width(105.));ui.add(egui::TextEdit::singleline(&mut resource.data_type).desired_width(105.));ui.checkbox(&mut resource.external,"external");if ui.small_button("×").clicked(){remove=Some(i);}});}
             if let Some(i)=remove{draft.resources.remove(i);}
 if ui.button("+ Resource").clicked(){let name=unique_name("resource",draft.resources.iter().map(|r|r.name.as_str()));draft.resources.push(SystemResource{name,data_type:"Value".into(),external:false,initial:Value::Null});}
             ui.label("Initial values, after constraints and all bindings are editable in the graph JSON below.");
@@ -3517,9 +3517,9 @@ fn component_origin(object: &AuthoredObject, prefab: Option<&Prefab>, name: &str
     });
     match (object.components.contains_key(name), overrides) {
         (false, false) => "Inherited from linked template",
-        (true, false) => "Linked template В· local component data",
-        (false, true) => "Linked template В· local overrides",
-        (true, true) => "Linked template В· local data and overrides",
+        (true, false) => "Linked template · local component data",
+        (false, true) => "Linked template · local overrides",
+        (true, true) => "Linked template · local data and overrides",
     }
 }
 fn reset_component(object: &mut AuthoredObject, prefab: Option<&Prefab>, name: &str) {
@@ -5816,19 +5816,19 @@ pub fn update(ctx: &mut ScriptContext) {
         );
         assert_eq!(
             component_origin(&object, Some(&prefab), "foo.bar"),
-            "Linked template В· local overrides"
+            "Linked template · local overrides"
         );
         object
             .components
             .insert("foo".into(), json!({"literal.key":null}));
         assert_eq!(
             component_origin(&object, Some(&prefab), "foo"),
-            "Linked template В· local component data"
+            "Linked template · local component data"
         );
         object.overrides.insert("foo.value".into(), json!(4));
         assert_eq!(
             component_origin(&object, Some(&prefab), "foo"),
-            "Linked template В· local data and overrides"
+            "Linked template · local data and overrides"
         );
         assert_eq!(component_origin(&object, None, "foo"), "Local component");
     }

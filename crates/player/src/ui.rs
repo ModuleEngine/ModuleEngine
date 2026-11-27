@@ -978,7 +978,7 @@ impl Player {
                     ui.painter().text(
                         rect.center(),
                         egui::Align2::CENTER_CENTER,
-                        "Preparing first game frameР В Р вЂ Р В РІР‚С™Р вЂ™Р’В¦",
+                        "Preparing first game frame…",
                         egui::FontId::proportional(18.),
                         Color32::WHITE,
                     );
@@ -1052,7 +1052,7 @@ impl Player {
                             rect.right_bottom() - Vec2::splat(16.),
                             egui::Align2::RIGHT_BOTTOM,
                             format!(
-                                "Simulation: {:.1} ms / tick Р В РІР‚в„ўР вЂ™Р’В· backlog {:.0} ms",
+                                "Simulation: {:.1} ms / tick · backlog {:.0} ms",
                                 snapshot.last_step_ms,
                                 snapshot.backlog_seconds * 1000.
                             ),
@@ -1082,7 +1082,7 @@ impl Player {
                         rect.center(),
                         egui::Align2::CENTER_CENTER,
                         if snapshot.as_ref().is_some_and(|s| s.fault.is_some()) {
-                            format!("Simulation paused: {error}\nR Р В Р вЂ Р В РІР‚С™Р Р†Р вЂљРЎСљ restart")
+                            format!("Simulation paused: {error}\nR — restart")
                         } else {
                             error.clone()
                         },
@@ -1098,7 +1098,7 @@ impl Player {
                     .order(egui::Order::Foreground)
                     .anchor(egui::Align2::LEFT_BOTTOM,Vec2::new(12.,-12.))
                     .show(ui.ctx(),|ui|{egui::Frame::popup(ui.style()).show(ui,|ui|{
-                        ui.label("Benchmark waiting Р В РІР‚в„ўР вЂ™Р’В· play normally, then press F9 to start measurement (120 s limit)");
+                        ui.label("Benchmark waiting · play normally, then press F9 to start measurement (120 s limit)");
                     });});
             }
         }
@@ -1531,7 +1531,7 @@ impl NativeBenchmark {
             },
             "presentation_identity_scope":"Successful rendered simulation-state or genuine interpolated-pose samples; not pixel-distinct images. Actor/epoch/serial belong to the completed frame and survive retained last-good snapshots.",
             "timing_met":timing_met,"physical_resolution_met":physical_resolution_met,"shipping_twenty_enemy_load_met":workload_met,
-            "callback_period":callback,"framework_cpu_including_gl_upload_draw_excluding_vsync":framework
+            "callback_period":callback,"framework_cpu_through_tessellation_excluding_root_paint_and_present":framework
         });
         report.as_object_mut().unwrap().extend(serde_json::json!({
             "arming_mode":self.arm_mode.name(),"armed":self.armed,

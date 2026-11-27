@@ -15,7 +15,7 @@ pub(super) fn run(report: &Path) -> Result<(), String> {
         egui::ViewportBuilder::default()
             .with_title("ModuleEngine / graph image verification")
             .with_inner_size([320., 240.]),
-        move |_, _, bridge| {
+        move |ctx, _, bridge| {
             let mut registry = ModuleRegistry::builtin();
             module_engine_vulkan::install(&mut registry, &source).map_err(|e| e.to_string())?;
             let mut doc = custom_alpha_document(RenderPath::Forward)?;
@@ -71,6 +71,18 @@ pub(super) fn run(report: &Path) -> Result<(), String> {
                 texture,
                 bridge,
                 output,
+                atlas: ctx.load_texture(
+                    "partial delta fixture",
+                    egui::ColorImage::new(
+                        [3, 1],
+                        vec![
+                            egui::Color32::RED,
+                            egui::Color32::BLACK,
+                            egui::Color32::BLACK,
+                        ],
+                    ),
+                    egui::TextureOptions::NEAREST,
+                ),
                 requested: false,
                 started: Instant::now(),
             }))
@@ -102,6 +114,7 @@ struct Probe {
     texture: FrameTexture,
     bridge: FrameBridge,
     output: Arc<Mutex<Option<Value>>>,
+    atlas: egui::TextureHandle,
     requested: bool,
     started: Instant,
 }
@@ -120,6 +133,28 @@ impl NativeApp for Probe {
             egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
             egui::Color32::WHITE,
         );
+        let frame = ctx.cumulative_frame_nr();
+        if frame == 1 || frame == 2 {
+            let color = if frame == 1 {
+                egui::Color32::GREEN
+            } else {
+                egui::Color32::BLUE
+            };
+            self.atlas.set_partial(
+                [frame as usize, 0],
+                egui::ColorImage::new([1, 1], vec![color]),
+                egui::TextureOptions::NEAREST,
+            );
+        }
+        ui.painter().image(
+            self.atlas.id(),
+            egui::Rect::from_min_size(
+                egui::pos2(16. / scale, 100. / scale),
+                egui::vec2(33. / scale, 11. / scale),
+            ),
+            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
+            egui::Color32::WHITE,
+        );
         let image = ctx.input(|input| {
             input.events.iter().find_map(|event| match event {
                 egui::Event::Screenshot { image, .. } => Some(image.clone()),
@@ -131,11 +166,13 @@ impl NativeApp for Probe {
                 .map(|x| image[(16 + 30 + x, 32)].to_array())
                 .collect();
             let expected = [[0, 0, 0, 255], [32, 64, 96, 255], [64, 128, 192, 255]];
+            let atlas = [21, 32, 43].map(|x| image[(x, 105)].to_array());
+            let atlas_expected = [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]];
             *self.output.lock().unwrap() = Some(
-                json!({"passed":observed==expected,"adapter":self.bridge.adapter,"surface_mode":self.bridge.present_mode,"source":"leased RGBA8 graph output after renderer drop","expected":expected,"sampled_swapchain":observed}),
+                json!({"passed":observed==expected && atlas==atlas_expected,"partial_atlas":atlas,"expected_atlas":atlas_expected,"adapter":self.bridge.adapter,"surface_mode":self.bridge.present_mode,"source":"leased RGBA8 graph output after renderer drop","expected":expected,"sampled_swapchain":observed}),
             );
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-        } else if !self.requested {
+        } else if frame >= 3 && !self.requested {
             self.requested = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
         } else if self.started.elapsed() > Duration::from_secs(10) {

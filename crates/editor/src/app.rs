@@ -2259,7 +2259,7 @@ impl Editor {
         );
         let target = self.library_graph_context();
         if let Some((id, _, label)) = &target {
-            ui.label(format!("Adding to: {label} В· pane {id}"));
+            ui.label(format!("Adding to: {label} · pane {id}"));
         } else {
             ui.label("Open Module Graph and select a graph to add nodes.");
         }
@@ -2272,9 +2272,9 @@ impl Editor {
         let descriptors = self.module_choices(path);
         let gpu_scope = self.is_gpu_graph_scope(path);
         ui.weak(if gpu_scope {
-            "GPU render pipeline В· typed resources"
+            "GPU render pipeline · typed resources"
         } else {
-            "Root composition В· module contracts"
+            "Root composition · module contracts"
         });
         egui::ScrollArea::vertical()
             .max_height(if gpu_scope { 360.0 } else { 420.0 })
@@ -2317,7 +2317,7 @@ impl Editor {
             };
             for (kind, meaning) in pins {
                 ui.horizontal(|ui| {
-                    ui.colored_label(canvas::type_color(kind), "в—Џ");
+                    ui.colored_label(canvas::type_color(kind), "●");
                     ui.label(RichText::new(kind).monospace().size(12.0));
                 });
                 ui.label(
@@ -2383,7 +2383,7 @@ impl Editor {
             );
         }
         if self.preview_builder.is_pending() {
-            ui.label("Building GPU candidate in the backgroundвЂ¦");
+            ui.label("Building GPU candidate in the background…");
         }
         if let Some(error) = &self.preview_builder.error {
             ui.colored_label(
@@ -2421,7 +2421,7 @@ impl Editor {
                         Ok(true) => {
                             self.runtime_error = None;
                             self.stats = format!(
-                                "{} objects В· t = {:.2} s",
+                                "{} objects · t = {:.2} s",
                                 runtime.object_count(),
                                 self.time
                             );
@@ -2473,7 +2473,7 @@ impl Editor {
                 .color(Color32::from_rgb(130, 153, 183)),
         );
         ui.label(
-            RichText::new("LMB: orbit В· wheel: distance")
+            RichText::new("LMB: orbit · wheel: distance")
                 .size(12.0)
                 .color(Color32::from_rgb(126, 140, 163)),
         );
@@ -2532,7 +2532,7 @@ impl Editor {
     }
 
     fn file_panel(&mut self, ui: &mut egui::Ui) {
-        ui.label(egui::RichText::new("Project data вЂ” expanded JSON").strong());
+        ui.label(egui::RichText::new("Project data — expanded JSON").strong());
         ui.label("Includes loaded scene bodies for editing. Save writes separate scene files when external storage is enabled.");
         ui.horizontal(|ui| {
             ui.heading("Graph text description");
@@ -2712,7 +2712,7 @@ impl Editor {
         }
         ui.label(
             RichText::new(
-                "One source В· the graph edits Rust В· unsupported constructs remain as text",
+                "One source · the graph edits Rust · unsupported constructs remain as text",
             )
             .size(12.0)
             .color(Color32::from_rgb(144, 161, 185)),
@@ -2964,7 +2964,7 @@ impl Editor {
                 );
             } else if pending {
                 ui.label(
-                    "Unapplied parameters вЂ” retained across views. Apply or Discard before saving.",
+                    "Unapplied parameters — retained across views. Apply or Discard before saving.",
                 );
             }
             let response = ui.add_enabled(
@@ -3298,7 +3298,7 @@ fn graph_connection_error(
             .ok_or("Input pin was not found.")?;
         if output.data_type != input.data_type {
             return Err(format!(
-                "Incompatible pins: {} в†’ {}.",
+                "Incompatible pins: {} → {}.",
                 output.data_type, input.data_type
             ));
         }
@@ -3320,7 +3320,7 @@ fn graph_connection_error(
                 || output.samples != input.samples
             {
                 return Err(format!(
-                    "Incompatible GPU resources: {} / {} / {} / {} samples в†’ {} / {} / {} / {} samples.",
+                    "Incompatible GPU resources: {} / {} / {} / {} samples → {} / {} / {} / {} samples.",
                     output.semantic,
                     output.format,
                     output.extent,
@@ -3795,12 +3795,7 @@ mod tests {
 
         let toolbar = |editor: &mut Editor, ui: &mut egui::Ui| editor.draw_workflow_toolbar(ui);
         click_test_panel(&mut editor, &ctx, "File", toolbar);
-        click_test_panel(
-            &mut editor,
-            &ctx,
-            "Review Custom Rust permissionвЂ¦",
-            toolbar,
-        );
+        click_test_panel(&mut editor, &ctx, "Review Custom Rust permission…", toolbar);
         assert!(editor.workflow.blocks_document_edits());
         test_panel_frame(&mut editor, &ctx, vec![], modal).drop_without_applying_deltas();
         click_test_panel(&mut editor, &ctx, "Allow compilation", modal);
@@ -4118,12 +4113,12 @@ mod tests {
         let beta = test_panel_frame(&mut editor, &ctx, vec![], inspector);
         text_center(&beta, "Linked template source: Beta");
         let draft_was_visible = beta.shapes.iter().any(|shape| {
-            matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Inspector drafts В· unapplied")
+            matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Inspector drafts · unapplied")
         });
         click_test_panel(&mut editor, &ctx, "Alpha", hierarchy);
         assert!(
             linked_template_control(&mut editor, &ctx, "0.68").is_some(),
-            "Alpha lost the unapplied value after Alpha в†’ Beta в†’ Alpha (draft visible at Beta: {draft_was_visible})"
+            "Alpha lost the unapplied value after Alpha → Beta → Alpha (draft visible at Beta: {draft_was_visible})"
         );
         assert!(draft_was_visible);
         assert!(editor.has_unsaved_work());
