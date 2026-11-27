@@ -13,6 +13,7 @@ pub(super) struct AreaDrag {
     was_dirty: bool,
     offset: Vec2,
     capture: usize,
+    source_viewport: egui::ViewportId,
     pub pointer: Pos2,
     pub cancelled: bool,
     refocus: bool,
@@ -247,13 +248,13 @@ pub(super) mod native_pointer {
     }
 }
 
-fn pointer(ctx: &egui::Context) -> Option<(Pos2, bool, bool)> {
+fn pointer(ctx: &egui::Context, viewport: egui::ViewportId) -> Option<(Pos2, bool, bool)> {
     #[cfg(windows)]
     if !ctx.embed_viewports() {
         return native_pointer::sample();
     }
-    let scale = ctx.pixels_per_point();
-    ctx.input(|i| {
+    ctx.input_for(viewport, |i| {
+        let scale = i.pixels_per_point;
         let origin = i
             .viewport()
             .inner_rect
@@ -410,7 +411,7 @@ impl Editor {
         if std::env::var_os("MODULE_ENGINE_DOCK_TRACE").is_some() {
             eprintln!(
                 "Dock begin {id}: native={:?}, egui={:?}, embed={}",
-                pointer(ctx),
+                pointer(ctx, ctx.viewport_id()),
                 ctx.input(|i| i.pointer.primary_down()),
                 ctx.embed_viewports()
             );
@@ -422,7 +423,7 @@ impl Editor {
         {
             return;
         }
-        let Some((pointer, held, _)) = pointer(ctx) else {
+        let Some((pointer, held, _)) = pointer(ctx, ctx.viewport_id()) else {
             return;
         };
         #[cfg(not(windows))]
@@ -470,6 +471,7 @@ impl Editor {
             was_dirty,
             offset,
             capture,
+            source_viewport: ctx.viewport_id(),
             pointer,
             cancelled: false,
             refocus: true,
@@ -479,7 +481,10 @@ impl Editor {
     }
 
     pub(super) fn update_area_drag(&mut self, ctx: &egui::Context) {
-        self.advance_area_drag(ctx, pointer(ctx));
+        if let Some(drag) = &self.area_drag {
+            // The initiating window owns the press, even when the root drives this update.
+            self.advance_area_drag(ctx, pointer(ctx, drag.source_viewport));
+        }
     }
 
     fn advance_area_drag(&mut self, ctx: &egui::Context, sample: Option<(Pos2, bool, bool)>) {
@@ -596,7 +601,9 @@ impl Editor {
         }
         let Some(target) = self.area_drop_destination(
             drag,
-            pointer(ui.ctx()).map(|s| s.0).unwrap_or(drag.pointer),
+            pointer(ui.ctx(), drag.source_viewport)
+                .map(|s| s.0)
+                .unwrap_or(drag.pointer),
             !ui.ctx().embed_viewports(),
         ) else {
             return;
@@ -812,6 +819,7 @@ mod tests {
             source_slot: None,
             was_dirty: false,
             offset: egui::vec2(20., 30.),
+            source_viewport: egui::ViewportId::ROOT,
             capture: 0,
             pointer: point,
             cancelled: false,
@@ -847,6 +855,7 @@ mod tests {
             source_slot: None,
             was_dirty: false,
             offset: Vec2::ZERO,
+            source_viewport: egui::ViewportId::ROOT,
             capture: 0,
             pointer: Pos2::ZERO,
             cancelled: false,
@@ -889,6 +898,7 @@ mod tests {
                 source_slot: None,
                 was_dirty: false,
                 offset: Vec2::ZERO,
+                source_viewport: egui::ViewportId::ROOT,
                 capture: 0,
                 pointer: Pos2::ZERO,
                 cancelled: false,
@@ -958,6 +968,7 @@ mod tests {
                 source_slot: None,
                 was_dirty: false,
                 offset: Vec2::ZERO,
+                source_viewport: egui::ViewportId::ROOT,
                 capture: 0,
                 pointer: point,
                 cancelled: false,
@@ -1012,6 +1023,7 @@ mod tests {
             source_slot: None,
             was_dirty: false,
             offset: Vec2::ZERO,
+            source_viewport: egui::ViewportId::ROOT,
             capture: 0,
             pointer: Pos2::ZERO,
             cancelled: false,
@@ -1039,6 +1051,7 @@ mod tests {
             source_slot: None,
             was_dirty: false,
             offset: egui::vec2(20., 30.),
+            source_viewport: egui::ViewportId::ROOT,
             capture: 0,
             pointer: Pos2::ZERO,
             cancelled: false,
