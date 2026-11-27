@@ -105,7 +105,7 @@ python -B scripts/s4_graph_memory.py <deferred-capture>/graph-memory.json --refe
 сравнении изображений, логи validation и хеши сборок. `asynchronous_compute`
 в отчёте диапазонов кандидата показывает, какой путь использовался.
 Повторите проверку с `MODULE_ENGINE_GRAPH_COMPUTE=graphics` для контроля с
-одной очередью.
+одной очередью. Итоги приведены в [отчёте R2.5](evidence/r25-s4/receipt.md).
 
 <a id="r23-scene-checks"></a>
 

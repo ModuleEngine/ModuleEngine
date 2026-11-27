@@ -1,0 +1,67 @@
+{
+  "asynchronous_compute": true,
+  "graph": "Forward",
+  "images": [
+    {
+      "format": "R32G32B32A32_SFLOAT",
+      "memory_binding": 0,
+      "offset_bytes": 192022528,
+      "required_bytes": 35389440,
+      "resource": "aa.color"
+    },
+    {
+      "format": "R32G32B32A32_SFLOAT",
+      "memory_binding": 0,
+      "offset_bytes": 227411968,
+      "required_bytes": 35389440,
+      "resource": "ao.color"
+    },
+    {
+      "format": "R8G8B8A8_UNORM",
+      "memory_binding": 1,
+      "offset_bytes": 0,
+      "required_bytes": 8847360,
+      "resource": "encode.frame"
+    },
+    {
+      "format": "D32_SFLOAT",
+      "memory_binding": 0,
+      "offset_bytes": 227411968,
+      "required_bytes": 8847360,
+      "resource": "geometry.__hardware_depth"
+    },
+    {
+      "format": "R32G32B32A32_SFLOAT",
+      "memory_binding": 0,
+      "offset_bytes": 156633088,
+      "required_bytes": 35389440,
+      "resource": "geometry.color"
+    },
+    {
+      "format": "R32_SFLOAT",
+      "memory_binding": 1,
+      "offset_bytes": 0,
+      "required_bytes": 8847360,
+      "resource": "geometry.depth"
+    },
+    {
+      "format": "R32G32B32A32_SFLOAT",
+      "memory_binding": 0,
+      "offset_bytes": 192022528,
+      "required_bytes": 35389440,
+      "resource": "geometry.normals"
+    },
+    {
+      "format": "R32G32B32A32_SFLOAT",
+      "memory_binding": 0,
+      "offset_bytes": 156633088,
+      "required_bytes": 35389440,
+      "resource": "tonemap.color"
+    }
+  ],
+  "render_pixels": [
+    1920,
+    1080
+  ],
+  "slot": 0
+}

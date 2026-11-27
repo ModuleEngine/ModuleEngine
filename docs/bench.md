@@ -100,6 +100,7 @@ the encoded output. Keep the capture manifests, raw ranges, image reports,
 validation logs and executable hashes. `asynchronous_compute` in each
 candidate range report records the route actually used. Repeat with
 `MODULE_ENGINE_GRAPH_COMPUTE=graphics` for the single-queue control.
+The [R2.5 receipt](evidence/r25-s4/receipt.md) records the verified results.
 
 <a id="r23-scene-checks"></a>
 
