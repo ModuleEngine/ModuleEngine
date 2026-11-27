@@ -315,7 +315,8 @@ def build_world(root: Path, events_path: Path | None = None, repo: str = "") -> 
     return inject_events(page, payload), errors, warnings
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, root: Path | None = None) -> int:
+    root = ROOT if root is None else root
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", default=DEFAULT_OUT, help=f"output HTML (default {DEFAULT_OUT})")
     parser.add_argument("--events", help="events JSON written by site/roadmap_events.py (optional)")
@@ -324,8 +325,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        page, errors, warnings = build(ROOT)
-        world, world_errors, world_warnings = build_world(ROOT, Path(args.events) if args.events else None, args.repo)
+        page, errors, warnings = build(root)
+        world, world_errors, world_warnings = build_world(root, Path(args.events) if args.events else None, args.repo)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -339,7 +340,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     if not args.check:
         out = Path(args.out)
-        out = out if out.is_absolute() else ROOT / out
+        out = out if out.is_absolute() else root / out
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(page, encoding="utf-8")
         print(f"wrote {out}")
