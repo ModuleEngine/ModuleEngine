@@ -74,6 +74,8 @@ arguments retain the previous heavy legacy suite**.
 | `native-tools` | Three native linker/cache/executable-spelling checks from `native`, without GameUI or GPU. | Not full `native`; a Windows-only test is marked `skipped` on Linux. Used by Windows CI. |
 | `package` | Two ignored `game_package` checks: native target modes and concurrent immutable snapshots. They build minimal Cargo fixtures and execute their products. | **Not a real Full/Team/Player game export, relocation, or full delivery acceptance.** These CLI checks remain a targeted/legacy route. |
 
+Linux CI also runs `native-window-acquire-recovery` under Xvfb with Mesa and Khronos validation. It interrupts recording after swapchain acquisition, retries after a fence reset without submission, and checks shutdown following an error. Windows can run the same test explicitly on a Vulkan desktop.
+
 The `clippy` profile is explicit and independent: `contracts` still runs formatting
 exactly once, and it adds no steps to the legacy suite. Run
 `python scripts/verify.py --profile clippy --plan`, then

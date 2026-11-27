@@ -292,7 +292,8 @@ impl Gpu {
 impl WindowFrames {
     fn complete_present(&mut self) -> Result<(), String> {
         if let Some(worker) = self.software_present.as_mut() {
-            self.recreate |= worker.complete()?;
+            let suboptimal = worker.complete().inspect_err(|_| self.recreate = true)?;
+            self.recreate |= suboptimal;
         }
         Ok(())
     }
@@ -332,7 +333,10 @@ impl WindowFrames {
             width: size.width,
             height: size.height,
         };
-        if self.recreate || self.frames.extent != extent {
+        if self.recreate
+            || self.frames.state == FrameState::Acquired
+            || self.frames.extent != extent
+        {
             if self.benchmark {
                 return Err("R3.1 presentation extent or surface changed".into());
             }
@@ -342,6 +346,9 @@ impl WindowFrames {
                 .unwrap_or_else(|p| p.into_inner());
             // SAFETY: No queue work may reference the swapchain during recreation.
             unsafe { handles.device.device_wait_idle() }.at("retire resized surface")?;
+            // An abandoned acquisition owns an image and an unconsumed binary
+            // semaphore. Retire that entire slot instead of acquiring with it again.
+            self.readback = None;
             self.frames = Frames::new(handles, extent, false, self.frames.swapchain)?;
             self.recreate = false;
         }
@@ -367,7 +374,9 @@ impl WindowFrames {
             self.readback = None;
             return Ok(None);
         };
-        self.recreate = suboptimal;
+        // Submission has signalled (or will signal) the per-image semaphore.
+        // If presentation fails, retire the slot before attempting another draw.
+        self.recreate = true;
         if !capture && let Some(worker) = self.software_present.as_mut() {
             self.window.pre_present_notify();
             worker.submit(PresentRequest {
@@ -375,12 +384,13 @@ impl WindowFrames {
                 rendered: self.frames.images[index as usize].rendered,
                 index,
             })?;
+            self.recreate = suboptimal;
         } else {
             match self
                 .frames
                 .present(handles.queue_access, &self.window, index)?
             {
-                Some(suboptimal) => self.recreate |= suboptimal,
+                Some(present_suboptimal) => self.recreate = suboptimal || present_suboptimal,
                 None => {
                     self.recreate = true;
                     self.frames.wait()?;
@@ -479,7 +489,10 @@ impl SoftwarePresent {
             .as_ref()
             .expect("live presentation worker")
             .send(request)
-            .map_err(|_| "Software presentation worker stopped")?;
+            .map_err(|_| {
+                self.busy.store(false, std::sync::atomic::Ordering::Release);
+                "Software presentation worker stopped"
+            })?;
         self.outstanding = true;
         Ok(())
     }
@@ -561,6 +574,13 @@ struct PresentImage {
     rendered: vk::Semaphore,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FrameState {
+    Idle,
+    Acquired,
+    Submitted,
+}
+
 pub(super) struct Frames {
     pub device: ash::Device,
     pub queue: vk::Queue,
@@ -575,6 +595,10 @@ pub(super) struct Frames {
     images: Vec<PresentImage>,
     command: vk::CommandBuffer,
     acquired: vk::Semaphore,
+    acquire_fence: vk::Fence,
+    state: FrameState,
+    #[cfg(test)]
+    fail_before_submit: bool,
     fence: vk::Fence,
 }
 
@@ -716,6 +740,10 @@ impl Frames {
                 images: Vec::new(),
                 command: vk::CommandBuffer::null(),
                 acquired: vk::Semaphore::null(),
+                acquire_fence: vk::Fence::null(),
+                state: FrameState::Idle,
+                #[cfg(test)]
+                fail_before_submit: false,
                 fence: vk::Fence::null(),
             };
             for raw in frames
@@ -763,6 +791,9 @@ impl Frames {
             frames.acquired = device
                 .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
                 .at("create acquire semaphore")?;
+            frames.acquire_fence = device
+                .create_fence(&vk::FenceCreateInfo::default(), None)
+                .at("create acquire fence")?;
             frames.fence = device
                 .create_fence(
                     &vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED),
@@ -774,13 +805,19 @@ impl Frames {
     }
 
     fn wait(&self) -> Result<(), String> {
-        // This fence belongs to the sole frame slot and its device is alive.
-        unsafe { self.device.wait_for_fences(&[self.fence], true, TIMEOUT_NS) }
+        let fences = [self.acquire_fence, self.fence];
+        let active = match self.state {
+            FrameState::Idle => return Ok(()),
+            FrameState::Acquired => &fences[..1],
+            FrameState::Submitted => &fences[..],
+        };
+        // SAFETY: Only wait for operations that were successfully issued.
+        unsafe { self.device.wait_for_fences(active, true, TIMEOUT_NS) }
             .at("wait for painter frame")
     }
 
     fn draw(
-        &self,
+        &mut self,
         queue_access: &std::sync::Mutex<()>,
         painter: &mut Painter,
         primitives: &[ClippedPrimitive],
@@ -793,16 +830,21 @@ impl Frames {
         // all resources are live, and this submission waits for image acquisition
         // before the first color attachment operation.
         unsafe {
+            self.state = FrameState::Idle;
+            device
+                .reset_fences(&[self.acquire_fence])
+                .at("reset acquire fence")?;
             let acquire = self.loader.acquire_next_image(
                 self.swapchain,
                 TIMEOUT_NS,
                 self.acquired,
-                vk::Fence::null(),
+                self.acquire_fence,
             );
             if acquire == Err(vk::Result::ERROR_OUT_OF_DATE_KHR) {
                 return Ok(None);
             }
             let (index, acquire_suboptimal) = acquire.at("acquire swapchain image")?;
+            self.state = FrameState::Acquired;
             let image = &self.images[index as usize];
             device
                 .reset_command_buffer(command, vk::CommandBufferResetFlags::empty())
@@ -912,6 +954,10 @@ impl Frames {
             device
                 .reset_fences(&[self.fence])
                 .at("reset painter fence")?;
+            #[cfg(test)]
+            if std::mem::take(&mut self.fail_before_submit) {
+                return Err("injected submit failure".into());
+            }
             let _queue = queue_access.lock().unwrap_or_else(|p| p.into_inner());
             device
                 .queue_submit(
@@ -924,6 +970,7 @@ impl Frames {
                     self.fence,
                 )
                 .at("submit painter frame")?;
+            self.state = FrameState::Submitted;
             Ok(Some((index, acquire_suboptimal)))
         }
     }
@@ -1041,6 +1088,13 @@ impl Drop for Frames {
         // On successful construction Gpu retires the device before field cleanup.
         // Partial constructors have not submitted work. All partial handles are null.
         unsafe {
+            if self.state != FrameState::Idle {
+                // WSI may still be signalling the acquisition even when no draw was submitted.
+                let _ = self
+                    .device
+                    .wait_for_fences(&[self.acquire_fence], true, u64::MAX);
+            }
+            self.device.destroy_fence(self.acquire_fence, None);
             self.device.destroy_fence(self.fence, None);
             self.device.destroy_semaphore(self.acquired, None);
             self.device.destroy_command_pool(self.pool, None);
@@ -1102,3 +1156,7 @@ impl Drop for HostBuffer {
         }
     }
 }
+
+#[cfg(all(test, any(target_os = "linux", windows)))]
+#[path = "gpu_tests.rs"]
+mod tests;
