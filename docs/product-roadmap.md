@@ -231,6 +231,16 @@ Otherwise the editor could be polished for months before discovering that a real
 
 **Entry and dependencies.** Start after the complete 0.4.1 route and necessary navigation fixes. Use 0.5–0.8 mechanisms as they become available; do not wait for every tool before the first encounter. This checks G2's first goal without changing its brief.
 
+**Plan items (revised 27 November 2026).** What exists: ARPG has `chase` and `boss` AI, melee combat, health, portals and audio events (`gameplay-arpg`, Two Arenas content), movement/collision on a horizontal plane, Rapier 3D physics (R6.1) and glTF skin/clip import with CPU playback (R7.1). Not in code: dash, projectile, a behavior graph editor, character animation in the game. The animation graph is tracked as R7.4 and weapon attachment as R7.5, not repeated here.
+
+| ID | Action | Measurable criterion | Depends on | Effort / status |
+| --- | --- | --- | --- | --- |
+| V0.9a.1 | One real episode: arena, hero, one opponent, obstacle, checkpoint, with a redistributable model and clips. | Hero skeleton and clips play in the gameplay camera; asset licenses recorded; readability agreed from the game camera. | R7.1, R7.5 | 1 w |
+| V0.9a.2 | Execution foundations: dash and projectile with independent cooldowns on the existing melee; movement and collision through Rapier. | Tests for miss, hit, wall and stop; the technical module reports events and combat decides damage. | R6.2, R7.3 | 1.5–2 w |
+| V0.9a.3 | Behavior graph with a text source and visible active state, edited during paused Play. | Both animation and behavior graphs execute in gameplay. While Play is paused, edit an animation transition and an enemy condition, then resume and check the changes and Undo. Compatible state is kept, incompatible changes offer reset, and errors keep the accepted version. | R7.4, R1.5 | 1–1.5 w |
+| V0.9a.4 | Close the loop through Player: telegraph, outcome, death, checkpoint return, early 20-enemy load. | S2 frame p95 [not worse](bench.md#not-worse) than R0.6 with animated enemies; a tester plays without schema help. | R6.3, R7.2 | 1 w |
+| V0.9a.5 | Second independent composition without XP or loot. | Same combat in a second project, no Core/Host change; G1 regressions pass. | V0.5.2, V0.9a.2 | 3–5 d |
+
 ### Ordered work
 
 1. **Take one real episode and assets.** A small arena, hero, one opponent, obstacle and checkpoint. Select a model/clips distributable with the source project; define skeleton, import, pose transition, hit event and weapon attachment. Agree readability from the gameplay camera, not merely the importer preview.
@@ -253,6 +263,15 @@ One encounter shows how to extend the engine. Only a full game demonstrates that
 
 **Entry and dependencies.** G2's second goal starts after its accepted first-goal foundation. 0.9a is the first complete example, not a substitute for the remaining required foundation.
 
+**Plan items (revised 27 November 2026).** None of progression exists in code yet: no experience, pickups, inventory or slots, no three-location content, no save-slot route for G2. G2's 27 preserved decisions stay the source of detail.
+
+| ID | Action | Measurable criterion | Depends on | Effort / status |
+| --- | --- | --- | --- | --- |
+| V0.9b.1 | Three locations, melee/ranged/heavy enemies, boss with three attacks and two phases, set up in the project. | Each element authored through project tools, not hardcoded; boss phases covered by tests. | V0.9a.1, V0.9a.2, V0.9a.3, V0.9a.4, V0.9a.5 | 2–3 w |
+| V0.9b.2 | Progression: experience, level-up choice, pickups, bonuses, weapon/armor/amulet slots. | Data → UI → save route works; inventory pauses the game; equipment visible. | V0.9b.1 | 2 w |
+| V0.9b.3 | User journey and saves: hints, start, victory, replay, checkpoint restart. | Death and exit keep XP and items; only the unfinished encounter repeats; playthrough measured at 20–30 min. | V0.9b.2 | 1.5 w |
+| V0.9b.4 | Delivery and cost. | Mean and p95 distinguishable-frame interval ≤16.667 ms at 1080p with 20 enemies; edit reaches relocated Player; G1 checks rerun. | V0.9b.3, V0.5.4 | 1 w |
+
 1. **Expand the agreed content.** Three sequential locations; melee, ranged and heavy enemies; a boss with three attacks/two phases. Configure exact behavior in the project using the new tools. Sword and two-handed hammer differ in tempo. Dash interrupts attacks/projectile preparation and is blocked by walls.
 2. **Connect progression and combat.** Experience, level-up/upgrade choice, ground items/click pickup, one or two random bonuses and three slots: weapon, armor, amulet. Weapon/armor changes are visible. Inventory and upgrade choice pause the game. Carry the route from data through UI and saving.
 3. **Finish the user journey.** Control hints, start, three locations, victory and replay. Death/exit preserve XP/items; the next launch starts at the checkpoint and repeats only the unfinished encounter. Use permitted asset licenses and honor the agreed Diablo III visual direction within the chosen content. Measure the 20–30-minute active-play target through an actual playthrough.
@@ -271,6 +290,15 @@ Basis: [G2 decisions](#g2-agreement), [portfolio/game gates](portfolio-roadmap.m
 “Someone explained it and I repeated it” does not establish an understandable product. Catalogue size and test counts do not measure independence either.
 
 **Entry and dependencies.** Three lines converge: understandable configuration (0.4.1–0.7), handoff/two versions (0.8), and accepted game consumers G1/G2 (0.9). This is the planned 1.0 product boundary, not present implementation status.
+
+**Plan items (revised 27 November 2026).** 1.0 is the convergence point; its items are mostly human work and do not scale with development speed.
+
+| ID | Action | Measurable criterion | Depends on | Effort / status |
+| --- | --- | --- | --- | --- |
+| V1.0.1 | Assemble the handoff candidate: shortcut, EN/RU docs, neutral example, G1/G2, restoration description, previous stable set, known limits. | Real shortcut, Full, Team and Player checked, not only a build EXE. | V0.8.1, V0.9b.4 | 1 w |
+| V1.0.2 | Independent attempts: owner plus four developers (two game authors, two extension authors), goals without button instructions. | On the shared U1–U3 tasks, the owner and at least 3 of 4 developers pass without observer hints. The mandatory role operations pass for 2 of 2 participants in each role. A separate recipient runs U6 in the clean environment under the [original protocol](#usability). Record stopping points. Data safety, A/B isolation and Team restrictions apply to every attempt. | V1.0.1 | 2 w (people) |
+| V1.0.3 | Fix stopping points; repeat revised routes with a new participant. | Each fixed route passes with a new person in that role. | V1.0.2 | 1–2 w |
+| V1.0.4 | Release scope: clean Windows G1/G2 delivery, update and rollback, budgets. | No data loss or rights violation. Existing mandatory gameplay and startup budgets apply. Compare metrics measured in R0.6 under the [not-worse rule](bench.md#not-worse). R0.6 has no open-to-first-frame measurement. For open-to-first-frame, the candidate must pass the not-worse rule against a comparable reference using the R3.5 method with identical start and end events. V1.0.4 stays open if the pair is missing or the comparison fails. Verify every declared platform and record the boundaries for undeclared ones. | V1.0.3, V0.8.3 | 1 w |
 
 1. **Assemble a handoff candidate.** Ordinary launch, public EN/RU documentation, a neutral example, G1/G2, restoration description, previous stable set and known limitations. Check the real shortcut, Full, Team and Player, not only an EXE in a build directory.
 2. **Give people goals, not button instructions.** The owner plus four developers not previously involved in implementation: two game authors and two extension authors. Each has legitimate rights and delivered help, without observer hints or a specially highlighted route. Start with a shared task, then their role-specific task.
@@ -291,6 +319,14 @@ Flat mechanics in a 3D diorama do not establish convenient 2D level authoring.
 
 **Entry and dependencies.** Proposed first new profile after G1/G2. The genre is a candidate; replacing it must preserve complete 2D/pixel-art coverage.
 
+**Plan items (revised 27 November 2026).** Nothing for 2D exists: no sprite, atlas or tilemap code, and the R track has no 2D renderer row; Rapier is built with `dim3` only. This is new work, not covered by R2.
+
+| ID | Action | Measurable criterion | Depends on | Effort / status |
+| --- | --- | --- | --- | --- |
+| V1.1.1 | Agree one scene and limits: camera, pixel scaling, target resolutions, budgets. | Written agreement before production. | none | 2–3 d |
+| V1.1.2 | 2D pipeline: sprite/atlas import, frames, alpha, layers, 2D camera, tile/level data and collisions (decide Rapier 2D or grid rules). | Author builds a section in Editor, changes a tile and sprite and sees it in game; no ARPG or 3D fields required. | R2.4, V0.5.2 | 3–4 w |
+| V1.1.3 | Finish game: controls, traversal, checkpoints, ending, replay, clean export. | Scaling captures match the agreement; older projects pass regressions. | V1.1.2 | 2 w |
+
 1. **Agree one scene and limits.** For a platformer, choose a short level with a jump, platform and checkpoint. Before production, fix camera, pixel-scaling rules, target resolutions and budgets on the declared PC.
 2. **Derive needed tools from content.** Import sprite/atlas; define frames, transparency, layers, camera and required collisions. Let the author draw/assemble a section in Editor, change a tile/sprite and check it in-game. Do not require ARPG or unnecessary 3D fields from a 2D author.
 3. **Finish the game and check return.** Complete controls, traversal, checkpoints, ending and replay; export to a clean machine. Capture selected scales, check edges/jump predictability, compare composition with G2 and recheck older projects affected by changes.
@@ -308,6 +344,14 @@ Basis: [portfolio gates](portfolio-roadmap.md), [current import capabilities](co
 3D models in a planar ARPG do not establish spatial movement or configuration without game-specific hardcoding.
 
 **Entry and dependencies.** Next proposed game after G3; reuse import, UI, input and packaging. The course determines the scope of general physics.
+
+**Plan items (revised 27 November 2026).** Rapier 3D with raycasts and shape queries exists (R6.1, done), so the general 3D contact work is no longer part of 1.2; camera and orientation remain.
+
+| ID | Action | Measurable criterion | Depends on | Effort / status |
+| --- | --- | --- | --- | --- |
+| V1.2.1 | Define one demanding section: two heights, a turn and an obstacle, with acceptable deviations. | Written scene and tolerances. | none | 2–3 d |
+| V1.2.2 | Spatial movement, orientation and camera on Rapier queries; gates repositionable in Scene. | Moving a gate upward changes the route; collisions and camera match position. | R6.1, R6.2 | 1–1.5 w |
+| V1.2.3 | Close the loop: course, checkpoints, time/score, replay, clean export. | Old route fails, new route passes; own budget measured; G1–G3 regressions pass. | V1.2.2 | 1.5–2 w |
 
 1. **Build one demanding section.** Two spans at different heights, a turn and an obstacle. Define movement in height/depth, orientation and camera behavior; fix the scene and acceptable deviations beforehand.
 2. **Generalize only necessary contracts.** Add missing 3D collision queries/camera settings. Flight, gate rules and score belong to the project or reusable gameplay mechanics. Let authors reposition gates and change the route in Scene.
@@ -327,6 +371,14 @@ A PBR switch or one attractive frame does not establish that the scene can be ed
 
 **Entry and dependencies.** G5 is a proposed compact first-person exploration story. Agree visual references, content, hardware, frame/resource budgets in advance.
 
+**Plan items (revised 27 November 2026).** Materials, lights, shadows, IBL, HDR and the editor workflow are R5.1–R5.6; R5.6's owner check is this milestone's owner check, so 1.3 here covers only the game around them. Today only base color is imported and rendered.
+
+| ID | Action | Measurable criterion | Depends on | Effort / status |
+| --- | --- | --- | --- | --- |
+| V1.3.1 | Fix references, a small section and comparison conditions (exposure, lighting, viewpoint, resolution, memory, frame time). | Reference set and budgets recorded before production. | none | 3–4 d |
+| V1.3.2 | Build the G5 section with the R5 material and light path; changes through Editor. | Roughness change visible in Editor and Player under identical lighting. | R5.1–R5.6 | 1–1.5 w |
+| V1.3.3 | Moving quality and the finished game. | Reference points, filtering and flicker, frame time and memory within agreed budgets; G3 does not require G5 maps. | V1.3.2 | 2 w |
+
 1. **Fix references and a small section.** One room/street, appropriate licenses, real asset dimensions, target frame and interaction task. Separately define comparison conditions: exposure, lighting, viewpoint, resolution, memory and frame time.
 2. **Carry materials from author to screen.** Import required maps, including normal/roughness/metallic according to the reference. Implement actual shader reads, filtering/mipmaps, required lighting/shadows. Let the author change material/light through Editor and verify the visible Player result. Add a subsystem only if the trial scene cannot meet its criterion.
 3. **Check moving quality and finish the game.** Traverse goals, interactions and ending. Compare reference points, flicker/filtering in motion, frame time and memory. Separately check previous inexpensive profiles: G5 improvements do not become their mandatory assets/settings.
@@ -344,6 +396,15 @@ Basis: [portfolio gates](portfolio-roadmap.md), [current import capabilities](co
 Five games on five incomparable forks prove less than five games on one foundation with different selected configurations.
 
 **Entry and dependencies.** All five small games are functionally complete. Portfolio acceptance is a separate decision after G5, not an automatic consequence of version 1.3.
+
+**Plan items (revised 27 November 2026).**
+
+| ID | Action | Measurable criterion | Depends on | Effort / status |
+| --- | --- | --- | --- | --- |
+| V1.3.x.1 | Choose a common release; verified migration of copies for each game. | Old pinned instances still work; refusal leaves a cell open and changes nothing. | V0.6.4, V0.8.4 | 1 w |
+| V1.3.x.2 | Five deliveries on that release. | Per game: reused modules, alternate composition, edit route, saves, target hardware, budget, clean launch. | V1.1.3, V1.2.3, V1.3.3, V1.3.x.1 | 2–3 w |
+| V1.3.x.3 | Coverage check and decision. | Five accepted games across 2D, 2.5D, spatial 3D, pixel art, stylization, realism; owner decides to stop or pick one question. | V1.3.x.2 | 2–3 d |
+| V1.3.x.4 | G6–G10 only for a new question; not planned. | Each needs a named question first. | V1.3.x.3 | not scheduled |
 
 1. **Choose a common version and accept transitions only in verification copies.** Old pinned instances/packages stay usable. For each game, explicitly accept a compatible common release or perform a verified migration of a copy. Refusal leaves an unclosed portfolio cell; it does not force an update of the working project.
 2. **Build and verify five deliveries.** For each, record reused modules and its own policy, alternate composition/refusal, authored-edit route, gameplay loop/saves, target OS/hardware, budget and launch on a clean declared system. Compare one common version with individual configurations.
@@ -685,7 +746,7 @@ Each fix starts with a regression test that fails on the current code and runs i
 
 The first useful checkpoint is after R2 + R5: a GPU-driven renderer with PBR and shadows, about 4.5–7 months in (R0, R1, R2 and R5). 0.5 implementation and new UI work resume after R1, R3 and R4 are accepted and the owner gives a separate go; R5–R10 can then continue in parallel with the version route, and R6–R7 should land before [0.9a](#combat) needs them. Replace these estimates with measured throughput after R0 and again after R2.
 
-**Version route 0.5–0.8.** The revised plan items V0.5.0–V0.8.4 add about 15 weeks of one developer's work (0.5 about 4 w, 0.6 about 3 w, 0.7 about 4 w, 0.8 about 4 w); this is a rough guess before measured throughput. Order: V0.5.0 → V0.5.1 → V0.5.2 in parallel with V0.6.1–V0.6.2; V0.5.3 after R6.3; V0.7.1 after R2.5; V0.8 after V0.6; V0.7.4 after R5.2. V0.5.0 may audit existing behavior before R3 acceptance and the owner's separate go. 0.5 implementation and new UI work remain paused until both. V0.6.1–V0.6.2 do not require new UI.
+**Version route.** The revised plan items add about 15 weeks of one developer's work for V0.5.0–V0.8.4 (0.5 about 4 w, 0.6 about 3 w, 0.7 about 4 w, 0.8 about 4 w) and about 36 weeks for V0.9a.1–V1.3.x.4 (0.9a 6 w, 0.9b 7 w, 1.0 5.5 w, 1.1 6 w, 1.2 3.5 w, 1.3 4 w, 1.3.x 4 w); these are rough guesses before measured throughput, and the 1.0 and 1.3.x items are mostly human work. Order: V0.5.0 → V0.5.1 → V0.5.2 in parallel with V0.6.1–V0.6.2; V0.5.3 after R6.3; V0.7.1 after R2.5; V0.8 after V0.6; V0.7.4 after R5.2. V0.5.0 may audit existing behavior before R3 acceptance and the owner's separate go. 0.5 implementation and new UI work remain paused until both. V0.6.1–V0.6.2 do not require new UI.
 
 **Stop conditions.** If an R1.1 or R3.1 spike misses its criterion, stop and record the alternative before migrating. If a phase breaks an S1/S2 gate or an authored-data invariant, it returns for correction while the previous path stays active. A modern feature without a consumer or that misses its cost budget is dropped rather than kept as an unused subsystem.
 
