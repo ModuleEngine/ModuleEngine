@@ -119,10 +119,11 @@ class PolicyTests(unittest.TestCase):
                 ci_plan.changed_files("a" * 40)
 
     def test_gate_rejects_every_non_success_prerequisite(self):
-        for light, native, package in [(True, False, False), (False, True, True),
-                                       (False, False, False), (False, True, False)]:
+        for route in ("docs", "site", "full"):
+            light = route != "full"
+            native = package = not light
             selected = {"light": str(light).lower(), "native": str(native).lower(),
-                        "package": str(package).lower(), "route": "docs" if light else "full"}
+                        "package": str(package).lower(), "route": route}
             needs = {job: {"result": "skipped" if light else "success"} for job in
                      ("workspace", "release", "player", "clippy", "contracts")}
             for job, enabled in (("documentation", True), ("native", native), ("package", package)):
@@ -135,6 +136,13 @@ class PolicyTests(unittest.TestCase):
                 for result in {"success", "failure", "skipped", "cancelled", None} - {needs[job]["result"]}:
                     with self.subTest(job=job, result=result), self.assertRaises(ValueError):
                         ci_plan.check_gate({**needs, job: {**needs[job], "result": result}})
+            if not light:
+                for omitted in (("native",), ("package",), ("native", "package")):
+                    outputs = {**selected, **dict.fromkeys(omitted, "false")}
+                    partial = {**needs, "plan": {"result": "success", "outputs": outputs}}
+                    partial.update({job: {"result": "skipped"} for job in omitted})
+                    with self.subTest(omitted=omitted), self.assertRaises(ValueError):
+                        ci_plan.check_gate(partial)
             flags = {key: value for key, value in selected.items() if key != "route"}
             for invalid in ({}, {**selected, "native": ""}, {**selected, "native": "true", "light": "true"},
                             {**selected, "route": "other"}, {**selected, "route": "full" if light else "site"},

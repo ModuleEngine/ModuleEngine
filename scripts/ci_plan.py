@@ -120,10 +120,11 @@ def check_gate(needs):
     if selected.get("route") not in {*LIGHT_ROUTES, "full"} or (selected["route"] in LIGHT_ROUTES) != (flags["light"] == "true"):
         raise ValueError("Route name does not match the light/full selection")
     light = flags["light"] == "true"
-    if light and any(flags[key] == "true" for key in ("native", "package")):
-        raise ValueError("Light plan selected a native route")
+    expected_flag = "false" if light else "true"
+    if any(flags[key] != expected_flag for key in ("native", "package")):
+        raise ValueError("Native and package must both be selected exactly for the full route")
     expected = {key: not light for key in CORE_JOBS}
-    expected.update(documentation=True, native=flags["native"] == "true", package=flags["package"] == "true")
+    expected.update(documentation=True, native=not light, package=not light)
     if set(needs) != {"plan", *expected}:
         raise ValueError("Missing or unexpected prerequisite job")
     for job, required in expected.items():
