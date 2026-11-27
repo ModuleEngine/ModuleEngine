@@ -1,15 +1,16 @@
 //! Explicit offscreen native verification, never an interactive fallback.
-//! Usage: gpu_presentation_check <report.json> [--png]
-use eframe::{egui, egui_wgpu, wgpu};
+//! Usage: gpu_presentation_check <report.json> [--png | --window]
+use eframe::egui;
 use module_engine_core::{
     Camera, Frame, FrameRenderer, Graph, GraphDocument, ModuleRegistry, ObjectsWorld,
     RenderOverrides, RenderSubmission, SceneChange, SceneChangeKind, SceneSnapshot, SceneUpdate,
     TextureImage, WorldKind, WorldProvider, demo_document,
 };
+use module_engine_native_ui::Offscreen;
 use module_engine_player::gpu_presentation::{
     GpuPresentationBridge, GpuTexture, finish_gpu_retirements,
 };
-use module_engine_vulkan::presentation::{AdapterIdentity, VulkanPresentationTarget};
+use module_engine_vulkan::WindowTarget;
 use module_engine_vulkan::{
     RenderPath, ResidentScene, SceneInput, VulkanRenderer, builtin_hlsl_source, builtin_manifest,
     default_graph, remove_pass_with_bypass,
@@ -17,35 +18,13 @@ use module_engine_vulkan::{
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
-    future::Future,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    task::{Context, Poll, Wake, Waker},
     time::{Duration, Instant},
 };
 
 const WATCHDOG_SECONDS: u64 = 180;
 
-struct ThreadWake(std::thread::Thread);
-impl Wake for ThreadWake {
-    fn wake(self: Arc<Self>) {
-        self.0.unpark();
-    }
-    fn wake_by_ref(self: &Arc<Self>) {
-        self.0.unpark();
-    }
-}
-fn block_on<T>(future: impl Future<Output = T>) -> T {
-    let mut future = std::pin::pin!(future);
-    let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
-    let mut context = Context::from_waker(&waker);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(value) => return value,
-            Poll::Pending => std::thread::park_timeout(Duration::from_millis(2)),
-        }
-    }
-}
 fn ensure(condition: bool, message: impl Into<String>) -> Result<(), String> {
     if condition {
         Ok(())
@@ -117,9 +96,16 @@ fn presented(
 fn main() {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     let Some(report_path) = args.first().map(PathBuf::from) else {
-        eprintln!("Usage: gpu_presentation_check <report.json> [--png]");
+        eprintln!("Usage: gpu_presentation_check <report.json> [--png | --window]");
         std::process::exit(2);
     };
+    if args.iter().any(|arg| arg == "--window") {
+        if let Err(error) = window_check::run(&report_path) {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     let png = args.iter().skip(1).any(|arg| arg == "--png");
     if let Some(parent) = report_path.parent().filter(|p| !p.as_os_str().is_empty())
         && let Err(error) = std::fs::create_dir_all(parent)
@@ -131,7 +117,7 @@ fn main() {
         "passed": false, "fixture": "production_gpu_presentation_offscreen",
         "os": std::env::consts::OS, "arch": std::env::consts::ARCH,
         "watchdog_seconds": WATCHDOG_SECONDS,
-        "scope": "Production Vulkan FrameRenderer -> native GUI bridge -> GUI-owned UNORM display; explicit diagnostic readback. No window, surface, eframe paint, vsync, compositor or hardware portability acceptance.",
+        "scope": "Production Vulkan FrameRenderer output sampled through the native egui painter into an offscreen RGBA8 attachment. Explicit diagnostic readback. Window presentation is checked separately with --window.",
         "cases": [],
     })));
     let (finished, watchdog) = std::sync::mpsc::sync_channel::<()>(1);
@@ -218,6 +204,7 @@ fn main() {
 }
 
 struct Fixture<'a> {
+    consumer: Offscreen,
     registry: ModuleRegistry,
     scene: SceneSnapshot,
     bridge: GpuPresentationBridge,
@@ -233,44 +220,20 @@ fn record(report: &Arc<Mutex<Value>>, case: Value) {
 }
 
 fn run(report: &Arc<Mutex<Value>>, report_path: &Path, png: bool) -> Result<Frame, String> {
-    let mut config = egui_wgpu::WgpuConfiguration::default();
-    let egui_wgpu::WgpuSetup::CreateNew(setup) = &mut config.wgpu_setup else {
-        return Err("Expected independent native WGPU setup".into());
-    };
-    setup.instance_descriptor.backends = if cfg!(target_os = "windows") {
-        wgpu::Backends::DX12
-    } else {
-        wgpu::Backends::VULKAN
-    };
-    let instance = block_on(config.wgpu_setup.new_instance());
-    let render_state = block_on(egui_wgpu::RenderState::create(
-        &config,
-        &instance,
-        None,
-        egui_wgpu::RendererOptions::default(),
-    ))
-    .map_err(|error| format!("Create actual offscreen GUI device: {error}"))?;
-    let adapter = render_state.adapter.get_info();
-    let expected_backend = if cfg!(target_os = "windows") {
-        wgpu::Backend::Dx12
-    } else {
-        wgpu::Backend::Vulkan
-    };
-    ensure(
-        adapter.backend == expected_backend,
-        "GUI selected a different native backend",
-    )?;
-    report.lock().expect("report mutex")["gui"] = json!({"backend":format!("{:?}", adapter.backend),"adapter":adapter.name,"driver":adapter.driver,"driver_info":adapter.driver_info,"surface":false});
-    let bridge = GpuPresentationBridge::new(render_state.clone())?;
-    ensure(
-        Arc::ptr_eq(&bridge.target(), &bridge.target()),
-        "Bridge target identity is unstable",
-    )?;
     let mut registry = ModuleRegistry::builtin();
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
         .map_err(|e| e.to_string())?;
+    let consumer = Offscreen::new(&root)?;
+    let endpoint = consumer.bridge();
+    report.lock().expect("report mutex")["gui"] =
+        json!({"backend":"Vulkan","adapter": endpoint.adapter,"surface": false});
+    let bridge = GpuPresentationBridge::window(endpoint);
+    ensure(
+        Arc::ptr_eq(&bridge.target(), &bridge.target()),
+        "Unstable presentation device",
+    )?;
     module_engine_vulkan::install(&mut registry, &root).map_err(|error| error.to_string())?;
     let png_folder = png.then(|| {
         report_path
@@ -282,6 +245,7 @@ fn run(report: &Arc<Mutex<Value>>, report_path: &Path, png: bool) -> Result<Fram
         std::fs::create_dir_all(folder).map_err(|e| e.to_string())?;
     }
     let mut fixture = Fixture {
+        consumer,
         registry,
         scene: ObjectsWorld::demo().snapshot(),
         bridge,
@@ -372,7 +336,7 @@ fn run(report: &Arc<Mutex<Value>>, report_path: &Path, png: bool) -> Result<Fram
         true,
     )?;
     let previous_id = fixture.display.texture_id();
-    let previous_pixels = fixture.display.diagnostic_readback()?;
+    let previous_pixels = capture(&mut fixture.consumer, &fixture.display)?;
     let mut invalid = alpha_document.clone();
     invalid.shader_sources.insert(
         "fixture-final-alpha".into(),
@@ -384,7 +348,7 @@ fn run(report: &Arc<Mutex<Value>>, report_path: &Path, png: bool) -> Result<Fram
     };
     ensure(
         fixture.display.texture_id() == previous_id
-            && fixture.display.diagnostic_readback()? == previous_pixels,
+            && capture(&mut fixture.consumer, &fixture.display)? == previous_pixels,
         "Rejected graph changed last good GUI display",
     )?;
     fixture.compare(
@@ -399,6 +363,7 @@ fn run(report: &Arc<Mutex<Value>>, report_path: &Path, png: bool) -> Result<Fram
         json!({"case":"rejected_shader_preserves_display","passed":true,"diagnostic":rejection.to_string()}),
     );
 
+    let previous_id = fixture.display.texture_id();
     let leased = presented(
         &mut *renderer,
         &fixture.scene,
@@ -406,7 +371,8 @@ fn run(report: &Arc<Mutex<Value>>, report_path: &Path, png: bool) -> Result<Fram
         [97, 63],
         &RenderOverrides::default(),
     )?;
-    let other_bridge = GpuPresentationBridge::new(render_state.clone())?;
+    let other_device = Offscreen::new(&root)?;
+    let other_bridge = GpuPresentationBridge::window(other_device.bridge());
     let target_error = renderer
         .set_presentation_target(Some(other_bridge.target()))
         .err()
@@ -414,7 +380,7 @@ fn run(report: &Arc<Mutex<Value>>, report_path: &Path, png: bool) -> Result<Fram
     renderer.set_presentation_target(Some(fixture.bridge.target()))?;
     ensure(
         fixture.display.texture_id() == previous_id
-            && fixture.display.diagnostic_readback()? == previous_pixels,
+            && capture(&mut fixture.consumer, &fixture.display)? == previous_pixels,
         "Rejected target changed last good GUI display",
     )?;
     drop(leased);
@@ -423,10 +389,30 @@ fn run(report: &Arc<Mutex<Value>>, report_path: &Path, png: bool) -> Result<Fram
         json!({"case":"rejected_target_preserves_endpoint_and_display","passed":true,"diagnostic":target_error.to_string()}),
     );
 
-    fixture.adapter_mismatch_check(&mut *renderer)?;
+    let foreign_frame = presented(
+        &mut *renderer,
+        &fixture.scene,
+        Camera::default(),
+        [96, 64],
+        &RenderOverrides::default(),
+    )?;
+    let old_id = fixture.display.texture_id();
+    ensure(
+        fixture
+            .display
+            .update(&other_bridge, &foreign_frame)
+            .is_err()
+            && fixture.display.texture_id() == old_id,
+        "Wrong logical device accepted a frame or changed the retained display",
+    )?;
+    drop(foreign_frame);
+    record(
+        report,
+        json!({"case":"foreign_logical_device_rejected","passed":true}),
+    );
 
     fixture.pool_check(&alpha_document)?;
-    fixture.async_check(&alpha_document, &render_state)?;
+    fixture.async_check(&alpha_document, &other_bridge)?;
     fixture.material_replacement_check(&root, false)?;
     fixture.material_replacement_check(&root, true)?;
     // Publishing a replacement shares the actual backend; replacing authored
@@ -519,20 +505,17 @@ fn custom_alpha_document(path: RenderPath) -> Result<GraphDocument, String> {
 }
 
 impl Fixture<'_> {
-    fn material_replacement_check(&self, root: &Path, resident: bool) -> Result<(), String> {
+    fn material_replacement_check(&mut self, root: &Path, resident: bool) -> Result<(), String> {
         // The FrameRenderer adapter admits one pending request per caller.
         // Exercise the same direct two-slot producer used by the native S3 window.
         let mut renderer = VulkanRenderer::new_at(root.to_owned()).map_err(|e| e.to_string())?;
         let target = self.bridge.target();
         let target = target
             .as_any()
-            .downcast_ref::<VulkanPresentationTarget>()
-            .ok_or("Vulkan presentation target is required")?;
+            .downcast_ref::<WindowTarget>()
+            .ok_or("Expected shared Vulkan device")?;
         renderer
-            .set_presentation_target(Some(Arc::new(VulkanPresentationTarget {
-                identity: target.identity.clone(),
-                allocator: target.allocator.clone(),
-            })))
+            .set_window_target(target)
             .map_err(|e| e.to_string())?;
         let case = if resident {
             "resident_scene_replacement"
@@ -668,10 +651,10 @@ impl Fixture<'_> {
             }
             ensure(
                 display.update(&self.bridge, &frame)?.is_some()
-                    && display.diagnostic_readback()? == *expected,
+                    && capture(&mut self.consumer, &display)? == *expected,
                 "Published material generation does not match its individual reference",
             )?;
-            self.reap(&mut display)?;
+            self.consumer.collect()?;
         }
         if resident {
             let repeat = |renderer: &mut VulkanRenderer, scene: &mut ResidentScene| match renderer
@@ -754,10 +737,10 @@ impl Fixture<'_> {
                     )?;
                     ensure(
                         display.update(&self.bridge, &frame)?.is_some()
-                            && display.diagnostic_readback()? == expected_c,
+                            && capture(&mut self.consumer, &display)? == expected_c,
                         "Retained scene lost accepted updates after cancellation",
                     )?;
-                    self.reap(&mut display)?;
+                    self.consumer.collect()?;
                     break;
                 }
                 ensure(Instant::now() < deadline, "Retained repeat timed out")?;
@@ -787,9 +770,9 @@ impl Fixture<'_> {
     }
 
     fn async_check(
-        &self,
+        &mut self,
         document: &GraphDocument,
-        render_state: &egui_wgpu::RenderState,
+        other: &GpuPresentationBridge,
     ) -> Result<(), String> {
         let controls = RenderOverrides::default();
         let mut scene_a = self.scene.clone();
@@ -868,7 +851,6 @@ impl Fixture<'_> {
             renderer.performance() == same_target_before,
             "Same target reconfigured an in-flight renderer",
         )?;
-        let other = GpuPresentationBridge::new(render_state.clone())?;
         let rejection = renderer
             .set_presentation_target(Some(other.target()))
             .err()
@@ -914,10 +896,10 @@ impl Fixture<'_> {
             "Pending A display copy missing",
         )?;
         ensure(
-            display.diagnostic_readback()? == expected_a,
+            capture(&mut self.consumer, &display)? == expected_a,
             "Scene/atlas/resize request or rejected candidate corrupted in-flight A pixels",
         )?;
-        self.reap(&mut display)?;
+        self.consumer.collect()?;
         drop(frame_a);
         record(
             self.report,
@@ -961,10 +943,10 @@ impl Fixture<'_> {
         )?;
         ensure(
             display.update(&self.bridge, &frame_b)?.is_some()
-                && display.diagnostic_readback()? == expected_b,
+                && capture(&mut self.consumer, &display)? == expected_b,
             "Next scene/atlas/resize did not match its own reference",
         )?;
-        self.reap(&mut display)?;
+        self.consumer.collect()?;
         drop(frame_b);
         ensure(
             renderer.performance().cpu_readback_bytes == before_b.cpu_readback_bytes
@@ -1015,10 +997,10 @@ impl Fixture<'_> {
         let frame = finish_submission(&mut *renderer, next)?;
         ensure(
             display.update(&self.bridge, &frame)?.is_some()
-                && display.diagnostic_readback()? == expected_b,
+                && capture(&mut self.consumer, &display)? == expected_b,
             "Discard corrupted the next publication",
         )?;
-        self.reap(&mut display)?;
+        self.consumer.collect()?;
         drop(frame);
         record(
             self.report,
@@ -1048,20 +1030,7 @@ impl Fixture<'_> {
         renderer.set_presentation_target(Some(self.bridge.target()))?;
         Ok(renderer)
     }
-    fn reap(&self, display: &mut GpuTexture) -> Result<(), String> {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while display.counters().pending_copies != 0 {
-            display.poll(&self.bridge)?;
-            ensure(
-                Instant::now() < deadline,
-                "Consumer GPU completion did not retire within 10 seconds",
-            )?;
-            if display.counters().pending_copies != 0 {
-                std::thread::sleep(Duration::from_millis(1));
-            }
-        }
-        Ok(())
-    }
+
     fn compare(
         &mut self,
         name: &str,
@@ -1134,7 +1103,7 @@ impl Fixture<'_> {
             self.display.dimensions() == Some(size),
             "GUI display dimensions mismatch",
         )?;
-        let actual = self.display.diagnostic_readback()?;
+        let actual = capture(&mut self.consumer, &self.display)?;
         ensure(
             actual.len() == expected.len(),
             format!("{name}: diagnostic display size mismatch"),
@@ -1152,15 +1121,7 @@ impl Fixture<'_> {
                 && self.display.texture_id() == Some(id),
             "Repeated GPU publication was incorrectly marked fresh",
         )?;
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while self.display.counters().pending_copies != 0 {
-            self.display.poll(&self.bridge)?;
-            ensure(
-                Instant::now() < deadline,
-                "Display release fence did not complete",
-            )?;
-            std::thread::sleep(Duration::from_millis(1));
-        }
+
         if let Some(folder) = &self.png_folder {
             write_png(&folder.join(format!("{name}.png")), size, &actual)?;
         }
@@ -1186,149 +1147,7 @@ impl Fixture<'_> {
         Ok(reference)
     }
 
-    fn adapter_mismatch_check(&mut self, renderer: &mut dyn FrameRenderer) -> Result<(), String> {
-        // All ordinary copies and the preceding endpoint-rejection lease have
-        // retired. Otherwise a busy-pool rejection would mask adapter matching.
-        ensure(
-            self.display.counters().pending_copies == 0,
-            "Adapter mismatch fixture requires no pending consumer copies",
-        )?;
-        let accepted = self.bridge.target();
-        let native = accepted
-            .as_any()
-            .downcast_ref::<VulkanPresentationTarget>()
-            .ok_or("GUI bridge did not supply a VulkanPresentationTarget")?;
-        let identities = match native.identity.clone() {
-            AdapterIdentity::VulkanUuid { device, driver } => {
-                ensure(
-                    cfg!(target_os = "linux"),
-                    "Vulkan UUID fixture requires Linux",
-                )?;
-                let mut wrong_device = device;
-                wrong_device[0] ^= 1;
-                let mut wrong_driver = driver;
-                wrong_driver[0] ^= 1;
-                vec![
-                    (
-                        "rejected_device_uuid_preserves_endpoint_and_display",
-                        AdapterIdentity::VulkanUuid {
-                            device: wrong_device,
-                            driver,
-                        },
-                    ),
-                    (
-                        "rejected_driver_uuid_preserves_endpoint_and_display",
-                        AdapterIdentity::VulkanUuid {
-                            device,
-                            driver: wrong_driver,
-                        },
-                    ),
-                ]
-            }
-            AdapterIdentity::WindowsLuid(mut luid) => {
-                ensure(cfg!(target_os = "windows"), "LUID fixture requires Windows")?;
-                luid[0] ^= 1;
-                vec![(
-                    "rejected_adapter_luid_preserves_endpoint_and_display",
-                    AdapterIdentity::WindowsLuid(luid),
-                )]
-            }
-        };
-        let previous_id = self.display.texture_id();
-        let previous_pixels = self.display.diagnostic_readback()?;
-        let [width, height] = self
-            .display
-            .dimensions()
-            .ok_or("Missing accepted display")?;
-        let previous_backend = renderer.backend_name().to_owned();
-        for (name, identity) in identities {
-            let before = renderer.performance();
-            let candidate = Arc::new(VulkanPresentationTarget {
-                identity,
-                allocator: native.allocator.clone(),
-            });
-            let rejection = renderer
-                .set_presentation_target(Some(candidate))
-                .err()
-                .ok_or_else(|| format!("{name}: mismatched adapter was accepted"))?;
-            ensure(
-                matches!(std::error::Error::source(&rejection).and_then(|error| error.downcast_ref::<module_engine_vulkan::VulkanError>()), Some(module_engine_vulkan::VulkanError::NoPresentationAdapter)),
-                format!("{name}: adapter matching was not reached: {rejection}"),
-            )?;
-            ensure(
-                renderer.performance() == before && renderer.backend_name() == previous_backend,
-                format!("{name}: rejected target changed accepted renderer state"),
-            )?;
-            ensure(
-                self.display.texture_id() == previous_id
-                    && self.display.diagnostic_readback()? == previous_pixels,
-                format!("{name}: rejection changed last good display"),
-            )?;
-            // Do not restore the endpoint: this actual publication must use the
-            // endpoint retained by the failed target-candidate transaction.
-            let frame = presented(
-                renderer,
-                &self.scene,
-                Camera::default(),
-                [width, height],
-                &RenderOverrides::default(),
-            )?;
-            let after = renderer.performance();
-            ensure(
-                frame.gpu.is_some()
-                    && frame.rgba.is_empty()
-                    && frame.is_valid()
-                    && after.cpu_readback_bytes == before.cpu_readback_bytes
-                    && after.gpu_presentation_frames == before.gpu_presentation_frames + 1
-                    && after.gpu_presentation_bytes
-                        == before.gpu_presentation_bytes + (width * height * 4) as u64,
-                format!("{name}: retained endpoint used CPU fallback or missed GPU publication"),
-            )?;
-            // A live lease forbids replacing a different endpoint. Reaccepting
-            // this exact endpoint must be a no-op while the new frame is held.
-            renderer.set_presentation_target(Some(accepted.clone()))?;
-            ensure(
-                renderer.performance() == after,
-                format!("{name}: retained endpoint was rebuilt"),
-            )?;
-            ensure(
-                self.display.update(&self.bridge, &frame)? == previous_id
-                    && self.display.texture_id() == previous_id
-                    && self.display.diagnostic_readback()? == previous_pixels,
-                format!("{name}: last good actual GPU image changed"),
-            )?;
-            let deadline = Instant::now() + Duration::from_secs(10);
-            while self.display.counters().pending_copies != 0 {
-                self.display.poll(&self.bridge)?;
-                ensure(
-                    Instant::now() < deadline,
-                    "Adapter mismatch copy did not retire",
-                )?;
-                std::thread::sleep(Duration::from_millis(1));
-            }
-            drop(frame);
-            let counters = self.bridge.counters();
-            ensure(
-                counters.cpu_readback_bytes == 0 && counters.cpu_upload_bytes == 0,
-                format!("{name}: normal bridge used CPU pixel transfer"),
-            )?;
-            record(
-                self.report,
-                json!({
-                    "case": name, "passed": true, "diagnostic": rejection.to_string(),
-                    "only_identity_changed": true, "allocator_preserved": true,
-                    "last_good_display_unchanged": true, "retained_endpoint_gpu_publication": true,
-                    "dimensions": [width, height], "differing_bytes": 0,
-                    "presented_gpu_frames": after.gpu_presentation_frames-before.gpu_presentation_frames,
-                    "presented_cpu_readback_bytes": after.cpu_readback_bytes-before.cpu_readback_bytes,
-                    "explicit_diagnostic_readback": true,
-                }),
-            );
-        }
-        Ok(())
-    }
-
-    fn pool_check(&self, document: &GraphDocument) -> Result<(), String> {
+    fn pool_check(&mut self, document: &GraphDocument) -> Result<(), String> {
         let mut renderer = self.renderer(document)?;
         let before = renderer.performance();
         let mut frames = Vec::new();
@@ -1358,7 +1177,7 @@ impl Fixture<'_> {
         let first = frames.remove(0);
         ensure(
             display.update(&self.bridge, &first)?.is_some(),
-            "Pool retirement copy not submitted",
+            "Pool output was not registered with the painter",
         )?;
         drop(first);
         // No completion poll has released the consumer's source lease yet.
@@ -1375,9 +1194,11 @@ impl Fixture<'_> {
             ),
             "Source lease was released before consumer completion observation",
         )?;
-        // Recover exclusively through production nonblocking poll, without a
-        // new frame or diagnostic readback providing an incidental GPU wait.
-        self.reap(&mut display)?;
+        // The displayed descriptor pins its source even after a completed draw.
+        let diagnostic = capture(&mut self.consumer, &display)?;
+        let counters = display.counters();
+        drop(display);
+        self.consumer.collect()?;
         let recycled = presented(
             &mut *renderer,
             &self.scene,
@@ -1395,17 +1216,16 @@ impl Fixture<'_> {
                 && after.gpu_presentation_frames == before.gpu_presentation_frames + 5,
             "Pool saturation performed a hidden readback/submission",
         )?;
-        let diagnostic = display.diagnostic_readback()?;
         drop(recycled);
         drop(frames);
         record(
             self.report,
-            json!({"case":"four_leases_backpressure_consumer_retirement","passed":true,"held_leases":4,"fifth_skipped":true,"leased_until_completion_poll":true,"recycled_after_gpu_completion":true,"gpu_frames":after.gpu_presentation_frames-before.gpu_presentation_frames,"normal_cpu_readback_bytes":after.cpu_readback_bytes-before.cpu_readback_bytes,"explicit_diagnostic_bytes":diagnostic.len(),"display_counters":display.counters()}),
+            json!({"case":"four_leases_backpressure_consumer_retirement","passed":true,"held_leases":4,"fifth_skipped":true,"leased_while_displayed":true,"recycled_after_descriptor_retirement":true,"gpu_frames":after.gpu_presentation_frames-before.gpu_presentation_frames,"normal_cpu_readback_bytes":after.cpu_readback_bytes-before.cpu_readback_bytes,"explicit_diagnostic_bytes":diagnostic.len(),"display_counters":counters}),
         );
         Ok(())
     }
 
-    fn drop_check(&self, document: &GraphDocument) -> Result<(), String> {
+    fn drop_check(&mut self, document: &GraphDocument) -> Result<(), String> {
         let mut renderer = self.renderer(document)?;
         let reference = renderer.render(
             &self.scene,
@@ -1432,12 +1252,12 @@ impl Fixture<'_> {
             display.update(&self.bridge, &frame)?.is_some(),
             "Frame could not be consumed after producer renderer drop",
         )?;
-        let actual = display.diagnostic_readback()?;
+        let actual = capture(&mut self.consumer, &display)?;
         ensure(
             actual == expected,
             "Renderer drop invalidated published GPU pixels",
         )?;
-        self.reap(&mut display)?;
+        self.consumer.collect()?;
         drop(frame);
         // Exercise pane closure with an actual outstanding copy and retain no
         // producer frame outside the production bridge's completion machinery.
@@ -1451,25 +1271,25 @@ impl Fixture<'_> {
         )?;
         ensure(
             display.update(&self.bridge, &frame)?.is_some(),
-            "Pane-drop copy not submitted",
+            "Pane-drop frame was not registered with the painter",
         )?;
         drop(frame);
         drop(renderer);
         drop(display);
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while self.bridge.counters().pending_copies != 0 {
-            ensure(
-                Instant::now() < deadline,
-                "Closed-pane completion reaper retained GPU leases",
-            )?;
-            std::thread::sleep(Duration::from_millis(2));
-        }
+        self.consumer.collect()?;
         record(
             self.report,
             json!({"case":"producer_drop_and_pane_drop_completion_lifetime","passed":true,"published_frame_consumed_after_renderer_drop":true,"closed_pane_pending_copies":0,"explicit_diagnostic_bytes":actual.len(),"scope":"FrameRenderer and GpuTexture destruction/recreation; not the Editor Stop command UI"}),
         );
         Ok(())
     }
+}
+
+fn capture(consumer: &mut Offscreen, display: &GpuTexture) -> Result<Vec<u8>, String> {
+    consumer.capture(
+        display.texture_id().ok_or("Missing display texture")?,
+        display.dimensions().ok_or("Missing display dimensions")?,
+    )
 }
 
 fn write_png(path: &Path, size: [usize; 2], pixels: &[u8]) -> Result<(), String> {
@@ -1487,3 +1307,6 @@ fn write_png(path: &Path, size: [usize; 2], pixels: &[u8]) -> Result<(), String>
         .write_image_data(pixels)
         .map_err(|e| e.to_string())
 }
+
+#[path = "gpu_presentation_check/window_check.rs"]
+mod window_check;

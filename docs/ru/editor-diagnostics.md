@@ -5,7 +5,7 @@
 [scripts/editor_diagnostics.py](../../scripts/editor_diagnostics.py) выполняет ограниченную
 диагностику с существующим обычным native Editor executable. Он создаёт собственный
 fixture, использует прежний `--editor-ui-check` для workflow и записывает native
-WGPU captures. Wrapper не собирает Editor и не принимает авторский JSON проекта.
+снимки Vulkan. Wrapper не собирает Editor и не принимает авторский JSON проекта.
 Приведённые ниже Windows-прогоны подтверждают этот ограниченный маршрут; Linux
 native capture ещё не проверен.
 [Hosted CI этапов 1/2](https://github.com/ModuleEngine/ModuleEngine/actions/runs/38994338494)
@@ -52,7 +52,7 @@ python3 scripts/editor_diagnostics.py --editor /absolute/path/to/module-engine-e
 Каждый запуск размещает сгенерированный fixture и изолированный personal directory
 в `work/verification/editor-diagnostics/<run-id>/`. Дочерние TEMP/TMP/TMPDIR используют
 уникальный короткий `.work/v/<token>`. Wrapper удаляет унаследованные capture controls
-и явно выбирает WGPU и запрошенную оконную систему, сохраняя обычное loader
+и явно выбирает отрисовщик Ash и запрошенную оконную систему, сохраняя обычное loader
 окружение. Запрошенный размер окна 1580×940, минимальный 1100×720; фактические
 размеры PNG проверяются и записываются.
 
@@ -85,9 +85,9 @@ tracked/untracked исходников до и после запуска. Invent
 Одного exit 0 Editor недостаточно. Capture требует новый полный RGBA8 PNG с
 ограниченными положительными размерами, корректными chunks/CRC, завершённым zlib
 и полными scanlines. Также требуется ровно одна запись фактически инициализированной
-графики: WGPU с `Dx12` на Windows или `Vulkan` на Linux и совместимая фактическая
+графики: Ash с `Vulkan` в Windows и Linux и совместимая фактическая
 оконная система. Одни запрошенные значения окружения не доказывают графику.
-`native-ui.png` — application WGPU readback, а не compositor screenshot.
+`native-ui.png` — результат чтения изображения из цепочки показа приложения.
 
 Workflow требует новый `workflow-report.json`, `passed=true`, положительные целые
 `model_pixels_changed` и `model_primitives`, все четыре `menus_clicked` равными true.

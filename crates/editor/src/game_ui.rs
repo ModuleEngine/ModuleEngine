@@ -384,9 +384,6 @@ impl GameWorkbench {
         {
             host.poll_authored_presentation()?;
         }
-        if let Some(bridge) = &self.gpu_bridge {
-            self.gpu_texture.poll(bridge)?;
-        }
         Ok(())
     }
     pub fn has_pending_gpu_presentation(&self) -> bool {

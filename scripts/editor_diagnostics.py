@@ -143,12 +143,12 @@ def graphics_evidence(log, system, requested_window):
         if len(matches) != 1:
             raise DiagnosticError("Missing or ambiguous graphics field: " + key)
         fields[key] = matches[0]
-    backend = "Dx12" if system == "windows" else "Vulkan"
-    if (fields["renderer"] != "Wgpu" or fields["backend"] != backend
-            or fields["requested_renderer"] != "Wgpu"
+    backend = "Vulkan"
+    if (fields["renderer"] != "Ash" or fields["backend"] != backend
+            or fields["requested_renderer"] != "Ash"
             or fields["requested_gpu_backend"].lower() != backend.lower()
             or fields["requested_window_system"] != requested_window):
-        raise DiagnosticError("Initialized GUI or reported request does not match required native WGPU policy")
+        raise DiagnosticError("Initialized GUI or reported request does not match required native Vulkan policy")
     windows = ("Windows",) if system == "windows" else ("X11", "Wayland")
     if fields["window_system"] not in windows or (requested_window != "auto" and fields["window_system"].lower() != requested_window):
         raise DiagnosticError("Actual GUI window system does not match request/platform")
@@ -161,7 +161,7 @@ def environment(temp, personal, window):
                      or key in ("MODULE_ENGINE_UI_SCREENSHOT_TO", "MODULE_ENGINE_UI_SETTLE_MS", "MODULE_ENGINE_SHOW_CUSTOM"))
     for key in removed:
         env.pop(key)
-    env.update(TEMP=str(temp), TMP=str(temp), TMPDIR=str(temp), MODULE_ENGINE_GUI_BACKEND="wgpu",
+    env.update(TEMP=str(temp), TMP=str(temp), TMPDIR=str(temp), MODULE_ENGINE_GUI_BACKEND="ash",
                MODULE_ENGINE_WINDOW_SYSTEM=window, MODULE_ENGINE_DIAGNOSTIC_USER_ROOT=str(personal))
     return env, removed
 

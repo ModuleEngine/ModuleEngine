@@ -185,7 +185,12 @@ impl Timeline {
             .wait_semaphore_infos(wait_info.as_slice())
             .command_buffer_infos(&command)
             .signal_semaphore_infos(&signal);
-        // SAFETY: The renderer owns the selected queue exclusively during submission. The buffer is
+        let _queue = self
+            .context
+            .queue_access
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        // SAFETY: The lock serializes submissions to the selected queue. The buffer is
         // executable for that queue family, the signal value increases, and the flight retains the
         // command pool and timelines through completion.
         unsafe {
@@ -249,6 +254,10 @@ impl Completion {
                 debug_assert!(wait.is_none());
                 let commands = [command];
                 let submit = vk::SubmitInfo::default().command_buffers(&commands);
+                let _queue = context
+                    .queue_access
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner());
                 // SAFETY: The renderer exclusively submits the executable buffer to its own queue.
                 // This completion owns a fresh unsignaled fence retained with the flight.
                 unsafe { context.device.queue_submit(queue, &[submit], *fence) }

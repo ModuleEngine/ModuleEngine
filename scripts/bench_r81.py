@@ -74,7 +74,7 @@ def run(exe, output, rounds):
     write_json(output / "source.json", source)
     exe_hash = entry(exe.parent, exe.name)["sha256"]
     env = bench_env(vsync=False, profiling=True)
-    env.update(MODULE_ENGINE_GUI_BACKEND="wgpu")
+    env.update(MODULE_ENGINE_GUI_BACKEND="ash")
     # The image gate and timing series use the same Release artifact.
     with (output / "visibility.log").open("x", encoding="utf-8") as log:
         subprocess.run([str(exe), "--bench-scene", "R81-visibility", str(output / "visibility")],

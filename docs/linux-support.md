@@ -4,7 +4,7 @@
 
 [English](linux-support.md) | [Русский](ru/linux-support.md) | [Documentation](README.md)
 
-GUI Editor and Player share one policy: **Windows — WGPU/DX12, Linux — WGPU/Vulkan**. The game renderer is a separate Vulkan module. The GUI using one API does not determine the game graph's format. The Windows DWM-freeze fix is preserved; diagnostic Glow is enabled only explicitly.
+Editor and Player open windows with winit and draw egui through Ash/Vulkan on Windows and Linux. The project’s selected modules determine its game graph.
 
 Policy checks with a Linux flag on Windows do not replace native building and execution. Native Rust/Cargo, a C compiler, pkg-config and DXC were installed in the existing Ubuntu/WSL2 with separate authorization. [Current status](current-status.md) ties completed fixes and open boundaries to subsequent checks; [linux-support-20261015.md](linux-support-20261015.md) describes the first run and is retained as history.
 
@@ -77,7 +77,7 @@ MODULE_ENGINE_WINDOW_SYSTEM=x11 sh run.sh /path/to/linux-project-v4.json
 MODULE_ENGINE_WINDOW_SYSTEM=auto sh run.sh /path/to/linux-project-v4.json
 ```
 
-Auto uses winit's selection: a nonempty Wayland environment takes priority. An automatic retry through X11 after a failed Wayland connection is not promised. On error, check `WAYLAND_DISPLAY`, `WAYLAND_SOCKET`, `XDG_RUNTIME_DIR` and `DISPLAY`, or explicitly select X11. A faulty configuration reports the reason; there is no hidden WGPU-to-Glow fallback.
+Auto uses winit's selection: a nonempty Wayland environment takes priority. An automatic retry through X11 after a failed Wayland connection is not promised. On error, check `WAYLAND_DISPLAY`, `WAYLAND_SOCKET`, `XDG_RUNTIME_DIR` and `DISPLAY`, or explicitly select X11. A faulty configuration reports the reason; the selected native window system must be available.
 
 In the detected WSLg, `WAYLAND_DISPLAY=wayland-0`, but the socket is in `/mnt/wslg/runtime-dir/wayland-0`, and `XDG_RUNTIME_DIR=/run/user/0` does not point to it. An absolute path is allowed for a separate process:
 
@@ -102,7 +102,7 @@ MODULE_ENGINE_PROBE_SECONDS=5 MODULE_ENGINE_WINDOW_SYSTEM=x11 \
 
 Running with `--target` without `CARGO_TARGET_DIR` uses standard `target/<host>`; set the same variable as in `run.sh` if needed. Do not run multiple GPU checks simultaneously.
 
-Logs distinguish `requested` parameters from the actually `initialized` adapter/backend/window-system. `WGPU_BACKEND` does not override Windows DX12 or Linux Vulkan. `MODULE_ENGINE_GUI_BACKEND=glow` is explicit diagnostics requiring a separate decision on a machine with the previous DWM defect. `EFRAME_SCREENSHOT_TO` no longer enables Glow implicitly: for Editor, use `MODULE_ENGINE_UI_SCREENSHOT_TO` with WGPU. The historical DWM report describes the previous capture behavior.
+The window log records the requested and initialized backend, adapter and window system. For normal launch, leave MODULE_ENGINE_GUI_BACKEND unset or set it to ash. Use MODULE_ENGINE_UI_SCREENSHOT_TO for Editor screenshots. The historical desktop_presentation_probe example separately compares Glow and WGPU.
 
 <a id="dxc-пакеты-и-процессы"></a>
 

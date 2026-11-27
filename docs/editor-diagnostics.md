@@ -4,7 +4,7 @@
 
 [scripts/editor_diagnostics.py](../scripts/editor_diagnostics.py) runs bounded diagnostics
 with an existing normal native Editor executable. It creates its own fixture, reuses
-`--editor-ui-check` for workflow checks, and records native WGPU captures. The wrapper
+`--editor-ui-check` for workflow checks, and records native Vulkan captures. The wrapper
 does not build an Editor and accepts no authored project JSON as input. The Windows
 runs below confirm this bounded route; Linux native capture remains unverified.
 The [stage-1/2 hosted CI run](https://github.com/ModuleEngine/ModuleEngine/actions/runs/38994338494)
@@ -48,7 +48,7 @@ select a build automatically. Record the chosen path and build evidence with the
 Each run places its generated fixture and isolated personal directory under
 `work/verification/editor-diagnostics/<run-id>/`. Child TEMP/TMP/TMPDIR use a unique
 short `.work/v/<token>` directory. The wrapper removes inherited capture controls
-and explicitly selects WGPU and the requested window system while retaining the
+and explicitly selects the Ash painter and the requested window system while retaining the
 normal loader environment. The requested window size is 1580×940 with a minimum
 1100×720; the actual PNG dimensions are validated and reported.
 
@@ -79,10 +79,10 @@ evidence before making a source-specific conclusion.
 
 Editor exit 0 alone is insufficient. Capture requires a fresh complete RGBA8 PNG
 with bounded positive dimensions, valid chunks/CRC, terminated zlib data and complete
-scanlines. It also requires exactly one actual initialized graphics record: WGPU
-with `Dx12` on Windows or `Vulkan` on Linux and a compatible actual window system.
+scanlines. It also requires exactly one actual initialized graphics record from the Ash painter
+with `Vulkan` on Windows and Linux and a compatible actual window system.
 Requested environment values alone are not graphics evidence. `native-ui.png` is
-an application WGPU readback, not a compositor screenshot.
+a readback of the application swapchain.
 
 Workflow requires a fresh `workflow-report.json`, `passed=true`, positive integer
 `model_pixels_changed` and `model_primitives`, and all four `menus_clicked` values

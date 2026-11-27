@@ -212,6 +212,11 @@ jobs:
       - name: Linux native offscreen contracts (Mesa software device)
         if: runner.os == 'Linux'
         run: python scripts/verify.py --profile native --require-capabilities --timeout 1800
+      - name: Recover a Vulkan window after an abandoned acquire (Mesa/X11)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install --no-install-recommends -y xvfb xauth vulkan-validationlayers
+          xvfb-run -a cargo test --locked -p module-engine-native-ui --lib -- gpu::tests::failed_recording_retires_the_acquired_slot_before_retry --ignored --exact --nocapture
       - *reports
 
   package:

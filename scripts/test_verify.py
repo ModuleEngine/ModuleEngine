@@ -97,7 +97,7 @@ class RegistryTests(Fixture):
             "fixture-emitter", "catchup-diagnostic", "g1-team-palette", "audio-source-clock",
             "audio-registered-pcm8", "audio-start-retry", "audio-owner-retirement", "g1-cpu-timing",
             "render-settings-history", "custom-player-settings", "custom-player-settings-rollback", "custom-player-settings-stale",
-            "native-window-icons", "native-window-z-order",
+            "native-window-icons", "native-window-z-order", "native-window-acquire-recovery",
             "r12-existing-game-roundtrip", "r12-player-stable-id-ipc", "r14-s3-tick-cost", "r15-event-replay",
             "r16-s3-vulkan", "r19-s3-motion-update-cost", "r71-gltf-playback",
             "r61-custom-physics", "r61-s2-physics",

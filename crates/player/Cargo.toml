@@ -7,16 +7,17 @@ publish = false
 
 [features]
 default = []
-ui = ["dep:module-engine-game-ui", "dep:eframe", "dep:winit", "dep:log", "module-engine-arpg?/ui", "module-engine-project-puzzle?/ui", "module-engine-g1?/ui"]
+ui = ["dep:module-engine-native-ui", "dep:module-engine-game-ui", "dep:eframe", "dep:winit", "dep:log", "module-engine-arpg?/ui", "module-engine-project-puzzle?/ui", "module-engine-g1?/ui"]
 arpg = ["dep:module-engine-arpg"]
 puzzle = ["dep:module-engine-project-puzzle"]
 g1 = ["dep:module-engine-g1"]
-vulkan = ["dep:module-engine-vulkan", "dep:ash", "dep:windows"]
+vulkan = ["dep:module-engine-vulkan"]
 audio = ["module-engine-host-services/audio"]
 persistence = ["module-engine-host-services/persistence"]
 rapier-physics = ["dep:module-engine-physics-rapier"]
 
 [dependencies]
+module-engine-native-ui = { path = "../native-ui", optional = true }
 module-engine-game-ui = { path = "../game-ui", optional = true }
 module-engine-core = { path = "../engine-core" }
 module-engine-host = { path = "../game-host" }
@@ -34,12 +35,8 @@ serde_json.workspace = true
 png.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-ash = { version = "0.38", optional = true }
 eframe = { workspace = true, optional = true, features = ["wayland", "x11"] }
 winit = { version = "0.30.13", default-features = false, features = ["wayland", "wayland-dlopen", "x11"], optional = true }
-
-[target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.62", default-features = false, optional = true, features = ["Win32_Foundation", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi_Common", "Win32_Security"] }
 
 [dev-dependencies]
 module-engine-two-arenas = { path = "../example-two-arenas" }

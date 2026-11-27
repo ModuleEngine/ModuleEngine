@@ -1,9 +1,9 @@
-//! Bounded control for the editor's native GUI presentation path.
+//! Bounded control for the historical eframe presentation path.
 //!
 //! This deliberately creates no project, GameHost, Vulkan device, or layout.
 //! `MODULE_ENGINE_PROBE_SECONDS` sets the lifetime (default: 10 seconds).
 //! `MODULE_ENGINE_PROBE_VSYNC=0` changes only the OpenGL swap interval.
-//! `MODULE_ENGINE_GUI_BACKEND=glow|wgpu` selects the shared presentation renderer.
+//! `MODULE_ENGINE_GUI_BACKEND=glow|wgpu` selects the diagnostic renderer.
 //! Linux uses WGPU/Vulkan; `MODULE_ENGINE_WINDOW_SYSTEM=auto|wayland|x11`
 //! independently selects the display server. Windows keeps WGPU/DX12.
 

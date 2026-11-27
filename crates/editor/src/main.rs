@@ -809,46 +809,45 @@ fn run() -> Result<(), String> {
     let initial_size = [1580., 940.];
     #[cfg(feature = "verification")]
     let initial_size = capture_geometry.map_or([1580., 940.], |g| g.size);
-    let options = module_engine_player::ui::native_options(
-        eframe::egui::ViewportBuilder::default()
-            .with_icon(app_icon::icon())
-            .with_inner_size(initial_size)
-            .with_min_inner_size([320.0, 240.0])
-            .with_clamp_size_to_monitor_size(true),
-    )?;
+    let viewport = eframe::egui::ViewportBuilder::default()
+        .with_title("ModuleEngine / Engine Constructor")
+        .with_icon(app_icon::icon())
+        .with_inner_size(initial_size)
+        .with_min_inner_size([320.0, 240.0])
+        .with_clamp_size_to_monitor_size(true);
     let open_custom = std::env::var_os("MODULE_ENGINE_SHOW_CUSTOM").is_some();
-    eframe::run_native(
-        "ModuleEngine / Engine Constructor",
-        options,
-        Box::new(move |cc| {
-            module_engine_player::ui::report_graphics(cc);
-            app::configure_style(&cc.egui_ctx);
+    module_engine_native_ui::run(
+        distribution.package_root.clone(),
+        viewport,
+        move |ctx, window, bridge| {
+            module_engine_player::ui::window_graphics(window, &bridge);
+            app::configure_style(ctx);
             #[cfg(feature = "verification")]
             if let Some(geometry) = capture_geometry {
-                cc.egui_ctx.set_zoom_factor(geometry.zoom);
-                cc.egui_ctx.data_mut(|d| {
+                ctx.set_zoom_factor(geometry.zoom);
+                ctx.data_mut(|d| {
                     d.insert_temp(eframe::egui::Id::new("diagnostic-geometry"), geometry)
                 });
             }
-            let bridge = module_engine_player::ui::presentation_bridge(cc)?;
             let mut editor = app::Editor::new_native_with_diagnostic_personal_root(
                 document,
                 path,
                 distribution,
                 diagnostic_personal_root,
-                bridge,
+                Some(std::sync::Arc::new(
+                    module_engine_player::gpu_presentation::GpuPresentationBridge::window(bridge),
+                )),
             );
             if open_custom {
                 editor.show_custom();
             }
             #[cfg(feature = "verification")]
             if let Ok(view) = std::env::var("MODULE_ENGINE_CAPTURE_VIEW") {
-                editor.show_verification_view(&view);
+                editor.show_verification_view(&view)?;
             }
             Ok(Box::new(editor))
-        }),
+        },
     )
-    .map_err(module_engine_player::ui::gui_startup_error)
 }
 
 fn parse_profile(

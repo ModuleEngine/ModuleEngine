@@ -299,50 +299,33 @@ fn scene(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
     let returned = Arc::clone(&report);
     let id = id.to_owned();
     let root = root.to_owned();
-    let options = ui::native_options(
-        egui::ViewportBuilder::default()
-            .with_title(format!("ModuleEngine / {id} benchmark"))
-            .with_position([0., 0.])
-            .with_inner_size([1920., 1080.])
-            .with_decorations(false),
-    )?;
-    ui::observe_benchmark_present_mode();
-    let outcome = eframe::run_native(
-        &format!("ModuleEngine / {id} benchmark"),
-        options,
-        Box::new(move |cc| {
-            let graphics = ui::report_graphics(cc);
-            let bridge = ui::presentation_bridge(cc)?.ok_or("Native WGPU bridge is required")?;
-            let target = bridge.target();
-            let target = target.as_any()
-                .downcast_ref::<module_engine_vulkan::presentation::VulkanPresentationTarget>()
-                .ok_or("Vulkan presentation target is required")?;
-            let target = Arc::new(
-                module_engine_vulkan::presentation::VulkanPresentationTarget {
-                    identity: target.identity.clone(),
-                    allocator: Arc::clone(&target.allocator),
-                },
-            );
-            let mut renderer = if let Some(path) = r81 {
-                VulkanRenderer::new_meshlet_benchmark(
-                    root,
-                    Some(target),
-                    path == meshlets::PathUnderTest::Mesh,
-                )?
-            } else {
-                let mut renderer = VulkanRenderer::new_at(root).map_err(|error| error.to_string())?;
-                renderer.set_presentation_target(Some(target))?;
-                renderer
-            };
+    let viewport = egui::ViewportBuilder::default()
+        .with_title(format!("ModuleEngine / {id} benchmark"))
+        .with_position([0., 0.])
+        .with_inner_size([1920., 1080.])
+        .with_decorations(false);
+    let outcome = module_engine_native_ui::run_with_meshlets(
+        root.clone(),
+        viewport,
+        r81 == Some(meshlets::PathUnderTest::Mesh),
+        move |ctx, window, native_bridge| {
+            let graphics = ui::window_graphics(window, &native_bridge);
+            ui::record_window_mode(native_bridge.present_mode);
+            let mut renderer = native_bridge.graph_renderer(root)?;
+            let bridge = Arc::new(GpuPresentationBridge::window(native_bridge));
             let mut meshlets = None;
             if let Some(path) = r81 {
-                let device = renderer.meshlet_device_report()?;
+                let device = renderer
+                    .meshlet_device_report()
+                    .map_err(|e| e.to_string())?;
                 let mut report = report.lock().unwrap();
                 report["r81_device"] = json!(device);
                 report["vulkan_capabilities"] = json!(renderer.capabilities());
                 write(&preflight_path, &report)?;
                 if path == meshlets::PathUnderTest::Mesh {
-                    let source = renderer.build_meshlet_probe(std::mem::take(&mut fixture.scene))?;
+                    let source = renderer
+                        .build_meshlet_probe(std::mem::take(&mut fixture.scene))
+                        .map_err(|e| e.to_string())?;
                     report["meshlet_build"] = json!(source.build_report());
                     meshlets = Some(source);
                 } else {
@@ -360,7 +343,9 @@ fn scene(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
             // S3 measures overlap. S4 and S5 keep the original one-request
             // protocol and S5's single expanded-stream memory preflight.
             let frame_window = if s3 { renderer.frame_capacity() } else { 1 };
-            let probe = r81.is_none().then(|| renderer.probe_vertex_allocation(triangles));
+            let probe = r81
+                .is_none()
+                .then(|| renderer.probe_vertex_allocation(triangles));
             let mut blocked = probe.as_ref().and_then(|probe| probe.blocked.clone());
             if id == "S5" {
                 let probe = probe.as_ref().unwrap();
@@ -370,19 +355,19 @@ fn scene(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
                 // Indexed source and frame images coexist with the host-visible
                 // Vulkan allocation and expanded stream.
                 let required = probe.requested_bytes + probe.requested_bytes / 2 + 1024_u64.pow(3);
-                report.lock().unwrap()["system_memory_preflight"] =
-                    json!({"available_bytes_before_load":available,"estimated_required_bytes":required});
+                report.lock().unwrap()["system_memory_preflight"] = json!({"available_bytes_before_load":available,"estimated_required_bytes":required});
                 if blocked.is_none() && available.is_none_or(|bytes| bytes < required) {
                     blocked = Some(
                         "S5 requires sufficient reported RAM/commit headroom; check system memory and launch with scripts/bench.py".into(),
                     );
                 }
             }
-            let window = cc.winit_window().cloned().ok_or("Native window is required")?;
+            let window = window.clone();
             let scale = window.scale_factor() as f32;
-            cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(
-                egui::vec2(SIZE[0] as f32 / scale, SIZE[1] as f32 / scale),
-            ));
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                SIZE[0] as f32 / scale,
+                SIZE[1] as f32 / scale,
+            )));
             {
                 let mut report = report.lock().unwrap();
                 report["gui_graphics"] = json!(graphics);
@@ -397,18 +382,37 @@ fn scene(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
                 write(&preflight_path, &report)?;
             }
             Ok(Box::new(SceneApp {
-                fixture, retained, meshlets, r81, static_s3, renderer, bridge, blocked,
-                warmup, frames, objects, triangles, report,
+                fixture,
+                retained,
+                meshlets,
+                r81,
+                static_s3,
+                renderer,
+                bridge,
+                blocked,
+                warmup,
+                frames,
+                objects,
+                triangles,
+                report,
                 window_state: Box::new(move || (window.inner_size().into(), window.is_minimized())),
-                graph: default_graph(RenderPath::Forward), texture: GpuTexture::default(),
-                started: Instant::now(), completed: 0, submitted: 0,
-                in_flight: std::collections::VecDeque::new(), retry_tick: None,
-                max_pending: 0, frame_window, last_ui: None,
-                last_painted: None, samples: Vec::new(), initial_work: None, finished: false,
+                graph: default_graph(RenderPath::Forward),
+                texture: GpuTexture::default(),
+                started: Instant::now(),
+                completed: 0,
+                submitted: 0,
+                in_flight: std::collections::VecDeque::new(),
+                retry_tick: None,
+                max_pending: 0,
+                frame_window,
+                last_ui: None,
+                last_painted: None,
+                samples: Vec::new(),
+                initial_work: None,
+                finished: false,
             }))
-        }),
-    )
-    .map_err(ui::gui_startup_error);
+        },
+    );
     let mut report = returned.lock().unwrap();
     let present_mode = ui::benchmark_present_mode();
     report["effective_present_mode"] = json!(present_mode.effective_present_mode);
@@ -598,7 +602,6 @@ impl SceneApp {
         if self.started.elapsed() > Duration::from_secs(300) {
             return Err("Native scene watchdog expired".into());
         }
-        self.texture.poll(&self.bridge)?;
         let now = Instant::now();
         self.observe(now)?;
         if self.completed == self.warmup + self.frames {
@@ -687,8 +690,8 @@ impl SceneApp {
     }
 }
 
-impl eframe::App for SceneApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
+impl module_engine_native_ui::NativeApp for SceneApp {
+    fn ui(&mut self, ui: &mut egui::Ui, _: &module_engine_native_ui::Window) {
         let ctx = ui.ctx().clone();
         let ui_frame = ctx.cumulative_frame_nr();
         if self.last_ui.replace(ui_frame) != Some(ui_frame) && !self.finished {

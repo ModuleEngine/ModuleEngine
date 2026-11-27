@@ -4,7 +4,7 @@ use super::{
     painter::upload,
 };
 use ash::vk;
-use eframe::egui::{
+use egui::{
     ImageData, Rect, TextureFilter, TextureId, TextureOptions, TextureWrapMode,
     epaint::{ClippedPrimitive, ImageDelta, Primitive, Vertex},
 };
@@ -544,21 +544,21 @@ impl Texture {
         buffer.write(bytes)?;
         let sample = (
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            vk::PipelineStageFlags2::FRAGMENT_SHADER,
-            vk::AccessFlags2::SHADER_SAMPLED_READ,
+            vk::PipelineStageFlags::FRAGMENT_SHADER,
+            vk::AccessFlags::SHADER_READ,
         );
         let copy = (
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            vk::PipelineStageFlags2::COPY,
-            vk::AccessFlags2::TRANSFER_WRITE,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::AccessFlags::TRANSFER_WRITE,
         );
         let old = if patch {
             sample
         } else {
             (
                 vk::ImageLayout::UNDEFINED,
-                vk::PipelineStageFlags2::NONE,
-                vk::AccessFlags2::NONE,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::AccessFlags::empty(),
             )
         };
         upload(frames, |command| {

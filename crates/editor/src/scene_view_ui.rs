@@ -275,12 +275,7 @@ impl SceneViewportState {
     pub fn texture_id(&self) -> Option<egui::TextureId> {
         module_engine_player::ui::presentation_texture_id(&self.texture, &self.gpu_texture)
     }
-    pub fn poll_gpu_presentation(&mut self) -> Result<(), String> {
-        if let Some(bridge) = &self.gpu_bridge {
-            self.gpu_texture.poll(bridge)?;
-        }
-        Ok(())
-    }
+
     fn visible_camera(&self) -> Camera {
         self.displayed_camera.unwrap_or(self.camera)
     }

@@ -71,6 +71,8 @@ python3 scripts/verify.py --profile native --plan
 | `native-tools` | Три native linker/cache/executable-spelling проверки из `native`, без GameUI и GPU. | Не полный `native`; на Linux Windows-only test отмечается `skipped`. Используется Windows CI. |
 | `package` | Две ignored проверки `game_package`: native target modes и concurrent immutable snapshots. Они собирают минимальные Cargo fixtures и исполняют их продукты. | **Не реальный Full/Team/Player game export, relocation или полная приёмка поставки.** Эти CLI-проверки остаются адресным/legacy маршрутом. |
 
+Linux CI дополнительно запускает `native-window-acquire-recovery` в Xvfb с Mesa и слоем проверки Khronos. Тест прерывает запись после получения изображения swapchain, повторяет отрисовку после сброса fence без submit и проверяет закрытие окна после ошибки. На Windows эту проверку можно запустить отдельно при наличии рабочего стола Vulkan.
+
 Профиль `clippy` явный и независимый: `contracts` по-прежнему проверяет formatting
 ровно один раз; он не добавляет шагов в legacy suite. Сначала выполните
 `python scripts/verify.py --profile clippy --plan`, затем
