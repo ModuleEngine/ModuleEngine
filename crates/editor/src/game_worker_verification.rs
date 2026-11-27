@@ -3,8 +3,8 @@ use crate::{
     game_host::GameHost,
     game_worker::{CustomApplyMode, GameSnapshot, GameWorker, WorkerCommand, WorkerReplyKind},
 };
-use module_engine_arpg::ArpgInput;
 use module_engine_core::{GameInput, GraphDocument, WorldKind};
+use module_engine_editor_composition::arpg::ArpgInput;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{

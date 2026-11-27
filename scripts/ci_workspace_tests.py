@@ -19,9 +19,12 @@ HIDDEN_GAME_RUST_TEST = "app::tests::rust_panel_prepares_hidden_game_recovers_ba
 ALLOCATION_TEST = "vulkan::tests::failed_partial_native_allocations_release_owned_handles_and_device_recovers"
 SUMMARY = re.compile(r"^test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;")
 CASE = re.compile(r"^test (.+?) \.\.\. (.*)$")
-FORBIDDEN_PLAYER_PACKAGES = {
+GAME_PACKAGES = {
     "module-engine-arpg", "module-engine-project-puzzle", "module-engine-g1",
-    "module-engine-two-arenas", "module-engine-vulkan", "ash",
+    "module-engine-two-arenas",
+}
+FORBIDDEN_PLAYER_PACKAGES = GAME_PACKAGES | {
+    "module-engine-vulkan", "ash",
     "module-engine-physics-rapier", "rapier3d",
 }
 
@@ -245,14 +248,18 @@ def without_dxc(output):
         raise VerificationError("Expected one allocation test to skip specifically because DXC is absent")
 
 
-def check_minimal_player():
-    command = ["cargo", "tree", "--locked", "-p", "module-engine-player", "--no-default-features",
+def check_minimal_dependencies(package, forbidden_packages):
+    command = ["cargo", "tree", "--locked", "-p", package, "--no-default-features",
                "--edges", "normal,build", "--prefix", "none", "--format", "{p}"]
     tree = subprocess.check_output(command, encoding="utf-8")
     print(tree, end="")
     packages = {line.split()[0] for line in tree.splitlines() if line.strip()}
-    if forbidden := packages & FORBIDDEN_PLAYER_PACKAGES:
-        raise VerificationError("Minimal Player includes an optional game or engine capability: " + ", ".join(sorted(forbidden)))
+    if forbidden := packages & forbidden_packages:
+        raise VerificationError(f"{package} with no default features includes optional dependencies: " + ", ".join(sorted(forbidden)))
+
+
+def check_minimal_player():
+    check_minimal_dependencies("module-engine-player", FORBIDDEN_PLAYER_PACKAGES)
 
 
 def main():
@@ -261,12 +268,15 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--nextest", action="store_true")
     mode.add_argument("--without-dxc", action="store_true")
+    mode.add_argument("--check-game-free-editor", action="store_true")
     mode.add_argument("--check-minimal-player", action="store_true")
     parser.add_argument("--output", type=Path, default=Path("outputs/verification/ci-workspace"))
     args = parser.parse_args()
     try:
         if args.without_dxc:
             without_dxc(args.output)
+        elif args.check_game_free_editor:
+            check_minimal_dependencies("module-engine-editor", GAME_PACKAGES)
         elif args.check_minimal_player:
             check_minimal_player()
         else:

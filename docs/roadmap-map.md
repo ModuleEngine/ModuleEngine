@@ -35,9 +35,9 @@ Only sections with a heading of the form `### <ID> — <title>` (for example `##
 
 ## What stays hand-written
 
-The page template [scripts/roadmap_map.html](../scripts/roadmap_map.html) holds the Russian wording: short task titles, phase descriptions, dependencies, the map layout, the timing chart and the version route. For a task that is not in the template yet, the page uses the first sentence of the task from the Russian roadmap. A new phase needs a node in the template (`phases` and `pos`) and an arrow for each of its dependencies (`add('from>to', ...)`); until the node exists the build prints a warning and the phase is not shown. A phase removed from the roadmap keeps its node but loses its tasks and is marked “not in plan”; the template's old tasks never come back.
+The page template [site/roadmap_map.html](../site/roadmap_map.html) holds the Russian wording: short task titles, phase descriptions, dependencies, the map layout, the timing chart and the version route. For a task that is not in the template yet, the page uses the first sentence of the task from the Russian roadmap. A new phase needs a node in the template (`phases` and `pos`) and an arrow for each of its dependencies (`add('from>to', ...)`); until the node exists the build prints a warning and the phase is not shown. A phase removed from the roadmap keeps its node but loses its tasks and is marked “not in plan”; the template's old tasks never come back.
 
-`scripts/test_roadmap_map.py` runs the data model of both pages in Node.js and checks, on small EN/RU fixtures, that a phase removed from both Markdown versions disappears from the map and the header reports blocked work, that the 0.5 checkpoint needs R1, R3 and R4, and that every dependency listed in a phase card has an arrow. Checks against the live roadmap derive their expectations from its tables, so ordinary plan edits do not break them.
+`site/test_roadmap_map.py` runs the data model of both pages in Node.js and checks, on small EN/RU fixtures, that a phase removed from both Markdown versions disappears from the map and the header reports blocked work, that the 0.5 checkpoint needs R1, R3 and R4, and that every dependency listed in a phase card has an arrow. Checks against the live roadmap derive their expectations from its tables, so ordinary plan edits do not break them.
 
 <a id="campaign-map"></a>
 
@@ -58,11 +58,11 @@ Both maps put work in progress first. Within a phase, only the first unfinished 
 
 The page is a static file with no network access: a Content-Security-Policy blocks every request. All art is drawn in code on a canvas, with no external assets. Animation stops with `prefers-reduced-motion`.
 
-What stays hand-written lives in [scripts/roadmap_world.html](../scripts/roadmap_world.html): region names and themes, the position of each region and landmark, and `STATIC` with the dependencies and goals of each phase. `STATIC` mirrors `phases` of the table page, and `scripts/test_roadmap_map.py` fails if they diverge. Provinces are laid out automatically in the order of the tasks, so a new task needs no edit in the template. A new phase needs an entry in `STATIC` and `REGS`; until it exists the build prints a warning and the phase is not shown. A phase removed from the roadmap disappears from the map together with its arrows.
+What stays hand-written lives in [site/roadmap_world.html](../site/roadmap_world.html): region names and themes, the position of each region and landmark, and `STATIC` with the dependencies and goals of each phase. `STATIC` mirrors `phases` of the table page, and `site/test_roadmap_map.py` fails if they diverge. Provinces are laid out automatically in the order of the tasks, so a new task needs no edit in the template. A new phase needs an entry in `STATIC` and `REGS`; until it exists the build prints a warning and the phase is not shown. A phase removed from the roadmap disappears from the map together with its arrows.
 
 ### Live GitHub activity
 
-At build time `scripts/roadmap_events.py` reads the repository's last 14 days of activity through the GitHub API and the workflow's own `GITHUB_TOKEN`, and the map shows it as objects at the place an event references. A task such as `R2.3` in a title, commit message or branch name points to its province. An AI task such as `AI-A.2` points to its phase tower. A phase such as `R2` puts the event in that region, and an event with no reference goes to the current front:
+At build time `site/roadmap_events.py` reads the repository's last 14 days of activity through the GitHub API and the workflow's own `GITHUB_TOKEN`, and the map shows it as objects at the place an event references. A task such as `R2.3` in a title, commit message or branch name points to its province. An AI task such as `AI-A.2` points to its phase tower. A phase such as `R2` puts the event in that region, and an event with no reference goes to the current front:
 
 | Event | On the map |
 | --- | --- |
@@ -77,12 +77,12 @@ Events older than three days are drawn dimmer. Under the map a chronicle lists t
 ## Checks and local build
 
 ```sh
-python scripts/roadmap_map.py            # writes outputs/roadmap/index.html and outputs/roadmap/world/index.html
-python scripts/roadmap_map.py --check    # validation only
-python scripts/roadmap_events.py --repo owner/name --out events.json   # optional: GitHub activity (set GITHUB_TOKEN for a higher rate limit)
-python scripts/roadmap_map.py --events events.json --repo owner/name   # build with that activity
+python site/roadmap_map.py            # writes outputs/roadmap/index.html and outputs/roadmap/world/index.html
+python site/roadmap_map.py --check    # validation only
+python site/roadmap_events.py --repo owner/name --out events.json   # optional: GitHub activity (set GITHUB_TOKEN for a higher rate limit)
+python site/roadmap_map.py --events events.json --repo owner/name   # build with that activity
 ```
 
 The build fails when the English and Russian tables list different tasks or states, or a task has an unsupported status or estimate. Estimates use days (`d`/`д`) or weeks (`w`/`н`), with an optional range. Use a decimal point in English and a comma in Russian.
 
-`ModuleEngine CI` uses the `Documentation checks` job for [documentation-only PRs](ci.md), including changes to roadmap text or status cells. It validates both tables, runs the generator tests and their Node model, checks without writing, and builds both pages. PRs that also change the generator, templates, scripts, or tests run the full OS matrix. `CI required` requires successful planning and all jobs required by the selected route. The separate Roadmap map workflow retains the Chromium regression and GitHub Pages publication.
+`ModuleEngine CI` runs the `Documentation and site checks` job on every route, and PRs that change only [documentation or `site/`](ci.md) skip the build matrix. The job validates both tables, runs the generator tests and their Node model, checks without writing, and builds both pages. `CI required` requires successful planning and all jobs required by the selected route. The separate Roadmap map workflow retains the Chromium regression and GitHub Pages publication.

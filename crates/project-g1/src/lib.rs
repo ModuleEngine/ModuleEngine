@@ -9,6 +9,8 @@ use std::collections::BTreeMap;
 mod authoring;
 mod components;
 #[cfg(feature = "ui")]
+pub mod editor_ui;
+#[cfg(feature = "ui")]
 pub mod grid_ui;
 mod levels;
 mod rules;
@@ -146,3 +148,6 @@ pub fn diagnostics(game: &GameState) -> serde_json::Value {
         "can_undo":view.can_undo,"warning":view.warning
     }))
 }
+
+#[cfg(feature = "verification")]
+pub mod verification;

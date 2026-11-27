@@ -97,12 +97,12 @@
 <div class="tip" id="tip"></div>
 <script>
 (() => {
-// @model-begin (scripts/test_roadmap_map.py runs this part in Node)
+// @model-begin (site/test_roadmap_map.py runs this part in Node)
 /*@ROADMAP_MOVES@*/
-// Task statuses: scripts/roadmap_map.py replaces the placeholder with the tasks parsed from docs/product-roadmap.md.
+// Task statuses: site/roadmap_map.py replaces the placeholder with the tasks parsed from docs/product-roadmap.md.
 // Everything else (region names, layout, dependencies) is hand-written below.
 const SRC = /*@ROADMAP_DATA@*/null;
-// Phase metadata mirrors `phases` in scripts/roadmap_map.html (scripts/test_roadmap_map.py checks that they agree).
+// Phase metadata mirrors `phases` in site/roadmap_map.html (site/test_roadmap_map.py checks that they agree).
 const STATIC = {
   v042: { id: '0.4.2', title: 'Чёткий кадр и перенос панелей', goal: 'Последний принятый рубеж. Его поставка final03 — рабочая основа, от которой стартует перестройка. Исправления ошибок 0.4.2 по-прежнему разрешены.', effort: '—', deps: [], unlocks: ['R0'], tag: 'ПРИНЯТА 17.11', cls: 'done', depNote: '' },
   R0: { id: 'R0', title: 'Заморозка и исходные замеры', goal: 'Остановить побочную работу, собрать воспроизводимые бенчмарки и записать исходные цифры. Они станут эталоном «не хуже» для всех следующих фаз.', effort: '1–2 недели', deps: ['v042'], unlocks: ['R1', 'R2', 'RV-A'], tag: 'СЕЙЧАС', cls: 'cur', depNote: '' },
@@ -203,7 +203,7 @@ const ancOf = k => anc[k] || (anc[k] = new Set(regOf[k].deps.filter(d => rk.incl
 const arrows = [];
 for (const k of rk) { const ds = regOf[k].deps.filter(d => rk.includes(d)); for (const d of ds) if (!ds.some(o => o !== d && ancOf(o).has(d))) arrows.push({ a: regOf[d], b: regOf[k] }); }
 const depth = {}; rk.forEach(k => depth[k] = regOf[k].provs.some(p => p.st !== 'next') ? 0 : 99); for (let it = 0; it < 12; it++) for (const a of arrows) depth[a.b.key] = Math.min(depth[a.b.key], depth[a.a.key] + 1);
-/* GitHub activity (scripts/roadmap_events.py, build time): place each event at its task's province or tower,
+/* GitHub activity (site/roadmap_events.py, build time): place each event at its task's province or tower,
    else in its phase's region, else at the current front. A merged PR replaces its "opened" event. */
 const EVD = /*@EVENTS_DATA@*/null;
 const evHome = e => (e.task && locationOf(e.task))

@@ -277,7 +277,7 @@
 <script>
 (() => {
   'use strict';
-  // @model-begin (scripts/test_roadmap_map.py runs this part in Node)
+  // @model-begin (site/test_roadmap_map.py runs this part in Node)
   /*@ROADMAP_MOVES@*/
   const D = 'Готово', C = 'В работе', N = 'Впереди';
   const phases = {
@@ -416,7 +416,7 @@
   };
 
   // ---- Statuses ----
-  // scripts/roadmap_map.py replaces the placeholder below with task statuses parsed from
+  // site/roadmap_map.py replaces the placeholder below with task statuses parsed from
   // docs/product-roadmap.md (last table column: Done / In progress / effort = not started).
   // Texts above stay hand-written; only statuses, the "now" strip and node colours are derived.
   const SRC = /*@ROADMAP_DATA@*/null;
@@ -545,7 +545,7 @@
   heads.forEach(([t, c]) => { el('text', { x: colX[c], y: 40, class: 'colhead' }, svg, t); el('line', { x1: colX[c], x2: colX[c] + (c === 5 ? 256 : W), y1: 54, y2: 54, class: 'colrule' }, svg); });
 
   // Edges: add('from>to', points, class, marker, label, label position).
-  // Every dependency listed in a phase card has an edge; scripts/test_roadmap_map.py checks it.
+  // Every dependency listed in a phase card has an edge; site/test_roadmap_map.py checks it.
   const pts = a => 'M' + a.map(p => p.join(',')).join(' L');
   const edges = [];
   const add = (link, points, cls, mk, label, lp) => edges.push({ link, points, cls, mk, label, lp });
@@ -704,7 +704,7 @@
   $('now-next').innerHTML = next.slice(0, 4).join('') || li('Дальше по маршруту версий');
   $('stamp').textContent = SRC
     ? `Статусы собраны автоматически из ${SRC.source} · коммит ${SRC.commit || '—'} · ${SRC.generated}`
-    : 'Шаблон без данных: запусти scripts/roadmap_map.py';
+    : 'Шаблон без данных: запусти site/roadmap_map.py';
   select(focusKey);
 
   // Timing chart

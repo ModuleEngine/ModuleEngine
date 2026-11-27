@@ -11,6 +11,8 @@ mod project;
 mod systems;
 pub use project::project;
 
+#[cfg(feature = "ui")]
+pub mod authoring;
 #[cfg(test)]
 mod tests;
 #[cfg(feature = "ui")]
@@ -199,3 +201,6 @@ pub fn registry() -> SystemRegistry {
     install(&mut registry).expect("Valid puzzle source contracts");
     registry
 }
+
+#[cfg(feature = "verification")]
+pub mod verification;

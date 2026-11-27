@@ -1752,6 +1752,7 @@ version = "0.4.0"
 dependencies = [
  "egui",
  "module-engine-core",
+ "module-engine-game-ui",
  "serde",
  "serde_json",
 ]
@@ -1802,24 +1803,35 @@ dependencies = [
  "egui-ash-renderer",
  "egui-winit",
  "libc",
- "module-engine-arpg",
  "module-engine-content",
  "module-engine-core",
  "module-engine-custom",
- "module-engine-g1",
+ "module-engine-editor-composition",
+ "module-engine-game-ui",
  "module-engine-host",
  "module-engine-host-services",
  "module-engine-physics-rapier",
  "module-engine-player",
  "module-engine-project",
- "module-engine-project-puzzle",
  "module-engine-script",
- "module-engine-two-arenas",
  "module-engine-vulkan",
  "png",
  "serde",
  "serde_json",
  "winit",
+]
+
+[[package]]
+name = "module-engine-editor-composition"
+version = "0.4.0"
+dependencies = [
+ "module-engine-arpg",
+ "module-engine-core",
+ "module-engine-g1",
+ "module-engine-game-ui",
+ "module-engine-player",
+ "module-engine-project-puzzle",
+ "module-engine-two-arenas",
 ]
 
 [[package]]
@@ -1829,6 +1841,9 @@ dependencies = [
  "egui",
  "module-engine-core",
  "module-engine-game-kit",
+ "module-engine-game-ui",
+ "module-engine-host",
+ "module-engine-project",
  "serde",
  "serde_json",
 ]
@@ -1838,6 +1853,15 @@ name = "module-engine-game-kit"
 version = "0.4.0"
 dependencies = [
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "module-engine-game-ui"
+version = "0.4.0"
+dependencies = [
+ "egui",
+ "module-engine-core",
  "serde_json",
 ]
 
@@ -1893,6 +1917,7 @@ dependencies = [
  "module-engine-arpg",
  "module-engine-core",
  "module-engine-g1",
+ "module-engine-game-ui",
  "module-engine-host",
  "module-engine-host-services",
  "module-engine-physics-rapier",
@@ -1923,6 +1948,8 @@ version = "0.4.0"
 dependencies = [
  "egui",
  "module-engine-core",
+ "module-engine-game-ui",
+ "module-engine-host",
  "serde",
  "serde_json",
 ]
@@ -1948,6 +1975,8 @@ version = "0.4.0"
 dependencies = [
  "module-engine-arpg",
  "module-engine-core",
+ "module-engine-game-ui",
+ "module-engine-host",
  "serde_json",
 ]
 

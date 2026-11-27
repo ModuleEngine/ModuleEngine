@@ -9,19 +9,19 @@ mod authoring;
 mod bench;
 mod canvas;
 mod distribution;
-#[cfg(feature = "verification")]
+#[cfg(all(feature = "verification", feature = "arpg", feature = "puzzle"))]
 mod engine_profile_verification;
 mod engine_profiles;
-#[cfg(feature = "verification")]
+#[cfg(all(feature = "verification", feature = "g1"))]
 mod g1_verification;
 mod game_host;
 mod game_package;
 mod game_templates;
 mod game_ui;
-#[cfg(feature = "verification")]
+#[cfg(all(feature = "verification", feature = "arpg"))]
 mod game_verification;
 mod game_worker;
-#[cfg(feature = "verification")]
+#[cfg(all(feature = "verification", feature = "arpg"))]
 mod game_worker_verification;
 mod host;
 mod layout;
@@ -30,7 +30,7 @@ mod player;
 #[cfg(feature = "verification")]
 mod player_settings_verification;
 mod project;
-#[cfg(feature = "verification")]
+#[cfg(all(feature = "verification", feature = "puzzle"))]
 mod puzzle_verification;
 #[cfg(all(windows, feature = "r31-spike"))]
 mod r31_spike;
@@ -234,6 +234,31 @@ fn run() -> Result<(), String> {
     {
         return Err("Built-in source fixtures require a Full source checkout. Use --check <project.json> to verify a Team project with its saved Custom Rust permission.".into());
     }
+    use module_engine_editor_composition::ProjectTemplate;
+    let command = args.first().map(String::as_str);
+    let template = match command {
+        Some("--new-game" | "--game-check" | "--game-worker-check") => {
+            Some(ProjectTemplate::TwoArenas)
+        }
+        Some("--new-puzzle" | "--puzzle-check") => Some(ProjectTemplate::Puzzle),
+        Some("--new-g1" | "--g1-check") => Some(ProjectTemplate::G1),
+        _ => None,
+    };
+    if let Some(required) = template
+        && !required.installed()
+    {
+        return Err(format!(
+            "Project template {} is absent from this Editor composition",
+            required.0
+        ));
+    }
+    #[cfg(all(
+        feature = "verification",
+        not(all(feature = "arpg", feature = "puzzle"))
+    ))]
+    if command == Some("--engine-profile-check") {
+        return Err("Engine profile verification requires the ARPG and Puzzle fixtures".into());
+    }
     match args.first().map(String::as_str) {
         #[cfg(all(windows, feature = "r31-spike"))]
         Some("--r31-editor-vulkan") => return r31_spike::run(&args[1..], requested_profile),
@@ -290,7 +315,7 @@ fn run() -> Result<(), String> {
             );
             return Ok(());
         }
-        #[cfg(feature = "verification")]
+        #[cfg(all(feature = "verification", feature = "arpg", feature = "puzzle"))]
         Some("--engine-profile-check") => {
             let source = Path::new(args.get(1).ok_or("Provide the legacy author project")?);
             let output = Path::new(args.get(2).ok_or("Provide a new evidence directory")?);
@@ -301,7 +326,7 @@ fn run() -> Result<(), String> {
             );
             return Ok(());
         }
-        #[cfg(feature = "verification")]
+        #[cfg(all(feature = "verification", feature = "puzzle"))]
         Some("--puzzle-check") => {
             let source = Path::new(args.get(1).ok_or("Provide puzzle project JSON")?);
             let folder = Path::new(args.get(2).ok_or("Provide separate verification folder")?);
@@ -344,7 +369,7 @@ fn run() -> Result<(), String> {
             println!("Authored Crate Garden project: {}", saved.path.display());
             return Ok(());
         }
-        #[cfg(feature = "verification")]
+        #[cfg(all(feature = "verification", feature = "g1"))]
         Some("--g1-check") => {
             let source = Path::new(args.get(1).ok_or("Provide Crate Garden project JSON")?);
             let folder = Path::new(
@@ -358,7 +383,7 @@ fn run() -> Result<(), String> {
             );
             return Ok(());
         }
-        #[cfg(feature = "verification")]
+        #[cfg(all(feature = "verification", feature = "arpg"))]
         Some("--game-worker-check") => {
             let source = Path::new(args.get(1).ok_or("Provide source project JSON")?);
             let output = Path::new(args.get(2).ok_or("Provide separate verification folder")?);
@@ -416,7 +441,7 @@ fn run() -> Result<(), String> {
             let kind = game_host::world_kind(&document)?;
             return player::run_benchmark(document, root, compile.as_deref(), kind, &folder);
         }
-        #[cfg(feature = "verification")]
+        #[cfg(all(feature = "verification", feature = "arpg"))]
         Some("--game-check") => {
             let path = PathBuf::from(args.get(1).ok_or("Provide a game project JSON")?);
             let folder = args

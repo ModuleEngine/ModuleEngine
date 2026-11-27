@@ -276,6 +276,10 @@ pub(crate) mod world_fixture {
                 )
             })
             .unwrap();
+            Self::with_composition(root, composition)
+        }
+
+        pub fn with_composition(root: &Path, composition: CompositionContext) -> Self {
             let mut installed = INSTALLATION.lock().unwrap();
             assert!(installed.is_none());
             *installed = Some((root.canonicalize().unwrap(), composition));

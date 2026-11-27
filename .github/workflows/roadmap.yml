@@ -10,27 +10,13 @@ on:
     paths:
       - docs/product-roadmap.md
       - docs/ru/product-roadmap.md
-      - scripts/roadmap_map.py
-      - scripts/roadmap_map.html
-      - scripts/roadmap_world.html
-      - scripts/roadmap_moves.js
-      - scripts/roadmap_events.py
-      - scripts/test_roadmap_map.py
-      - scripts/test_roadmap_events.py
-      - scripts/test_roadmap_browser.cjs
+      - site/**
       - .github/workflows/roadmap.yml
   pull_request:
     paths:
       - docs/product-roadmap.md
       - docs/ru/product-roadmap.md
-      - scripts/roadmap_map.py
-      - scripts/roadmap_map.html
-      - scripts/roadmap_world.html
-      - scripts/roadmap_moves.js
-      - scripts/roadmap_events.py
-      - scripts/test_roadmap_map.py
-      - scripts/test_roadmap_events.py
-      - scripts/test_roadmap_browser.cjs
+      - site/**
       - .github/workflows/roadmap.yml
   schedule:
     - cron: '17 * * * *'  # hourly: refreshes the GitHub activity on the campaign map
@@ -58,19 +44,19 @@ jobs:
         with:
           python-version: '3.12'
       - name: Roadmap page tests
-        run: python -B -m unittest discover -s scripts -p 'test_roadmap*.py' -v
+        run: python -B -m unittest discover -s site -p 'test_roadmap*.py' -v
       - name: Fetch recent GitHub activity (build time only; the token is not shipped)
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: python -B scripts/roadmap_events.py --out _events/events.json
+        run: python -B site/roadmap_events.py --out _events/events.json
       - name: Check statuses and build the page
-        run: python -B scripts/roadmap_map.py --out _site/index.html --events _events/events.json
+        run: python -B site/roadmap_map.py --out _site/index.html --events _events/events.json
       - name: Open the campaign map with missing phases in Chromium
         run: |
           browser_tools="$RUNNER_TEMP/roadmap-browser"
           npm install --prefix "$browser_tools" --no-save --no-package-lock --ignore-scripts --no-audit --no-fund playwright@1.65.1
           "$browser_tools/node_modules/.bin/playwright" install --with-deps --only-shell chromium
-          NODE_PATH="$browser_tools/node_modules" node scripts/test_roadmap_browser.cjs
+          NODE_PATH="$browser_tools/node_modules" node site/test_roadmap_browser.cjs
       - name: Upload Pages artifact
         if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0

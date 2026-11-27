@@ -1,7 +1,9 @@
 //! Fixed input replay through the shared GameHost for R1.5.
-use module_engine_arpg::ArpgInput;
 use module_engine_core::{GameInput, GraphDocument};
-use module_engine_g1::{Direction, Phase, action_input, direction_input, level_catalog, view};
+use module_engine_editor_composition::arpg::ArpgInput;
+use module_engine_editor_composition::g1::{
+    Direction, Phase, action_input, direction_input, level_catalog, view,
+};
 use module_engine_host::{GameHost, HostOptions, RenderMode};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

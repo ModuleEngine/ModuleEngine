@@ -29,7 +29,8 @@ jobs:
     outputs:
       native: ${{ steps.routes.outputs.native }}
       package: ${{ steps.routes.outputs.package }}
-      docs_only: ${{ steps.routes.outputs.docs_only }}
+      light: ${{ steps.routes.outputs.light }}
+      route: ${{ steps.routes.outputs.route }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -46,7 +47,7 @@ jobs:
   workspace:
     name: workspace (${{ matrix.os }})
     needs: plan
-    if: needs.plan.outputs.docs_only == 'false'
+    if: needs.plan.outputs.light == 'false'
     strategy: &os_matrix
       fail-fast: false
       matrix:
@@ -97,7 +98,7 @@ jobs:
   release:
     name: release (${{ matrix.os }})
     needs: plan
-    if: needs.plan.outputs.docs_only == 'false'
+    if: needs.plan.outputs.light == 'false'
     strategy: *os_matrix
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
@@ -115,12 +116,17 @@ jobs:
       - name: Default Release Editor refuses verification commands
         env: *build_env
         run: cargo test --offline --locked --release -p module-engine-editor --test verification_cli
+      - name: Build the Editor without game packages
+        env: *build_env
+        run: |
+          python scripts/ci_workspace_tests.py --check-game-free-editor
+          cargo build --offline --locked --release -p module-engine-editor --no-default-features
       - *reports
 
   clippy:
     name: clippy (${{ matrix.os }})
     needs: plan
-    if: needs.plan.outputs.docs_only == 'false'
+    if: needs.plan.outputs.light == 'false'
     strategy: *os_matrix
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
@@ -139,7 +145,7 @@ jobs:
   contracts:
     name: contracts (${{ matrix.os }})
     needs: plan
-    if: needs.plan.outputs.docs_only == 'false'
+    if: needs.plan.outputs.light == 'false'
     strategy: *os_matrix
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
@@ -165,7 +171,7 @@ jobs:
   player:
     name: player (${{ matrix.os }})
     needs: plan
-    if: needs.plan.outputs.docs_only == 'false'
+    if: needs.plan.outputs.light == 'false'
     strategy: *os_matrix
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
@@ -227,9 +233,8 @@ jobs:
       - *reports
 
   documentation:
-    name: Documentation checks
+    name: Documentation and site checks
     needs: plan
-    if: needs.plan.outputs.docs_only == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -242,9 +247,9 @@ jobs:
       - name: Check the bilingual roadmap and its Node model
         run: |
           node --version
-          python -B -m unittest discover -s scripts -p test_roadmap_map.py -v
-          python -B scripts/roadmap_map.py --check
-          python -B scripts/roadmap_map.py --out _site/index.html
+          python -B -m unittest discover -s site -p "test_roadmap*.py" -v
+          python -B site/roadmap_map.py --check
+          python -B site/roadmap_map.py --out _site/index.html
           test -s _site/index.html
           test -s _site/world/index.html
 

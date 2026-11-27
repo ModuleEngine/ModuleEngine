@@ -8,7 +8,7 @@ Ordinary PRs run the workspace tests, the minimal Player configuration, the
 default Release Editor's CLI test, and separate `contracts` and `clippy`
 checks on Windows and Linux.
 Executable-source changes add native and package checks.
-Documentation-only PRs have a dedicated check. `CI required` succeeds after planning and
+Documentation-only and `site/` PRs skip the build matrix. `CI required` succeeds after planning and
 every job required by the selected route. Performance, desktop dialogs, hardware
 GPU and full Full/Team/Player delivery are outside this CI scope.
 
@@ -18,12 +18,25 @@ GPU and full Full/Team/Player delivery are outside this CI scope.
 
 The [workflow](../.github/workflows/ci.yml) runs for all PRs, pushes to `main`, the merge queue,
 and manual invocation; there are no workflow-level path filters. [ci_plan.py](../scripts/ci_plan.py)
-reads the Git diff, including deleted files and both sides of renames. A nonempty PR uses
-`Documentation checks` when every changed path is a regular, non-executable
-Markdown file (`.md` or `.markdown`) under `docs/`,
-a root `AGENTS.md` or README, or a README directly in
-a crate or example directory (`README.md` or `README.ru.md`). This job runs the
-generator and Node model tests, checks [roadmap EN/RU consistency](roadmap-map.md),
+reads the Git diff, including deleted files and both sides of renames, and routes it by
+[.github/ci-routes.json](../.github/ci-routes.json): one folder is one route, the first matching rule wins,
+and a path with no rule runs the full matrix. Routes:
+
+| Route | Paths | Runs |
+| --- | --- | --- |
+| `docs` | `docs/**/*.md`, root `AGENTS.md` and README, README in a crate or example | Documentation and site checks only |
+| `site` | `site/**` (roadmap and site generator, its templates and tests) | Documentation and site checks only |
+| `full` | everything else: `crates/`, `assets/`, `examples/`, `scripts/`, `tools/`, `.github/`, root manifests, non-Markdown files in `docs/` | The full matrix below, plus the documentation job |
+
+A PR, a merge group and a push to `main` use the same rule on the diff against the event's base, so a
+merge group or a push is the union of its changes: one code file anywhere selects the full matrix. An empty
+diff, a non-regular or executable file, an initial push and a manual run also select it. Failure to
+determine the diff fails planning. The planning step prints the chosen route and the files that selected
+it in the run summary. `scripts/test_ci.py` requires every tracked file to match a rule, so a new folder
+must be added to the routes file; do not commit `outputs/` or `work/`, they are ignored.
+
+`Documentation and site checks` is a few-minute Linux job that runs on every route. It runs the
+generator and Node model tests from `site/`, checks [roadmap EN/RU consistency](roadmap-map.md),
 and builds both HTML pages. The
 standalone Roadmap map workflow still checks Chromium and publishes Pages.
 
@@ -39,12 +52,7 @@ the same PR group. Each push to `main`, merge-queue event, and manual run has
 its own group keyed by run ID. A second merge can start before the first
 finishes and cannot cancel or replace its run.
 
-All other PRs run both platforms with native and package checks. On pushes and merge groups,
-only matching status-cell edits in both roadmaps qualify for the light job. Within the
-ordinary matrix for non-PR events, edits limited to `docs/`,
-Markdown, `LICENSE-MIT`, `LICENSE-APACHE`, or `.gitignore` skip native and package
-routes. Unknown source paths, empty diffs, initial pushes and manual runs enable
-them. Failure to determine the diff fails planning.
+The `full` route runs both platforms with native and package checks.
 
 | Runner | Ordinary matrix | When sources change |
 | --- | --- | --- |
@@ -91,6 +99,7 @@ Each platform runs separate workspace, default Release Editor build and CLI test
 Clippy, contracts and minimal Player jobs. The plan can also select native and package
 jobs independently. Each job gets its own hosted VM and TEMP. GPU and native tests
 within a job run serially. Windows places Cargo products on a Dev Drive.
+The release job also builds the Editor with `--no-default-features` and rejects game crates in its normal or build dependency tree.
 Top-level workspace builds use rust-lld on Windows and lld on Linux. Release Editor,
 Clippy and minimal Player invocations set the fast linker and `CARGO_PROFILE_DEV_DEBUG=0`.
 The native and Custom SDK proofs retain their audited compiler environment.

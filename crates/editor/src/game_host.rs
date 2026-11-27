@@ -3,13 +3,9 @@ pub use crate::game_templates::demo_document;
 #[cfg(any(test, feature = "verification"))]
 pub use crate::game_templates::puzzle_document;
 use module_engine_core::*;
-#[cfg(feature = "verification")]
-use module_engine_host::ScriptSlot;
 pub use module_engine_host::{GameHost, script_ids};
 use module_engine_host::{HostOptions, RenderMode};
 use module_engine_script::CompiledProgramStore;
-#[cfg(feature = "verification")]
-use std::{collections::BTreeMap, sync::Mutex};
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, atomic::AtomicBool},
@@ -251,22 +247,6 @@ pub fn render_graph(document: &GraphDocument) -> Graph {
         .and_then(|r| r.renderer.subgraph.as_deref())
         .cloned()
         .unwrap_or_default()
-}
-#[cfg(feature = "verification")]
-pub fn game_registry_at(
-    document: &GraphDocument,
-    root: &Path,
-    backend: &Path,
-    slots: &BTreeMap<String, ScriptSlot>,
-    overrides: Arc<Mutex<RenderOverrides>>,
-) -> Result<SystemRegistry, String> {
-    module_engine_host::bind_game_registry(
-        Arc::new(Mutex::new(document.clone())),
-        root,
-        &crate::host::composition_at(backend)?,
-        slots,
-        overrides,
-    )
 }
 /// Resolve only the package selected and checked by distribution policy. A
 /// relocated authored project supplies assets; it never has to contain DXC or

@@ -7,47 +7,71 @@ use std::{
     path::Path,
 };
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ProfileKind {
-    #[default]
-    Neutral,
-    Arpg,
-    Puzzle,
-    G1,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProfileKind {
+    id: &'static str,
+    label: &'static str,
+    source_feature: Option<&'static str>,
 }
+impl Default for ProfileKind {
+    fn default() -> Self {
+        Self::Neutral
+    }
+}
+#[allow(non_upper_case_globals)]
 impl ProfileKind {
+    pub const Neutral: Self = Self {
+        id: "module-engine.neutral",
+        label: "Neutral",
+        source_feature: None,
+    };
+    pub const Arpg: Self = Self {
+        id: "module-engine.arpg",
+        label: "ARPG",
+        source_feature: Some("arpg"),
+    };
+    pub const Puzzle: Self = Self {
+        id: "module-engine.puzzle",
+        label: "Puzzle",
+        source_feature: Some("puzzle"),
+    };
+    pub const G1: Self = Self {
+        id: "module-engine.g1",
+        label: "Crate Garden (G1)",
+        source_feature: Some("g1"),
+    };
     pub fn id(self) -> &'static str {
-        match self {
-            Self::Neutral => "module-engine.neutral",
-            Self::Arpg => "module-engine.arpg",
-            Self::Puzzle => "module-engine.puzzle",
-            Self::G1 => "module-engine.g1",
-        }
+        self.id
     }
     pub fn label(self) -> &'static str {
-        match self {
-            Self::Neutral => "Neutral",
-            Self::Arpg => "ARPG",
-            Self::Puzzle => "Puzzle",
-            Self::G1 => "Crate Garden (G1)",
-        }
-    }
-    pub fn parse(text: &str) -> Result<Self, String> {
-        match text {
-            "neutral" => Ok(Self::Neutral),
-            "arpg" => Ok(Self::Arpg),
-            "puzzle" => Ok(Self::Puzzle),
-            "g1" => Ok(Self::G1),
-            _ => Err("Engine profile must be neutral, arpg, puzzle or g1".into()),
-        }
+        self.label
     }
     pub fn source_feature(self) -> Option<&'static str> {
-        match self {
-            Self::Neutral => None,
-            Self::Arpg => Some("arpg"),
-            Self::Puzzle => Some("puzzle"),
-            Self::G1 => Some("g1"),
+        self.source_feature
+    }
+    pub fn installed() -> Vec<Self> {
+        let mut profiles = vec![Self::Neutral];
+        for template in module_engine_editor_composition::authoring().templates() {
+            let profile = template.engine_profile;
+            if profiles.iter().any(|installed| installed.id == profile.id) {
+                continue;
+            }
+            profiles.push(Self {
+                id: profile.id,
+                label: profile.label,
+                source_feature: Some(profile.source_feature),
+            });
         }
+        profiles
+    }
+    pub fn parse(text: &str) -> Result<Self, String> {
+        Self::installed()
+            .into_iter()
+            .find(|profile| {
+                profile.source_feature == Some(text)
+                    || (text == "neutral" && *profile == Self::Neutral)
+            })
+            .ok_or_else(|| format!("Engine profile '{text}' is not installed"))
     }
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -149,6 +173,9 @@ pub fn finish_template(
     attach(document, &composition, &profile)
 }
 pub fn select(kind: ProfileKind, backend: &Path) -> Result<EngineProfile, String> {
+    if !ProfileKind::installed().contains(&kind) {
+        return Err(format!("Engine profile '{}' is not installed", kind.id()));
+    }
     let mut document =
         crate::host::gpu_document(WorldKind::Ecs, module_engine_vulkan::RenderPath::Forward);
     document.root.nodes.retain(|node| {

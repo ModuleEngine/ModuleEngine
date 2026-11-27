@@ -677,7 +677,7 @@ pub fn write_full_manifest(
             backend_files.insert(name.into(), hash_file(&root.join(name))?);
         }
     }
-    for name in ["docs", "examples", "scripts", "tools/dxc"] {
+    for name in ["docs", "examples", "scripts", "site", "tools/dxc"] {
         inventory_tree(root, &root.join(name), &mut backend_files)?;
     }
     let sources = files
@@ -928,6 +928,18 @@ const NATIVE_FILES: &[&str] = &[
     "crates/host-services/src/persistence.rs",
     "crates/host-services/src/wav.rs",
     "crates/host-services/src/audio_output.rs",
+    "crates/editor-composition/Cargo.toml",
+    "crates/editor-composition/src/lib.rs",
+    "crates/editor-composition/tests/support/independent.rs",
+    "crates/game-ui/Cargo.toml",
+    "crates/game-ui/src/lib.rs",
+    "crates/game-ui/src/authoring.rs",
+    "crates/example-two-arenas/src/authoring.rs",
+    "crates/example-two-arenas/src/verification.rs",
+    "crates/project-g1/src/editor_ui.rs",
+    "crates/project-g1/src/verification.rs",
+    "crates/project-puzzle/src/authoring.rs",
+    "crates/project-puzzle/src/verification.rs",
     "crates/game-kit/Cargo.toml",
     "crates/game-kit/src/lib.rs",
     "crates/game-kit/src/grid.rs",

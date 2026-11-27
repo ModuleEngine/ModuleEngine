@@ -30,11 +30,11 @@ function buildFixture(fixture, phases) {
     const text = fs.readFileSync(path.join(root, relative), 'utf8');
     fs.writeFileSync(path.join(fixture, relative), withoutPhases(text, phases));
   }
-  fs.mkdirSync(path.join(fixture, 'scripts'));
+  fs.mkdirSync(path.join(fixture, 'site'));
   for (const name of ['roadmap_map.py', 'roadmap_events.py', 'roadmap_map.html', 'roadmap_world.html', 'roadmap_moves.js']) {
-    fs.copyFileSync(path.join(__dirname, name), path.join(fixture, 'scripts', name));
+    fs.copyFileSync(path.join(__dirname, name), path.join(fixture, 'site', name));
   }
-  execFileSync(process.env.PYTHON || 'python', ['-B', 'scripts/roadmap_map.py', '--out', 'site/index.html'], {
+  execFileSync(process.env.PYTHON || 'python', ['-B', 'site/roadmap_map.py', '--out', 'site/index.html'], {
     cwd: fixture,
     stdio: 'inherit',
   });

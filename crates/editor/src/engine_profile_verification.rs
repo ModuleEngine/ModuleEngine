@@ -401,7 +401,7 @@ fn controller_compatibility(
         host.device == "Headless" && !host.services.enabled(),
         "Controller proof initialized graphical/audio service execution",
     )?;
-    let input = module_engine_arpg::ArpgInput {
+    let input = module_engine_editor_composition::arpg::ArpgInput {
         aim_world: target_position,
         attack: true,
         interact: true,
