@@ -38,6 +38,9 @@ EXTRA_NOTICES = {
                   "fonts/emoji-icon-font-mit-license.txt"),
         "covers": frozenset({"OFL-1.1", "Ubuntu-font-1.0"}),
     },
+    "rfd": {
+        "files": ("src/backend/xdg_desktop_portal/window_identifier/LICENSE",),
+    },
 }
 
 

@@ -80,6 +80,8 @@ class RegistryTests(Fixture):
         for source_root in source_roots:
             self.assertTrue(source_root.is_dir(), "Run this inventory test in the actual checkout")
             for path in source_root.rglob("*.rs"):
+                if path.is_relative_to(repo / "crates/vendor"):
+                    continue
                 actual.extend(pattern.findall(path.read_text(encoding="utf-8")))
         registered = [s["filter"].rsplit("::", 1)[-1] for s in self.data["steps"] if s.get("ignored")]
         self.assertCountEqual(actual, registered, "Every real #[ignore] needs a purpose and profile/exclusion decision")

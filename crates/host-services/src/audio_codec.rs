@@ -64,9 +64,10 @@ pub(crate) fn decode_source(
                 ));
             }
             let mut frames = Vec::new();
+            let (stereo_samples, _) = wave.samples.as_chunks::<2>();
             append_frames(
                 &mut frames,
-                wave.samples.chunks_exact(2),
+                stereo_samples.iter().map(|frame| frame.as_slice()),
                 2,
                 limit,
                 |sample| sample,

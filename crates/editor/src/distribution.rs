@@ -954,6 +954,7 @@ const NATIVE_FILES: &[&str] = &[
     "crates/vendor/rfd/build.rs",
     "crates/vendor/rfd/src/lib.rs",
     "crates/vendor/rfd/src/backend/win_cid/file_dialog/dialog_ffi.rs",
+    "crates/vendor/rfd/src/backend/xdg_desktop_portal/window_identifier/LICENSE",
     "crates/native-ui/src/gpu.rs",
     "crates/native-ui/src/lib.rs",
     "crates/native-ui/src/offscreen.rs",
@@ -1163,6 +1164,7 @@ fn native_source_path(path: &str) -> bool {
             "crates/vendor/rfd/LICENSE"
                 | "crates/vendor/rfd/PATCH.md"
                 | "crates/vendor/rfd/src/backend/wasm/style.css"
+                | "crates/vendor/rfd/src/backend/xdg_desktop_portal/window_identifier/LICENSE"
         )
         || path.ends_with(".hlsl")
         || path.ends_with(".hlsli")
