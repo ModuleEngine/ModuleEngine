@@ -81,6 +81,14 @@ float4 baseColor(SceneVarying v) {
 #endif
 
 #ifdef MODULE_ENGINE_SURFACE_MATERIALS
+float3 shadeAtSurface(float3 base, ShadedSurface surface, SceneVarying v) {
+    float3 view = normalize(eyeNear.xyz - v.world);
+#ifdef MODULE_ENGINE_CLUSTERED_LIGHTS
+    return shadeClustered(base, surface, view, v.world, uint2(v.position.xy), v.depth, eyeNear.w, upFar.w);
+#else
+    return shadeMetallicRoughness(base, surface, view);
+#endif
+}
 float4 sampleMap(SurfaceRow row, uint slot, float2 uv) {
     if (row.maps[slot] == 0) return 1.0.xxxx;
 #ifdef MODULE_ENGINE_BINDLESS_MATERIALS
@@ -120,7 +128,7 @@ float4 main(SceneVarying v, bool frontFace:SV_IsFrontFace) : SV_Target0 {
     float4 base = baseColor(v);
     if (base.a <= 0.0) discard;
     ShadedSurface surface = sampleSurface(row, v, frontFace);
-    return float4(shadeMetallicRoughness(base.rgb, surface, normalize(eyeNear.xyz - v.world)), base.a);
+    return float4(shadeAtSurface(base.rgb, surface, v), base.a);
 }
 #else
 struct Targets {
@@ -146,7 +154,7 @@ Targets main(SceneVarying v, bool frontFace:SV_IsFrontFace) {
         o.color = float4(base.rgb, v.ids.x);
         o.surface = encodeSurfacePayload(surface);
 #else
-        o.color = float4(shadeMetallicRoughness(base.rgb, surface, normalize(eyeNear.xyz - v.world)), v.ids.x);
+        o.color = float4(shadeAtSurface(base.rgb, surface, v), v.ids.x);
 #endif
         o.normal = float4(surface.normal, v.ids.y);
         o.depth = v.depth;
@@ -157,6 +165,8 @@ Targets main(SceneVarying v, bool frontFace:SV_IsFrontFace) {
 #ifdef MODULE_ENGINE_GBUFFER_SURFACE
     o.color = float4(base.rgb, v.ids.x);
     o.surface = 0.0.xxxx;
+#elif defined(MODULE_ENGINE_CLUSTERED_LIGHTS)
+    o.color = float4(shadeAtSurface(base.rgb, legacySurface(normalize(v.normal)), v), v.ids.x);
 #else
     float diffuse=0.20+1.65*abs(dot(normalize(v.normal),normalize(float3(-0.5,1.0,0.7))));
     o.color=float4(base.rgb*diffuse,v.ids.x);

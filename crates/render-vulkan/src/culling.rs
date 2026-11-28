@@ -51,15 +51,15 @@ pub struct CullingStats {
     pub visible: u32,
 }
 
-struct Layout {
+pub(super) struct Layout {
     device: ash::Device,
-    set: vk::DescriptorSetLayout,
-    raw: vk::PipelineLayout,
+    pub(super) set: vk::DescriptorSetLayout,
+    pub(super) raw: vk::PipelineLayout,
     pipelines: Vec<vk::Pipeline>,
 }
 
 impl Layout {
-    fn new(
+    pub(super) fn new(
         device: &ash::Device,
         descriptors: &[(u32, vk::DescriptorType)],
         stage: vk::ShaderStageFlags,
@@ -106,7 +106,26 @@ impl Layout {
     }
 
     fn compute(&mut self, root: &Path, shader: Shader) -> Result<vk::Pipeline, VulkanError> {
-        let (module, name) = shader_module(&self.device, root, shader)?;
+        let artifact = compile_hlsl_at(root, shader.0, shader.1, shader.2)?;
+        self.compute_artifact(shader.1, &artifact.words)
+    }
+
+    pub(super) fn compute_artifact(
+        &mut self,
+        entry: &str,
+        words: &[u32],
+    ) -> Result<vk::Pipeline, VulkanError> {
+        let name = CString::new(entry).map_err(|source| VulkanError::ShaderEntry {
+            stage: "Compute",
+            source,
+        })?;
+        // SAFETY: The checked SPIR-V stays live during shader creation.
+        let raw = unsafe {
+            self.device
+                .create_shader_module(&vk::ShaderModuleCreateInfo::default().code(words), None)
+        }
+        .map_err(VulkanError::api("create compute shader module"))?;
+        let module = OwnedShaderModule(&self.device, raw);
         let stage = vk::PipelineShaderStageCreateInfo::default()
             .stage(COMPUTE)
             .module(module.1)

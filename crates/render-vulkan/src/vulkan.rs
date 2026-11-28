@@ -59,6 +59,8 @@ pub use resident::ResidentScene;
 #[path = "culling.rs"]
 pub(crate) mod culling;
 pub use culling::{CullingStats, SceneCulling};
+#[path = "lighting.rs"]
+pub(crate) mod lighting;
 
 #[cfg(feature = "bench")]
 #[path = "meshlet_probe.rs"]
@@ -258,6 +260,7 @@ struct FrameResources {
     vertex: Option<Buffer>,
     staging: Option<Buffer>,
     culling: Option<culling::Frame>,
+    lighting: Option<lighting::Frame>,
 }
 
 /// A graph-owned image's bound Vulkan range, for the synchronous benchmark.
@@ -453,6 +456,7 @@ struct ProducerFlight {
     needs_graphics_visibility: bool,
     _pipelines: Vec<Arc<Pipeline>>,
     _culling_pipelines: Option<Arc<culling::Pipelines>>,
+    _light_pipeline: Option<Arc<lighting::Pipeline>>,
     _context: Arc<DeviceLifetime>,
     size: [usize; 2],
     stats: RenderStats,
@@ -541,6 +545,8 @@ pub struct FrameWork {
     pub atlas_upload_bytes: usize,
     pub material_images: usize,
     pub material_bc7_images: usize,
+    pub punctual_lights: usize,
+    pub clustered_local_lights: usize,
     pub material_bc5_images: usize,
     pub material_uploaded_images: usize,
     pub material_upload_bytes: usize,
@@ -684,6 +690,7 @@ pub struct VulkanRenderer {
     materials: Option<Arc<MaterialSet>>,
     gpu_scene: resident::GpuScene,
     culling_pipelines: Option<Arc<culling::Pipelines>>,
+    light_pipeline: Option<Arc<lighting::Pipeline>>,
     culling_mode: SceneCulling,
     culling_stats: bool,
     #[cfg(feature = "bench")]
@@ -1079,6 +1086,7 @@ impl VulkanRenderer {
                 materials: None,
                 gpu_scene: resident::GpuScene::default(),
                 culling_pipelines: None,
+                light_pipeline: None,
                 culling_mode: SceneCulling::default(),
                 culling_stats: false,
                 #[cfg(feature = "bench")]
@@ -2102,6 +2110,19 @@ impl VulkanRenderer {
                         .stage_flags(vk::ShaderStageFlags::FRAGMENT),
                 );
             }
+            if pass.clustered_lights && !geometry.meshlets() {
+                bindings.extend(lighting::BINDINGS.map(|binding| {
+                    vk::DescriptorSetLayoutBinding::default()
+                        .binding(binding)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .descriptor_count(1)
+                        .stage_flags(if compute {
+                            vk::ShaderStageFlags::COMPUTE
+                        } else {
+                            vk::ShaderStageFlags::FRAGMENT
+                        })
+                }));
+            }
             if geometry != Geometry::Expanded {
                 let last_binding = if geometry == Geometry::Culled || geometry.meshlets() {
                     5
@@ -2692,22 +2713,39 @@ impl VulkanRenderer {
                 surface.alpha_mode == module_engine_core::AlphaMode::Opaque && surface.double_sided;
         }
         let prepared = self.prepared.as_ref().unwrap();
-        let material_plan = has_surfaces
+        #[cfg(feature = "bench")]
+        let has_lights = !scene.lights.is_empty() && !matches!(input, SceneInput::Meshlets(_));
+        #[cfg(not(feature = "bench"))]
+        let has_lights = !scene.lights.is_empty();
+        let material_plan = (has_surfaces || has_lights)
             .then(|| prepared.with_surface_payload())
             .flatten();
         let mut plan = material_plan.unwrap_or_else(|| prepared.clone());
         if has_blend {
             plan = plan.with_transparency(&self.resource_root)?;
         }
-        if has_surfaces {
+        let clustered = has_lights && plan.enable_clustered_lights();
+        if clustered && self.light_pipeline.is_none() {
+            self.light_pipeline = Some(Arc::new(lighting::Pipeline::new(self)?));
+        }
+        if has_surfaces || clustered {
             for pass in plan.passes.iter().filter(|pass| {
-                pass.reads_surface_materials()
+                pass.clustered_lights
+                    || pass.reads_surface_materials()
                     || pass.module == "gpu.gbuffer" && pass.surface_materials()
                     || pass.transparency()
             }) {
                 let key = pipeline_key(pass);
-                self.prepare_pipeline(pass, key.clone(), true, Geometry::Expanded)?;
-                if pass.resident_geometry() && self.capabilities.resident_scene {
+                self.prepare_pipeline(
+                    pass,
+                    key.clone(),
+                    !pass.clustered_lights || self.capabilities.clustered_indexed_materials,
+                    Geometry::Expanded,
+                )?;
+                if pass.resident_geometry()
+                    && self.capabilities.resident_scene
+                    && (!clustered || self.capabilities.clustered_resident_scene)
+                {
                     self.prepare_pipeline(
                         pass,
                         resident_pipeline_key(&key),
@@ -2735,14 +2773,16 @@ impl VulkanRenderer {
         // Limit the handoff to a trailing compute batch. A raster pass that
         // follows compute stays on graphics with its dependencies. Timestamp
         // profiling keeps all queries in one queue's timestamp domain.
-        let compute_start = compute.filter(|_| !self.frame_profiling).and_then(|_| {
-            let first = plan
-                .passes
-                .iter()
-                .rposition(|pass| pass.manifest.stage == "raster")
-                .map_or(0, |last_raster| last_raster + 1);
-            (first < plan.passes.len()).then_some(first)
-        });
+        let compute_start = compute
+            .filter(|_| !self.frame_profiling && !clustered)
+            .and_then(|_| {
+                let first = plan
+                    .passes
+                    .iter()
+                    .rposition(|pass| pass.manifest.stage == "raster")
+                    .map_or(0, |last_raster| last_raster + 1);
+                (first < plan.passes.len()).then_some(first)
+            });
         let asynchronous_compute = compute_start.is_some();
         let synchronization2 = self.capabilities.synchronization2;
         let command = graphics;
@@ -2784,6 +2824,7 @@ impl VulkanRenderer {
         let resident = match &input {
             SceneInput::Retained(source)
                 if self.capabilities.resident_scene
+                    && (!clustered || self.capabilities.clustered_resident_scene)
                     && active_passes().any(Pass::geometry)
                     && active_passes()
                         .filter(|pass| pass.geometry())
@@ -2800,7 +2841,10 @@ impl VulkanRenderer {
         let objects = scene.items.len();
         let wants_indexed =
             self.material_layout.is_some() && active_passes().any(Pass::has_bindless_variant);
-        let indexed = if resident.is_none() && wants_indexed {
+        let indexed = if resident.is_none()
+            && wants_indexed
+            && (!clustered || self.capabilities.clustered_indexed_materials)
+        {
             self.prepare_materials(scene)?
         } else {
             None
@@ -2906,6 +2950,20 @@ impl VulkanRenderer {
         let mut vertex = reused
             .as_mut()
             .and_then(|resources| resources.vertex.take());
+        let light_camera = geometry::camera_constants(camera, width, height);
+        let frame_lighting = if clustered {
+            Some(lighting::Frame::prepare(
+                self,
+                reused
+                    .as_mut()
+                    .and_then(|resources| resources.lighting.take()),
+                &scene.lights,
+                &light_camera,
+                [width as u32, height as u32],
+            )?)
+        } else {
+            None
+        };
         let mut scene_culling = if resident
             .as_ref()
             .is_some_and(|r| r.buffers.culling.is_some())
@@ -3044,6 +3102,14 @@ impl VulkanRenderer {
         frame_work.material_upload_bytes = uploads.bytes;
         let material_upload = uploads.stage(self)?;
         let culling_scope = u32::from(scene_culling.is_some());
+        let has_grid = frame_lighting
+            .as_ref()
+            .is_some_and(|frame| frame.local_count() != 0);
+        let extra_scopes = culling_scope + u32::from(has_grid);
+        if let Some(frame) = &frame_lighting {
+            frame_work.punctual_lights = scene.lights.len();
+            frame_work.clustered_local_lights = frame.local_count();
+        }
         let capture = self.frame_profiling.then(|| {
             TimestampCapture::new(
                 &mut self.slots[index].timestamp_pool,
@@ -3054,6 +3120,7 @@ impl VulkanRenderer {
                     .as_ref()
                     .map(|_| ("Scene culling".into(), false))
                     .into_iter()
+                    .chain(has_grid.then(|| ("Light clustering".into(), false)))
                     .chain(
                         plan.passes
                             .iter()
@@ -3174,6 +3241,23 @@ impl VulkanRenderer {
                 timestamps.end(command, 1);
             }
         }
+        if let Some(frame) = &frame_lighting
+            && has_grid
+        {
+            if let Some(timestamps) = timestamps {
+                timestamps.begin(command, 1 + culling_scope);
+            }
+            frame.record(
+                &self.device,
+                command,
+                descriptor_pool,
+                self.light_pipeline.as_deref().unwrap(),
+                light_camera,
+            )?;
+            if let Some(timestamps) = timestamps {
+                timestamps.end(command, 1 + culling_scope);
+            }
+        }
         let mut recorder = graph_record::Recorder {
             device: &self.device,
             command,
@@ -3196,7 +3280,7 @@ impl VulkanRenderer {
             }
             let command = recorder.command;
             if let Some(timestamps) = timestamps {
-                timestamps.begin(command, pass_index as u32 + 1 + culling_scope);
+                timestamps.begin(command, pass_index as u32 + 1 + extra_scopes);
             }
             let enabled = pass_enabled(pass, overrides);
             let key = pipeline_key(pass);
@@ -3413,7 +3497,20 @@ impl VulkanRenderer {
                             .buffer_info(std::slice::from_ref(&visible_info)),
                     );
                 }
-                let mut constants = geometry::camera_constants(camera, width, height);
+                let light_infos;
+                if pass.clustered_lights && !pipeline.geometry.meshlets() {
+                    light_infos = frame_lighting.as_ref().unwrap().descriptor_infos();
+                    writes.extend(lighting::BINDINGS.into_iter().zip(light_infos.iter()).map(
+                        |(binding, info)| {
+                            vk::WriteDescriptorSet::default()
+                                .dst_set(set)
+                                .dst_binding(binding)
+                                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                                .buffer_info(std::slice::from_ref(info))
+                        },
+                    ));
+                }
+                let mut constants = light_camera;
                 for (i, name) in pass.manifest.parameters.iter().enumerate() {
                     let configured = overrides
                         .parameters
@@ -3701,7 +3798,7 @@ impl VulkanRenderer {
                 }
             }
             if let Some(timestamps) = timestamps {
-                timestamps.end(command, pass_index as u32 + 1 + culling_scope);
+                timestamps.end(command, pass_index as u32 + 1 + extra_scopes);
             }
         }
         let command = recorder.command;
@@ -3761,6 +3858,7 @@ impl VulkanRenderer {
             resources.images = images;
             resources.vertex = vertex;
             resources.culling = scene_culling;
+            resources.lighting = frame_lighting;
             resources
         } else {
             FrameResources {
@@ -3769,6 +3867,7 @@ impl VulkanRenderer {
                 vertex,
                 staging: new_staging,
                 culling: scene_culling,
+                lighting: frame_lighting,
             }
         };
         let ticket = if direct {
@@ -3817,6 +3916,7 @@ impl VulkanRenderer {
             needs_graphics_visibility: asynchronous_compute && direct,
             _pipelines: self.pipelines.values().cloned().collect(),
             _culling_pipelines: self.culling_pipelines.clone(),
+            _light_pipeline: self.light_pipeline.clone(),
             _context: self.context.clone(),
             size: [width, height],
             stats: RenderStats {
@@ -4076,6 +4176,109 @@ mod content_player_tests {
     use super::*;
     use crate::{RenderPath, default_graph, precompile_graph_at};
     use module_engine_core::{ObjectsWorld, WorldProvider};
+    #[test]
+    fn clustered_punctual_lights_reach_both_stock_paths_and_exclude_other_cells() {
+        crate::requires_capabilities!(Vulkan, Dxc);
+        use module_engine_core::{
+            LightKind, Material, Mesh, RenderItem, SceneLight, identity_matrix,
+        };
+
+        let surface = RenderItem {
+            id: 1,
+            mesh: Mesh {
+                vertices: vec![[-1., -1., 0.], [1., -1., 0.], [1., 1., 0.], [-1., 1., 0.]],
+                triangles: vec![[0, 1, 2], [0, 2, 3]],
+                ..Default::default()
+            },
+            model: identity_matrix(),
+            color: [255; 4],
+            material: Material::default(),
+        };
+        let light = SceneLight {
+            id: 2,
+            kind: LightKind::Point,
+            position: [0., 0., 2.],
+            direction: [0., 0., -1.],
+            color: [1., 0.01, 0.01],
+            intensity: 12.,
+            range: 4.,
+            inner_angle_cos: 0.97,
+            outer_angle_cos: 0.8,
+        };
+        let camera = Camera {
+            yaw: 0.,
+            pitch: 0.,
+            distance: 3.5,
+            target: [0.; 3],
+        };
+        let mut results = Vec::new();
+        for force_atlas in [true, false] {
+            let mut renderer = VulkanRenderer::new().unwrap();
+            if force_atlas {
+                renderer.material_layout = None;
+                renderer.capabilities.resident_scene = false;
+            }
+            for route in [RenderPath::Forward, RenderPath::Deferred] {
+                let graph = default_graph(route);
+                let mut pixel = |light| {
+                    let frame = renderer
+                        .render(
+                            &SceneSnapshot {
+                                items: vec![surface.clone()],
+                                lights: vec![light],
+                                time: 0.,
+                            },
+                            camera,
+                            129,
+                            97,
+                            &graph,
+                            &BTreeMap::new(),
+                            &RenderOverrides::default(),
+                        )
+                        .unwrap();
+                    let offset = (48 * 129 + 64) * 4;
+                    assert_eq!(
+                        renderer.last_frame_work().unwrap().clustered_local_lights,
+                        usize::from(light.kind != LightKind::Directional)
+                    );
+                    frame.rgba[offset..offset + 3].to_vec()
+                };
+                let lit = pixel(light);
+                let distant = pixel(SceneLight {
+                    position: [60., 0., 2.],
+                    ..light
+                });
+                assert!(
+                    lit[0] > distant[0] + 12 && lit[0] > lit[1] + 12,
+                    "{lit:?} {distant:?}"
+                );
+                let spot = pixel(SceneLight {
+                    kind: LightKind::Spot,
+                    ..light
+                });
+                let away = pixel(SceneLight {
+                    kind: LightKind::Spot,
+                    direction: [0., 0., 1.],
+                    ..light
+                });
+                assert!(spot[0] > away[0] + 12, "{spot:?} {away:?}");
+                let sun = pixel(SceneLight {
+                    kind: LightKind::Directional,
+                    intensity: 3.,
+                    ..light
+                });
+                assert!(sun[0] > away[0] + 12, "{sun:?} {away:?}");
+                if let Some(reference) = results.first() {
+                    assert!(
+                        lit.iter().zip(reference).all(|(a, &b)| a.abs_diff(b) <= 3),
+                        "{lit:?} {reference:?}"
+                    );
+                }
+                results.push(lit);
+            }
+        }
+    }
+
     #[test]
     fn masked_and_blended_surfaces_respect_alpha_order_and_opaque_depth() {
         crate::requires_capabilities!(Vulkan, Dxc);
@@ -4667,6 +4870,7 @@ fn pipeline_key(pass: &Pass) -> String {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     pass.source.hash(&mut h);
     pass.dependency_hash.hash(&mut h);
+    pass.clustered_lights.hash(&mut h);
     serde_json::to_string(&pass.manifest).unwrap().hash(&mut h);
     format!("{:016x}", h.finish())
 }

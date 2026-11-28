@@ -16,6 +16,8 @@ pub struct DeviceCapabilities {
     pub synchronization2: bool,
     pub bindless_materials: bool,
     pub material_block_compression: bool,
+    pub clustered_indexed_materials: bool,
+    pub clustered_resident_scene: bool,
     pub resident_scene: bool,
     pub gpu_frustum_culling: bool,
     pub hiz_occlusion_culling: bool,
@@ -158,6 +160,14 @@ impl DeviceCapabilities {
             synchronization2,
             bindless_materials,
             material_block_compression,
+            clustered_indexed_materials: bindless_materials
+                && limits.max_per_stage_descriptor_storage_buffers >= 4
+                && limits.max_descriptor_set_storage_buffers >= 4
+                && limits.max_per_stage_resources >= MATERIAL_IMAGE_COUNT + 5,
+            clustered_resident_scene: resident_scene
+                && limits.max_per_stage_descriptor_storage_buffers >= 5
+                && limits.max_descriptor_set_storage_buffers >= 9
+                && limits.max_per_stage_resources >= MATERIAL_IMAGE_COUNT + 5,
             resident_scene,
             gpu_frustum_culling,
             hiz_occlusion_culling,

@@ -72,6 +72,7 @@ pub(crate) struct Pass {
     pub source: String,
     pub dependency_hash: u64,
     pub params: serde_json::Value,
+    pub clustered_lights: bool,
 }
 impl Pass {
     pub fn resource(&self, name: &str) -> String {
@@ -108,6 +109,10 @@ impl Pass {
                     .any(|output| output.name == SURFACE_PAYLOAD)
     }
 
+    pub fn light_receiver(&self) -> bool {
+        self.module == "gpu.forward" || self.transparency() || self.reads_surface_materials()
+    }
+
     pub fn reads_surface_materials(&self) -> bool {
         self.module == "gpu.deferred"
             && self
@@ -125,6 +130,15 @@ pub(crate) struct Plan {
 const SURFACE_PAYLOAD: &str = "__surface";
 
 impl Plan {
+    pub fn enable_clustered_lights(&mut self) -> bool {
+        let mut any = false;
+        for pass in &mut self.passes {
+            pass.clustered_lights = pass.light_receiver();
+            any |= pass.clustered_lights;
+        }
+        any
+    }
+
     /// Extend the stock G-buffer when its three visible outputs feed the same Deferred pass.
     pub fn with_surface_payload(&self) -> Option<Self> {
         let mut links = Vec::new();
@@ -253,6 +267,7 @@ impl Plan {
                     source: source.into(),
                     dependency_hash,
                     params: serde_json::Value::Null,
+                    clustered_lights: false,
                 });
             }
         }
@@ -920,6 +935,7 @@ fn build_plan_impl(
             source,
             dependency_hash,
             params: node.params.clone(),
+            clustered_lights: false,
         });
     }
     let output = output.ok_or(VulkanError::Graph("GPU frame output missing".into()))?;

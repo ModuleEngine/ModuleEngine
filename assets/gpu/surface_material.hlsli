@@ -86,9 +86,8 @@ ShadedSurface decodeSurfacePayload(float4 data, float3 normal) {
     return surface;
 }
 
-float3 shadeMetallicRoughness(float3 base, ShadedSurface surface, float3 view) {
+float3 punctualBrdf(float3 base, ShadedSurface surface, float3 view, float3 light) {
     const float pi = 3.14159265359;
-    const float3 light = normalize(float3(-0.5, 1.0, 0.7));
     float3 n = surface.normal;
     float3 h = normalize(light + view);
     float NoL = saturate(dot(n, light));
@@ -107,7 +106,64 @@ float3 shadeMetallicRoughness(float3 base, ShadedSurface surface, float3 view) {
     float3 fresnel = f0 + (1.0 - f0) * pow(1.0 - VoH, 5.0);
     float3 diffuseColor = base * (1.0 - surface.metallic);
     float3 diffuse = diffuseColor * (1.0 - fresnel) / pi;
-    float3 direct = (diffuse + distribution * visibility * fresnel) * NoL * 3.0;
-    float3 ambient = (diffuseColor * 0.16 + f0 * 0.03) * surface.occlusion;
-    return direct + ambient + surface.emissive;
+    return (diffuse + distribution * visibility * fresnel) * NoL;
 }
+
+float3 ambientSurface(float3 base, ShadedSurface surface) {
+    float3 f0 = lerp(0.04.xxx, base, surface.metallic);
+    return (base * (1.0 - surface.metallic) * 0.16 + f0 * 0.03) * surface.occlusion;
+}
+
+float3 shadeMetallicRoughness(float3 base, ShadedSurface surface, float3 view) {
+    const float3 sun = normalize(float3(-0.5, 1.0, 0.7));
+    return punctualBrdf(base, surface, view, sun) * 3.0 + ambientSurface(base, surface) + surface.emissive;
+}
+
+#ifdef MODULE_ENGINE_CLUSTERED_LIGHTS
+ShadedSurface legacySurface(float3 normal) {
+    ShadedSurface surface;
+    surface.normal = normal;
+    surface.emissive = 0.0.xxx;
+    surface.metallic = 0.0;
+    surface.roughness = 1.0;
+    surface.occlusion = 1.0;
+    return surface;
+}
+
+float3 shadeClustered(float3 base, ShadedSurface surface, float3 view, float3 world, uint2 pixel,
+                      float depth, float nearZ, float farZ) {
+    uint4 counts = lightCounts();
+    float3 direct = 0.0.xxx;
+    for (uint id = 0; id < counts.w; ++id) {
+        uint row = lightRow(id);
+        direct += punctualBrdf(base, surface, view, -lightData[row + 2].xyz) * lightData[row + 1].rgb;
+    }
+
+    uint offset = lightPixelOffset(pixel, depth, nearZ, farZ);
+    for (uint word = 0; word < lightExtent().z; ++word) {
+        uint remaining = lightGrid[offset + word];
+        while (remaining != 0u) {
+            uint bit = firstbitlow(remaining);
+            remaining &= remaining - 1u;
+            uint row = lightRow(counts.w + word * 32u + bit);
+            float4 source = lightData[row];
+            float3 direction = source.xyz - world;
+            float distanceSq = dot(direction, direction);
+            if (distanceSq <= 1e-8 || distanceSq >= source.w * source.w) continue;
+            float3 light = direction * rsqrt(distanceSq);
+            if (dot(light, surface.normal) <= 0.0) continue;
+            float4 energy = lightData[row + 1];
+            float relativeDistanceSq = distanceSq / (source.w * source.w);
+            float window = saturate(1.0 - relativeDistanceSq * relativeDistanceSq);
+            float falloff = window * window / max(distanceSq, 0.01);
+            if (energy.w >= 0.0) {
+                float4 cone = lightData[row + 2];
+                float angle = saturate((dot(-light, cone.xyz) - cone.w) / (energy.w - cone.w));
+                falloff *= angle * angle;
+            }
+            direct += punctualBrdf(base, surface, view, light) * (energy.rgb * falloff);
+        }
+    }
+    return direct + ambientSurface(base, surface) + surface.emissive;
+}
+#endif

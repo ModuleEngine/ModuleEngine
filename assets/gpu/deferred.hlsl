@@ -25,12 +25,23 @@ struct Config {
     float d=depth.Load(int3(p,0));
 #ifdef MODULE_ENGINE_DEFERRED_SURFACE
     float4 payload = surfacePayload.Load(int3(p, 0));
+#ifdef MODULE_ENGINE_CLUSTERED_LIGHTS
+    if (d > 0) {
+#else
     if (d > 0 && payload.a > 0) {
+#endif
         float2 ndc = (float2(p) + 0.5) / float2(w, h) * 2.0 - 1.0;
         float3 forward = forwardFocal.xyz + rightAspect.xyz * (ndc.x * rightAspect.w / forwardFocal.w)
                                          - upFar.xyz * (ndc.y / forwardFocal.w);
+#ifdef MODULE_ENGINE_CLUSTERED_LIGHTS
+        ShadedSurface surface = legacySurface(n);
+        if (payload.a > 0) surface = decodeSurfacePayload(payload, n);
+        outputColor[p] = float4(shadeClustered(a.rgb, surface, normalize(-forward), eyeNear.xyz + d * forward,
+                                               tid.xy, d, eyeNear.w, upFar.w), a.a);
+#else
         ShadedSurface surface = decodeSurfacePayload(payload, n);
         outputColor[p] = float4(shadeMetallicRoughness(a.rgb, surface, normalize(-forward)), a.a);
+#endif
         return;
     }
 #endif
