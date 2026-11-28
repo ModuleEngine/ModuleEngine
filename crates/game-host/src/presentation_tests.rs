@@ -448,7 +448,7 @@ impl PresentationTarget for FixturePresentationTarget {
 }
 #[derive(Default)]
 pub(crate) struct GpuDraws {
-    busy: bool,
+    pub(crate) busy: bool,
     reject_target: Option<u64>,
     accepted_target: Option<Arc<dyn PresentationTarget>>,
     target_attempts: usize,

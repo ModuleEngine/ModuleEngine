@@ -4,13 +4,16 @@ use crate::frames::CommandPool;
 
 impl VulkanRenderer {
     pub fn offscreen_target(&self) -> WindowTarget {
-        WindowTarget(RenderDevice {
-            context: self.context.clone(),
-            physical: self.physical,
-            capabilities: self.capabilities,
-            timestamp_valid_bits: self.timestamp_valid_bits,
-            meshlets: false,
-        })
+        WindowTarget {
+            device: RenderDevice {
+                context: self.context.clone(),
+                physical: self.physical,
+                capabilities: self.capabilities,
+                timestamp_valid_bits: self.timestamp_valid_bits,
+                meshlets: false,
+            },
+            scheduling: WindowScheduling::Default,
+        }
     }
 
     pub fn graphics_device(&self) -> (&ash::Instance, vk::PhysicalDevice, &ash::Device) {
