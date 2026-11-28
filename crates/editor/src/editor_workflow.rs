@@ -723,6 +723,18 @@ impl Editor {
             let manifest = AssetManifest::from_value(&before.asset_manifest)?;
             let mut operation = match action {
                 BrowserAction::NewFolder { path } => workspace.create_folder(&before, &path)?,
+                BrowserAction::NewMaterial { path } => workspace.create_material(&before, &path)?,
+                BrowserAction::SaveMaterial {
+                    id,
+                    expected_hash,
+                    bytes,
+                } => {
+                    let mut library = module_engine_content::ContentLibrary::new(&root)?;
+                    for (_, path) in module_engine_core::MaterialAsset::parse(&bytes)?.textures() {
+                        library.load_texture(path)?;
+                    }
+                    workspace.edit_material(&before, &id, &expected_hash, bytes)?
+                }
                 BrowserAction::Rename { id, name } => {
                     if name.is_empty()
                         || name.contains(['/', '\\', ':'])

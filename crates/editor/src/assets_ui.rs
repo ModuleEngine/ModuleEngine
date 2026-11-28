@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 )]
 pub enum AssetKind {
     Model,
+    Material,
     Texture,
     Audio,
     Shader,
@@ -21,6 +22,7 @@ impl AssetKind {
     pub fn label(self) -> &'static str {
         match self {
             Self::Model => "Model",
+            Self::Material => "Material",
             Self::Texture => "Texture",
             Self::Audio => "Audio",
             Self::Shader => "Shader",
@@ -31,6 +33,7 @@ impl AssetKind {
     fn icon(self) -> &'static str {
         match self {
             Self::Model => "3D",
+            Self::Material => "MAT",
             Self::Texture => "IMG",
             Self::Audio => "WAV",
             Self::Shader => "HLSL",
@@ -113,6 +116,17 @@ pub enum BrowserAction {
     NewFolder {
         path: String,
     },
+    NewMaterial {
+        path: String,
+    },
+    OpenMaterial {
+        id: String,
+    },
+    SaveMaterial {
+        id: String,
+        expected_hash: String,
+        bytes: Vec<u8>,
+    },
     Rename {
         id: String,
         name: String,
@@ -147,6 +161,9 @@ enum DeleteMode {
 #[derive(Clone, Debug)]
 enum BrowserDialog {
     NewFolder {
+        name: String,
+    },
+    NewMaterial {
         name: String,
     },
     Rename {
@@ -297,6 +314,9 @@ impl BrowserState {
                         name: String::new(),
                     });
                 }
+                if ui.add_enabled(!self.show_trash && !source_folder, egui::Button::new("New material…")).clicked() {
+                    self.dialog = Some(BrowserDialog::NewMaterial { name: String::new() });
+                }
             });
             ui.separator();
             if self.show_trash {
@@ -429,6 +449,7 @@ impl BrowserState {
                     ui.selectable_value(&mut self.kind_filter, None, "All types");
                     for kind in [
                         AssetKind::Model,
+                        AssetKind::Material,
                         AssetKind::Texture,
                         AssetKind::Audio,
                         AssetKind::Shader,
@@ -750,6 +771,7 @@ impl BrowserState {
                     "Drag into Scene to create an object. Replace its model in Inspector.",
                 AssetKind::Texture =>
                     "Drag onto an object in Scene or into Inspector to assign a texture.",
+                AssetKind::Material => "Assign through Surface Material in Inspector.",
                 _ => "Select a file to view details and usages.",
             }
         ));
@@ -838,6 +860,19 @@ impl BrowserState {
             }
             ui.weak("Entry and game-owned scene references are checked before changes.");
             return;
+        }
+
+        if asset.kind == AssetKind::Material
+            && ui
+                .add_enabled(!asset.protected, egui::Button::new("Edit material…"))
+                .clicked()
+        {
+            actions.push(BrowserAction::OpenMaterial {
+                id: asset.id.clone(),
+            });
+            if popup {
+                ui.close();
+            }
         }
 
         let rename = ui.add_enabled(!asset.protected, egui::Button::new("Rename…"));
@@ -998,6 +1033,21 @@ impl BrowserState {
             ui.set_width(390.0_f32.min(ctx.content_rect().width() - 40.0).max(160.0));
             ui.add_enabled_ui(!busy, |ui| {
                 match &mut dialog {
+                    BrowserDialog::NewMaterial { name } => {
+                        ui.heading("New material");
+                        ui.label(writable_folder(&self.folder));
+                        ui.add(egui::TextEdit::singleline(name).hint_text("Material name"));
+                        let error = valid_leaf(name).err();
+                        if let Some(error) = error {
+                            ui.weak(error);
+                        }
+                        if ui.add_enabled(error.is_none(), egui::Button::new("Create")).clicked() {
+                            let name = format!("{}.material", name.trim());
+                            command = Some(BrowserAction::NewMaterial {
+                                path: join_folder(&writable_folder(&self.folder), &name),
+                            });
+                        }
+                    }
                     BrowserDialog::NewFolder { name } => {
                         ui.heading("New folder");
                         ui.label(format!("In folder: {}", writable_folder(&self.folder)));

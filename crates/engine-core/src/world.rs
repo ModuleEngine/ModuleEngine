@@ -11,6 +11,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+const RENDER_COMPONENTS: [&str; 3] = ["mesh", "material", crate::MATERIAL_ASSET_COMPONENT];
+
 /// Identifies built-in world storage or a separately registered source provider.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum WorldKind {
@@ -706,7 +708,7 @@ impl Clone for EcsRows {
 
 impl EcsRows {
     fn mark_binding_changed(&mut self, id: u64, name: &str) {
-        if matches!(name, "mesh" | "material") {
+        if RENDER_COMPONENTS.contains(&name) {
             self.render_writes += 1;
             self.world
                 .get_mut::<RenderBindings>(self.index[&id])
@@ -791,7 +793,7 @@ impl EcsRows {
             {
                 *self.native_mut(id).unwrap() = row.transform;
             }
-            for name in ["mesh", "material"] {
+            for name in RENDER_COMPONENTS {
                 if self.components.get(name).and_then(|column| column.get(&id))
                     != row.components.get(name)
                 {
@@ -1282,7 +1284,7 @@ impl EcsWorld {
         // Check before potentially cloning a shared world or notifying render
         // extraction. For ordinary values in a unique world, the mutable
         // lookup itself can report absence.
-        if Arc::strong_count(&self.rows) != 1 || matches!(name, "mesh" | "material") {
+        if Arc::strong_count(&self.rows) != 1 || RENDER_COMPONENTS.contains(&name) {
             self.component(id, name)?;
         }
         let rows = Arc::make_mut(&mut self.rows);
@@ -1335,7 +1337,7 @@ impl EcsWorld {
         let Some(column) = rows.components.get_mut(name) else {
             return 0;
         };
-        let render_binding = matches!(name, "mesh" | "material");
+        let render_binding = RENDER_COMPONENTS.contains(&name);
         for &id in ids {
             let Some(component) = column.get_mut(&id) else {
                 continue;

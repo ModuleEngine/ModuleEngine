@@ -25,6 +25,7 @@ mod game_worker;
 mod game_worker_verification;
 mod host;
 mod layout;
+mod material_asset_ui;
 mod native_dialogs;
 mod player;
 #[cfg(feature = "verification")]

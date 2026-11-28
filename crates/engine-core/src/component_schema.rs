@@ -677,6 +677,21 @@ pub fn register_builtin_component_schemas(registry: &mut ComponentRegistry) -> R
             Ok(())
         },
     )?;
+    let mut surface_material = schema(
+        crate::MATERIAL_ASSET_COMPONENT,
+        "scene.extract",
+        json!({"asset":null}),
+        vec![(
+            "asset",
+            PropertyType::AssetReference {
+                kinds: vec![crate::MATERIAL_ASSET_EXTENSION.into()],
+                optional: true,
+            },
+        )],
+    );
+    surface_material.label = "Surface Material".into();
+    surface_material.fields[0].label = "Material asset".into();
+    registry.register(surface_material)?;
     Ok(())
 }
 

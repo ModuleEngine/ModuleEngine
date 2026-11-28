@@ -1,6 +1,7 @@
 //! glTF content import with explicit package ownership and a neutral scene.
 //! No glTF document or GPU handle is required by either world implementation.
 mod animation;
+mod material;
 
 pub use animation::AnimationClip;
 use animation::{Matrix, PrimitiveNode, PrimitiveSkin, Rig, SceneNode, Skin, row_major};
@@ -55,6 +56,7 @@ pub struct ContentLibrary {
     asset_paths: BTreeMap<String, String>,
     models: BTreeMap<String, Arc<LoadedModel>>,
     textures: BTreeMap<String, Arc<TextureImage>>,
+    materials: BTreeMap<String, Arc<material::LoadedMaterial>>,
 }
 impl ContentLibrary {
     pub fn new(root: impl AsRef<Path>) -> Result<Self, String> {
@@ -67,11 +69,13 @@ impl ContentLibrary {
             asset_paths: BTreeMap::new(),
             models: BTreeMap::new(),
             textures: BTreeMap::new(),
+            materials: BTreeMap::new(),
         })
     }
     pub fn invalidate(&mut self) {
         self.models.clear();
         self.textures.clear();
+        self.materials.clear();
     }
     /// Install the project's stable asset index. A changed mapping invalidates
     /// decoded files so moved assets never reuse an obsolete dependency root.

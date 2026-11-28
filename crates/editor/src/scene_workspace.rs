@@ -98,14 +98,12 @@ impl Editor {
                     {
                         content.load_model(reference)?;
                     }
-                    if let Some(reference) = entity
-                        .components
-                        .get("material")
-                        .and_then(|value| value.get("base_color_texture"))
-                        .and_then(serde_json::Value::as_str)
-                    {
-                        content.load_texture(reference)?;
-                    }
+                    content.material_dependencies(
+                        entity.components.get("material"),
+                        entity
+                            .components
+                            .get(module_engine_core::MATERIAL_ASSET_COMPONENT),
+                    )?;
                 }
             }
         }

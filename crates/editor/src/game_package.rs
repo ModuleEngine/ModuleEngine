@@ -931,15 +931,14 @@ fn prepare_files(
         {
             models.push(path.to_owned());
         }
-        if let Some(path) = entity
-            .components
-            .get("material")
-            .and_then(|m| m.get("base_color_texture"))
-            .and_then(|v| v.as_str())
-        {
-            library.load_texture(path)?;
-            assets.insert(manifest.resolve_reference(path)?);
-        }
+        assets.extend(
+            library.material_dependencies(
+                entity.components.get("material"),
+                entity
+                    .components
+                    .get(module_engine_core::MATERIAL_ASSET_COMPONENT),
+            )?,
+        );
     }
     assets.extend(library.dependencies(models)?);
     let composition = crate::host::composition_at(backend_root)?;

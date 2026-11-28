@@ -151,7 +151,8 @@ impl CompositionContext {
                     .map(|node| node.module.clone()),
             );
         }
-        let renderer = crate::connected_modules(document)
+        let connected = crate::connected_modules(document);
+        let renderer = connected
             .iter()
             .filter_map(|id| self.modules.descriptor(id))
             .any(|descriptor| {
@@ -166,6 +167,14 @@ impl CompositionContext {
             });
         if renderer {
             components.extend(["mesh".into(), "material".into()]);
+            if connected.contains("render.vulkan")
+                && document.engine_lock.as_ref().is_none_or(|lock| {
+                    lock.component_schemas
+                        .contains_key(crate::MATERIAL_ASSET_COMPONENT)
+                })
+            {
+                components.insert(crate::MATERIAL_ASSET_COMPONENT.into());
+            }
         } else {
             for component in ["mesh", "material"] {
                 let consumed = document.game.as_ref().is_some_and(|game| {
