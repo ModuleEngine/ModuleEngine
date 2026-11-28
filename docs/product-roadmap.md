@@ -6,7 +6,7 @@ Recorded project roadmap and planning baseline, updated 17 November 2026.
 
 The final demonstration is concrete: you assemble the capabilities you need. A colleague reproduces that configuration from its description and changes a second game. The first game still builds and plays as before. A player receives only what their game needs.
 
-This document records the reviewed sequence and its full acceptance expectations. **The owner closed 0.4.2 on 17 November 2026. On 21 November 2026 the owner started the [engine rebuild track](#rebuild) and paused the 0.5 brief and new UI work until its core phases R1, R3 and R4 are accepted. The 0.5 milestone remains paused on `main`.** See [accepted rebuild stages and available next moves](#rebuild-status). The 0.4.1 implementation and historical 0.4.2 engineering evidence remain recorded below. Future version numbers and milestone scopes are planning labels: they do not mean those versions have shipped, authorize every implementation, or promise dates. Existing specifications, ownership boundaries and budgets remain in force. Use the agreed [0.5 composition and dependency scope](#compose) for the next brief and the [owner check cards](product-roadmap-checks.md) for short personal checks.
+This document records the reviewed sequence and its full acceptance expectations. **The owner closed 0.4.2 on 17 November 2026. On 21 November 2026 the owner started the [engine rebuild track](#rebuild) and paused the 0.5 brief and new UI work. R1, R3 and R4 are now accepted. The 0.5 brief, implementation on `main` and new UI work for this milestone remain paused until R6 is complete and the owner separately approves the start.** See [accepted rebuild stages and available next moves](#rebuild-status). The 0.4.1 implementation and historical 0.4.2 engineering evidence remain recorded below. Future version numbers and milestone scopes are planning labels: they do not mean those versions have shipped, authorize every implementation, or promise dates. Existing specifications, ownership boundaries and budgets remain in force. Use the agreed [0.5 composition and dependency scope](#compose) for the next brief and the [owner check cards](product-roadmap-checks.md) for short personal checks.
 
 [Version map](#map) · [Baseline](#baseline) · [Starting handoff](#start) · [Independent use](#usability) · [Release decisions](#decision) · [Engine rebuild](#rebuild) · [AI-assisted live authoring](#ai-authoring)
 
@@ -21,7 +21,7 @@ This document records the reviewed sequence and its full acceptance expectations
 | [0.4.2](#image-and-docking) | Image, panes, stabilization and compact chrome; closed by the owner’s decision. | Accepted 17 Nov 2026 |
 | [R0–R10](#rebuild) | Engine rebuild track: `bevy_ecs` world, GPU-driven Vulkan renderer, editor on Vulkan, `rapier3d`/`kira`, skeletal animation, PBR, mesh shaders and hybrid ray tracing. | Engine core · proposed 21 Nov 2026 |
 | [AI-A–AI-B](#ai-authoring) | Build a game by plain-language requests while it runs; accepted changes are saved as an ordinary project. | Idea · not before R1/R4/R6 accepted |
-| [0.5](#compose) | Add, remove or replace a capability without unrelated settings getting in the way. | Paused until R1/R3/R4 |
+| [0.5](#compose) | Add, remove or replace a capability without unrelated settings getting in the way. | Paused until R6 completes and the owner gives a go |
 | [0.6](#pin) | Identical starting configurations for A and B; changing B does not require updating A. | Stability |
 | [0.7](#extend) | Two distinct tasks: configure an existing function and write a new one. | Extensions |
 | [0.8](#restore) | One entry description, available pinned sources/resources and an understandable refusal. | Handoff |
@@ -55,7 +55,7 @@ Basis: [current status](current-status.md), [G1 evidence and acceptance boundari
 
 ## Next brief — 0.5 composition and understandable dependencies
 
-**Entry.** The owner closed 0.4.2 on 17 November 2026. V0.5.0 may audit existing behavior before R3 acceptance and the owner's separate go. Implementation of 0.5 and new UI work remain paused until both. The separate brief follows the [agreed 0.5 scope](#compose): current capabilities, examples with and without audio, rights and actual Player-composition evidence.
+**Entry.** The owner closed 0.4.2 on 17 November 2026. V0.5.0 may audit existing behavior. Implementing 0.5 requires completion of R6 and the owner's separate go. The separate brief follows the [agreed 0.5 scope](#compose): current capabilities, examples with and without audio, rights and actual Player-composition evidence.
 
 1. Preserve the working UI and authored data. Reconcile stage 4 with implemented 2A and complete only confirmed gaps instead of repeating a redesign.
 2. In Full, show the audio consumer and removal consequences. First refuse clearly while the request is needed; after removing the request, carry the change through UI, runtime and a real Player package. Provide restoration of previous values.
@@ -106,11 +106,11 @@ Original detailed brief: [0.4.2 plan](release-042-plan.md). The protocol above i
 
 ## 0.5 — I assemble what I need and understand the consequences
 
-**Status — implementation and new UI work remain paused. R1 and R4 are accepted. Start only after R3 is accepted and the owner gives a separate go for the 0.5 brief. V0.5.0 may audit existing behavior before that decision.**
+**Status — R1, R3 and R4 are accepted. Implementing 0.5 waits for completion of R6 and the owner's separate go for the brief. Until then, V0.5.0 may audit existing behavior.**
 
 Disabling a button while retaining its service, resource requirement and Player dependency does not remove unnecessary engine capabilities.
 
-**Entry and dependencies.** The owner has closed 0.4.2. Preserve the 0.4.1 route. V0.5.0 is preparatory verification of existing behavior and can precede R3 acceptance and the separate decision to start. The separate 0.5 brief follows the scope below. The parallel G1 and G2 checks retain their own entry conditions.
+**Entry and dependencies.** The owner has closed 0.4.2. Preserve the 0.4.1 route. V0.5.0 is preparatory verification of existing behavior and can precede R6 completion and the separate decision to start implementation. The separate 0.5 brief follows the scope below. The parallel G1 and G2 checks retain their own entry conditions.
 
 **Plan items (revised 27 November 2026).** `V` marks the version route; effort is a rough guess for one developer. The former items 1 and 2 are replaced by an audit: 2A already covers the window/project split and PR #67 (R4.2–R4.3) already selects linked games.
 
@@ -433,9 +433,11 @@ Phase numbers R0–R10 are planning labels, not versions. Effort is a rough rang
 
 **Step 4 accepted by 27 November 2026.** [PR #67](https://github.com/ModuleEngine/ModuleEngine/pull/67) completed R4.2–R4.3. The Editor builds without games or with a selected game. A fourth game integrated without edits to `crates/editor`, and its input and HUD were checked offscreen. [PR #68](https://github.com/ModuleEngine/ModuleEngine/pull/68) completed R1.10. In paired headless Windows Release runs, the median of the mean tick times fell from 980.00 to 559.55 µs. Late rejection and retry were verified. [Measurements and scope](evidence/r110-arpg/README.md).
 
-**Next by dependency.** R6.2, R3.2, R7.2 and R8.2 are available. The map automatically lists R6.2 first, and no next start has been approved. Step 5 (R3.2 and R3.3) has not started. R2.5 has cleared its technical prerequisites and remains paused. V0.5.0 may audit existing behavior before R3 acceptance and the owner's separate go. Implementation of 0.5 on `main` and new UI work remain paused until both. The tested audio scenario and both Practice Arena examples are preserved on the [separate 0.5 audio branch at `c199903`](https://github.com/ModuleEngine/ModuleEngine/commit/c19990396a9c5be43309f9d102a992385555d81e).
+**Status on 28 November 2026.** R3.2–R3.5 were accepted in [PR #74](https://github.com/ModuleEngine/ModuleEngine/pull/74) (`6b4b0e9`), and R2.5–R2.7 in [PR #73](https://github.com/ModuleEngine/ModuleEngine/pull/73) (`df8ce5a`). R2 and R3 are complete. Both merge-queue CI runs passed: [R3](https://github.com/ModuleEngine/ModuleEngine/actions/runs/46106086880), [R2](https://github.com/ModuleEngine/ModuleEngine/actions/runs/46114053229). Windows RTX checks covered the owner's G1 run, window panes and docking, latency, and the [first visible frame](bench.md#editor-first-frame). Final S2 p95 was accepted after the prescribed borderline repeat. Puzzle showed a ready Scene and a playing Game. The cold ARPG Scene did not reach a ready frame within 45 seconds on either the base or the candidate. The exact cause of the timeout remains open. Software Vulkan on Linux passed functional checks. Hardware Linux latency measurements are deferred.
 
-**Relation to the version route.** On 21 November 2026 the owner paused the 0.5 brief and new UI work until R1, R3 and R4 are accepted, because they change the world storage, the editor shell and the editor/game boundary that 0.5 would build on. The track does not replace any milestone: R5 is the technical base for [1.3](#real), R6–R7 supply the physics and skeleton that [0.9a](#combat) and the [G2 decisions](#g2-agreement) need, and every phase keeps the G1 and ARPG budgets from [release decisions](#decision) as regression gates. Ray tracing and mesh shaders are optional hardware tiers: G1/G3-style packages must never require them.
+**In progress.** R5.1 (materials) and R6.2 (moving general collision code to Rapier) have started. Other future tasks have not started. Implementing 0.5 waits for completion of R6 and the owner's separate go. V0.5.0 remains a preparatory check. The tested audio scenario and both Practice Arena examples are preserved on the [separate 0.5 audio branch at `c199903`](https://github.com/ModuleEngine/ModuleEngine/commit/c19990396a9c5be43309f9d102a992385555d81e).
+
+**Relation to the version route.** On 21 November 2026 the owner paused the 0.5 brief and new UI work while R1, R3 and R4 rebuilt the world storage, the editor shell and the editor/game boundary that 0.5 will build on. Those phases are now accepted. The 0.5 brief, implementation and new UI work for this milestone remain paused until R6 is complete and the owner separately approves the start. The track does not replace any milestone: R5 is the technical base for [1.3](#real), R6–R7 supply the physics and skeleton that [0.9a](#combat) and the [G2 decisions](#g2-agreement) need, and every phase keeps the G1 and ARPG budgets from [release decisions](#decision) as regression gates. Ray tracing and mesh shaders are optional hardware tiers: G1/G3-style packages must never require them.
 
 ### Historical starting point, 0.4.2
 
@@ -463,7 +465,7 @@ Snapshot of `main` at `b6f54c9` before the rebuild. See [current status](current
 - The old path stays behind a switch until the new one passes parity; it is removed in the same phase after acceptance, not left as a second production implementation.
 - Every hardware-dependent feature declares its tier and a fallback. The [R0.4 hardware contract](hardware-tiers.md) lists the Vulkan 1.3 base tier A and the independent mesh shader (B) and ray tracing (C) additions, with their individual features and requirements for native Player presentation.
 - Measurements follow [release decisions](#decision): sequential GPU runs, recorded driver and load, mean and p95, the real game window rather than offscreen alone.
-- "Not worse than R0.6" (or than another baseline) is decided by the [not-worse rule](bench.md#not-worse), approved on 21 November 2026: the baseline commit and the candidate run interleaved in one session, five runs each; medians are compared with a per-metric tolerance of max(5 %, 2 × measured spread); a borderline result is repeated once; peak memory is compared with a 1 % floor; p99 is tracked but does not block. `python scripts/bench.py --compare <baseline>` returns the verdict for the S1–S5 metrics; R3.5 open-to-first-frame has no automated check yet.
+- "Not worse than R0.6" (or than another baseline) is decided by the [not-worse rule](bench.md#not-worse), approved on 21 November 2026: the baseline commit and the candidate run interleaved in one session, five runs each; medians are compared with a per-metric tolerance of max(5 %, 2 × measured spread); a borderline result is repeated once; peak memory is compared with a 1 % floor; p99 is tracked but does not block. `python scripts/bench.py --compare <baseline>` returns the verdict for the S1–S5 metrics; R3.5 uses the separate [paired first-frame measurement](bench.md#editor-first-frame).
 
 ### Benchmark scenes used by all phases
 
@@ -619,9 +621,9 @@ Each fix starts with a regression test that fails on the current code and runs i
 | R2.2 | Bindless resources: one global descriptor set with descriptor indexing (texture array, samplers, storage buffers) or buffer device address. Replace the atlas with per-texture images, mipmaps generated at import or on upload, anisotropic sampling. The push-constant ABI gains bindless indices; custom HLSL passes keep working. | 1,000 unique textures without the 8192 px limit; no shimmering on a moving camera over S4 floors; existing custom-pass tests pass. | Done |
 | R2.3 | GPU-resident scene: one mesh pool (shared vertex/index buffers) uploaded once per mesh; instance buffer with transforms and material indices updated from R1.6 deltas; material buffer. Remove the CPU vertex transform in `geometry.rs`. | Upload bytes per frame proportional to changed objects; S3 CPU frame ≤1 ms. | Done |
 | R2.4 | GPU culling and indirect drawing: compute frustum culling, `vkCmdDrawIndexedIndirectCount`, then two-phase Hi-Z occlusion culling. | Draw calls per pass do not grow with object count; S3 scaled to 100,000 instances keeps 60 FPS at 1080p on the [R0.4 reference GPU](hardware-tiers.md#reference-gpu). | Done |
-| R2.5 | Render graph v2: automatic barriers with synchronization2, transient resource aliasing, async compute queue. Existing graph documents load unchanged; built-in passes (forward, gbuffer, deferred, SSAO, FXAA, tonemap, color encode) are migrated. | Existing graph and custom-pass tests pass; built-ins match the old images within the `image_quality_check` tolerance; transient memory on S4 is at least 30 % lower. | Paused · 2–3 w |
-| R2.6 | Game swapchain for Player: present modes, frame pacing, resize. HDR output itself is [R10.2](#rebuild). | Player S1/S2 run directly on the swapchain; frame-time p95 [not worse](bench.md#not-worse) than R0.6. | 1 w |
-| R2.7 | Parity and switch: the old renderer behind a feature flag until S1/S2 pass, then removal. | S1/S2 gates pass on the new renderer; old code deleted; independent review. | 0.5–1 w |
+| R2.5 | Render graph v2: automatic barriers with synchronization2, transient resource aliasing, async compute queue. Existing graph documents load unchanged; built-in passes (forward, gbuffer, deferred, SSAO, FXAA, tonemap, color encode) are migrated. | Existing graph and custom-pass tests pass; built-ins match the old images within the `image_quality_check` tolerance; transient memory on S4 is at least 30 % lower. | Done |
+| R2.6 | Game swapchain for Player: present modes, frame pacing, resize. HDR output itself is [R10.2](#rebuild). | Player S1/S2 run directly on the swapchain; frame-time p95 [not worse](bench.md#not-worse) than R0.6. | Done |
+| R2.7 | Parity and switch: the old renderer behind a feature flag until S1/S2 pass, then removal. | S1/S2 gates pass on the new renderer; old code deleted; independent review. | Done |
 
 <a id="rebuild-r3"></a>
 
@@ -630,10 +632,10 @@ Each fix starts with a regression test that fails on the current code and runs i
 | # | Task | Acceptance | Effort |
 | --- | --- | --- | --- |
 | R3.1 | Spike: `eframe` has no Vulkan backend. Compare `winit` + `egui-winit` + `egui-ash-renderer` against a thin own egui painter on the R2 device. [Decision](decisions.md#r31-editor-painter): R3.2 starts with `egui-ash-renderer 0.13.0`. ModuleEngine owns the device, swapchain and frame lifetime. | Decision recorded; the spike draws the current editor at ≥60 FPS with crisp text at 100 % and 150 % DPI. | Done |
-| R3.2 | Replace the `eframe` shell in Editor and Player UI: window, input, clipboard, IME, DPI, cursor, and the detached native windows from `native_windows.rs`. egui widgets and panes stay unchanged. | Every existing pane opens; detached windows, docking and resize work; native window checks pass. | 1–1.5 w |
-| R3.3 | Scene and Game views sample render-graph output images on the same device. Remove the D3D12/OPAQUE_FD interop path after acceptance. | One frame less latency than today; `gpu_presentation.rs` interop removed; Linux uses the same path. | 4–5 d |
-| R3.4 | Port verification hooks that depend on `eframe` (`__screenshot`, `ui_capture.rs`, editor benchmark). | UI capture and editor benchmark run as before. | 2–3 d |
-| R3.5 | Acceptance. | Open-to-first-frame [not worse](bench.md#not-worse) than R0.6 (the paired open-to-first-frame check is still to be built: neither `--compare` nor the R0.6 report measures it); owner opens the editor, moves panes and plays G1 without visible change; independent review. | 1–2 d |
+| R3.2 | Replace the `eframe` shell in Editor and Player UI: window, input, clipboard, IME, DPI, cursor, and the detached native windows from `native_windows.rs`. egui widgets and panes stay unchanged. | Every existing pane opens; detached windows, docking and resize work; native window checks pass. | Done |
+| R3.3 | Scene and Game views sample render-graph output images on the same device. Remove the D3D12/OPAQUE_FD interop path after acceptance. | One frame less latency than today; `gpu_presentation.rs` interop removed; Linux uses the same path. | Done |
+| R3.4 | Port verification hooks that depend on `eframe` (`__screenshot`, `ui_capture.rs`, editor benchmark). | UI capture and editor benchmark run as before. | Done |
+| R3.5 | Acceptance. | Open-to-first-frame [not worse](bench.md#not-worse) than R0.6 using the [paired measurement with a rebuilt reference](bench.md#editor-first-frame); owner opens the editor, moves panes and plays G1 without visible change; independent review. | Done |
 
 <a id="rebuild-r4"></a>
 
@@ -651,7 +653,7 @@ Each fix starts with a regression test that fails on the current code and runs i
 
 | # | Task | Acceptance | Effort |
 | --- | --- | --- | --- |
-| R5.1 | glTF metallic-roughness materials: base color, normal, metallic-roughness, occlusion, emissive, alpha mask/blend; importer and material asset in the editor; BC7/BC5 compression at import. | Khronos sample models (DamagedHelmet, FlightHelmet) import with all maps; editor changes reach Player. | 1.5 w |
+| R5.1 | glTF metallic-roughness materials: base color, normal, metallic-roughness, occlusion, emissive, alpha mask/blend; importer and material asset in the editor; BC7/BC5 compression at import. | Khronos sample models (DamagedHelmet, FlightHelmet) import with all maps; editor changes reach Player. | In progress (1.5 w) |
 | R5.2 | Lights as ECS components (directional, point, spot, area later) with clustered light culling in compute; one shading model for forward and deferred. | S4 with 256 point lights: lighting ≤2 ms at 1080p on the [R0.4 reference GPU](hardware-tiers.md#reference-gpu). | 1.5 w |
 | R5.3 | Shadows: cascaded shadow maps for the sun (4 cascades, PCF with optional PCSS), a shadow atlas for point/spot lights, cached static shadows. | No visible cascade seams or acne on S4; shadows ≤2.5 ms. | 1.5–2 w |
 | R5.4 | Image-based lighting and sky: environment cubemap, prefiltered specular, irradiance as spherical harmonics, BRDF LUT, a physical sky model. | Sample models match the Khronos glTF Sample Viewer within an agreed image tolerance. | 1 w |
@@ -665,7 +667,7 @@ Each fix starts with a regression test that fails on the current code and runs i
 | # | Task | Acceptance | Effort |
 | --- | --- | --- | --- |
 | R6.1 | `rapier3d`: rigid body, collider and joint components; a physics step synchronized to the 60 Hz tick with `enhanced-determinism`; raycasts and shape queries for systems and scripts; collision events as `GameEvent`; debug draw in the Scene view. | Recorded-input replay stays identical; S2 with projectiles: physics ≤1 ms per tick. | Done |
-| R6.2 | Move game collision code to `rapier3d` where it is a general physics problem; grid rules in `game-kit` stay as game rules. | G1 levels and the ARPG encounter play as before. | 2–3 d |
+| R6.2 | Move game collision code to `rapier3d` where it is a general physics problem; grid rules in `game-kit` stay as game rules. | G1 levels and the ARPG encounter play as before. | In progress (2–3 d) |
 | R6.3 | `kira` replaces the WinMM mixer: OGG/MP3/FLAC/WAV, buses, volume and fades, spatial audio; Linux output. Existing game-event-to-sound bindings and audio composition from 0.5 planning keep their meaning. | Same bindings play on Windows and Linux; measured output latency ≤50 ms. | 4–5 d |
 | R6.4 | `glam` for math instead of hand-written matrix helpers (`transform_point` and similar); `rfd` for native file dialogs where the editor has its own. | No hand-written matrix code left outside codecs; dialogs work on Windows and Linux. | 2–3 d |
 
@@ -732,7 +734,7 @@ Each fix starts with a regression test that fails on the current code and runs i
 - R0 → R2.1 → R2.2 → R2.3 (also needs R1.6) → R2.4 → R2.5 → R2.6 → R2.7.
 - [Review fixes](#rebuild-rv): R0 → RV-A → RV-B.1–RV-B.3 → R2.5 (RV-B.4 may close separately); RV-A → RV-C (RV-C.3 before R2.5, RV-C.4 before all of R6); RV-D is optional and taken alongside related work.
 - R2.1 → R3, in parallel with the rest of R2.
-- R1 + R3 + R4 accepted and a separate owner go → resume 0.5 implementation and new UI work.
+- R1 + R3 + R4 + R6 accepted and a separate owner go → resume 0.5 implementation.
 - R1 + R4 + R6 accepted → [AI-assisted live authoring](#ai-authoring) AI-A → AI-B (outside this track's effort totals).
 - R2 → R5 → R9 and R10; R2.4 → R8; R1 + R2.3 → R7 → skinned refit in R9.1.
 
@@ -744,9 +746,9 @@ Each fix starts with a regression test that fails on the current code and runs i
 | Whole track | R0–R10 | about 44–71 weeks (11–17 months) |
 | Review fixes | RV-A, RV-B, RV-C | about 3–4 weeks, outside the R0–R10 total; optional RV-D about 2–3 weeks more |
 
-The first useful checkpoint is after R2 + R5: a GPU-driven renderer with PBR and shadows, about 4.5–7 months in (R0, R1, R2 and R5). 0.5 implementation and new UI work resume after R1, R3 and R4 are accepted and the owner gives a separate go; R5–R10 can then continue in parallel with the version route, and R6–R7 should land before [0.9a](#combat) needs them. Replace these estimates with measured throughput after R0 and again after R2.
+The first useful checkpoint is after R2 + R5: a GPU-driven renderer with PBR and shadows, about 4.5–7 months in (R0, R1, R2 and R5). 0.5 implementation resumes after R1, R3, R4 and R6 are accepted and the owner gives a separate go. R5 and later rendering work can continue in parallel with the version route, and R6–R7 should land before [0.9a](#combat) needs them. Replace these estimates with measured throughput after R0 and again after R2.
 
-**Version route.** The revised plan items add about 15 weeks of one developer's work for V0.5.0–V0.8.4 (0.5 about 4 w, 0.6 about 3 w, 0.7 about 4 w, 0.8 about 4 w) and about 36 weeks for V0.9a.1–V1.3.x.4 (0.9a 6 w, 0.9b 7 w, 1.0 5.5 w, 1.1 6 w, 1.2 3.5 w, 1.3 4 w, 1.3.x 4 w); these are rough guesses before measured throughput, and the 1.0 and 1.3.x items are mostly human work. Order: V0.5.0 → V0.5.1 → V0.5.2 in parallel with V0.6.1–V0.6.2; V0.5.3 after R6.3; V0.7.1 after R2.5; V0.8 after V0.6; V0.7.4 after R5.2. V0.5.0 may audit existing behavior before R3 acceptance and the owner's separate go. 0.5 implementation and new UI work remain paused until both. V0.6.1–V0.6.2 do not require new UI.
+**Version route.** The revised plan items add about 15 weeks of one developer's work for V0.5.0–V0.8.4 (0.5 about 4 w, 0.6 about 3 w, 0.7 about 4 w, 0.8 about 4 w) and about 36 weeks for V0.9a.1–V1.3.x.4 (0.9a 6 w, 0.9b 7 w, 1.0 5.5 w, 1.1 6 w, 1.2 3.5 w, 1.3 4 w, 1.3.x 4 w); these are rough guesses before measured throughput, and the 1.0 and 1.3.x items are mostly human work. Order: V0.5.0 → V0.5.1 → V0.5.2 in parallel with V0.6.1–V0.6.2; V0.5.3 after R6.3; V0.7.1 after R2.5; V0.8 after V0.6; V0.7.4 after R5.2. V0.5.0 may audit existing behavior before R6 completion and the owner's separate go. 0.5 implementation remains paused until both. V0.6.1–V0.6.2 do not require new UI.
 
 **Stop conditions.** If an R1.1 or R3.1 spike misses its criterion, stop and record the alternative before migrating. If a phase breaks an S1/S2 gate or an authored-data invariant, it returns for correction while the previous path stays active. A modern feature without a consumer or that misses its cost budget is dropped rather than kept as an unused subsystem.
 

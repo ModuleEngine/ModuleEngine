@@ -212,18 +212,19 @@ process.stdout.write(JSON.stringify({
         self.assertEqual(m["summary"]["kind"], "blocked")
         self.assertEqual((m["summary"]["phase"], m["summary"]["waits"], m["summary"]["remaining"]), ("R1", ["R0"], 4))
 
-    def test_checkpoint_needs_all_of_r1_r3_r4(self):
-        base = {"R0": ["done"], "R2": ["done"]}
-        for open_phase in ("R1", "R3", "R4"):
-            spec = dict(base, R1=["done", "done"], R3=["done"], R4=["done"])
+    def test_checkpoint_needs_r1_r3_r4_and_r6(self):
+        base = {"R0": ["done"], "R2": ["done"], "R1": ["done"], "R3": ["done"], "R4": ["done"], "R6": ["done"]}
+        for open_phase in ("R1", "R3", "R4", "R6"):
+            spec = dict(base)
             spec[open_phase] = ["done", "todo"]
             with self.subTest(open_phase=open_phase):
                 self.assertEqual(self.fixture(spec)["phases"]["g05"]["cls"], "gate")
-        passed = self.fixture(dict(base, R1=["done", "done"], R3=["done"], R4=["done"]))
+        passed = self.fixture(base)
         self.assertEqual(passed["phases"]["g05"]["cls"], "done")
+        self.assertEqual(passed["phases"]["v05"]["cls"], "paused")
 
     def test_open_optional_task_does_not_block_phase_or_checkpoint(self):
-        spec = {"R0": ["done"], "R2": ["done"], "R1": ["done", "done", "opt"], "R3": ["done"], "R4": ["done"]}
+        spec = {"R0": ["done"], "R2": ["done"], "R1": ["done", "done", "opt"], "R3": ["done"], "R4": ["done"], "R6": ["done"]}
         m = self.fixture(spec)
         self.assertEqual(m["phases"]["R1"]["cls"], "done")
         self.assertEqual(m["phases"]["g05"]["cls"], "done")
@@ -486,9 +487,13 @@ process.stdout.write(JSON.stringify({
         self.assertNotIn("R1>R4", m["arrows"])
 
     def test_checkpoint_is_passed_when_its_phases_are_done(self):
-        base = {"R0": ["done"], "R2": ["done"], "R1": ["done"], "R3": ["done"]}
-        self.assertEqual(self.fixture(dict(base, R4=["todo"]))["landmarks"]["R1+R3+R4"], "next")
-        self.assertEqual(self.fixture(dict(base, R4=["done"]))["landmarks"]["R1+R3+R4"], "done")
+        base = {"R0": ["done"], "R2": ["done"], "R1": ["done"], "R3": ["done"], "R4": ["done"], "R6": ["done"]}
+        gate = "R1+R3+R4+R6"
+        self.assertEqual(self.fixture(dict(base, R4=["todo"]))["landmarks"][gate], "next")
+        self.assertEqual(self.fixture(dict(base, R6=["done", "cur"]))["landmarks"][gate], "next")
+        landmarks = self.fixture(base)["landmarks"]
+        self.assertEqual(landmarks[gate], "done")
+        self.assertEqual(landmarks["0.5"], "next")
 
     def test_live_statuses_reach_the_campaign_map(self):
         en, ru = live()
