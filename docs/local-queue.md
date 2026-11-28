@@ -72,7 +72,9 @@ terminal status. Retain that evidence and resubmit for a fresh ID.
 Both audio routes need a quiet output. They preserve the exact probe binary,
 its hash and the original interleaved `f32le` capture with its own hash.
 The task log records the endpoint, channel count, sample rate and individual
-cue timings. On this stand, the WSLg routes use Ubuntu with the pinned Linux
+cue timings. The first cue is a startup diagnostic. The log records the start
+of the warm capture and any earlier discontinuity. A discontinuity during the
+warm measurement fails the check. On this stand, the WSLg routes use Ubuntu with the pinned Linux
 toolchain environment at `E:/ModuleEngine/.tools/linux-x86_64/env.sh`. Place
 an extracted Ubuntu ALSA development and PulseAudio utilities sysroot
 under `E:/ModuleEngine-queue/tools/r6-wsl-alsa/sysroot`. The desktop picker

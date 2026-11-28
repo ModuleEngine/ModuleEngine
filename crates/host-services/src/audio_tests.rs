@@ -350,6 +350,7 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
         io::{BufWriter, Write},
         sync::{
             Mutex,
+            atomic::AtomicUsize,
             mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel},
         },
         thread,
@@ -368,6 +369,12 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
     struct CaptureSamples {
         frames: Vec<f32>,
         truncated: bool,
+    }
+
+    #[derive(Default)]
+    struct CaptureErrors {
+        overruns: AtomicUsize,
+        fatal: AtomicBool,
     }
 
     struct Recording {
@@ -415,7 +422,7 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
         config: cpal::StreamConfig,
         hits: SyncSender<Instant>,
         recording: Option<Arc<Mutex<CaptureSamples>>>,
-        stream_error: Arc<AtomicBool>,
+        stream_errors: Arc<CaptureErrors>,
     ) -> cpal::Stream
     where
         T: SizedSample + Sample,
@@ -456,7 +463,11 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
                     }
                 },
                 move |error| {
-                    stream_error.store(true, Ordering::Relaxed);
+                    if error.kind() == cpal::ErrorKind::Xrun {
+                        stream_errors.overruns.fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        stream_errors.fatal.store(true, Ordering::Relaxed);
+                    }
                     eprintln!("Audio loopback stream: {error}");
                 },
                 None,
@@ -464,7 +475,7 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
             .unwrap()
     }
 
-    let native = cpal::default_host();
+    let native = crate::audio_output::native_host();
     let output = native
         .default_output_device()
         .expect("default output device");
@@ -511,7 +522,7 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
     let samples = recording
         .as_ref()
         .map(|recording| recording.samples.clone());
-    let stream_error = Arc::new(AtomicBool::new(false));
+    let stream_errors = Arc::new(CaptureErrors::default());
     let (tx, rx) = sync_channel(128);
     let stream = match support.sample_format() {
         SampleFormat::F32 => capture::<f32>(
@@ -519,21 +530,21 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
             support.config(),
             tx,
             samples,
-            stream_error.clone(),
+            stream_errors.clone(),
         ),
         SampleFormat::I16 => capture::<i16>(
             &monitor,
             support.config(),
             tx,
             samples,
-            stream_error.clone(),
+            stream_errors.clone(),
         ),
         SampleFormat::I32 => capture::<i32>(
             &monitor,
             support.config(),
             tx,
             samples,
-            stream_error.clone(),
+            stream_errors.clone(),
         ),
         format => panic!("Unsupported loopback format {format:?}"),
     };
@@ -558,6 +569,7 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
     };
     let mut service = registry.build(&[request], &context, true).unwrap();
     let mut latencies = Vec::new();
+    let mut startup_overruns = 0;
     for (index, name) in std::iter::once("wav")
         .chain(AUDIO_CUE_EXTENSIONS.into_iter().cycle().take(16))
         .enumerate()
@@ -572,6 +584,16 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
         thread::sleep(Duration::from_millis(210));
         while rx.try_recv().is_ok() {}
         require_quiet(&rx, Duration::from_millis(50), name);
+        if index == 1 {
+            // The first cue is a startup diagnostic. Score only the warmed stream.
+            startup_overruns = stream_errors.overruns.load(Ordering::Relaxed);
+            let sample_offset = recording
+                .as_ref()
+                .map(|recording| recording.samples.lock().unwrap().frames.len());
+            eprintln!(
+                "Warm measurement starts at capture sample offset {sample_offset:?}; startup capture overruns {startup_overruns}"
+            );
+        }
         let dispatch = Instant::now();
         service.consume(&[sound(name)]).unwrap();
         let deadline = dispatch + Duration::from_secs(2);
@@ -604,8 +626,13 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
     assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
     drop(stream);
     assert!(
-        !stream_error.load(Ordering::Relaxed),
-        "Loopback capture reported a stream error"
+        !stream_errors.fatal.load(Ordering::Relaxed),
+        "Loopback capture reported a fatal stream error"
+    );
+    assert_eq!(
+        stream_errors.overruns.load(Ordering::Relaxed),
+        startup_overruns,
+        "Loopback capture overran during the warm measurement"
     );
     if let Some(recording) = &mut recording {
         assert!(

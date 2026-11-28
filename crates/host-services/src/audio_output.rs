@@ -46,12 +46,26 @@ pub(crate) struct NativeBackend {
     error_sender: SyncSender<cpal::Error>,
 }
 
+pub(crate) fn native_host() -> cpal::Host {
+    let host = cpal::default_host();
+    // A second connection can succeed after CPAL's initial PulseAudio attempt
+    // fell back during startup of a session's audio server.
+    #[cfg(target_os = "linux")]
+    if host.id() == cpal::HostId::Alsa
+        && let Ok(pulse) = cpal::host_from_id(cpal::HostId::PulseAudio)
+        && pulse.default_output_device().is_some()
+    {
+        return pulse;
+    }
+    host
+}
+
 impl Backend for NativeBackend {
     type Settings = ();
     type Error = String;
 
     fn setup(_: ()) -> Result<(Self, u32), String> {
-        let device = cpal::default_host()
+        let device = native_host()
             .default_output_device()
             .ok_or("No default output device")?;
         let supported = device

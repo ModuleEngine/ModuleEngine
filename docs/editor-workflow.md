@@ -159,6 +159,8 @@ Open, Save As, folder selection and Import use `rfd` on Windows and Linux. Linux
 
 The bundled `rfd` 0.18.0 carries a [Windows picker fix](../crates/vendor/rfd/PATCH.md). If Windows Shell refuses the starting directory, the picker still opens in its default location.
 
+With the Zenity fallback, some desktop versions open in Recent and show the requested directory in the sidebar. Zenity 4.0.1 can leave the filename blank for a new Save As destination. Select the directory and enter the new `.json` name in the picker.
+
 Save As uses the exact `.json` path returned by the picker after any native replacement confirmation. A selection without `.json` gets an explicit filename error. The adapter receives `None` from `rfd` when the picker returns no path, which leaves the current project open. Run the [native picker check](verification.md#native-pickers) to verify desktop selection and cancellation.
 
 The **Export project…** command in Module Library invokes the same asynchronous Full export command as the File menu. It uses system folder selection and checks unsaved changes and the Gameplay Systems draft. Copying runs outside library painting; results and errors appear in the shared operation report.
