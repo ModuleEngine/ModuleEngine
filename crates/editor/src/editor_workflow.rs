@@ -16,6 +16,10 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(feature = "verification")]
+#[path = "material_verification.rs"]
+pub(crate) mod material_verification;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
     NewEmpty,

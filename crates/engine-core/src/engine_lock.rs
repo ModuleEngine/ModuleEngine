@@ -525,6 +525,15 @@ mod tests {
         let composition = CompositionContext::new(modules, SystemRegistry::builtin()).unwrap();
         let sdk = crate::SdkIdentity::current();
 
+        document.schema_version -= 1;
+        assert!(
+            !composition
+                .required_contracts(&document)
+                .unwrap()
+                .component_schemas
+                .contains_key(crate::MATERIAL_ASSET_COMPONENT)
+        );
+        document.schema_version = ENGINE_LOCK_DOCUMENT_VERSION;
         composition
             .capture_lock(&document, profile(), Some(sdk.clone()))
             .unwrap()

@@ -168,6 +168,7 @@ impl CompositionContext {
         if renderer {
             components.extend(["mesh".into(), "material".into()]);
             if connected.contains("render.vulkan")
+                && document.schema_version >= crate::ENGINE_LOCK_DOCUMENT_VERSION
                 && document.engine_lock.as_ref().is_none_or(|lock| {
                     lock.component_schemas
                         .contains_key(crate::MATERIAL_ASSET_COMPONENT)

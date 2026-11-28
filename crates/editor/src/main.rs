@@ -170,6 +170,7 @@ fn run() -> Result<(), String> {
                 | "--game-worker-check"
                 | "--editor-benchmark"
                 | "--scene-assets-check"
+                | "--material-check"
                 | "--player-benchmark"
                 | "--game-check"
                 | "--editor-ui-check"
@@ -417,6 +418,25 @@ fn run() -> Result<(), String> {
                 "{}",
                 serde_json::to_string_pretty(&scene_assets_verification::run(source, output)?)
                     .map_err(|e| e.to_string())?
+            );
+            return Ok(());
+        }
+        #[cfg(feature = "verification")]
+        Some("--material-check") => {
+            let project = Path::new(args.get(1).ok_or("Provide a Full source project JSON")?);
+            let fixtures = Path::new(
+                args.get(2)
+                    .ok_or("Provide the pinned Khronos sample directory")?,
+            );
+            let output = Path::new(
+                args.get(3)
+                    .ok_or("Provide a new material evidence folder")?,
+            );
+            let report =
+                app::editor_workflow::material_verification::run(project, fixtures, output)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?
             );
             return Ok(());
         }
