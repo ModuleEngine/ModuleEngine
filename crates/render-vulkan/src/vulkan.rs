@@ -350,7 +350,7 @@ fn frame_resource_key(
                 .iter()
                 .map(|spec| (pass.resource(&spec.name), spec.format.clone(), false)),
         );
-        if pass.geometry() {
+        if pass.hardware_depth() {
             images.push((
                 format!("{}.__hardware_depth", pass.id),
                 "d32float".into(),
@@ -399,7 +399,7 @@ fn validate_frame_images(
                 )));
             }
         }
-        if pass.geometry() {
+        if pass.hardware_depth() {
             let resource = format!("{}.__hardware_depth", pass.id);
             if !declared.insert(resource.clone()) {
                 return Err(VulkanError::Resource(format!(
@@ -427,6 +427,7 @@ struct AtlasGpu {
     keys: Vec<usize>,
     atlas: geometry::TextureAtlas,
     image: Image,
+    surfaces: Option<(Vec<materials::AtlasSurfaceRow>, Buffer)>,
 }
 /// Everything referenced by the recorded command buffer remains untouched until
 /// completion is confirmed. In particular uploads and evicted pipelines cannot drop.
@@ -539,6 +540,8 @@ pub struct FrameWork {
     pub cpu_wait_ms: f64,
     pub atlas_upload_bytes: usize,
     pub material_images: usize,
+    pub material_bc7_images: usize,
+    pub material_bc5_images: usize,
     pub material_uploaded_images: usize,
     pub material_upload_bytes: usize,
 }
@@ -895,6 +898,7 @@ impl VulkanRenderer {
                 .runtime_descriptor_array(bindless);
             let features = vk::PhysicalDeviceFeatures::default()
                 .sampler_anisotropy(bindless)
+                .texture_compression_bc(capabilities.material_block_compression)
                 .multi_draw_indirect(capabilities.resident_scene)
                 .draw_indirect_first_instance(capabilities.resident_scene);
             let mut extensions = Vec::new();
@@ -1980,7 +1984,8 @@ impl VulkanRenderer {
                     bindless_source(pass)
                 }
             });
-            let source = variant.as_deref().unwrap_or(&pass.source);
+            let compatibility = crate::compiler::compatibility_source(pass);
+            let source = variant.as_deref().unwrap_or(&compatibility);
             #[cfg(feature = "bench")]
             let (source, profile) = if geometry.meshlets() {
                 (meshlet_probe::SOURCE, "ps_6_5")
@@ -1989,9 +1994,13 @@ impl VulkanRenderer {
             };
             let shader =
                 compile_hlsl_at(&self.resource_root, source, &pass.manifest.entry, profile)?;
-            if bindless.is_some() {
+            #[cfg(feature = "bench")]
+            if geometry.meshlets() {
+                crate::compiler::verify_meshlet_fragment(pass, &shader.words)?;
+            }
+            if bindless.is_some() && !geometry.meshlets() {
                 verify_bindless_shader(pass, &shader.words)?;
-            } else {
+            } else if !geometry.meshlets() {
                 verify_shader(pass, &shader.words, false)?;
             }
             if pass.module == "gpu.custom" && pass.has_bindless_variant() {
@@ -2084,6 +2093,15 @@ impl VulkanRenderer {
                         })
                 })
                 .collect();
+            if pass.surface_materials() && bindless.is_none() {
+                bindings.push(
+                    vk::DescriptorSetLayoutBinding::default()
+                        .binding(descriptor_count as u32)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .descriptor_count(1)
+                        .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+                );
+            }
             if geometry != Geometry::Expanded {
                 let last_binding = if geometry == Geometry::Culled || geometry.meshlets() {
                     5
@@ -2215,7 +2233,7 @@ impl VulkanRenderer {
                     .collect();
                 let vertex_bindings = [vk::VertexInputBindingDescription {
                     binding: 0,
-                    stride: 72,
+                    stride: geometry::VERTEX_BYTES as u32,
                     input_rate: vk::VertexInputRate::VERTEX,
                 }];
                 let attributes = [
@@ -2255,6 +2273,12 @@ impl VulkanRenderer {
                         format: vk::Format::R32G32B32A32_SFLOAT,
                         offset: 56,
                     },
+                    vk::VertexInputAttributeDescription {
+                        location: 6,
+                        binding: 0,
+                        format: vk::Format::R32G32B32A32_SFLOAT,
+                        offset: 72,
+                    },
                 ];
                 let vertex_input = if pass.geometry() && geometry == Geometry::Expanded {
                     vk::PipelineVertexInputStateCreateInfo::default()
@@ -2276,16 +2300,29 @@ impl VulkanRenderer {
                 let multi = vk::PipelineMultisampleStateCreateInfo::default()
                     .rasterization_samples(vk::SampleCountFlags::TYPE_1);
                 let depth = vk::PipelineDepthStencilStateCreateInfo::default()
-                    .depth_test_enable(pass.geometry())
-                    .depth_write_enable(pass.geometry())
+                    .depth_test_enable(pass.hardware_depth())
+                    .depth_write_enable(pass.hardware_depth())
                     .depth_compare_op(vk::CompareOp::LESS);
                 let attachments: Vec<_> = pass
                     .manifest
                     .outputs
                     .iter()
                     .map(|_| {
-                        vk::PipelineColorBlendAttachmentState::default()
-                            .color_write_mask(vk::ColorComponentFlags::RGBA)
+                        if pass.transparency() {
+                            vk::PipelineColorBlendAttachmentState::default()
+                                .color_write_mask(
+                                    vk::ColorComponentFlags::R
+                                        | vk::ColorComponentFlags::G
+                                        | vk::ColorComponentFlags::B,
+                                )
+                                .blend_enable(true)
+                                .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+                                .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+                                .color_blend_op(vk::BlendOp::ADD)
+                        } else {
+                            vk::PipelineColorBlendAttachmentState::default()
+                                .color_write_mask(vk::ColorComponentFlags::RGBA)
+                        }
                     })
                     .collect();
                 let blend =
@@ -2301,7 +2338,7 @@ impl VulkanRenderer {
                     .collect::<Result<_, _>>()?;
                 let mut rendering = vk::PipelineRenderingCreateInfo::default()
                     .color_attachment_formats(&formats)
-                    .depth_attachment_format(if pass.geometry() {
+                    .depth_attachment_format(if pass.hardware_depth() {
                         vk::Format::D32_SFLOAT
                     } else {
                         vk::Format::UNDEFINED
@@ -2639,7 +2676,55 @@ impl VulkanRenderer {
         let prepare_started = Instant::now();
         self.performance.render_calls += 1;
         self.prepare_for_render(graph, sources)?;
-        let plan = self.prepared.as_ref().unwrap().clone();
+        let scene = input.snapshot()?;
+        let mut has_surfaces = false;
+        let mut has_blend = false;
+        let mut opaque_depth_seed = true;
+        for surface in scene
+            .items
+            .iter()
+            .filter_map(|item| item.material.pbr.as_ref())
+        {
+            has_surfaces = true;
+            has_blend |= surface.alpha_mode == module_engine_core::AlphaMode::Blend;
+            // The position-only depth seed cannot reject alpha cuts or single-sided backfaces.
+            opaque_depth_seed &=
+                surface.alpha_mode == module_engine_core::AlphaMode::Opaque && surface.double_sided;
+        }
+        let prepared = self.prepared.as_ref().unwrap();
+        let material_plan = has_surfaces
+            .then(|| prepared.with_surface_payload())
+            .flatten();
+        let mut plan = material_plan.unwrap_or_else(|| prepared.clone());
+        if has_blend {
+            plan = plan.with_transparency(&self.resource_root)?;
+        }
+        if has_surfaces {
+            for pass in plan.passes.iter().filter(|pass| {
+                pass.reads_surface_materials()
+                    || pass.module == "gpu.gbuffer" && pass.surface_materials()
+                    || pass.transparency()
+            }) {
+                let key = pipeline_key(pass);
+                self.prepare_pipeline(pass, key.clone(), true, Geometry::Expanded)?;
+                if pass.resident_geometry() && self.capabilities.resident_scene {
+                    self.prepare_pipeline(
+                        pass,
+                        resident_pipeline_key(&key),
+                        true,
+                        Geometry::Resident,
+                    )?;
+                    if self.capabilities.gpu_frustum_culling {
+                        self.prepare_pipeline(
+                            pass,
+                            culled_pipeline_key(&key),
+                            true,
+                            Geometry::Culled,
+                        )?;
+                    }
+                }
+            }
+        }
         let operations = schedule_overrides(&plan, overrides)?;
         let graphics = self.slots[index].pools.graphics.command;
         let compute = self.slots[index]
@@ -2754,8 +2839,24 @@ impl VulkanRenderer {
                     keys,
                     atlas: decoded,
                     image,
+                    surfaces: None,
                 });
                 atlas_needs_upload = true;
+            }
+            if active_passes().any(Pass::surface_materials) {
+                let atlas = atlas.as_mut().unwrap();
+                let rows = materials::atlas_surface_rows(scene, &atlas.atlas.rects);
+                if atlas
+                    .surfaces
+                    .as_ref()
+                    .is_none_or(|(previous, _)| *previous != rows)
+                {
+                    let limit = self.storage_buffer_limit;
+                    if std::mem::size_of_val(rows.as_slice()) as u64 > limit {
+                        return Err(VulkanError::SceneBufferLimit);
+                    }
+                    atlas.surfaces = Some((rows.clone(), self.write_host_storage(&rows)?));
+                }
             }
         }
         if atlas_overflow_fallback {
@@ -2770,14 +2871,18 @@ impl VulkanRenderer {
         }
         let no_rects = BTreeMap::new();
         let rects = atlas.as_ref().map_or(&no_rects, |a| &a.atlas.rects);
-        let (vertex_bytes, submitted) = match &resident {
-            Some(resident) => (Vec::new(), resident.triangles),
+        let (vertex_bytes, submitted, blend_draws) = match &resident {
+            Some(resident) => (Vec::new(), resident.triangles, Vec::new()),
             #[cfg(feature = "bench")]
             None if meshlet_frame => (
                 Vec::new(),
                 meshlets.unwrap().build_report().source_triangles,
+                Vec::new(),
             ),
-            None => geometry::legacy_vertices(scene, rects),
+            None => {
+                let camera = geometry::camera_constants(camera, width, height);
+                geometry::legacy_vertices(scene, rects, [camera[12], camera[13], camera[14]])
+            }
         };
         let readback = if direct {
             Vec::new()
@@ -2812,6 +2917,7 @@ impl VulkanRenderer {
                     .and_then(|resources| resources.culling.take()),
                 [width as u32, height as u32],
                 objects,
+                opaque_depth_seed,
             )?
         } else {
             None
@@ -2930,6 +3036,10 @@ impl VulkanRenderer {
             .map(|r| &r.materials)
             .or(materials.as_ref());
         frame_work.material_images = bound_materials.map_or(0, |set| set.image_count());
+        [
+            frame_work.material_bc7_images,
+            frame_work.material_bc5_images,
+        ] = bound_materials.map_or([0; 2], |set| set.block_image_counts());
         frame_work.material_uploaded_images = uploads.image_count();
         frame_work.material_upload_bytes = uploads.bytes;
         let material_upload = uploads.stage(self)?;
@@ -3131,6 +3241,16 @@ impl VulkanRenderer {
                     height as u32,
                 )?;
             } else {
+                if pass.transparency() {
+                    copy_image(
+                        recorder,
+                        &mut images,
+                        &pass.inputs[1].1,
+                        &pass.resource("color"),
+                        width as u32,
+                        height as u32,
+                    )?;
+                }
                 for (_, resource) in pass.inputs.iter().filter(|(s, _)| s.format != "scene") {
                     recorder.use_image(
                         images.get_mut(resource).unwrap(),
@@ -3157,6 +3277,11 @@ impl VulkanRenderer {
                             vk::AccessFlags::SHADER_WRITE
                         } else {
                             vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+                                | if pass.transparency() {
+                                    vk::AccessFlags::COLOR_ATTACHMENT_READ
+                                } else {
+                                    vk::AccessFlags::empty()
+                                }
                         },
                     );
                 }
@@ -3236,6 +3361,20 @@ impl VulkanRenderer {
                         })
                     });
                 let buffer_infos = buffer_infos.as_ref().map(|infos| infos.as_slice());
+                let surface_info;
+                if pass.surface_materials() && !pipeline.bindless_materials {
+                    let (_, rows) = atlas.as_ref().unwrap().surfaces.as_ref().unwrap();
+                    surface_info = vk::DescriptorBufferInfo::default()
+                        .buffer(rows.buffer)
+                        .range(rows.size);
+                    writes.push(
+                        vk::WriteDescriptorSet::default()
+                            .dst_set(set)
+                            .dst_binding(descriptor_images.len() as u32)
+                            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                            .buffer_info(std::slice::from_ref(&surface_info)),
+                    );
+                }
                 #[cfg(feature = "bench")]
                 let meshlet_infos: Option<[_; 5]> = meshlets
                     .filter(|_| pipeline.geometry.meshlets())
@@ -3367,7 +3506,11 @@ impl VulkanRenderer {
                                 vk::RenderingAttachmentInfo::default()
                                     .image_view(images[&pass.resource(&spec.name)].view)
                                     .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                                    .load_op(vk::AttachmentLoadOp::CLEAR)
+                                    .load_op(if pass.transparency() {
+                                        vk::AttachmentLoadOp::LOAD
+                                    } else {
+                                        vk::AttachmentLoadOp::CLEAR
+                                    })
                                     .store_op(vk::AttachmentStoreOp::STORE)
                                     .clear_value(vk::ClearValue {
                                         color: vk::ClearColorValue {
@@ -3393,7 +3536,7 @@ impl VulkanRenderer {
                             .layer_count(1)
                             .color_attachments(&attachments);
                         let depth_attachment;
-                        if pass.geometry() {
+                        if pass.hardware_depth() {
                             let depth = images
                                 .get_mut(&format!("{}.__hardware_depth", pass.id))
                                 .unwrap();
@@ -3480,12 +3623,25 @@ impl VulkanRenderer {
                                         &[vertex.as_ref().unwrap().buffer],
                                         &[0],
                                     );
-                                    self.device
-                                        .cmd_draw(command, (submitted * 3) as u32, 1, 0, 0);
+                                    if pass.transparency() {
+                                        for &(first, count) in &blend_draws {
+                                            self.device.cmd_draw(command, count, 1, first, 0);
+                                        }
+                                        blend_draws.len()
+                                    } else {
+                                        self.device.cmd_draw(
+                                            command,
+                                            (submitted * 3) as u32,
+                                            1,
+                                            0,
+                                            0,
+                                        );
+                                        1
+                                    }
                                 } else {
                                     self.device.cmd_draw(command, 3, 1, 0, 0);
+                                    1
                                 }
-                                1
                             }
                         };
                         frame_work.draw_calls += draws;
@@ -3921,6 +4077,114 @@ mod content_player_tests {
     use crate::{RenderPath, default_graph, precompile_graph_at};
     use module_engine_core::{ObjectsWorld, WorldProvider};
     #[test]
+    fn masked_and_blended_surfaces_respect_alpha_order_and_opaque_depth() {
+        crate::requires_capabilities!(Vulkan, Dxc);
+        use module_engine_core::{
+            AlphaMode, Material, Mesh, MetallicRoughness, RenderItem, TextureImage, identity_matrix,
+        };
+
+        let item = |id, z, emissive, alpha_mode, alpha| RenderItem {
+            id,
+            mesh: Mesh {
+                vertices: vec![[-1., -1., z], [1., -1., z], [1., 1., z], [-1., 1., z]],
+                triangles: vec![[0, 1, 2], [0, 2, 3]],
+                ..Mesh::default()
+            },
+            model: identity_matrix(),
+            color: [255; 4],
+            material: Material {
+                base_color: [0., 0., 0., 1.],
+                base_color_texture: Some(Arc::new(TextureImage {
+                    width: 1,
+                    height: 1,
+                    rgba8: vec![255, 255, 255, alpha],
+                    blocks: None,
+                })),
+                pbr: Some(MetallicRoughness {
+                    emissive,
+                    alpha_mode,
+                    double_sided: true,
+                    ..Default::default()
+                }),
+            },
+        };
+        let camera = Camera {
+            yaw: 0.,
+            pitch: 0.,
+            distance: 3.,
+            target: [0.; 3],
+        };
+        let mut atlas = VulkanRenderer::new().unwrap();
+        atlas.material_layout = None;
+        atlas.capabilities.resident_scene = false;
+        let mut indexed = VulkanRenderer::new().unwrap();
+        let focused_pixel =
+            |renderer: &mut VulkanRenderer, graph: &Graph, items: Vec<RenderItem>| {
+                let frame = renderer
+                    .render(
+                        &SceneSnapshot { items, time: 0. },
+                        camera,
+                        64,
+                        64,
+                        graph,
+                        &BTreeMap::new(),
+                        &RenderOverrides::default(),
+                    )
+                    .unwrap();
+                let start = (32 * 64 + 32) * 4;
+                [
+                    frame.rgba[start],
+                    frame.rgba[start + 1],
+                    frame.rgba[start + 2],
+                ]
+            };
+        for renderer in [&mut atlas, &mut indexed] {
+            for path in [RenderPath::Forward, RenderPath::Deferred] {
+                let graph = default_graph(path);
+                let background = focused_pixel(renderer, &graph, vec![]);
+                let red = [0.6, 0., 0.];
+                let green = [0., 0.6, 0.];
+                let reject = focused_pixel(
+                    renderer,
+                    &graph,
+                    vec![item(1, 0., red, AlphaMode::Mask, 63)],
+                );
+                let accept = focused_pixel(
+                    renderer,
+                    &graph,
+                    vec![item(1, 0., red, AlphaMode::Mask, 255)],
+                );
+                let blended = focused_pixel(
+                    renderer,
+                    &graph,
+                    vec![item(1, 0., red, AlphaMode::Blend, 90)],
+                );
+                assert_eq!(reject, background, "{path:?}");
+                assert!(
+                    background[0] < blended[0] && blended[0] < accept[0],
+                    "{path:?}: {background:?} {blended:?} {accept:?}"
+                );
+
+                let near = item(2, 0.5, red, AlphaMode::Blend, 200);
+                let far = item(3, -0.5, green, AlphaMode::Blend, 200);
+                let sorted = focused_pixel(renderer, &graph, vec![near.clone(), far.clone()]);
+                assert_eq!(
+                    sorted,
+                    focused_pixel(renderer, &graph, vec![far.clone(), near])
+                );
+                assert!(
+                    sorted[0] > sorted[1],
+                    "near red is composited last: {sorted:?}"
+                );
+
+                let opaque = item(4, 0., red, AlphaMode::Opaque, 40);
+                let hidden = focused_pixel(renderer, &graph, vec![far, opaque.clone()]);
+                assert_eq!(hidden, focused_pixel(renderer, &graph, vec![opaque]));
+            }
+        }
+    }
+
+    #[test]
     fn actual_imported_uv_texture_changes_forward_and_deferred_gpu_pixels_and_cache_is_reused() {
         crate::requires_capabilities!(Vulkan, Dxc);
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -4037,7 +4301,8 @@ mod content_player_tests {
             return;
         }
         // Two cube meshes fit; a third would overflow either pool buffer.
-        renderer.storage_buffer_limit = 400;
+        renderer.storage_buffer_limit =
+            (2 * 8 * geometry::RESIDENT_VERTEX_BYTES).max(2 * 36 * 4) as u64;
         let scene = ObjectsWorld::demo().snapshot();
         let original = scene.items[0].clone();
         let item = |id, offset| {
@@ -4079,7 +4344,7 @@ mod content_player_tests {
         let actual = render(&mut renderer, 2, next.clone());
         let work = renderer.last_frame_work().unwrap();
         assert!(work.resident_scene, "Unsubmitted meshes exhausted the pool");
-        assert_eq!(work.vertex_write_bytes, 8 * 20);
+        assert_eq!(work.vertex_write_bytes, 8 * geometry::RESIDENT_VERTEX_BYTES);
         assert_eq!(work.mesh_index_write_bytes, 36 * 4);
         let reference = renderer
             .render(
@@ -4332,6 +4597,7 @@ mod content_player_tests {
                             width: 1,
                             height: 1,
                             rgba8: vec![i as u8, (i >> 8) as u8, 160, 255],
+                            blocks: None,
                         }));
                     item
                 })
@@ -5342,6 +5608,7 @@ mod conversion_tests {
                 232, 163, 38, 255, 16, 18, 193, 255, 49, 224, 58, 255, 186, 24, 139, 255, 22, 175,
                 98, 255, 243, 201, 143, 255,
             ],
+            blocks: None,
         }));
         for path in [RenderPath::Forward, RenderPath::Deferred] {
             let mut graph = default_graph(path);

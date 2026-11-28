@@ -540,6 +540,7 @@ impl Fixture<'_> {
                 width: 9,
                 height: 5,
                 rgba8: color.repeat(45),
+                blocks: None,
             })
         };
         let mut a = self.scene.clone();
@@ -782,6 +783,7 @@ impl Fixture<'_> {
             rgba8: vec![
                 255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255,
             ],
+            blocks: None,
         });
         for item in &mut scene_a.items {
             item.material.base_color_texture = Some(texture_a.clone());
@@ -791,6 +793,7 @@ impl Fixture<'_> {
             width: 3,
             height: 1,
             rgba8: vec![0, 255, 255, 255, 255, 0, 255, 255, 32, 32, 32, 255],
+            blocks: None,
         });
         for item in &mut scene_b.items {
             item.material.base_color_texture = Some(texture_b.clone());

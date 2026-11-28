@@ -44,6 +44,7 @@ impl WorldProvider for PyramidWorld {
                         [1, 2, 3],
                         [1, 3, 4],
                     ],
+                    ..Mesh::default()
                 },
                 model: Transform {
                     rotation: [0.0, self.angle, 0.0],

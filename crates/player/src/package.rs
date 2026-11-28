@@ -151,7 +151,12 @@ fn validate_package_contents(
     root: &Path,
     manifest: &PlayerManifest,
 ) -> Result<GraphDocument, String> {
-    for directory in [".spirv", "scripts", "assets"] {
+    for directory in [
+        ".spirv",
+        "scripts",
+        "assets",
+        module_engine_core::PACKAGE_TEXTURE_DIR,
+    ] {
         validate_sealed_tree(root, &root.join(directory), manifest)?;
     }
     let document: GraphDocument = serde_json::from_slice(

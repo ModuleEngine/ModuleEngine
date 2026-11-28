@@ -1,8 +1,21 @@
 use crate::VulkanError;
-use module_engine_core::{Camera, SceneSnapshot, transform_point};
+use module_engine_core::{
+    AlphaMode, Camera, Material, SceneSnapshot, TextureImage, transform_point,
+};
 use std::{collections::BTreeMap, sync::Arc};
 
-pub(crate) const VERTEX_BYTES: usize = 72;
+pub(crate) const VERTEX_BYTES: usize = 88;
+pub(super) type ResidentVertex = [u32; 7];
+pub(super) const RESIDENT_VERTEX_BYTES: usize = size_of::<ResidentVertex>();
+
+pub(super) fn pack_direction(direction: [f32; 3], sign: f32) -> u32 {
+    let mut packed = 0;
+    for (axis, value) in direction.into_iter().enumerate() {
+        let bits = (value.clamp(-1., 1.) * 511.).round() as i32 as u32;
+        packed |= (bits & 0x3ff) << (axis * 10);
+    }
+    packed | (u32::from(sign < 0.) << 30)
+}
 pub(crate) struct TextureAtlas {
     pub width: u32,
     pub height: u32,
@@ -10,16 +23,29 @@ pub(crate) struct TextureAtlas {
     pub rects: BTreeMap<usize, [f32; 4]>,
     pub _textures: Vec<Arc<module_engine_core::TextureImage>>,
 }
+
+fn texture_sources(material: &Material) -> impl Iterator<Item = &Arc<TextureImage>> {
+    material
+        .base_color_texture
+        .iter()
+        .chain(material.pbr.iter().flat_map(|surface| {
+            [
+                &surface.metallic_roughness_texture,
+                &surface.normal_texture,
+                &surface.occlusion_texture,
+                &surface.emissive_texture,
+            ]
+            .into_iter()
+            .flatten()
+        }))
+}
+
 pub(crate) fn texture_keys(scene: &SceneSnapshot) -> Vec<usize> {
     let mut keys = scene
         .items
         .iter()
-        .filter_map(|i| {
-            i.material
-                .base_color_texture
-                .as_ref()
-                .map(|t| Arc::as_ptr(t) as usize)
-        })
+        .flat_map(|i| texture_sources(&i.material))
+        .map(|texture| Arc::as_ptr(texture) as usize)
         .collect::<Vec<_>>();
     keys.sort_unstable();
     keys.dedup();
@@ -28,7 +54,7 @@ pub(crate) fn texture_keys(scene: &SceneSnapshot) -> Vec<usize> {
 pub(crate) fn texture_atlas(scene: &SceneSnapshot) -> Result<TextureAtlas, VulkanError> {
     let mut textures = BTreeMap::new();
     for item in &scene.items {
-        if let Some(t) = &item.material.base_color_texture {
+        for t in texture_sources(&item.material) {
             textures.entry(Arc::as_ptr(t) as usize).or_insert(t.clone());
         }
     }
@@ -42,30 +68,58 @@ pub(crate) fn texture_atlas(scene: &SceneSnapshot) -> Result<TextureAtlas, Vulka
             ));
         }
     }
-    let width = textures.values().map(|t| t.width).max().unwrap_or(1).max(1);
-    let height = textures
-        .values()
-        .try_fold(1u32, |sum, t| sum.checked_add(t.height))
-        .ok_or(VulkanError::Resource(
-            "Base-color atlas height overflow".into(),
-        ))?;
-    if width > 8192 || height > 8192 {
-        return Err(VulkanError::Resource(
-            "Base-color atlas exceeds 8192 pixels; reduce imported texture sizes".into(),
-        ));
+    let mut sizes: Vec<_> = textures
+        .iter()
+        .map(|(&key, image)| (key, image.width, image.height))
+        .collect();
+    sizes.push((0, 1, 1));
+    sizes.sort_unstable_by_key(|&(key, width, height)| (std::cmp::Reverse((height, width)), key));
+    let minimum_width = sizes.iter().map(|&(_, w, _)| w).max().unwrap();
+    const LIMIT: u32 = 8192;
+    let mut best = None;
+    for limit in [minimum_width, 2048, 4096, LIMIT]
+        .into_iter()
+        .filter(|w| (minimum_width..=LIMIT).contains(w))
+    {
+        let mut rects = BTreeMap::new();
+        let (mut x, mut y, mut shelf, mut width) = (0, 0, 0, 0);
+        for &(key, w, h) in &sizes {
+            if x + w > limit {
+                y += shelf;
+                x = 0;
+                shelf = 0;
+            }
+            if h > LIMIT || y + h > LIMIT {
+                break;
+            }
+            rects.insert(key, [x as f32, y as f32, w as f32, h as f32]);
+            x += w;
+            shelf = shelf.max(h);
+            width = width.max(x);
+        }
+        let height = y + shelf;
+        if rects.len() == sizes.len()
+            && best
+                .as_ref()
+                .is_none_or(|&(w, h, _)| width * height < w * h)
+        {
+            best = Some((width, height, rects));
+        }
     }
+    let (width, height, rects) = best.ok_or_else(|| {
+        VulkanError::Resource(
+            "Material atlas exceeds 8192 pixels; reduce imported texture sizes".into(),
+        )
+    })?;
     let mut rgba = vec![255; (width * height * 4) as usize];
-    let mut rects = BTreeMap::new();
-    let mut y = 1;
     for (key, t) in &textures {
+        let [x, y, _, _] = rects[key];
         for row in 0..t.height {
             let source = (row * t.width * 4) as usize;
-            let target = ((y + row) * width * 4) as usize;
+            let target = (((y as u32 + row) * width + x as u32) * 4) as usize;
             rgba[target..target + t.width as usize * 4]
                 .copy_from_slice(&t.rgba8[source..source + t.width as usize * 4]);
         }
-        rects.insert(*key, [0., y as f32, t.width as f32, t.height as f32]);
-        y += t.height;
     }
     Ok(TextureAtlas {
         width,
@@ -78,7 +132,8 @@ pub(crate) fn texture_atlas(scene: &SceneSnapshot) -> Result<TextureAtlas, Vulka
 pub(crate) fn legacy_vertices(
     scene: &SceneSnapshot,
     rects: &BTreeMap<usize, [f32; 4]>,
-) -> (Vec<u8>, usize) {
+    view: [f32; 3],
+) -> (Vec<u8>, usize, Vec<(u32, u32)>) {
     let mut bytes = Vec::with_capacity(
         scene
             .items
@@ -87,7 +142,34 @@ pub(crate) fn legacy_vertices(
             .sum(),
     );
     let mut triangle = 0;
+    let mut blended = Vec::new();
     for (object, item) in scene.items.iter().enumerate() {
+        let sorted = item
+            .material
+            .pbr
+            .as_ref()
+            .is_some_and(|surface| surface.alpha_mode == AlphaMode::Blend);
+        let first = triangle;
+        let mut depth = [f32::INFINITY, f32::NEG_INFINITY];
+        let [x, y, z] = std::array::from_fn(|axis| {
+            [
+                item.model[0][axis],
+                item.model[1][axis],
+                item.model[2][axis],
+            ]
+        });
+        let normal_axes = [cross(y, z), cross(z, x), cross(x, y)];
+        let handedness = if x
+            .into_iter()
+            .zip(normal_axes[0])
+            .map(|(a, b)| a * b)
+            .sum::<f32>()
+            < 0.
+        {
+            -1.
+        } else {
+            1.
+        };
         for indices in &item.mesh.triangles {
             let positions = indices.map(|index| {
                 item.mesh
@@ -102,20 +184,53 @@ pub(crate) fn legacy_vertices(
             if !a.into_iter().chain(b).chain(c).all(f32::is_finite) {
                 continue;
             }
-            let normal = normalize(cross(sub(b, a), sub(c, a)));
+            if sorted {
+                for point in [a, b, c] {
+                    let z = point.into_iter().zip(view).map(|(p, f)| p * f).sum::<f32>();
+                    depth[0] = depth[0].min(z);
+                    depth[1] = depth[1].max(z);
+                }
+            }
+            let face_normal = normalize(cross(sub(b, a), sub(c, a)));
             triangle += 1;
             for (vertex, p) in indices.iter().zip([a, b, c]) {
                 let color = std::array::from_fn::<_, 4, _>(|c| {
                     item.color[c] as f32 / 255.0 * item.material.base_color[c]
                 });
                 let uv = item.mesh.texcoords.get(*vertex).copied().unwrap_or([0.; 2]);
+                let normal = item
+                    .mesh
+                    .normals
+                    .get(*vertex)
+                    .map_or(face_normal, |&normal| {
+                        let n =
+                            combine_axes(normal_axes, normal).map(|channel| channel * handedness);
+                        if n.into_iter().map(|c| c * c).sum::<f32>() > 0.000_000_000_1 {
+                            normalize(n)
+                        } else {
+                            face_normal
+                        }
+                    });
+                let tangent =
+                    item.mesh
+                        .tangents
+                        .get(*vertex)
+                        .map_or([0., 0., 0., 1.], |&[u, v, w, sign]| {
+                            let [a, b, c] = combine_axes([x, y, z], [u, v, w]);
+                            [a, b, c, sign * handedness]
+                        });
+                let tangent_sign = if handedness < 0. {
+                    2. * tangent[3]
+                } else {
+                    tangent[3]
+                };
                 let rect = item
                     .material
                     .base_color_texture
                     .as_ref()
                     .and_then(|t| rects.get(&(Arc::as_ptr(t) as usize)))
                     .copied()
-                    .unwrap_or([0., 0., 1., 1.]);
+                    .unwrap_or_else(|| rects.get(&0).copied().unwrap_or([0., 0., 1., 1.]));
                 let values = [
                     p[0],
                     p[1],
@@ -135,14 +250,39 @@ pub(crate) fn legacy_vertices(
                     rect[1],
                     rect[2],
                     rect[3],
+                    tangent[0],
+                    tangent[1],
+                    tangent[2],
+                    tangent_sign,
                 ];
                 for v in values {
                     bytes.extend_from_slice(&v.to_ne_bytes());
                 }
             }
         }
+        if sorted && triangle != first {
+            blended.push((
+                depth[0].midpoint(depth[1]),
+                (first * 3) as u32,
+                ((triangle - first) * 3) as u32,
+            ));
+        }
     }
-    (bytes, triangle)
+    blended.sort_by(|a, b| b.0.total_cmp(&a.0));
+    (
+        bytes,
+        triangle,
+        blended
+            .into_iter()
+            .map(|(_, first, count)| (first, count))
+            .collect(),
+    )
+}
+
+fn combine_axes(axes: [[f32; 3]; 3], direction: [f32; 3]) -> [f32; 3] {
+    std::array::from_fn(|axis| {
+        axes[0][axis] * direction[0] + axes[1][axis] * direction[1] + axes[2][axis] * direction[2]
+    })
 }
 pub(crate) fn camera_constants(camera: Camera, width: usize, height: usize) -> [f32; 32] {
     let target = camera.target.map(|v| if v.is_finite() { v } else { 0. });

@@ -1,6 +1,7 @@
 //! Cached asset service adapter and asynchronous, renderer-independent thumbnails.
 //! Files are scanned at explicit synchronization boundaries, never every UI frame.
 use crate::assets_ui::{AssetKind, AssetTile, BrowserAction, BrowserState, TrashTile};
+use crate::material_asset_ui::MaterialDraft;
 use eframe::egui;
 use module_engine_content::ContentLibrary;
 use module_engine_core::{
@@ -92,6 +93,7 @@ pub struct AssetsWorkbench {
     scan_needed: bool,
     usages_dirty: bool,
     pub error: Option<String>,
+    material_draft: Option<MaterialDraft>,
 }
 impl AssetsWorkbench {
     pub(super) fn reveal_source(&mut self, key: (String, u64), id: &str, path: &str) {
@@ -752,6 +754,12 @@ impl super::Editor {
         for action in actions {
             match action {
                 BrowserAction::Select { .. } => {}
+                BrowserAction::OpenMaterial { id } => {
+                    match MaterialDraft::open(&canonical, &self.document, id) {
+                        Ok(draft) => self.assets.material_draft = Some(draft),
+                        Err(error) => self.assets.error = Some(error),
+                    }
+                }
                 BrowserAction::Preview { id } => {
                     if let Err(error) = self.assets.queue_preview(&id, &self.document) {
                         self.assets.error = Some(error);
@@ -760,12 +768,28 @@ impl super::Editor {
                 action => self.request_asset_action(action, ui.ctx()),
             }
         }
+        if let Some(mut draft) = self.assets.material_draft.take() {
+            let (keep, action) = draft.ui(
+                ui.ctx(),
+                &canonical,
+                &self.document,
+                &self.assets.tiles,
+                busy,
+            );
+            if keep {
+                self.assets.material_draft = Some(draft);
+            }
+            if let Some(action) = action {
+                self.request_asset_action(action, ui.ctx());
+            }
+        }
     }
 }
 
 fn ui_kind(kind: &module_engine_project::AssetKind) -> AssetKind {
     match kind {
         module_engine_project::AssetKind::Model => AssetKind::Model,
+        module_engine_project::AssetKind::Material => AssetKind::Material,
         module_engine_project::AssetKind::Texture => AssetKind::Texture,
         module_engine_project::AssetKind::Audio => AssetKind::Audio,
         module_engine_project::AssetKind::Shader => AssetKind::Shader,

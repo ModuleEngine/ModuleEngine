@@ -84,6 +84,16 @@ impl Editor {
         // exists yet. This path does not initialize a GPU backend.
         if self.game_workbench.preview_host.is_none() {
             let root = self.project_asset_root();
+            let backend = self
+                .distribution
+                .as_ref()
+                .map(|package| package.package_root.clone())
+                .unwrap_or_else(crate::project::source_root);
+            let surface_id = module_engine_core::MATERIAL_ASSET_COMPONENT;
+            let surface_active = crate::host::composition_at(&backend)?
+                .activity(&candidate)?
+                .components
+                .contains(surface_id);
             let manifest = AssetManifest::from_value(&candidate.asset_manifest)?;
             let mut content = module_engine_content::ContentLibrary::new(&root)?;
             content.set_asset_paths(manifest.asset_paths());
@@ -98,14 +108,10 @@ impl Editor {
                     {
                         content.load_model(reference)?;
                     }
-                    if let Some(reference) = entity
-                        .components
-                        .get("material")
-                        .and_then(|value| value.get("base_color_texture"))
-                        .and_then(serde_json::Value::as_str)
-                    {
-                        content.load_texture(reference)?;
-                    }
+                    content.material_dependencies(
+                        entity.components.get("material"),
+                        entity.components.get(surface_id).filter(|_| surface_active),
+                    )?;
                 }
             }
         }

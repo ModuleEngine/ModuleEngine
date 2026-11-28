@@ -663,15 +663,14 @@ fn add_game_assets_at(
         {
             models.push(path.to_owned());
         }
-        if let Some(path) = entity
-            .components
-            .get("material")
-            .and_then(|m| m.get("base_color_texture"))
-            .and_then(serde_json::Value::as_str)
-        {
-            library.load_texture(path)?;
-            paths.insert(manifest.resolve_reference(path)?);
-        }
+        paths.extend(
+            library.material_dependencies(
+                entity.components.get("material"),
+                entity
+                    .components
+                    .get(module_engine_core::MATERIAL_ASSET_COMPONENT),
+            )?,
+        );
     }
     paths.extend(library.dependencies(models)?);
     if crate::host::composition_at(backend_root)?

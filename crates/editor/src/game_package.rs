@@ -703,6 +703,13 @@ fn export_into_staging(
             .map_err(|e| e.to_string())?;
     }
     if uses_vulkan_renderer(document, &backend_root)? {
+        let manifest = AssetManifest::from_value(&document.asset_manifest)?;
+        let mut content = ContentLibrary::new(&destination)?;
+        content.set_asset_paths(manifest.asset_paths());
+        content.bake_player_textures(
+            &asset_root,
+            &crate::host::active_game_entities_at(document, &backend_root)?,
+        )?;
         module_engine_vulkan::precompile_graph_at(
             &render_graph(document),
             &document.shader_sources,
@@ -890,6 +897,7 @@ fn reserved_player_path(relative: &str, scripts: &BTreeSet<String>) -> bool {
             | "third-party-licenses.txt"
             | ".module-engine-package.json"
             | ".spirv"
+            | module_engine_core::PACKAGE_TEXTURE_DIR
             | ".sdk"
             | ".work"
             | ".tools"
@@ -931,15 +939,14 @@ fn prepare_files(
         {
             models.push(path.to_owned());
         }
-        if let Some(path) = entity
-            .components
-            .get("material")
-            .and_then(|m| m.get("base_color_texture"))
-            .and_then(|v| v.as_str())
-        {
-            library.load_texture(path)?;
-            assets.insert(manifest.resolve_reference(path)?);
-        }
+        assets.extend(
+            library.material_dependencies(
+                entity.components.get("material"),
+                entity
+                    .components
+                    .get(module_engine_core::MATERIAL_ASSET_COMPONENT),
+            )?,
+        );
     }
     assets.extend(library.dependencies(models)?);
     let composition = crate::host::composition_at(backend_root)?;
