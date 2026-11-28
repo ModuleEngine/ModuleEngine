@@ -353,7 +353,7 @@ fn progression(
     let mut last_frame = 0;
     let mut warning_image_saved = false;
     for index in 0..9000 {
-        let input = autopilot(host.session.state(), index)?;
+        let input = progression_input(host.session.state(), index)?;
         if !host.session.state().arpg().telegraphs.is_empty() {
             if !host
                 .session
@@ -544,7 +544,8 @@ fn number(e: &GameEntity, component: &str, field: &str, default: f32) -> f32 {
         .map_or(default, |n| n as f32)
 }
 
-fn autopilot(state: &GameState, index: usize) -> Result<GameInput, String> {
+/// Scripted controls for the two-scene progression fixture.
+pub fn progression_input(state: &GameState, index: usize) -> Result<GameInput, String> {
     let player = state.player().ok_or("Acceptance game has no player")?;
     let p = player.object.transform.translation;
     let radius = number(&player, "actor", "radius", 0.35);
@@ -759,7 +760,7 @@ mod tests {
         let mut warning = false;
         let mut transitioned = false;
         for index in 0..9000 {
-            let input = autopilot(session.state(), index).unwrap();
+            let input = progression_input(session.state(), index).unwrap();
             session.step(DT, &input).unwrap();
             warning |=
                 !session.state().arpg().telegraphs.is_empty() && session.state().scene == "boss";

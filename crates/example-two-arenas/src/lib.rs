@@ -31,7 +31,48 @@ pub fn document(mut document: GraphDocument) -> GraphDocument {
         .retain(|e| ids.contains(&e.from_node) && ids.contains(&e.to_node));
     document.custom_sources.clear();
     let mut game = demo_project();
+    let stages = &mut game.execution.stages;
+    let collision = stages
+        .iter()
+        .position(|stage| {
+            stage
+                .nodes
+                .iter()
+                .any(|node| node.module == "game.collision")
+        })
+        .expect("Two Arenas movement schedule");
+    let after_movement = std::mem::replace(
+        &mut stages[collision].nodes[0].after,
+        vec!["physics".into()],
+    );
+    stages.insert(
+        collision,
+        SystemStage {
+            name: "Physics".into(),
+            nodes: vec![SystemNode {
+                id: "physics".into(),
+                module: "physics.rapier".into(),
+                params: json!({}),
+                bindings: [
+                    ("world".into(), "world".into()),
+                    ("events".into(), "events".into()),
+                ]
+                .into(),
+                after: after_movement,
+            }],
+        },
+    );
     for scene in game.scenes.values_mut() {
+        for obstacle in scene
+            .objects
+            .iter_mut()
+            .filter(|object| object.components.contains_key("obstacle"))
+        {
+            obstacle.components.insert(
+                "physics.collider".into(),
+                json!({"half_extents": obstacle.object.transform.scale}),
+            );
+        }
         if let Some(player) = scene.objects.iter_mut().find(|o| o.object.id == 1) {
             player.components.insert(
                 "mesh".into(),
