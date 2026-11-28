@@ -46,6 +46,8 @@ probe="$artifacts/native-dialogs-probe"
 cp -- "$binary" "$probe"
 (cd "$artifacts" && sha256sum native-dialogs-probe > probe.sha256)
 cat "$artifacts/probe.sha256"
+mkdir -- "$artifacts/fixture-tmp"
+export TMPDIR="$artifacts/fixture-tmp"
 setpriv --reuid 1000 --regid 1000 --clear-groups \
     timeout --kill-after=5s 240s "$probe" native_dialogs::tests::native_dialogs_choose_and_cancel \
     --exact --ignored --nocapture --test-threads=1

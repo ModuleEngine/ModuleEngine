@@ -358,24 +358,43 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
 
     const ONSET: f32 = 0.035;
 
+    struct CaptureSamples {
+        frames: Vec<f32>,
+        truncated: bool,
+    }
+
     struct Recording {
-        path: std::path::PathBuf,
-        samples: Arc<Mutex<Vec<f32>>>,
+        path: PathBuf,
+        samples: Arc<Mutex<CaptureSamples>>,
+        saved: bool,
+    }
+
+    impl Recording {
+        fn save(&mut self) -> std::io::Result<()> {
+            let samples = self.samples.lock().unwrap_or_else(|err| err.into_inner());
+            let partial = self.path.with_extension("f32le.partial");
+            let mut file = BufWriter::new(std::fs::File::create(&partial)?);
+            for sample in &samples.frames {
+                file.write_all(&sample.to_le_bytes())?;
+            }
+            file.flush()?;
+            drop(file);
+            std::fs::rename(partial, &self.path)?;
+            self.saved = true;
+            eprintln!(
+                "Saved {} interleaved f32le capture samples, truncated: {}",
+                samples.frames.len(),
+                samples.truncated
+            );
+            Ok(())
+        }
     }
 
     impl Drop for Recording {
         fn drop(&mut self) {
-            let save = || -> std::io::Result<()> {
-                let samples = self.samples.lock().unwrap_or_else(|err| err.into_inner());
-                let mut file = BufWriter::new(std::fs::File::create(&self.path)?);
-                for sample in samples.iter() {
-                    file.write_all(&sample.to_le_bytes())?;
-                }
-                file.flush()?;
-                eprintln!("Saved {} interleaved f32le capture samples", samples.len());
-                Ok(())
-            };
-            if let Err(error) = save() {
+            if !self.saved
+                && let Err(error) = self.save()
+            {
                 eprintln!(
                     "Could not save loopback capture {}: {error}",
                     self.path.display()
@@ -388,7 +407,8 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
         device: &cpal::Device,
         config: cpal::StreamConfig,
         hits: SyncSender<Instant>,
-        recording: Option<Arc<Mutex<Vec<f32>>>>,
+        recording: Option<Arc<Mutex<CaptureSamples>>>,
+        stream_error: Arc<AtomicBool>,
     ) -> cpal::Stream
     where
         T: SizedSample + Sample,
@@ -406,10 +426,11 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
                     let delay = stamp.callback.duration_since(stamp.capture);
                     if let Some(recording) = &recording {
                         let mut samples = recording.lock().unwrap_or_else(|err| err.into_inner());
-                        let remaining = samples.capacity() - samples.len();
+                        let remaining = samples.frames.capacity() - samples.frames.len();
                         let available = remaining.min(input.len());
                         let complete_frames = available - available % channels;
-                        samples.extend(
+                        samples.truncated |= complete_frames != input.len();
+                        samples.frames.extend(
                             input[..complete_frames]
                                 .iter()
                                 .map(|sample| sample.to_sample::<f32>()),
@@ -427,7 +448,10 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
                         previous = audible;
                     }
                 },
-                |error| eprintln!("Audio loopback stream: {error}"),
+                move |error| {
+                    stream_error.store(true, Ordering::Relaxed);
+                    eprintln!("Audio loopback stream: {error}");
+                },
                 None,
             )
             .unwrap()
@@ -460,20 +484,45 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
         native.id(),
         monitor.id().unwrap()
     );
-    let recording = std::env::var_os("MODULE_ENGINE_AUDIO_PROBE_RECORDING").map(|path| Recording {
-        path: path.into(),
-        samples: Arc::new(Mutex::new(Vec::with_capacity(
-            (support.sample_rate() as usize * usize::from(support.channels()) * 12).min(4_000_000),
-        ))),
-    });
+    let mut recording =
+        std::env::var_os("MODULE_ENGINE_AUDIO_PROBE_RECORDING").map(|path| Recording {
+            path: path.into(),
+            samples: Arc::new(Mutex::new(CaptureSamples {
+                frames: Vec::with_capacity(
+                    (support.sample_rate() as usize * usize::from(support.channels()) * 12)
+                        .min(16_000_000),
+                ),
+                truncated: false,
+            })),
+            saved: false,
+        });
     let samples = recording
         .as_ref()
         .map(|recording| recording.samples.clone());
+    let stream_error = Arc::new(AtomicBool::new(false));
     let (tx, rx) = sync_channel(128);
     let stream = match support.sample_format() {
-        SampleFormat::F32 => capture::<f32>(&monitor, support.config(), tx, samples),
-        SampleFormat::I16 => capture::<i16>(&monitor, support.config(), tx, samples),
-        SampleFormat::I32 => capture::<i32>(&monitor, support.config(), tx, samples),
+        SampleFormat::F32 => capture::<f32>(
+            &monitor,
+            support.config(),
+            tx,
+            samples,
+            stream_error.clone(),
+        ),
+        SampleFormat::I16 => capture::<i16>(
+            &monitor,
+            support.config(),
+            tx,
+            samples,
+            stream_error.clone(),
+        ),
+        SampleFormat::I32 => capture::<i32>(
+            &monitor,
+            support.config(),
+            tx,
+            samples,
+            stream_error.clone(),
+        ),
         format => panic!("Unsupported loopback format {format:?}"),
     };
     stream.play().unwrap();
@@ -543,4 +592,16 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
     thread::sleep(Duration::from_millis(180));
     while rx.try_recv().is_ok() {}
     assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
+    drop(stream);
+    assert!(
+        !stream_error.load(Ordering::Relaxed),
+        "Loopback capture reported a stream error"
+    );
+    if let Some(recording) = &mut recording {
+        assert!(
+            !recording.samples.lock().unwrap().truncated,
+            "Loopback recording was truncated"
+        );
+        recording.save().expect("Save original loopback capture");
+    }
 }
