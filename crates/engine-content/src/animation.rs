@@ -1,12 +1,12 @@
 use crate::ModelPrimitive;
-use glam::Quat;
+use glam::{Mat3, Quat, Vec3};
 use gltf::{
     accessor::{DataType, Dimensions},
     animation::{Interpolation, Property, util::ReadOutputs},
     mesh::Semantic,
     scene::Transform,
 };
-use module_engine_core::{identity_matrix, multiply_matrices, transform_point};
+use module_engine_core::{Mesh, identity_matrix, multiply_matrices, transform_point};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) type Matrix = [[f32; 4]; 4];
@@ -142,6 +142,8 @@ struct Influences {
 pub(super) struct PrimitiveSkin {
     pub skin: usize,
     positions: Vec<[f32; 3]>,
+    normals: Vec<[f32; 3]>,
+    tangents: Vec<[f32; 4]>,
     influences: Vec<Influences>,
 }
 
@@ -150,10 +152,11 @@ impl PrimitiveSkin {
         skin: usize,
         joint_count: usize,
         primitive: &gltf::Primitive<'_>,
-        positions: &[[f32; 3]],
+        mesh: &Mesh,
         buffers: &[Vec<u8>],
         influence_budget: &mut usize,
     ) -> Result<Self, String> {
+        let positions = &mesh.vertices;
         let sets = primitive
             .attributes()
             .filter_map(|(semantic, _)| match semantic {
@@ -238,33 +241,70 @@ impl PrimitiveSkin {
         }
         Ok(Self {
             skin,
-            positions: positions.to_vec(),
+            positions: positions.clone(),
+            normals: mesh.normals.clone(),
+            tangents: mesh.tangents.clone(),
             influences,
         })
     }
 
-    fn deform(&self, palette: &[Matrix]) -> Result<Vec<[f32; 3]>, String> {
-        self.positions
-            .iter()
-            .enumerate()
-            .map(|(i, &position)| {
-                let mut result = [0.; 3];
-                for set in &self.influences {
-                    for (joint, weight) in set.joints[i].into_iter().zip(set.weights[i]) {
-                        if weight > 0. {
-                            let point = transform_point(palette[joint as usize], position);
-                            for (axis, value) in result.iter_mut().enumerate() {
-                                *value += point[axis] * weight;
-                            }
+    fn deform(&self, mesh: &mut Mesh, palette: &[Matrix]) -> Result<(), String> {
+        let has_normals = !self.normals.is_empty();
+        let axes = if has_normals {
+            palette
+                .iter()
+                .map(|m| {
+                    Mat3::from_cols_array(&[
+                        m[0][0], m[1][0], m[2][0], m[0][1], m[1][1], m[2][1], m[0][2], m[1][2],
+                        m[2][2],
+                    ])
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        for (i, &position) in self.positions.iter().enumerate() {
+            let mut point = Vec3::ZERO;
+            let mut frame = Mat3::ZERO;
+            for set in &self.influences {
+                for (joint, weight) in set.joints[i].into_iter().zip(set.weights[i]) {
+                    if weight > 0. {
+                        let joint = joint as usize;
+                        point +=
+                            Vec3::from_array(transform_point(palette[joint], position)) * weight;
+                        if has_normals {
+                            frame += axes[joint] * weight;
                         }
                     }
                 }
-                if !result.iter().all(|v| v.is_finite()) {
-                    return Err("glTF skin produced a nonfinite vertex".into());
+            }
+            if !point.is_finite() {
+                return Err("glTF skin produced a nonfinite vertex".into());
+            }
+            mesh.vertices[i] = point.to_array();
+            if has_normals {
+                // The cofactor transforms normals by the inverse transpose up
+                // to scale, without division by a possibly singular determinant.
+                let cofactors = Mat3::from_cols(
+                    frame.y_axis.cross(frame.z_axis),
+                    frame.z_axis.cross(frame.x_axis),
+                    frame.x_axis.cross(frame.y_axis),
+                );
+                let handedness = if frame.x_axis.dot(cofactors.x_axis) < 0. {
+                    -1.
+                } else {
+                    1.
+                };
+                let normal = cofactors * Vec3::from_array(self.normals[i]) * handedness;
+                mesh.normals[i] = normal.normalize_or_zero().to_array();
+                if let Some(&[x, y, z, sign]) = self.tangents.get(i) {
+                    let tangent = frame * Vec3::new(x, y, z);
+                    let [x, y, z] = tangent.normalize_or_zero().to_array();
+                    mesh.tangents[i] = [x, y, z, sign * handedness];
                 }
-                Ok(result)
-            })
-            .collect()
+            }
+        }
+        Ok(())
     }
 }
 
@@ -347,7 +387,7 @@ impl Rig {
                 // Joint palettes already transform into scene space. The mesh
                 // node's transform is ignored for its own skinned geometry.
                 primitive.transform = identity_matrix();
-                primitive.mesh.vertices = skin.deform(&palettes[&skin.skin])?;
+                skin.deform(&mut primitive.mesh, &palettes[&skin.skin])?;
             }
         }
         Ok(())
@@ -376,16 +416,16 @@ impl Rig {
             .iter()
             .zip(&self.primitives)
             .map(|(primitive, binding)| {
-                let (vertices, transform) = match &binding.skin {
-                    Some(skin) => (skin.deform(&palettes[&skin.skin])?, identity_matrix()),
-                    None => (primitive.mesh.vertices.clone(), globals[binding.node]),
+                let mut mesh = primitive.mesh.clone();
+                let transform = match &binding.skin {
+                    Some(skin) => {
+                        skin.deform(&mut mesh, &palettes[&skin.skin])?;
+                        identity_matrix()
+                    }
+                    None => globals[binding.node],
                 };
                 Ok(ModelPrimitive {
-                    mesh: module_engine_core::Mesh {
-                        vertices,
-                        triangles: primitive.mesh.triangles.clone(),
-                        texcoords: primitive.mesh.texcoords.clone(),
-                    },
+                    mesh,
                     material: primitive.material.clone(),
                     transform,
                 })

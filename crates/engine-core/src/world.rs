@@ -12,6 +12,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+const RENDER_COMPONENTS: [&str; 3] = ["mesh", "material", crate::MATERIAL_ASSET_COMPONENT];
+
 /// Identifies built-in world storage or a separately registered source provider.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum WorldKind {
@@ -21,13 +23,18 @@ pub enum WorldKind {
 }
 
 /// Renderer-neutral indexed triangle mesh.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Mesh {
     pub vertices: Vec<[f32; 3]>,
     pub triangles: Vec<[usize; 3]>,
     /// Per-vertex UV set zero. Missing values use `[0, 0]`.
     #[serde(default)]
     pub texcoords: Vec<[f32; 2]>,
+    /// Local-space normals and tangent frames from the mesh, when supplied.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub normals: Vec<[f32; 3]>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tangents: Vec<[f32; 4]>,
 }
 
 impl Mesh {
@@ -58,7 +65,7 @@ impl Mesh {
                 [1, 2, 6],
                 [1, 6, 5],
             ],
-            texcoords: vec![],
+            ..Self::default()
         }
     }
 }
@@ -74,25 +81,110 @@ pub struct RenderItem {
     pub material: Material,
 }
 
-/// Decoded, renderer-neutral RGBA8 base-color image. Shared between snapshots.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+/// Decoded renderer-neutral RGBA8 image. The material slot defines its color space.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct TextureImage {
     pub width: u32,
     pub height: u32,
     pub rgba8: Vec<u8>,
+    /// An optional derived GPU representation. The neutral wire format retains RGBA8.
+    #[serde(skip)]
+    pub blocks: Option<TextureBlockChain>,
 }
 
-/// Opaque static base-color material. Texture RGB is sRGB; factors are linear.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TextureEncoding {
+    Srgb,
+    SrgbOpaque,
+    Linear,
+    Normal,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextureBlockChain {
+    pub encoding: TextureEncoding,
+    pub bytes: Vec<u8>,
+}
+
+/// All R5.1 BC formats use sixteen bytes per 4×4 block.
+pub fn texture_block_mip_bytes(width: u32, height: u32) -> u64 {
+    16 * u64::from(width.div_ceil(4)) * u64::from(height.div_ceil(4))
+}
+
+pub fn texture_mip_extents(width: u32, height: u32) -> impl Iterator<Item = [u32; 2]> {
+    let levels = u32::BITS - width.max(height).leading_zeros();
+    (0..levels).map(move |level| [(width >> level).max(1), (height >> level).max(1)])
+}
+
+/// A legacy base-color material or a metallic/roughness surface. Factors are linear.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Material {
     pub base_color: [f32; 4],
     pub base_color_texture: Option<std::sync::Arc<TextureImage>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pbr: Option<MetallicRoughness>,
+}
+impl Material {
+    /// Legacy shading and mask/blend can use the sampled alpha. Opaque PBR only uses RGB.
+    pub fn base_color_encoding(&self) -> TextureEncoding {
+        match self.pbr.as_ref().map(|surface| surface.alpha_mode) {
+            Some(AlphaMode::Opaque) => TextureEncoding::SrgbOpaque,
+            _ => TextureEncoding::Srgb,
+        }
+    }
 }
 impl Default for Material {
     fn default() -> Self {
         Self {
             base_color: [1.; 4],
             base_color_texture: None,
+            pbr: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AlphaMode {
+    #[default]
+    Opaque,
+    Mask,
+    Blend,
+}
+
+/// glTF core surface values. The metallic/roughness texture uses G for roughness
+/// and B for metallic. Occlusion uses R. Only base color and emissive use sRGB.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct MetallicRoughness {
+    pub metallic: f32,
+    pub roughness: f32,
+    pub metallic_roughness_texture: Option<Arc<TextureImage>>,
+    pub normal_texture: Option<Arc<TextureImage>>,
+    pub normal_scale: f32,
+    pub occlusion_texture: Option<Arc<TextureImage>>,
+    pub occlusion_strength: f32,
+    pub emissive_texture: Option<Arc<TextureImage>>,
+    pub emissive: [f32; 3],
+    pub alpha_mode: AlphaMode,
+    pub alpha_cutoff: f32,
+    pub double_sided: bool,
+}
+
+impl Default for MetallicRoughness {
+    fn default() -> Self {
+        Self {
+            metallic: 1.,
+            roughness: 1.,
+            metallic_roughness_texture: None,
+            normal_texture: None,
+            normal_scale: 1.,
+            occlusion_texture: None,
+            occlusion_strength: 1.,
+            emissive_texture: None,
+            emissive: [0.; 3],
+            alpha_mode: AlphaMode::Opaque,
+            alpha_cutoff: 0.5,
+            double_sided: false,
         }
     }
 }
@@ -626,7 +718,7 @@ impl Clone for EcsRows {
 
 impl EcsRows {
     fn mark_binding_changed(&mut self, id: u64, name: &str) {
-        if matches!(name, "mesh" | "material") {
+        if RENDER_COMPONENTS.contains(&name) {
             self.render_writes += 1;
             self.world
                 .get_mut::<RenderBindings>(self.index[&id])
@@ -711,7 +803,7 @@ impl EcsRows {
             {
                 *self.native_mut(id).unwrap() = row.transform;
             }
-            for name in ["mesh", "material"] {
+            for name in RENDER_COMPONENTS {
                 if self.components.get(name).and_then(|column| column.get(&id))
                     != row.components.get(name)
                 {
@@ -1202,7 +1294,7 @@ impl EcsWorld {
         // Check before potentially cloning a shared world or notifying render
         // extraction. For ordinary values in a unique world, the mutable
         // lookup itself can report absence.
-        if Arc::strong_count(&self.rows) != 1 || matches!(name, "mesh" | "material") {
+        if Arc::strong_count(&self.rows) != 1 || RENDER_COMPONENTS.contains(&name) {
             self.component(id, name)?;
         }
         let rows = Arc::make_mut(&mut self.rows);
@@ -1255,7 +1347,7 @@ impl EcsWorld {
         let Some(column) = rows.components.get_mut(name) else {
             return 0;
         };
-        let render_binding = matches!(name, "mesh" | "material");
+        let render_binding = RENDER_COMPONENTS.contains(&name);
         for &id in ids {
             let Some(component) = column.get_mut(&id) else {
                 continue;

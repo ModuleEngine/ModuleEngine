@@ -30,6 +30,7 @@ pub(super) fn check(root: &Path, folder: &Path) -> Result<(), String> {
         ],
         triangles: vec![[0, 1, 2], [0, 2, 3]],
         texcoords: vec![[0., 1.], [1., 1.], [1., 0.], [0., 0.]],
+        ..Mesh::default()
     };
     let linear = |byte: u8| {
         let v = f32::from(byte) / 255.0;
@@ -66,17 +67,18 @@ pub(super) fn check(root: &Path, folder: &Path) -> Result<(), String> {
             color: [255; 4],
             material: Material {
                 base_color: [linear(color[0]), linear(color[1]), linear(color[2]), 1.],
-                base_color_texture: None,
+                ..Material::default()
             },
         };
         reference.items.push(item.clone());
         item.material = Material {
-            base_color: [1.; 4],
             base_color_texture: Some(Arc::new(TextureImage {
                 width: SIDE,
                 height: SIDE,
                 rgba8: color.repeat((SIDE * SIDE) as usize),
+                blocks: None,
             })),
+            ..Material::default()
         };
         scene.items.push(item);
         sample_xy.push([

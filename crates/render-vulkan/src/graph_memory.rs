@@ -14,7 +14,7 @@ pub(super) fn lifetimes(
         for spec in &pass.manifest.outputs {
             result.insert(pass.resource(&spec.name), (index, index));
         }
-        if pass.geometry() {
+        if pass.hardware_depth() {
             result.insert(format!("{}.__hardware_depth", pass.id), (index, index));
         }
         let mut read = |resource: &str| {

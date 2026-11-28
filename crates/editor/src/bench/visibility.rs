@@ -115,6 +115,7 @@ pub(super) fn run(root: &Path, output: &Path) -> Result<(), String> {
                         width: 1,
                         height: 1,
                         rgba8: vec![105, 41, 226, 255],
+                        blocks: None,
                     }));
                     let insertion = [SceneChange {
                         id: 10,

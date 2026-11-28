@@ -992,7 +992,7 @@ mod tests {
                 mesh: Mesh {
                     vertices: vec![[2., 2., 0.], [3., 2., 0.], [2., 3., 0.]],
                     triangles: vec![[0, 1, 2]],
-                    texcoords: vec![],
+                    ..Mesh::default()
                 },
                 ..cube(7, [0.; 3])
             }],

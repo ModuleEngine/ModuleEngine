@@ -171,7 +171,7 @@ In the old Runtime, Object stores an actual recursive hierarchy, while ECS uses 
 
 CPU matrix operations use `glam`. The Core adapters preserve row-major matrices for the renderer and SDK. Authored `Transform` separates translation, XYZ Euler radians and scale. The operation order is `T * Rz * Ry * Rx * S`. The editor rejects a world gesture that cannot be represented by its local transform.
 
-ContentLibrary attaches imported primitives by stable object ID. It applies the authored object's transform to imported or sampled geometry and shares TextureImage between snapshots through Arc. Import and export are restricted to the selected project/package root. Vulkan renders opaque base color and builds mipmaps on the indexed material path. [Content and CPU skinning](content.md).
+ContentLibrary attaches imported primitives by stable object ID. It applies the authored object's transform to imported or sampled geometry and shares TextureImage between snapshots through Arc. Import and export are restricted to the selected project/package root. Stock Vulkan passes consume glTF metallic/roughness materials and the active Surface Material asset override. Indexed Vulkan devices use BC7/BC5 mip chains where supported. [Content, materials and CPU skinning](content.md).
 
 <a id="авторство-и-сохранённые-данные"></a>
 

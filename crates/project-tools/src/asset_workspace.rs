@@ -9,7 +9,9 @@ use crate::asset_fields::{AssetFields, remove_field};
 use crate::{
     AssetEntry, AssetManifest, hash_bytes, hash_file, normalize_relative, resolve_relative,
 };
-use module_engine_core::{CompositionContext, GraphDocument};
+use module_engine_core::{
+    CompositionContext, GraphDocument, MATERIAL_ASSET_EXTENSION, MaterialAsset,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -45,6 +47,7 @@ pub(crate) fn with_source_write_failure<T>(at: usize, work: impl FnOnce() -> T) 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AssetKind {
     Model,
+    Material,
     Texture,
     Audio,
     Shader,
@@ -60,6 +63,7 @@ impl AssetKind {
             .as_str()
         {
             "gltf" | "glb" => Self::Model,
+            MATERIAL_ASSET_EXTENSION => Self::Material,
             "png" | "jpg" | "jpeg" => Self::Texture,
             ext if module_engine_core::AUDIO_CUE_EXTENSIONS.contains(&ext) => Self::Audio,
             "hlsl" | "hlsli" => Self::Shader,
@@ -679,6 +683,90 @@ impl AssetWorkspace {
             source_files: None,
         })
     }
+
+    pub fn create_material(
+        &self,
+        document: &GraphDocument,
+        path: &str,
+    ) -> Result<AssetOperation, String> {
+        let path = self.editable(path)?;
+        let target = self.checked_target(&path)?;
+        let mut manifest = AssetManifest::from_value(&document.asset_manifest)?;
+        if AssetKind::for_path(&path) != AssetKind::Material
+            || target.exists()
+            || manifest
+                .assets
+                .values()
+                .any(|entry| same_path(&entry.path, &path))
+        {
+            return Err("Choose an unused .material filename".into());
+        }
+        let bytes = b"{\n  \"schema_version\": 1\n}\n".to_vec();
+        manifest.assets.insert(
+            unique_asset_id(),
+            AssetEntry {
+                path: path.clone(),
+                sha256: hash_bytes(&bytes),
+                dependencies: vec![],
+            },
+        );
+        let mut candidate = document.clone();
+        candidate.asset_manifest = serde_json::to_value(manifest).map_err(|e| e.to_string())?;
+        self.commit(
+            document,
+            candidate,
+            BTreeMap::from([(path.clone(), Some(bytes))]),
+            format!("New material: {path}"),
+            None,
+        )
+    }
+
+    pub fn edit_material(
+        &self,
+        document: &GraphDocument,
+        id: &str,
+        expected_hash: &str,
+        bytes: Vec<u8>,
+    ) -> Result<AssetOperation, String> {
+        let mut manifest = AssetManifest::from_value(&document.asset_manifest)?;
+        let before = manifest.assets.get(id).ok_or("Unknown material asset")?;
+        let path = self.editable(&before.path)?;
+        if AssetKind::for_path(&path) != AssetKind::Material || before.sha256 != expected_hash {
+            return Err("Material changed while being edited. Reopen its current version.".into());
+        }
+        let links = file_links(&self.root, &path, &bytes)?;
+        let dependencies = links
+            .iter()
+            .map(|link| {
+                manifest
+                    .assets
+                    .iter()
+                    .find(|(_, entry)| same_path(&entry.path, &link.target))
+                    .map(|(id, _)| id.clone())
+                    .ok_or_else(|| format!("Texture must be indexed in Assets: {}", link.target))
+            })
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        let sha256 = hash_bytes(&bytes);
+        let mut changes = BTreeMap::new();
+        if sha256 != before.sha256 {
+            changes.insert(path.clone(), Some(bytes));
+        } else if hash_file(&resolve_relative(&self.root, &path)?)? != expected_hash {
+            return Err("Material changed while being edited. Reopen its current version.".into());
+        }
+        let updated = manifest.assets.get_mut(id).unwrap();
+        updated.sha256 = sha256;
+        updated.dependencies = dependencies.into_iter().collect();
+        let mut candidate = document.clone();
+        candidate.asset_manifest = serde_json::to_value(manifest).map_err(|e| e.to_string())?;
+        self.commit(
+            document,
+            candidate,
+            changes,
+            format!("Edit material: {path}"),
+            None,
+        )
+    }
+
     /// Adopt files freshly created by the import worker. Caller must pass only
     /// that import's new files (its unique destination prevents overwrites).
     /// Recording them makes Undo remove files and metadata together.
@@ -1108,6 +1196,11 @@ impl AssetWorkspace {
             .ok_or_else(|| format!("Unknown asset ID: {id}"))?;
         let old = self.editable(&entry.path)?;
         let new = self.editable(destination)?;
+        if (AssetKind::for_path(&old) == AssetKind::Material)
+            != (AssetKind::for_path(&new) == AssetKind::Material)
+        {
+            return Err("Keep the .material filename extension".into());
+        }
         if old.eq_ignore_ascii_case(&new) {
             return Err("Asset destination must differ, including letter case".into());
         }
@@ -1428,6 +1521,7 @@ impl AssetWorkspace {
             });
         }
         let mut deltas = vec![];
+        let before_assets = AssetManifest::from_value(&before.asset_manifest)?;
         for (index, (path, bytes)) in changes.iter().enumerate() {
             let target = self.checked_target(path)?;
             if self.protected(path) {
@@ -1444,6 +1538,17 @@ impl AssetWorkspace {
                 return Err(format!(
                     "Authored source changed during publication: {path}"
                 ));
+            }
+            if AssetKind::for_path(path) == AssetKind::Material {
+                let expected = before_assets
+                    .assets
+                    .values()
+                    .find(|entry| same_path(&entry.path, path));
+                if original.as_deref().map(hash_bytes).as_deref()
+                    != expected.map(|entry| entry.sha256.as_str())
+                {
+                    return Err(format!("Material changed during publication: {path}"));
+                }
             }
             let store =
                 |side: &str, data: &Option<Vec<u8>>| -> Result<Option<AssetFileSnapshot>, String> {
@@ -1777,6 +1882,9 @@ struct FileLink {
 }
 #[derive(Clone)]
 enum LinkSlot {
+    Material {
+        field: &'static str,
+    },
     Gltf {
         collection: String,
         index: usize,
@@ -1795,6 +1903,16 @@ fn file_links(root: &Path, path: &str, bytes: &[u8]) -> Result<Vec<FileLink>, St
         .to_ascii_lowercase()
         .as_str()
     {
+        MATERIAL_ASSET_EXTENSION => MaterialAsset::parse(bytes)?
+            .textures()
+            .map(|(field, target)| {
+                resolve_relative(root, target)?;
+                Ok(FileLink {
+                    target: target.into(),
+                    slot: LinkSlot::Material { field },
+                })
+            })
+            .collect(),
         "gltf" | "glb" => {
             let (json, _) = model_json(path, bytes)?;
             let mut links = vec![];
@@ -1822,12 +1940,15 @@ fn file_links(root: &Path, path: &str, bytes: &[u8]) -> Result<Vec<FileLink>, St
                     }
                 }
             }
-            if ["extensionsRequired", "extensionsUsed"]
-                .iter()
-                .any(|field| {
-                    json.get(field)
-                        .and_then(Value::as_array)
-                        .is_some_and(|e| !e.is_empty())
+            // Optional transmission only points to existing glTF texture indices.
+            // Its image dependencies are already enumerated by the core image table.
+            if json["extensionsRequired"]
+                .as_array()
+                .is_some_and(|extensions| !extensions.is_empty())
+                || json["extensionsUsed"].as_array().is_some_and(|extensions| {
+                    extensions
+                        .iter()
+                        .any(|name| name != "KHR_materials_transmission")
                 })
             {
                 return Err(format!(
@@ -2033,6 +2154,23 @@ fn rewrite_file_links(
     let links = file_links(root, old_file, bytes)?;
     if links.is_empty() {
         return Ok(bytes.to_vec());
+    }
+    if AssetKind::for_path(old_file) == AssetKind::Material {
+        let mut json: Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+        let mut changed = false;
+        for link in links {
+            if let LinkSlot::Material { field } = link.slot
+                && same_path(&link.target, old_target)
+            {
+                json[field] = Value::String(new_target.into());
+                changed = true;
+            }
+        }
+        return if changed {
+            serde_json::to_vec_pretty(&json).map_err(|e| e.to_string())
+        } else {
+            Ok(bytes.to_vec())
+        };
     }
     let model = matches!(AssetKind::for_path(old_file), AssetKind::Model);
     if model {
@@ -4485,6 +4623,78 @@ mod tests {
                 .move_asset(&doc, &asset, "assets/renamed.glb")
                 .is_err()
         );
+        crate::history::remove_test_directory(&root);
+    }
+
+    #[test]
+    fn optional_transmission_keeps_core_image_dependencies_during_adoption() {
+        let (root, workspace, doc) = fixture();
+        let model = "assets/lenses/lenses.gltf";
+        let image = "assets/lenses/transmission.png";
+        write(&root, image, b"image");
+        write(&root, model, br#"{
+            "asset":{"version":"2.0"},
+            "extensionsUsed":["KHR_materials_transmission"],
+            "materials":[{"extensions":{"KHR_materials_transmission":{"transmissionTexture":{"index":0}}}}],
+            "textures":[{"source":0}],"images":[{"uri":"transmission.png"}]
+        }"#);
+
+        let operation = workspace.adopt_import(&doc, &[model.into()]).unwrap();
+        assert!(operation.record.files.iter().any(|file| file.path == image));
+        let image_id = id(&operation.document, image);
+        let moved = workspace
+            .move_asset(&operation.document, &image_id, "assets/lenses/new.png")
+            .unwrap();
+        assert_eq!(id(&moved.document, "assets/lenses/new.png"), image_id);
+        let updated: Value = serde_json::from_slice(&fs::read(root.join(model)).unwrap()).unwrap();
+        assert_eq!(updated["images"][0]["uri"], "new.png");
+        assert_eq!(
+            updated["materials"][0]["extensions"]["KHR_materials_transmission"]["transmissionTexture"]
+                ["index"],
+            0
+        );
+        crate::history::remove_test_directory(&root);
+    }
+
+    #[test]
+    fn material_edit_checks_the_draft_generation_and_moves_texture_links() {
+        let (root, workspace, mut document) = fixture();
+        let material = "assets/Surface.material";
+        let texture = "assets/surface.png";
+        write(&root, texture, b"image");
+        workspace.synchronize(&mut document).unwrap();
+        let created = workspace.create_material(&document, material).unwrap();
+        let material_id = id(&created.document, material);
+        let texture_id = id(&created.document, texture);
+        let hash = created.document.asset_manifest["assets"][&material_id]["sha256"]
+            .as_str()
+            .unwrap();
+        let bytes = br#"{"schema_version":1,"roughness":0.25,"emissive":null,"base_color_texture":"assets/surface.png","future":{"property":null}}"#;
+        let edit = workspace
+            .edit_material(&created.document, &material_id, hash, bytes.to_vec())
+            .unwrap();
+        assert_eq!(fs::read(root.join(material)).unwrap(), bytes);
+        assert!(
+            workspace
+                .edit_material(&edit.document, &material_id, hash, bytes.to_vec())
+                .is_err()
+        );
+        assert_eq!(
+            edit.document.asset_manifest["assets"][&material_id]["dependencies"],
+            json!([texture_id])
+        );
+        let moved = workspace
+            .move_asset(&edit.document, &texture_id, "assets/moved.png")
+            .unwrap();
+        let after: Value = serde_json::from_slice(&fs::read(root.join(material)).unwrap()).unwrap();
+        assert_eq!(after["base_color_texture"], "assets/moved.png");
+        assert_eq!(after["roughness"], 0.25);
+        assert_eq!(after["future"], json!({"property":null}));
+        assert_eq!(after.get("emissive"), Some(&Value::Null));
+        let previous = moved.record.undo(&root, &moved.document).unwrap();
+        assert_eq!(fs::read(root.join(material)).unwrap(), bytes);
+        edit.record.undo(&root, &previous).unwrap();
+        assert_ne!(fs::read(root.join(material)).unwrap(), bytes);
         crate::history::remove_test_directory(&root);
     }
     #[test]

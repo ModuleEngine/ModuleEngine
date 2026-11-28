@@ -221,6 +221,11 @@ try {
         if ($request.check -eq 'bench-once') {
             $report.environment.actual_adapters = @(Get-BenchAdapters (Join-Path $artifacts 'bench'))
         }
+        $materialReport = Join-Path $artifacts 'material-check/material-report.json'
+        if ($request.check -eq 'r5-materials' -and (Test-Path -LiteralPath $materialReport -PathType Leaf)) {
+            $materials = Read-QueueJson $materialReport
+            $report.environment.actual_adapters = @($materials.captures.graphs.adapter | Sort-Object -Unique)
+        }
         if ($report.environment.actual_adapters.Count) {
             $report.environment.selected_adapter_evidence = @($report.environment.actual_adapters | ForEach-Object {
                 Get-AdapterEvidence $_ $report.environment.video_controllers

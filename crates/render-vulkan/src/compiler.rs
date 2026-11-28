@@ -573,17 +573,46 @@ pub fn precompile_graph_at(
     destination: &Path,
 ) -> Result<usize, VulkanError> {
     let plan = crate::graph::build_plan_at(graph, sources, root)?;
+    let surface_plan = plan.with_surface_payload();
+    let blend_plan = match surface_plan
+        .as_ref()
+        .unwrap_or(&plan)
+        .with_transparency(root)
+    {
+        Ok(plan) => Some(plan),
+        Err(VulkanError::PassLimit) => None,
+        Err(other) => return Err(other),
+    };
     let mut jobs = BTreeMap::new();
-    for pass in &plan.passes {
+    for pass in plan
+        .passes
+        .iter()
+        .chain(
+            surface_plan
+                .iter()
+                .flat_map(|plan| &plan.passes)
+                .filter(|pass| {
+                    pass.reads_surface_materials()
+                        || pass.module == "gpu.gbuffer" && pass.surface_materials()
+                }),
+        )
+        .chain(
+            blend_plan
+                .iter()
+                .flat_map(|plan| &plan.passes)
+                .filter(|pass| pass.transparency()),
+        )
+    {
         let profile = if pass.manifest.stage == "compute" {
             "cs_6_0"
         } else {
             "ps_6_0"
         };
-        let shader = compile_hlsl_at(root, &pass.source, &pass.manifest.entry, profile)?;
+        let compatibility = compatibility_source(pass);
+        let shader = compile_hlsl_at(root, &compatibility, &pass.manifest.entry, profile)?;
         verify_shader(pass, &shader.words, false)?;
         jobs.insert(
-            shader_key(root, &pass.source, &pass.manifest.entry, profile)?,
+            shader_key(root, &compatibility, &pass.manifest.entry, profile)?,
             shader.words,
         );
         if pass.has_bindless_variant() {
@@ -646,10 +675,42 @@ pub fn precompile_graph_at(
     Ok(jobs.len())
 }
 
+pub(crate) fn compatibility_source(pass: &Pass) -> std::borrow::Cow<'_, str> {
+    if pass.surface_materials() {
+        let (define, source) = if pass.transparency() {
+            (
+                "#define MODULE_ENGINE_TRANSPARENT_SURFACE 1\n",
+                pass.source.as_str(),
+            )
+        } else if pass.module == "gpu.gbuffer" {
+            (
+                "#define MODULE_ENGINE_GBUFFER_SURFACE 1\n",
+                include_str!("../../../assets/gpu/forward.hlsl"),
+            )
+        } else {
+            ("", pass.source.as_str())
+        };
+        format!(
+            "#define MODULE_ENGINE_SURFACE_MATERIALS 1\n{define}{}\n{source}",
+            include_str!("../../../assets/gpu/surface_material.hlsli"),
+        )
+        .into()
+    } else if pass.reads_surface_materials() {
+        format!(
+            "#define MODULE_ENGINE_DEFERRED_SURFACE 1\n{}\n{}",
+            include_str!("../../../assets/gpu/surface_material.hlsli"),
+            pass.source,
+        )
+        .into()
+    } else {
+        pass.source.as_str().into()
+    }
+}
+
 pub(crate) fn bindless_source(pass: &Pass) -> String {
     format!(
         "#define MODULE_ENGINE_BINDLESS_MATERIALS 1\n{}",
-        pass.source
+        compatibility_source(pass)
     )
 }
 
@@ -662,11 +723,27 @@ pub(crate) fn culled_fragment_source(pass: &Pass) -> String {
 
 enum SceneDescriptors {
     Bindless,
+    IndexedSurface,
+    AtlasSurface,
+    IndexedBlend,
+    AtlasBlend,
     Resident,
     Culled,
 }
 
 pub(crate) fn verify_bindless_shader(pass: &Pass, words: &[u32]) -> Result<(), ShaderError> {
+    let descriptors = if pass.transparency() {
+        SceneDescriptors::IndexedBlend
+    } else if pass.surface_materials() {
+        SceneDescriptors::IndexedSurface
+    } else {
+        SceneDescriptors::Bindless
+    };
+    verify_scene_descriptors(&pass.id, words, descriptors)
+}
+
+#[cfg(feature = "bench")]
+pub(crate) fn verify_meshlet_fragment(pass: &Pass, words: &[u32]) -> Result<(), ShaderError> {
     verify_scene_descriptors(&pass.id, words, SceneDescriptors::Bindless)
 }
 
@@ -722,19 +799,28 @@ fn verify_scene_descriptors(
         }
         index += count;
     }
-    let matches = |id: &u32, binding| {
+    let matches = |id: &u32, set, binding| {
         let (pointer, storage) = *variables.get(id)?;
         let (32, [_, element]) = types.get(&pointer).copied()? else {
             return None;
         };
         let (opcode, operands) = types.get(element).copied()?;
+        let sampled_float = |opcode, operands: &[u32]| {
+            let (25, [component, 1, _, 0, 0, 1, ..]) = (opcode, operands) else {
+                return None;
+            };
+            (types.get(component).copied() == Some((22, &[32]))).then_some(())
+        };
         let storage_array = || {
             let (12, 30, [rows]) = (storage, opcode, operands) else {
                 return None;
             };
             read_only_rows.contains(element).then_some(*rows)
         };
-        if !matches!(descriptors, SceneDescriptors::Bindless) {
+        if matches!(
+            descriptors,
+            SceneDescriptors::Resident | SceneDescriptors::Culled
+        ) {
             let rows = storage_array()?;
             let stride = match binding {
                 1 | 2 | 5 => 4,
@@ -743,6 +829,31 @@ fn verify_scene_descriptors(
                 _ => return None,
             };
             return (strides.get(&rows) == Some(&stride)).then_some(());
+        }
+        if matches!(descriptors, SceneDescriptors::IndexedBlend) && set == 0 {
+            return (binding == 1 && storage == 0)
+                .then(|| sampled_float(opcode, operands))
+                .flatten();
+        }
+        if matches!(
+            descriptors,
+            SceneDescriptors::AtlasSurface | SceneDescriptors::AtlasBlend
+        ) {
+            let (atlas, params) = if matches!(descriptors, SceneDescriptors::AtlasBlend) {
+                (2, 3)
+            } else {
+                (0, 1)
+            };
+            return if binding == params {
+                (strides.get(&storage_array()?) == Some(&128)).then_some(())
+            } else if storage == 0
+                && (binding == atlas
+                    || matches!(descriptors, SceneDescriptors::AtlasBlend) && binding == 1)
+            {
+                sampled_float(opcode, operands)
+            } else {
+                None
+            };
         }
         match (binding, storage, opcode, operands) {
             (0, 0, 29, [image]) => {
@@ -761,23 +872,35 @@ fn verify_scene_descriptors(
                     && types.get(component).copied() == Some((21, &[32, 0])))
                 .then_some(())
             }
+            (3, ..)
+                if matches!(
+                    descriptors,
+                    SceneDescriptors::IndexedSurface | SceneDescriptors::IndexedBlend
+                ) =>
+            {
+                (strides.get(&storage_array()?) == Some(&64)).then_some(())
+            }
             _ => None,
         }
     };
     let actual = bindings
-        .values()
-        .copied()
+        .iter()
+        .filter_map(|(id, &binding)| Some((*sets.get(id)?, binding)))
         .collect::<std::collections::BTreeSet<_>>();
-    let (set, expected): (u32, &[u32]) = match descriptors {
-        SceneDescriptors::Bindless => (1, &[0, 1, 2]),
-        SceneDescriptors::Resident => (0, &[1, 2, 3, 4]),
-        SceneDescriptors::Culled => (0, &[1, 2, 3, 4, 5]),
+    let expected: &[(u32, u32)] = match descriptors {
+        SceneDescriptors::Bindless => &[(1, 0), (1, 1), (1, 2)],
+        SceneDescriptors::IndexedSurface => &[(1, 0), (1, 1), (1, 2), (1, 3)],
+        SceneDescriptors::AtlasSurface => &[(0, 0), (0, 1)],
+        SceneDescriptors::IndexedBlend => &[(0, 1), (1, 0), (1, 1), (1, 2), (1, 3)],
+        SceneDescriptors::AtlasBlend => &[(0, 1), (0, 2), (0, 3)],
+        SceneDescriptors::Resident => &[(0, 1), (0, 2), (0, 3), (0, 4)],
+        SceneDescriptors::Culled => &[(0, 1), (0, 2), (0, 3), (0, 4), (0, 5)],
     };
     if bindings.len() != expected.len()
         || !actual.iter().copied().eq(expected.iter().copied())
-        || bindings
-            .iter()
-            .any(|(id, binding)| sets.get(id) != Some(&set) || matches(id, *binding).is_none())
+        || bindings.iter().any(|(id, binding)| {
+            matches(id, sets.get(id).copied().unwrap_or(u32::MAX), *binding).is_none()
+        })
     {
         return Err(ShaderError::ShaderInterface(format!(
             "Pass {name} has an invalid scene descriptor interface"
@@ -787,6 +910,14 @@ fn verify_scene_descriptors(
 }
 
 pub(crate) fn verify_shader(pass: &Pass, words: &[u32], vertex: bool) -> Result<(), ShaderError> {
+    if !vertex && pass.surface_materials() {
+        let descriptor = if pass.transparency() {
+            SceneDescriptors::AtlasBlend
+        } else {
+            SceneDescriptors::AtlasSurface
+        };
+        return verify_scene_descriptors(&pass.id, words, descriptor);
+    }
     let mut bindings = BTreeMap::new();
     let mut sets = BTreeMap::new();
     let mut pointer_types = BTreeMap::new();

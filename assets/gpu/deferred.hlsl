@@ -13,11 +13,28 @@ struct Config {
 [[vk::binding(0,0)]] Texture2D<float4> albedo;
 [[vk::binding(1,0)]] Texture2D<float4> normals;
 [[vk::binding(2,0)]] Texture2D<float> depth;
+#ifdef MODULE_ENGINE_DEFERRED_SURFACE
+[[vk::binding(3,0)]] Texture2D<float4> surfacePayload;
+[[vk::binding(4,0),vk::image_format("rgba32f")]] RWTexture2D<float4> outputColor;
+#else
 [[vk::binding(3,0),vk::image_format("rgba32f")]] RWTexture2D<float4> outputColor;
+#endif
 [numthreads(8,8,1)] void main(uint3 tid:SV_DispatchThreadID) {
     uint w,h;outputColor.GetDimensions(w,h);if(tid.x>=w||tid.y>=h)return;
     int2 p=int2(tid.xy);float4 a=albedo.Load(int3(p,0));float3 n=normals.Load(int3(p,0)).xyz;
-    float d=depth.Load(int3(p,0));float diffuse=0.20+1.65*abs(dot(n,normalize(float3(-0.5,1.0,0.7))));
+    float d=depth.Load(int3(p,0));
+#ifdef MODULE_ENGINE_DEFERRED_SURFACE
+    float4 payload = surfacePayload.Load(int3(p, 0));
+    if (d > 0 && payload.a > 0) {
+        float2 ndc = (float2(p) + 0.5) / float2(w, h) * 2.0 - 1.0;
+        float3 forward = forwardFocal.xyz + rightAspect.xyz * (ndc.x * rightAspect.w / forwardFocal.w)
+                                         - upFar.xyz * (ndc.y / forwardFocal.w);
+        ShadedSurface surface = decodeSurfacePayload(payload, n);
+        outputColor[p] = float4(shadeMetallicRoughness(a.rgb, surface, normalize(-forward)), a.a);
+        return;
+    }
+#endif
+    float diffuse=0.20+1.65*abs(dot(n,normalize(float3(-0.5,1.0,0.7))));
     float specular=0.18*pow(saturate(abs(n.z)),12.0);
     outputColor[p]=d>0?float4(a.rgb*diffuse+specular,a.a):a;
 }

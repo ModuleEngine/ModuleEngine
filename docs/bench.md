@@ -45,8 +45,8 @@ Sponza is not redistributed: its model files are under the
 pins all 71 files (about 53 MB) by SHA-256 at the same Khronos commit.
 `scripts/bench.py` downloads missing files into the Git-ignored
 `.tools/bench-assets/sponza/`, and the fixture checks every hash again before
-loading. The static importer accepts only opaque materials, so the three alpha-mask materials
-(leaves, chains, plant) are drawn opaque from a derived `Sponza.bench.gltf`
+loading. The S4 fixture preserves the opaque leaves, chains and plant used for
+the original baseline. It draws them from a derived `Sponza.bench.gltf`
 beside the download. S4 uses original base-color dimensions on the
 [indexed path](hardware-tiers.md#r22-materials). On the compatibility path
 the fixture box-filters them to at most 256 px per edge to fit the atlas.

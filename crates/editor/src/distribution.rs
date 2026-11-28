@@ -1105,6 +1105,8 @@ const NATIVE_FILES: &[&str] = &[
     "crates/engine-content/Cargo.toml",
     "crates/engine-content/src/animation.rs",
     "crates/engine-content/src/lib.rs",
+    "crates/engine-content/src/material.rs",
+    "crates/engine-content/src/texture_cache.rs",
     "crates/runtime-script/src/persistent.rs",
     "crates/runtime-script/src/worker_stdio.rs",
     "Cargo.toml",
@@ -1130,9 +1132,13 @@ const NATIVE_FILES: &[&str] = &[
     "crates/editor/src/scalar.rs",
     "crates/editor/src/verification.rs",
     "crates/editor/src/settings_verification.rs",
+    "crates/editor/src/material_asset_ui.rs",
+    "crates/editor/src/material_verification.rs",
+    "crates/editor/src/material_khronos_sha256.txt",
     "crates/engine-core/Cargo.toml",
     "crates/engine-core/src/lib.rs",
     "crates/engine-core/src/world.rs",
+    "crates/engine-core/src/material_asset.rs",
     "crates/engine-core/src/runtime.rs",
     "crates/engine-core/src/settings.rs",
     "crates/engine-core/src/backend.rs",
@@ -1173,6 +1179,7 @@ const NATIVE_FILES: &[&str] = &[
     "crates/project-tools/src/history.rs",
     "crates/project-tools/src/merge.rs",
     "assets/gpu/forward.hlsl",
+    "assets/gpu/surface_material.hlsli",
     "assets/gpu/fullscreen.hlsl",
     "assets/gpu/depth_normal.hlsl",
     "assets/gpu/gbuffer.hlsl",
@@ -1193,6 +1200,7 @@ fn native_source_path(path: &str) -> bool {
             | "engine-sdk.json"
             | "assets/engine-contracts/v0.4.0.json"
             | "crates/editor/assets/editor.ico"
+            | "crates/editor/src/material_khronos_sha256.txt"
     ) || (path.starts_with("crates/") && (path.ends_with(".rs") || path.ends_with("Cargo.toml")))
         || (path.starts_with("crates/vendor/egui-ash-renderer/")
             && (path.ends_with(".spv")

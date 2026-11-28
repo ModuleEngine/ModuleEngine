@@ -262,6 +262,19 @@ impl CompositionContext {
             .map(|lock| lock.component_schemas.clone())
             .unwrap_or_default();
         component_schemas.extend(required.component_schemas);
+        // Explicit publication can offer the material asset to projects whose
+        // previous profile predates the surface_material contribution.
+        if crate::connected_modules(document).contains("render.vulkan")
+            && let Some(schema) = self
+                .systems
+                .components()
+                .schema(crate::MATERIAL_ASSET_COMPONENT)
+        {
+            component_schemas.insert(
+                crate::MATERIAL_ASSET_COMPONENT.into(),
+                SchemaPin::capture(schema)?,
+            );
+        }
         let mut system_state_schemas = archive
             .map(|lock| lock.system_state_schemas.clone())
             .unwrap_or_default();
@@ -492,6 +505,74 @@ mod tests {
     fn reseal(document: &mut GraphDocument) {
         let lock = document.engine_lock.as_mut().unwrap();
         lock.lock_fingerprint = lock.fingerprint(&document.module_versions).unwrap();
+    }
+
+    #[test]
+    fn legacy_renderer_lock_opens_and_explicit_publication_offers_surface_materials() {
+        let mut document = demo_document(WorldKind::Ecs);
+        document.schema_version = ENGINE_LOCK_DOCUMENT_VERSION;
+        let renderer = document
+            .root
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == "renderer")
+            .unwrap();
+        let mut modules = ModuleRegistry::builtin();
+        let mut descriptor = modules.descriptor(&renderer.module).unwrap().clone();
+        descriptor.id = "render.vulkan".into();
+        renderer.module.clone_from(&descriptor.id);
+        modules.register_module(descriptor).unwrap();
+        let composition = CompositionContext::new(modules, SystemRegistry::builtin()).unwrap();
+        let sdk = crate::SdkIdentity::current();
+
+        document.schema_version -= 1;
+        assert!(
+            !composition
+                .required_contracts(&document)
+                .unwrap()
+                .component_schemas
+                .contains_key(crate::MATERIAL_ASSET_COMPONENT)
+        );
+        document.schema_version = ENGINE_LOCK_DOCUMENT_VERSION;
+        composition
+            .capture_lock(&document, profile(), Some(sdk.clone()))
+            .unwrap()
+            .apply_to(&mut document);
+        let original_pin =
+            document.engine_lock.as_ref().unwrap().component_schemas["material"].clone();
+        document
+            .engine_lock
+            .as_mut()
+            .unwrap()
+            .component_schemas
+            .remove(crate::MATERIAL_ASSET_COMPONENT)
+            .unwrap();
+        reseal(&mut document);
+        composition.validate_lock(&document, Some(&sdk)).unwrap();
+        assert!(
+            !composition
+                .activity(&document)
+                .unwrap()
+                .components
+                .contains(crate::MATERIAL_ASSET_COMPONENT)
+        );
+
+        composition
+            .capture_lock(&document, profile(), Some(sdk.clone()))
+            .unwrap()
+            .apply_to(&mut document);
+        composition.validate_lock(&document, Some(&sdk)).unwrap();
+        assert!(
+            composition
+                .activity(&document)
+                .unwrap()
+                .components
+                .contains(crate::MATERIAL_ASSET_COMPONENT)
+        );
+        assert_eq!(
+            document.engine_lock.as_ref().unwrap().component_schemas["material"],
+            original_pin
+        );
     }
 
     #[test]

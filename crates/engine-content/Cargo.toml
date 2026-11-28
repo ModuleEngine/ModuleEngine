@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+texture-bake = ["dep:intel_tex_2"]
+
 [dependencies]
 module-engine-core = { path = "../engine-core" }
 gltf = { version = "1.4", default-features = false, features = ["utils", "names"] }
@@ -12,4 +15,6 @@ glam = "0.33"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 base64 = "0.22"
 serde_json.workspace = true
+sha2 = "0.10.9"
+intel_tex_2 = { version = "=0.5.0", optional = true }
 

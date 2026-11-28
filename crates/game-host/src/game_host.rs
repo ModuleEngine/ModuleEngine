@@ -1504,17 +1504,12 @@ impl GameHost {
                     {
                         content.load_model(path)?;
                     }
-                    if let Some(material) = entity.components.get("material") {
-                        if let Some(color) = material.get("base_color") {
-                            serde_json::from_value::<[f32; 4]>(color.clone())
-                                .map_err(|error| format!("Material color: {error}"))?;
-                        }
-                        if let Some(path) =
-                            material.get("base_color_texture").and_then(Value::as_str)
-                        {
-                            content.load_texture(path)?;
-                        }
-                    }
+                    content.material_dependencies(
+                        entity.components.get("material"),
+                        entity
+                            .components
+                            .get(module_engine_core::MATERIAL_ASSET_COMPONENT),
+                    )?;
                 }
             }
         }
@@ -1849,15 +1844,13 @@ impl GameHost {
             state.world.component(id, "mesh")?.get("path")?.as_str()
         })?;
         for item in &mut snapshot.items {
-            if let Some(material) = state.world.component(item.id, "material") {
-                if let Some(color) = material.get("base_color") {
-                    item.material.base_color = serde_json::from_value(color.clone())
-                        .map_err(|error| format!("Material color: {error}"))?;
-                }
-                if let Some(path) = material.get("base_color_texture").and_then(Value::as_str) {
-                    item.material.base_color_texture = Some(content.load_texture(path)?);
-                }
-            }
+            content.apply_material_components(
+                &mut item.material,
+                state.world.component(item.id, "material"),
+                state
+                    .world
+                    .component(item.id, module_engine_core::MATERIAL_ASSET_COMPONENT),
+            )?;
         }
         for contribution in contributions {
             (contribution.decorate_snapshot)(&mut snapshot, state);

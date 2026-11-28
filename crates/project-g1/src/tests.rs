@@ -211,6 +211,7 @@ fn partial_goal_has_distinct_sound_and_instance_feedback_undo_clears_it_and_fina
         width: 1,
         height: 1,
         rgba8: vec![180, 120, 60, 255],
+        blocks: None,
     });
     for item in &mut snapshot.items {
         if item.id == occupied || item.id == other {
@@ -1272,8 +1273,7 @@ fn ambient_source_mesh(kind: &str) -> Mesh {
         .collect();
     Mesh {
         vertices,
-        triangles: vec![],
-        texcoords: vec![],
+        ..Mesh::default()
     }
 }
 
@@ -1428,10 +1428,12 @@ fn ambient_original_gardener_breathes_with_an_anchored_sole_plane_and_bounded_he
         width: 1,
         height: 1,
         rgba8: vec![75, 160, 170, 255],
+        blocks: None,
     });
     let material = Material {
         base_color: [0.8, 0.7, 0.6, 0.9],
         base_color_texture: Some(texture.clone()),
+        ..Material::default()
     };
     let first = RenderItem {
         id: pawn,

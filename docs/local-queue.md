@@ -50,6 +50,7 @@ Windows permissions as its daemon.
 | format | gpu | Workspace format check. |
 | quick, contracts, clippy, native, package | gpu | Named verification profile and its own scope, logs and reports. |
 | render | gpu | Offscreen profile with required capabilities, including retained Host and Vulkan checks. |
+| r5-materials | gpu | Offscreen run of the original Khronos helmets, BC7/BC5, and the saved Editor material in the exported Player. |
 | window-graph | gpu | Release Player graph probe in a native window with the selected adapter and presentation mode. |
 | audio-loopback | gpu | Kira cue playback and latency on a quiet default WASAPI output with its loopback capture. |
 | audio-loopback-wslg | gpu | Linux Kira cue playback and latency on the virtual WSLg RDPSink and its monitor. |
@@ -112,6 +113,16 @@ cache. For the graphics routes the owner can place the pinned Windows DXC
 and companion DLLs in the queue's bin directory. Verify their hashes against
 the project's toolchain manifest. Benchmark fixtures follow the [S1–S5
 contract](bench.md).
+
+For `r5-materials`, put the original [Khronos inputs](content.md#r51-material-check)
+under `fixtures/khronos/e124e8d8d7330a5372bc2b4d00d39a4a9d7997ea` inside
+the queue root. Keep their relative `Models/...` paths. The Editor checks
+every listed SHA-256 before import. The route builds and seals a Full
+source delivery in its artifacts directory, keeps the exact Editor
+and exported Players, and records the selected Vulkan adapter. Retain
+the Full delivery at its recorded path for the authored project's binding.
+Its generated `.work/player-native-target` is a build directory and can be
+removed after acceptance and verification of the retained artifacts.
 
 From a verified commit, publish an independent copy of the client and runner.
 Keep the release directory path and its files fixed while jobs refer to it.

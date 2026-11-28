@@ -80,6 +80,12 @@ impl Pass {
     pub fn geometry(&self) -> bool {
         self.manifest.stage == "raster" && self.manifest.raster_mode == "scene"
     }
+    pub fn hardware_depth(&self) -> bool {
+        self.geometry() && !self.transparency()
+    }
+    pub fn transparency(&self) -> bool {
+        self.module == "gpu.internal_blend"
+    }
     pub fn resident_geometry(&self) -> bool {
         matches!(
             self.module.as_str(),
@@ -90,11 +96,171 @@ impl Pass {
     pub fn has_bindless_variant(&self) -> bool {
         self.manifest.bindless_materials
     }
+
+    pub fn surface_materials(&self) -> bool {
+        self.module == "gpu.forward"
+            || self.transparency()
+            || self.module == "gpu.gbuffer"
+                && self
+                    .manifest
+                    .outputs
+                    .iter()
+                    .any(|output| output.name == SURFACE_PAYLOAD)
+    }
+
+    pub fn reads_surface_materials(&self) -> bool {
+        self.module == "gpu.deferred"
+            && self
+                .manifest
+                .inputs
+                .iter()
+                .any(|input| input.name == SURFACE_PAYLOAD)
+    }
 }
 #[derive(Clone, Debug)]
 pub(crate) struct Plan {
     pub passes: Vec<Pass>,
     pub output: String,
+}
+const SURFACE_PAYLOAD: &str = "__surface";
+
+impl Plan {
+    /// Extend the stock G-buffer when its three visible outputs feed the same Deferred pass.
+    pub fn with_surface_payload(&self) -> Option<Self> {
+        let mut links = Vec::new();
+        for (consumer, pass) in self
+            .passes
+            .iter()
+            .enumerate()
+            .filter(|(_, pass)| pass.module == "gpu.deferred")
+        {
+            let Some(geometry) = pass.inputs[0].1.strip_suffix(".albedo") else {
+                continue;
+            };
+            if let Some(producer) = self.passes[..consumer].iter().position(|source| {
+                source.id == geometry
+                    && source.module == "gpu.gbuffer"
+                    && pass.inputs[1].1 == source.resource("normals")
+                    && pass.inputs[2].1 == source.resource("depth")
+            }) {
+                links.push((producer, consumer));
+            }
+        }
+        if links.is_empty() {
+            return None;
+        }
+        let mut plan = self.clone();
+        for (producer, consumer) in links {
+            let from = &mut plan.passes[producer];
+            if !from.surface_materials() {
+                from.manifest.outputs.push(resource(
+                    SURFACE_PAYLOAD,
+                    "rgba32float",
+                    "pbr_surface",
+                    "color_write",
+                ));
+            }
+            let source = from.resource(SURFACE_PAYLOAD);
+            let read = resource(
+                SURFACE_PAYLOAD,
+                "rgba32float",
+                "pbr_surface",
+                "sampled_read",
+            );
+            let to = &mut plan.passes[consumer];
+            to.manifest.inputs.push(read.clone());
+            to.inputs.push((read, source));
+        }
+        Some(plan)
+    }
+
+    /// Insert a color-only pass for glTF blend primitives after the opaque
+    /// lighting of each stock chain. Consumers still use the same HDR semantic.
+    pub fn with_transparency(&self, root: &std::path::Path) -> Result<Self, VulkanError> {
+        let source = builtin_source("gpu.forward");
+        let dependency_hash = crate::compiler::dependency_fingerprint_at(root, source)?;
+        let mut plan = Self {
+            output: self.output.clone(),
+            passes: Vec::new(),
+        };
+        let mut routed = BTreeMap::new();
+        let mut used_ids: BTreeSet<_> = self.passes.iter().map(|pass| pass.id.clone()).collect();
+        for mut pass in self.passes.iter().cloned() {
+            let depth = if pass.module == "gpu.forward" {
+                Some(pass.resource("depth"))
+            } else if pass.reads_surface_materials() {
+                Some(pass.inputs[2].1.clone())
+            } else {
+                None
+            };
+            let linked_scene = if pass.module == "gpu.forward" {
+                Some(pass.inputs[0].1.clone())
+            } else if pass.reads_surface_materials() {
+                self.passes
+                    .iter()
+                    .find(|geometry| geometry.resource("depth") == pass.inputs[2].1)
+                    .map(|geometry| geometry.inputs[0].1.clone())
+            } else {
+                None
+            };
+            for (_, name) in &mut pass.inputs {
+                if let Some(blended) = routed.get(name) {
+                    name.clone_from(blended);
+                }
+            }
+            let color = pass.resource("color");
+            let pass_id = pass.id.clone();
+            plan.passes.push(pass);
+            if let (Some(scene), Some(depth)) = (linked_scene, depth) {
+                let mut id = format!("{pass_id}.blend");
+                while !used_ids.insert(id.clone()) {
+                    id.push('_');
+                }
+                let mut manifest = manifest(
+                    "raster",
+                    vec![
+                        resource("scene", "scene", "scene3d", "vertex_read"),
+                        resource("opaque_color", "rgba32float", "hdr_linear", "sampled_read"),
+                        resource(
+                            "opaque_depth",
+                            "r32float",
+                            "camera_linear_depth",
+                            "sampled_read",
+                        ),
+                    ],
+                    vec![resource(
+                        "color",
+                        "rgba32float",
+                        "hdr_linear",
+                        "color_write",
+                    )],
+                    &[],
+                );
+                manifest.scene_materials = true;
+                manifest.bindless_materials = true;
+                let inputs = manifest
+                    .inputs
+                    .iter()
+                    .cloned()
+                    .zip([scene, color.clone(), depth])
+                    .collect();
+                routed.insert(color, format!("{id}.color"));
+                plan.passes.push(Pass {
+                    id,
+                    module: "gpu.internal_blend".into(),
+                    manifest,
+                    inputs,
+                    source: source.into(),
+                    dependency_hash,
+                    params: serde_json::Value::Null,
+                });
+            }
+        }
+        if plan.passes.len() > 64 {
+            return Err(VulkanError::PassLimit);
+        }
+        Ok(plan)
+    }
 }
 fn resource(name: &str, format: &str, semantic: &str, access: &str) -> ResourceSpec {
     ResourceSpec {

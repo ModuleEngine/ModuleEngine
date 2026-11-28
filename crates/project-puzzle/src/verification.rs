@@ -1,6 +1,8 @@
 //! Game-owned Puzzle composition and hosted runtime acceptance scenarios.
 use crate::{Direction, PuzzleOutcome, direction_input, frame};
-use module_engine_core::{GameInput, GameSession, GameState, GraphDocument, WorldKind};
+use module_engine_core::{
+    GameInput, GameSession, GameState, GraphDocument, MATERIAL_ASSET_COMPONENT, WorldKind,
+};
 use module_engine_host::GameHost;
 use serde_json::{Value, json};
 use std::{fs, path::Path};
@@ -53,19 +55,21 @@ pub fn independent_activity(
     composition: &module_engine_core::CompositionContext,
 ) -> Result<Value, String> {
     let activity = composition.activity(document)?;
+    let allowed_component = |id: &str| {
+        matches!(
+            id,
+            "puzzle.board" | "puzzle.cell" | "mesh" | "material" | MATERIAL_ASSET_COMPONENT
+        )
+    };
     require(
         activity.components.contains("puzzle.board") && activity.components.contains("puzzle.cell"),
         "Puzzle schemas are absent from derived component activity",
     )?;
     require(
-        activity.components.iter().all(|id| {
-            matches!(
-                id.as_str(),
-                "puzzle.board" | "puzzle.cell" | "mesh" | "material"
-            )
-        }) && ARPG_SYSTEMS
-            .iter()
-            .all(|id| !activity.modules.contains(*id)),
+        activity.components.iter().all(|id| allowed_component(id))
+            && ARPG_SYSTEMS
+                .iter()
+                .all(|id| !activity.modules.contains(*id)),
         "Puzzle composition activated a genre-specific gameplay contract",
     )?;
     let game = document.game.as_ref().ok_or("Puzzle game is missing")?;
@@ -86,14 +90,7 @@ pub fn independent_activity(
         game.scenes
             .values()
             .flat_map(|scene| &scene.objects)
-            .all(|object| {
-                object.components.keys().all(|id| {
-                    matches!(
-                        id.as_str(),
-                        "puzzle.board" | "puzzle.cell" | "mesh" | "material"
-                    )
-                })
-            }),
+            .all(|object| object.components.keys().all(|id| allowed_component(id))),
         "Puzzle authored data contains unrelated gameplay components",
     )?;
     Ok(
