@@ -126,15 +126,54 @@ In the explicit CPU/diagnostic route, the readback buffer prefers `HOST_VISIBLE 
 
 The renderer is measured separately with `cargo run --locked --release -p module-engine-vulkan --example gpu_benchmark`: 20 imported textured models, the complete standard Forward/SSAO/tonemap/FXAA/encoding chain, 1920×1080, 10 warm-up frames and 120 measured frames. On RTX 4080 SUPER after the readback-memory fix, the mean was 3.11 ms, p95 3.98 ms. This is a diagnostic renderer measurement with CPU readback, without game subsystems or egui output; a separate complete measurement corresponds to the finished Player criterion. JSON is written to `.work/gpu-benchmark.json`.
 
+<a id="r25-graph"></a>
+
+## R2.5 graph image lifetime and execution
+
+The renderer derives image uses from the existing pass manifest, graph links
+and ordered resource commands. Raster attachments, sampled and storage
+images, bypass copies, explicit clear/copy and output consumers keep their
+current formats and HLSL bindings. With synchronization2 the recorder emits
+image barriers at the use sites and a memory barrier between images sharing
+one backing range. A device without synchronization2 uses legacy Vulkan
+barriers and separate ranges.
+
+A frame slot can bind device-local viewport images to the same range when
+the lifetimes are disjoint, their memory requirements have a common
+device-local type and neither requires dedicated memory. Uses in the same
+pass overlap. Explicit unprofiled diagnostic copies take each plane at its
+last use. With timestamp profiling the copies stay after the timed graph.
+The native window output has a separate allocation and stays alive through
+the painter's final GPU use, with independent lifetimes for other frame slots.
+
+When synchronization2, timeline semaphores and a distinct compute queue are
+available, the compute suffix after the last raster pass runs on that
+queue. A compute-only family is preferred, followed by a second queue in
+the graphics family. Cross-family graph images and diagnostic staging
+buffers use concurrent sharing. The compute submission waits for the
+graphics prefix. Completed window frames join the graphics queue before
+publication, and cancelled frames retire through the producer completion.
+The compatible route uses the combined graphics+compute queue. Profiling
+uses that queue so timestamps come from one domain.
+
+`MODULE_ENGINE_GRAPH_COMPUTE=graphics` selects the single-queue control.
+See the [S4 capture and memory check](bench.md#r25-checks)
+and [Vulkan synchronization rules](https://docs.vulkan.org/spec/latest/chapters/synchronization.html).
+
 ## Native GPU presentation
 
-The normal native Vulkan viewport publishes an opaque GPU frame lease instead of CPU pixels. Windows bridges the separate Vulkan producer to WGPU/DX12 through shared D3D12 resources; Linux bridges separate Vulkan devices through dedicated OPAQUE_FD memory and requires exact device and driver UUIDs. The GUI bridge copies and premultiplies RGBA8 on the GPU into its own native `Rgba8Unorm` texture, preserving the byte rounding of the previous egui conversion without sRGB decoding. Normal presentation performs no pixel readback to CPU and no CPU texture upload. Unsupported or failed interop reports an error and preserves the last good image; it does not silently select CPU transfer.
+The native Vulkan viewport publishes an opaque GPU frame lease. The
+window painter samples the graph's RGBA8 image on the same logical device
+and premultiplies each texel before filtering. The shader uses the encoded
+values in the UNORM image. Normal presentation uses the image directly,
+with no CPU pixel readback, texture upload, or intermediate display copy.
+A failed frame preserves the last good image and reports diagnostics.
 
 The Vulkan device layer admits up to two GPU submissions on [tier A with timeline support](hardware-tiers.md#r21-device) and one on the compatibility path. The normal Player and editor Host each track one outstanding frame transaction. Four leased output images bound producer and consumer reuse independently of the command slots. `render_presented` returns `RenderSubmission::Pending(ticket)` after admission. `poll_presented(ticket)` checks completion without waiting and publishes that request at most once. `Busy` admits no work. `Ready(Frame)` supports immediate CPU/software output. The previous image, identity, camera and provenance remain current until completion. The slot retains command resources, atlas and pipeline references until the GPU completes their use. The GUI retains the shared image lease until actual consumer GPU completion, including when a surface is minimized. Explicit CPU render, Glow diagnostics and PNG capture can synchronously wait for readback. A conflicting CPU render is rejected while native work is pending.
 
 A valid graph/HLSL candidate may compile and warm caches while a request is pending without selecting the candidate for that request. In-flight commands pin every referenced pipeline/layout and their scene/atlas/extent resources until completion; invalid candidates preserve that request and the accepted wrapper. Submitted and completed GPU-frame counters are distinct.
 
-Cancellation discards publication and retains the job until its GPU completion is observed. A dropped renderer hands over busy slots to a shared deletion queue, which polls their latest timeline value or compatibility fence off the render thread. Application shutdown drains this queue after renderer owners have stopped. `finish_gpu_retirements` reports consumer retirement and nested producer registered/joined/completed/unconfirmed/failed counts. A timeout (30 s per queued producer), device error, panic or worker start failure reports an error and retains unconfirmed resources and the device pin. The Linux consumer retains its existing quarantine for ownership-release failure.
+Cancellation discards publication and retains the job until its GPU completion is observed. A dropped renderer hands over busy slots to a shared deletion queue, which polls each pending slot's timeline or fence off the render thread. Application shutdown drains this queue after renderer owners have stopped. `finish_gpu_retirements` reports consumer retirement and nested producer registered/joined/completed/unconfirmed/failed counts. A timeout (30 s per queued producer), device error, panic or worker start failure reports an error and retains unconfirmed resources and the device pin.
 
 New async sources require separately bound checks and an independent conclusion in the [async report](gpu-async-20261018.md); passing individual current gates does not establish no regression or final acceptance. The [historical GPU report](gpu-presentation-20261018.md) retains Windows source15/Linux source11 results and earlier failures, including the cold gate open at that time. The [18 October continuation](p0-continuation-20261018.md) separately records the later normal cold PASS 40.906/39.9128549 s, Windows22/16 and WSL Linux23/16 and scoped native/package/lifecycle checks for its own sources. These snapshots do not verify the new async implementation or certify hardware Linux, real device loss or physical scanout.
 
@@ -148,7 +187,7 @@ Requires Vulkan 1.3, dynamicRendering, a graphics+compute queue, host-visible co
 
 Buffer/Image receive an RAII owner immediately after the first Vulkan handle is created. Failure in memory selection/allocation, binding or image view creation releases already created parts. The native regression injects failures at intermediate stages, checks handle/device-memory balance and a subsequent successful GPU frame; it does not require deliberately exhausting video memory.
 
-Viewport images have one layer, samples=1; maximum 4096 on each axis and 4 million pixels. MSAA/resolve and temporal AA are deferred. There is no game-renderer swapchain. Normal native output uses shared GPU images; explicit CPU/diagnostic output reads pixels synchronously.
+Viewport images have one layer, samples=1; maximum 4096 on each axis and 4 million pixels. MSAA/resolve and temporal AA are deferred. The window shell owns the swapchain and samples the graph image. Explicit CPU and diagnostic output reads pixels synchronously.
 
 Clear/copy commands address pass_id.output_name and execute after the producer in submission order. An invalid resource, incompatible copy or write after the first consumer is rejected. A portable Rust enabled override takes priority over params.enabled; disabling is allowed only with a compatible single-image bypass.
 

@@ -47,6 +47,11 @@ mod materials;
 mod window_diagnostic;
 use materials::{MaterialLayout, MaterialSet};
 
+#[path = "graph_memory.rs"]
+mod graph_memory;
+#[path = "graph_record.rs"]
+mod graph_record;
+
 #[path = "resident.rs"]
 pub(crate) mod resident;
 pub use resident::ResidentScene;
@@ -130,15 +135,24 @@ struct Image {
     device: ash::Device,
     image: vk::Image,
     view: vk::ImageView,
-    memory: Option<ResourceMemory>,
+    memory: Option<Arc<ResourceMemory>>,
     format: vk::Format,
     aspect: vk::ImageAspectFlags,
     layout: vk::ImageLayout,
     stage: vk::PipelineStageFlags,
     access: vk::AccessFlags,
+    aliased: bool,
+    recorded_on_compute: bool,
     #[cfg(test)]
     allocations: std::sync::Arc<AllocationCounts>,
 }
+struct PendingImage {
+    image: Image,
+    requirements: vk::MemoryRequirements,
+    dedicated: bool,
+    mip_levels: u32,
+}
+
 impl Drop for Image {
     fn drop(&mut self) {
         // SAFETY: The frame owner retains this device and the image until GPU use ends. Destroy its
@@ -264,6 +278,8 @@ struct FrameResourceKey {
     size: [usize; 2],
     images: Vec<(String, String, bool)>,
     readback: Vec<ReadbackImage>,
+    lifetimes: graph_memory::Lifetimes,
+    leased_output: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -346,6 +362,8 @@ fn frame_resource_key(
         size: [width, height],
         images,
         readback: readback.to_vec(),
+        lifetimes: Default::default(),
+        leased_output: None,
     }
 }
 fn validate_frame_images(
@@ -429,6 +447,9 @@ struct ProducerFlight {
     #[cfg(feature = "bench")]
     _meshlet_staging: Option<Arc<Buffer>>,
     _transfer_timeline: Option<Arc<Timeline>>,
+    _graphics_timeline: Option<Arc<Timeline>>,
+    compute_timeline: Option<Arc<Timeline>>,
+    needs_graphics_visibility: bool,
     _pipelines: Vec<Arc<Pipeline>>,
     _culling_pipelines: Option<Arc<culling::Pipelines>>,
     _context: Arc<DeviceLifetime>,
@@ -444,6 +465,7 @@ struct FrameSlot {
     resources: Option<FrameResources>,
     atlas: Option<AtlasGpu>,
     last_serial: u64,
+    last_compute_serial: Option<u64>,
     timestamp_pool: Option<Arc<TimestampPool>>,
 }
 
@@ -508,6 +530,8 @@ pub struct FrameWork {
     pub draw_write_bytes: usize,
     pub culling_input_write_bytes: usize,
     pub resident_scene: bool,
+    /// The trailing compute graph batch was submitted to a second queue.
+    pub asynchronous_compute: bool,
     pub cpu_prepare_ms: f64,
     pub cpu_record_ms: f64,
     pub cpu_queue_submit_ms: f64,
@@ -649,6 +673,7 @@ pub struct VulkanRenderer {
     timeline: Option<Arc<Timeline>>,
     allocator: Option<Arc<DeviceAllocator>>,
     transfer: Option<TransferQueue>,
+    compute: Option<ComputeQueue>,
     staging: StagingRing,
     staging_alignment: u64,
     capabilities: DeviceCapabilities,
@@ -682,6 +707,12 @@ pub struct VulkanRenderer {
     #[cfg(test)]
     allocations: std::sync::Arc<AllocationCounts>,
 }
+struct ComputeQueue {
+    family: u32,
+    queue: vk::Queue,
+    timeline: Arc<Timeline>,
+}
+
 fn has_window_frame_capacity<T>(frames: &[Arc<T>], in_flight: usize) -> bool {
     const MAX_LIVE_WINDOW_FRAMES: usize = 4;
     frames
@@ -837,20 +868,27 @@ impl VulkanRenderer {
             let family = capabilities.graphics_family;
             let modern = capabilities.use_modern_device();
             let transfer_family = capabilities.dedicated_transfer_family.filter(|_| modern);
-            let priorities = [1.];
-            let queue_info = |family| {
+            let compute = capabilities.async_compute_queue;
+            let priorities = [1., 1.];
+            let queue_info = |family, count| {
                 vk::DeviceQueueCreateInfo::default()
                     .queue_family_index(family)
-                    .queue_priorities(&priorities)
+                    .queue_priorities(&priorities[..count])
             };
-            let mut queues = vec![queue_info(family)];
-            queues.extend(transfer_family.map(queue_info));
+            let graphics_count = if compute == Some([family, 1]) { 2 } else { 1 };
+            let mut queues = vec![queue_info(family, graphics_count)];
+            queues.extend(transfer_family.map(|family| queue_info(family, 1)));
+            queues.extend(
+                compute
+                    .filter(|[compute, _]| *compute != family)
+                    .map(|[compute, _]| queue_info(compute, 1)),
+            );
             let mut vulkan13 = vk::PhysicalDeviceVulkan13Features::default()
                 .dynamic_rendering(true)
-                .synchronization2(modern);
+                .synchronization2(capabilities.synchronization2);
             let bindless = capabilities.bindless_materials;
             let mut vulkan12 = vk::PhysicalDeviceVulkan12Features::default()
-                .timeline_semaphore(modern)
+                .timeline_semaphore(modern || compute.is_some())
                 .draw_indirect_count(capabilities.gpu_frustum_culling)
                 .descriptor_indexing(bindless)
                 .shader_sampled_image_array_non_uniform_indexing(bindless)
@@ -954,11 +992,30 @@ impl VulkanRenderer {
                 format!("ModuleEngine graphics+compute queue {family}")
             });
             let memory = instance.get_physical_device_memory_properties(physical);
-            let timeline = modern
-                .then(|| Timeline::new(&context, "ModuleEngine graphics timeline"))
-                .transpose()?;
             let transfer = transfer_family
                 .map(|family| TransferQueue::new(&context, family))
+                .transpose()?;
+            let graphics_only = std::env::var_os("MODULE_ENGINE_GRAPH_COMPUTE")
+                .is_some_and(|value| value == "graphics");
+            let compute = capabilities
+                .async_compute_queue
+                .filter(|_| !graphics_only)
+                .map(|[family, index]| {
+                    let queue = device.get_device_queue(family, index);
+                    context.name(queue, || {
+                        format!("ModuleEngine async compute queue {family}:{index}")
+                    });
+                    Timeline::new(&context, "ModuleEngine compute timeline").map(|timeline| {
+                        ComputeQueue {
+                            family,
+                            queue,
+                            timeline,
+                        }
+                    })
+                })
+                .transpose()?;
+            let timeline = (modern || compute.is_some())
+                .then(|| Timeline::new(&context, "ModuleEngine graphics timeline"))
                 .transpose()?;
             let allocator = modern
                 .then(|| DeviceAllocator::new(&context, &instance, physical))
@@ -966,21 +1023,28 @@ impl VulkanRenderer {
             let mut slots = Vec::new();
             for _ in 0..if modern { 2 } else { 1 } {
                 slots.push(FrameSlot {
-                    pools: FramePools::new(&context, family, transfer_family)?,
+                    pools: FramePools::new(
+                        &context,
+                        family,
+                        transfer_family,
+                        compute.as_ref().map(|queue| queue.family),
+                    )?,
                     pending: None,
                     resources: None,
                     atlas: None,
                     last_serial: 0,
+                    last_compute_serial: None,
                     timestamp_pool: None,
                 });
             }
             if let Some(trace) = trace {
                 eprintln!(
-                    "Vulkan device renderer={trace} adapter={name:?} driver={:#x} tier_a={} tier_b={} tier_c={} timeline={modern} bindless_materials={bindless} graphics_family={family} transfer_family={} slots={}",
+                    "Vulkan device renderer={trace} adapter={name:?} driver={:#x} tier_a={} tier_b={} tier_c={} timeline={} bindless_materials={bindless} graphics_family={family} transfer_family={} slots={}",
                     properties.driver_version,
                     capabilities.tier_a,
                     capabilities.tier_b,
                     capabilities.tier_c,
+                    timeline.is_some(),
                     transfer_family.unwrap_or(family),
                     slots.len(),
                 );
@@ -1000,6 +1064,7 @@ impl VulkanRenderer {
                 timeline,
                 allocator,
                 transfer,
+                compute,
                 staging: StagingRing::default(),
                 staging_alignment: properties
                     .limits
@@ -1516,7 +1581,7 @@ impl VulkanRenderer {
         Ok(ResourceMemory::Standalone(self.context.clone(), memory))
     }
     fn buffer(&self, size: u64, usage: vk::BufferUsageFlags) -> Result<Buffer, VulkanError> {
-        self.allocate_buffer(size, usage, false)
+        self.allocate_buffer(size, usage, false, &[])
     }
 
     fn device_buffer(&self, size: u64, usage: vk::BufferUsageFlags) -> Result<Buffer, VulkanError> {
@@ -1524,6 +1589,7 @@ impl VulkanRenderer {
             size,
             usage | vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::TRANSFER_SRC,
             true,
+            &[],
         )
     }
 
@@ -1532,21 +1598,22 @@ impl VulkanRenderer {
         size: u64,
         usage: vk::BufferUsageFlags,
         device_local: bool,
+        concurrent: &[u32],
     ) -> Result<Buffer, VulkanError> {
         // SAFETY: The new buffer is private to this call until a compatible allocation is bound. It
         // and its requirements come from the same retained device. The local owner destroys any
         // unsubmitted buffer on error.
         unsafe {
             let size = size.max(4);
+            let mut info = vk::BufferCreateInfo::default().size(size).usage(usage);
+            if !concurrent.is_empty() {
+                info = info
+                    .sharing_mode(vk::SharingMode::CONCURRENT)
+                    .queue_family_indices(concurrent);
+            }
             let buffer = self
                 .device
-                .create_buffer(
-                    &vk::BufferCreateInfo::default()
-                        .size(size)
-                        .usage(usage)
-                        .sharing_mode(vk::SharingMode::EXCLUSIVE),
-                    None,
-                )
+                .create_buffer(&info, None)
                 .map_err(VulkanError::api("create buffer"))?;
             self.context
                 .name(buffer, || format!("ModuleEngine {usage:?} buffer"));
@@ -1620,6 +1687,20 @@ impl VulkanRenderer {
         format: vk::Format,
         depth: bool,
     ) -> Result<Image, VulkanError> {
+        let pending = self.create_viewport_image(width, height, format, depth, false, None)?;
+        let memory = self.allocate_image_memory(&pending)?;
+        self.bind_image(pending, Arc::new(memory))
+    }
+
+    fn create_viewport_image(
+        &self,
+        width: u32,
+        height: u32,
+        format: vk::Format,
+        depth: bool,
+        alias: bool,
+        concurrent: Option<&[u32]>,
+    ) -> Result<PendingImage, VulkanError> {
         // SAFETY: The live instance owns the selected physical device. The image format and
         // required usage flags are checked before allocation.
         unsafe {
@@ -1652,7 +1733,7 @@ impl VulkanRenderer {
                     | vk::ImageUsageFlags::TRANSFER_SRC
                     | vk::ImageUsageFlags::TRANSFER_DST
             };
-            let info = vk::ImageCreateInfo::default()
+            let mut info = vk::ImageCreateInfo::default()
                 .image_type(vk::ImageType::TYPE_2D)
                 .format(format)
                 .extent(vk::Extent3D {
@@ -1666,22 +1747,40 @@ impl VulkanRenderer {
                 .tiling(vk::ImageTiling::OPTIMAL)
                 .usage(usage)
                 .initial_layout(vk::ImageLayout::UNDEFINED);
+            if alias {
+                info = info.flags(vk::ImageCreateFlags::ALIAS);
+            }
+            if let Some(families) = concurrent {
+                info = info
+                    .sharing_mode(vk::SharingMode::CONCURRENT)
+                    .queue_family_indices(families);
+            }
             let aspect = if depth {
                 vk::ImageAspectFlags::DEPTH
             } else {
                 vk::ImageAspectFlags::COLOR
             };
-            self.allocate_image(&info, aspect)
+            self.create_image(&info, aspect)
         }
     }
+
     fn allocate_image(
         &self,
         info: &vk::ImageCreateInfo<'_>,
         aspect: vk::ImageAspectFlags,
     ) -> Result<Image, VulkanError> {
-        // SAFETY: The image info and its chains live through creation. The dedicated or
-        // suballocated memory honors this image's requirements, and the view refers only to its
-        // declared subresources.
+        let pending = self.create_image(info, aspect)?;
+        let memory = self.allocate_image_memory(&pending)?;
+        self.bind_image(pending, Arc::new(memory))
+    }
+
+    fn create_image(
+        &self,
+        info: &vk::ImageCreateInfo<'_>,
+        aspect: vk::ImageAspectFlags,
+    ) -> Result<PendingImage, VulkanError> {
+        // SAFETY: The image info and its chains live through creation. On error
+        // the local owner destroys any image that was already created.
         unsafe {
             let image = self
                 .device
@@ -1691,7 +1790,7 @@ impl VulkanRenderer {
             self.allocations
                 .images
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let mut allocated = Image {
+            let allocated = Image {
                 device: self.device.clone(),
                 image,
                 view: vk::ImageView::null(),
@@ -1701,6 +1800,8 @@ impl VulkanRenderer {
                 layout: vk::ImageLayout::UNDEFINED,
                 stage: vk::PipelineStageFlags::TOP_OF_PIPE,
                 access: vk::AccessFlags::empty(),
+                aliased: false,
+                recorded_on_compute: false,
                 #[cfg(test)]
                 allocations: self.allocations.clone(),
             };
@@ -1713,20 +1814,45 @@ impl VulkanRenderer {
                 &mut requirements,
             );
             let requirements = requirements.memory_requirements;
-            let memory_type = self.memory_type(
-                requirements.memory_type_bits,
-                vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            )?;
-            allocated.memory = Some(
-                self.allocate(
-                    "image",
-                    requirements,
-                    memory_type,
-                    false,
-                    (dedicated.requires_dedicated_allocation != 0)
-                        .then_some(AllocationScheme::DedicatedImage(image)),
-                )?,
-            );
+            Ok(PendingImage {
+                image: allocated,
+                requirements,
+                dedicated: dedicated.requires_dedicated_allocation != 0,
+                mip_levels: info.mip_levels,
+            })
+        }
+    }
+
+    fn allocate_image_memory(&self, pending: &PendingImage) -> Result<ResourceMemory, VulkanError> {
+        let memory_type = self.memory_type(
+            pending.requirements.memory_type_bits,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        )?;
+        self.allocate(
+            "image",
+            pending.requirements,
+            memory_type,
+            false,
+            pending
+                .dedicated
+                .then_some(AllocationScheme::DedicatedImage(pending.image.image)),
+        )
+    }
+
+    fn bind_image(
+        &self,
+        pending: PendingImage,
+        memory: Arc<ResourceMemory>,
+    ) -> Result<Image, VulkanError> {
+        let PendingImage {
+            image: mut allocated,
+            mip_levels,
+            ..
+        } = pending;
+        allocated.memory = Some(memory);
+        // SAFETY: The caller supplies memory from the same device with a type,
+        // size and alignment supported by this image. The image owns the binding.
+        unsafe {
             #[cfg(test)]
             self.allocations
                 .memory
@@ -1735,16 +1861,16 @@ impl VulkanRenderer {
             self.allocation_checkpoint(AllocationFault::ImageMemory)?;
             let (memory, offset) = allocated.memory.as_ref().unwrap().binding();
             self.device
-                .bind_image_memory(image, memory, offset)
+                .bind_image_memory(allocated.image, memory, offset)
                 .map_err(VulkanError::api("bind image memory"))?;
             let view = self
                 .device
                 .create_image_view(
                     &vk::ImageViewCreateInfo::default()
-                        .image(image)
+                        .image(allocated.image)
                         .view_type(vk::ImageViewType::TYPE_2D)
-                        .format(info.format)
-                        .subresource_range(range(aspect).level_count(info.mip_levels)),
+                        .format(allocated.format)
+                        .subresource_range(range(allocated.aspect).level_count(mip_levels)),
                     None,
                 )
                 .map_err(VulkanError::api("create image view"))?;
@@ -2354,7 +2480,8 @@ impl VulkanRenderer {
             .find(|flight| flight.ticket == ticket)
             .map(|flight| flight.cancelled.clone())
     }
-    /// Only this exact request can complete; polling never submits or waits.
+    /// Poll this exact request without waiting. Async output may need a graphics-queue
+    /// visibility handoff before it can be published.
     pub fn poll_presented(&mut self, ticket: u64) -> Result<Option<Frame>, VulkanError> {
         if ticket == 0 || ticket > self.next_ticket {
             return Err(VulkanError::UnknownTicket(ticket));
@@ -2383,6 +2510,24 @@ impl VulkanRenderer {
                 return Err(error);
             }
             Ok(true) => {}
+        }
+        if flight.needs_graphics_visibility && !flight.cancelled.load(Ordering::Acquire) {
+            flight.completion = Completion::new(&self.context, None, 0)?;
+            flight.needs_graphics_visibility = false;
+            if let Err(source) = flight.completion.join_compute(
+                self.queue,
+                flight.compute_timeline.as_deref().unwrap(),
+                flight.serial,
+            ) {
+                let error = VulkanError::ProducerUnconfirmed {
+                    operation: "join async compute on graphics",
+                    source,
+                };
+                flight.failure = Some(error.clone());
+                self.producer_error = Some(error.clone());
+                return Err(error);
+            }
+            return Ok(None);
         }
         let mut flight = slot.pending.take().unwrap();
         if let Some(trace) = self.trace {
@@ -2496,7 +2641,26 @@ impl VulkanRenderer {
         self.prepare_for_render(graph, sources)?;
         let plan = self.prepared.as_ref().unwrap().clone();
         let operations = schedule_overrides(&plan, overrides)?;
-        let command = self.slots[index].pools.graphics.command;
+        let graphics = self.slots[index].pools.graphics.command;
+        let compute = self.slots[index]
+            .pools
+            .compute
+            .as_ref()
+            .map(|pool| pool.command);
+        // Limit the handoff to a trailing compute batch. A raster pass that
+        // follows compute stays on graphics with its dependencies. Timestamp
+        // profiling keeps all queries in one queue's timestamp domain.
+        let compute_start = compute.filter(|_| !self.frame_profiling).and_then(|_| {
+            let first = plan
+                .passes
+                .iter()
+                .rposition(|pass| pass.manifest.stage == "raster")
+                .map_or(0, |last_raster| last_raster + 1);
+            (first < plan.passes.len()).then_some(first)
+        });
+        let asynchronous_compute = compute_start.is_some();
+        let synchronization2 = self.capabilities.synchronization2;
+        let command = graphics;
         let descriptor_pool = self.slots[index].pools.descriptors;
         let active_passes = || {
             plan.passes
@@ -2620,7 +2784,16 @@ impl VulkanRenderer {
         } else {
             frame_readback(&plan, width, height, self.detailed_stats)
         };
-        let resource_key = frame_resource_key(&plan, width, height, &readback);
+        let mut resource_key = frame_resource_key(&plan, width, height, &readback);
+        resource_key.leased_output = direct.then(|| plan.output.clone());
+        let early_readback = !self.frame_profiling;
+        resource_key.lifetimes = graph_memory::lifetimes(&plan, &operations);
+        if !early_readback {
+            // The graph timestamps exclude the terminal diagnostic copy.
+            for plane in &readback {
+                resource_key.lifetimes.get_mut(&plane.resource).unwrap().1 = plan.passes.len();
+            }
+        }
         let mut reused = self.slots[index]
             .resources
             .take()
@@ -2691,30 +2864,13 @@ impl VulkanRenderer {
         if let Some(image) = recycled {
             images.insert(plan.output.clone(), image);
         }
-        {
-            for pass in &plan.passes {
-                for spec in &pass.manifest.outputs {
-                    let id = pass.resource(&spec.name);
-                    if images.contains_key(&id) {
-                        continue;
-                    }
-                    let image =
-                        self.image(width as u32, height as u32, format(&spec.format)?, false)?;
-                    self.context.name(image.image, || id.clone());
-                    self.context.name(image.view, || format!("{id} view"));
-                    images.insert(id, image);
-                }
-                if pass.geometry() {
-                    let id = format!("{}.__hardware_depth", pass.id);
-                    if images.contains_key(&id) {
-                        continue;
-                    }
-                    let image =
-                        self.image(width as u32, height as u32, vk::Format::D32_SFLOAT, true)?;
-                    self.context.name(image.image, || id.clone());
-                    self.context.name(image.view, || format!("{id} view"));
-                    images.insert(id, image);
-                }
+        self.populate_graph_images(&resource_key, &mut images)?;
+        if synchronization2 {
+            for image in images.values_mut() {
+                // All graph attachments are overwritten on first use in the
+                // reserved slot. Aliased images can no longer claim their
+                // previous logical layout.
+                image.layout = vk::ImageLayout::UNDEFINED;
             }
         }
         validate_frame_images(
@@ -2724,7 +2880,23 @@ impl VulkanRenderer {
         )?;
         let new_staging = if reused.is_none() && !direct {
             let last = readback.last().expect("final color readback");
-            Some(self.buffer(last.end() as u64, vk::BufferUsageFlags::TRANSFER_DST)?)
+            let graphics_family = self.family;
+            let compute_family = self
+                .compute
+                .as_ref()
+                .map_or(graphics_family, |queue| queue.family);
+            let families = [graphics_family, compute_family];
+            let concurrent = if graphics_family == compute_family {
+                &[][..]
+            } else {
+                &families[..]
+            };
+            Some(self.allocate_buffer(
+                last.end() as u64,
+                vk::BufferUsageFlags::TRANSFER_DST,
+                false,
+                concurrent,
+            )?)
         } else {
             None
         };
@@ -2735,6 +2907,7 @@ impl VulkanRenderer {
         });
         let mut frame_work = FrameWork {
             vertex_write_bytes: vertex_bytes.len(),
+            asynchronous_compute,
             resident_scene: resident.is_some(),
             #[cfg(feature = "bench")]
             meshlets: meshlets.map(MeshletScene::work),
@@ -2891,9 +3064,29 @@ impl VulkanRenderer {
                 timestamps.end(command, 1);
             }
         }
-        for (index, pass) in plan.passes.iter().enumerate() {
+        let mut recorder = graph_record::Recorder {
+            device: &self.device,
+            command,
+            synchronization2,
+            compute_queue: false,
+        };
+        for (pass_index, pass) in plan.passes.iter().enumerate() {
+            if compute_start == Some(pass_index) {
+                if let Some(staging) = staging {
+                    recorder.finish_host_read(staging);
+                }
+                // SAFETY: The graphics list is recording and all render scopes
+                // are closed. The compute pool belongs to this reserved slot.
+                unsafe { self.device.end_command_buffer(graphics) }
+                    .map_err(VulkanError::api("end graphics batch"))?;
+                let pool = self.slots[index].pools.compute.as_ref().unwrap();
+                pool.begin()?;
+                recorder.command = pool.command;
+                recorder.compute_queue = true;
+            }
+            let command = recorder.command;
             if let Some(timestamps) = timestamps {
-                timestamps.begin(command, index as u32 + 1 + culling_scope);
+                timestamps.begin(command, pass_index as u32 + 1 + culling_scope);
             }
             let enabled = pass_enabled(pass, overrides);
             let key = pipeline_key(pass);
@@ -2930,8 +3123,7 @@ impl VulkanRenderer {
                     .1;
                 let to = pass.resource(&pass.manifest.outputs[0].name);
                 copy_image(
-                    &self.device,
-                    command,
+                    recorder,
                     &mut images,
                     from,
                     &to,
@@ -2940,9 +3132,7 @@ impl VulkanRenderer {
                 )?;
             } else {
                 for (_, resource) in pass.inputs.iter().filter(|(s, _)| s.format != "scene") {
-                    transition(
-                        &self.device,
-                        command,
+                    recorder.use_image(
                         images.get_mut(resource).unwrap(),
                         vk::ImageLayout::GENERAL,
                         stage,
@@ -2951,9 +3141,7 @@ impl VulkanRenderer {
                 }
                 for spec in &pass.manifest.outputs {
                     let image = images.get_mut(&pass.resource(&spec.name)).unwrap();
-                    transition(
-                        &self.device,
-                        command,
+                    recorder.use_image(
                         image,
                         if compute {
                             vk::ImageLayout::GENERAL
@@ -3209,9 +3397,7 @@ impl VulkanRenderer {
                             let depth = images
                                 .get_mut(&format!("{}.__hardware_depth", pass.id))
                                 .unwrap();
-                            transition(
-                                &self.device,
-                                command,
+                            recorder.use_image(
                                 depth,
                                 vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
                                 vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
@@ -3310,14 +3496,12 @@ impl VulkanRenderer {
                     }
                 }
             }
-            if let Some(commands) = operations.get(&index) {
+            if let Some(commands) = operations.get(&pass_index) {
                 for operation in commands {
                     match operation {
                         RenderResourceCommand::ClearResource { name, value } => {
                             let image = images.get_mut(name).unwrap();
-                            transition(
-                                &self.device,
-                                command,
+                            recorder.use_image(
                                 image,
                                 vk::ImageLayout::GENERAL,
                                 vk::PipelineStageFlags::TRANSFER,
@@ -3337,8 +3521,7 @@ impl VulkanRenderer {
                             }
                         }
                         RenderResourceCommand::CopyResource { from, to } => copy_image(
-                            &self.device,
-                            command,
+                            recorder,
                             &mut images,
                             from,
                             to,
@@ -3348,10 +3531,24 @@ impl VulkanRenderer {
                     }
                 }
             }
+            if early_readback {
+                for plane in &readback {
+                    if resource_key.lifetimes[&plane.resource].1 == pass_index {
+                        recorder.copy_to_host(
+                            images.get_mut(&plane.resource).unwrap(),
+                            staging.unwrap(),
+                            plane,
+                            width as u32,
+                            height as u32,
+                        );
+                    }
+                }
+            }
             if let Some(timestamps) = timestamps {
-                timestamps.end(command, index as u32 + 1 + culling_scope);
+                timestamps.end(command, pass_index as u32 + 1 + culling_scope);
             }
         }
+        let command = recorder.command;
         if let Some(timestamps) = timestamps {
             timestamps.end(command, 0);
         }
@@ -3366,79 +3563,38 @@ impl VulkanRenderer {
                     "GPU presentation requires RGBA8_UNORM graph output".into(),
                 ));
             }
-            transition(
-                &self.device,
-                command,
+            let (stage, access) = if asynchronous_compute {
+                (vk::PipelineStageFlags::empty(), vk::AccessFlags::empty())
+            } else {
+                (
+                    vk::PipelineStageFlags::FRAGMENT_SHADER,
+                    vk::AccessFlags::SHADER_READ,
+                )
+            };
+            recorder.use_image(
                 output,
                 vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                vk::PipelineStageFlags::FRAGMENT_SHADER,
-                vk::AccessFlags::SHADER_READ,
+                stage,
+                access,
             );
         }
-        for plane in &readback {
-            let image = images.get_mut(&plane.resource).unwrap();
-            transition(
-                &self.device,
-                command,
-                image,
-                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::AccessFlags::TRANSFER_READ,
-            );
-            let region = vk::BufferImageCopy::default()
-                .buffer_offset(plane.offset as u64)
-                .image_subresource(vk::ImageSubresourceLayers {
-                    aspect_mask: image.aspect,
-                    mip_level: 0,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                })
-                .image_extent(vk::Extent3D {
-                    width: width as u32,
-                    height: height as u32,
-                    depth: 1,
-                });
-            // SAFETY: The plane covers the mip extent and fits the allocated readback buffer. The
-            // image is in TRANSFER_SRC_OPTIMAL and both allocations are retained by the flight.
-            unsafe {
-                self.device.cmd_copy_image_to_buffer(
-                    command,
-                    image.image,
-                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                    staging.unwrap().buffer,
-                    &[region],
+        if !early_readback {
+            for plane in &readback {
+                recorder.copy_to_host(
+                    images.get_mut(&plane.resource).unwrap(),
+                    staging.unwrap(),
+                    plane,
+                    width as u32,
+                    height as u32,
                 );
             }
         }
-        // SAFETY: This slot's command buffer is still recording outside a render pass. The staging
-        // buffer belongs to that slot and the barrier covers the preceding transfer writes.
-        unsafe {
-            // Make transfer writes available and visible to host reads. Waiting
-            // for the queue alone is not the graph's memory dependency contract.
-            if !direct {
-                let staging = staging.unwrap();
-                let host_read = vk::BufferMemoryBarrier::default()
-                    .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                    .dst_access_mask(vk::AccessFlags::HOST_READ)
-                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                    .buffer(staging.buffer)
-                    .offset(0)
-                    .size(staging.size);
-                self.device.cmd_pipeline_barrier(
-                    command,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::PipelineStageFlags::HOST,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[host_read],
-                    &[],
-                );
-            }
-            self.device
-                .end_command_buffer(command)
-                .map_err(VulkanError::api("end command buffer"))?;
+        if let Some(staging) = staging {
+            recorder.finish_host_read(staging);
         }
+        // SAFETY: Recording is outside rendering and complete for this batch.
+        unsafe { self.device.end_command_buffer(command) }
+            .map_err(VulkanError::api("end graph command buffer"))?;
         frame_work.cpu_record_ms = recording_started.elapsed().as_secs_f64() * 1000.;
         let timings = capture.map(|capture| PendingTimings {
             capture,
@@ -3466,8 +3622,14 @@ impl VulkanRenderer {
         } else {
             0
         };
-        let completion = Completion::new(&self.context, self.timeline.as_ref(), serial)?;
+        let async_queue = self.compute.as_ref().filter(|_| asynchronous_compute);
+        let completion_timeline = async_queue
+            .map(|queue| &queue.timeline)
+            .or(self.timeline.as_ref());
+        let completion = Completion::new(&self.context, completion_timeline, serial)?;
         let transfer = self.transfer.as_ref().filter(|_| split_upload);
+        let compute_timeline = self.compute.as_ref().map(|queue| queue.timeline.clone());
+        let previous_compute = self.slots[index].last_compute_serial;
         let staging_range = atlas_upload
             .as_ref()
             .and_then(|upload| upload.ring_range.clone());
@@ -3494,6 +3656,9 @@ impl VulkanRenderer {
             #[cfg(feature = "bench")]
             _meshlet_staging: meshlets.and_then(|scene| scene.staging.clone()),
             _transfer_timeline: transfer.map(|queue| queue.timeline.clone()),
+            _graphics_timeline: self.timeline.clone(),
+            compute_timeline: compute_timeline.clone(),
+            needs_graphics_visibility: asynchronous_compute && direct,
             _pipelines: self.pipelines.values().cloned().collect(),
             _culling_pipelines: self.culling_pipelines.clone(),
             _context: self.context.clone(),
@@ -3524,11 +3689,23 @@ impl VulkanRenderer {
             Ok(())
         }
         .and_then(|()| {
-            flight.completion.submit(
-                self.queue,
-                command,
-                transfer.map(|queue| queue.timeline.as_ref()),
-            )
+            let Some(timeline) = &self.timeline else {
+                return flight.completion.submit(self.queue, graphics, None);
+            };
+            let transfer_wait = transfer.map(|queue| (queue.timeline.as_ref(), serial));
+            // A reused slot may carry writes from its earlier compute batch.
+            // The GPU wait pairs with that signal even after CPU completion.
+            let reuse_wait = previous_compute
+                .zip(compute_timeline.as_deref())
+                .map(|(value, timeline)| (timeline, value));
+            let waits: Vec<_> = transfer_wait.into_iter().chain(reuse_wait).collect();
+            timeline.submit_waiting(self.queue, graphics, serial, &waits)?;
+            if let Some(queue) = async_queue {
+                flight
+                    .completion
+                    .submit(queue.queue, command, Some(timeline))?;
+            }
+            Ok(())
         });
         if let Err(error) = result {
             let error = VulkanError::ProducerUnconfirmed {
@@ -3539,7 +3716,7 @@ impl VulkanRenderer {
             self.producer_error = Some(error.clone());
             return Err(error);
         }
-        // New image uploads and all users are on the same graphics queue.
+        // Material uploads and raster users are on the graphics queue.
         // An earlier flight keeps its immutable descriptor generation alive.
         frame_work.cpu_queue_submit_ms = submit_started.elapsed().as_secs_f64() * 1000.;
         flight.work = frame_work;
@@ -3569,6 +3746,7 @@ impl VulkanRenderer {
         self.performance.material_row_upload_bytes += frame_work.material_row_write_bytes as u64;
         self.serial = serial;
         self.slots[index].last_serial = serial;
+        self.slots[index].last_compute_serial = asynchronous_compute.then_some(serial);
         if let Some(range) = staging_range {
             self.staging.cursor.commit(serial, range);
         }
@@ -3705,33 +3883,34 @@ impl Drop for VulkanRenderer {
             let trace = self.trace;
             let mut pinned = std::mem::ManuallyDrop::new(bundle);
             crate::retirement::retire(move || {
-                let flights = pinned.slots.iter().filter_map(|slot| slot.pending.as_ref());
-                if let Some(error) = flights.clone().find_map(|flight| flight.failure.clone()) {
-                    return Poll::Ready(Err(error));
-                }
-                let last = flights.max_by_key(|flight| flight.serial).unwrap();
-                match last.completion.ready() {
-                    Ok(false) => Poll::Pending,
-                    Err(source) => Poll::Ready(Err(VulkanError::ProducerUnconfirmed {
-                        operation: "producer retirement",
-                        source,
-                    })),
-                    Ok(true) => {
-                        if let Some(trace) = trace {
-                            eprintln!(
-                                "Vulkan retirement complete renderer={trace} serial={}",
-                                last.serial
-                            );
-                        }
-                        // Completion of the last graphics signal also covers
-                        // its transfer dependency and all earlier submissions.
-                        // SAFETY: This path drops the pinned resources exactly once after observing
-                        // the last graphics signal. That signal also covers the transfer dependency
-                        // and all earlier submissions.
-                        unsafe { std::mem::ManuallyDrop::drop(&mut pinned) };
-                        Poll::Ready(Ok(()))
+                let mut ready = true;
+                let mut last_serial = 0;
+                for flight in pinned.slots.iter().filter_map(|slot| slot.pending.as_ref()) {
+                    if let Some(error) = &flight.failure {
+                        return Poll::Ready(Err(error.clone()));
                     }
+                    match flight.completion.ready() {
+                        Ok(done) => ready &= done,
+                        Err(source) => {
+                            return Poll::Ready(Err(VulkanError::ProducerUnconfirmed {
+                                operation: "producer retirement",
+                                source,
+                            }));
+                        }
+                    }
+                    last_serial = last_serial.max(flight.serial);
                 }
+                if !ready {
+                    return Poll::Pending;
+                }
+                if let Some(trace) = trace {
+                    eprintln!("Vulkan retirement complete renderer={trace} serial={last_serial}");
+                }
+                // SAFETY: Every pending slot has confirmed completion, which
+                // also covers that slot's semaphore waits and earlier batches.
+                // Different slots can complete on independent queues.
+                unsafe { std::mem::ManuallyDrop::drop(&mut pinned) };
+                Poll::Ready(Ok(()))
             });
         }
     }
@@ -4282,8 +4461,7 @@ fn transition(
     image.access = access;
 }
 fn copy_image(
-    device: &ash::Device,
-    command: vk::CommandBuffer,
+    recorder: graph_record::Recorder<'_>,
     images: &mut BTreeMap<String, Image>,
     from: &str,
     to: &str,
@@ -4298,9 +4476,7 @@ fn copy_image(
     let source = images
         .get_mut(from)
         .ok_or_else(|| VulkanError::Resource(format!("Unknown GPU resource {from}")))?;
-    transition(
-        device,
-        command,
+    recorder.use_image(
         source,
         vk::ImageLayout::GENERAL,
         vk::PipelineStageFlags::TRANSFER,
@@ -4316,9 +4492,7 @@ fn copy_image(
             "Resource copy requires identical image formats".into(),
         ));
     }
-    transition(
-        device,
-        command,
+    recorder.use_image(
         target,
         vk::ImageLayout::GENERAL,
         vk::PipelineStageFlags::TRANSFER,
@@ -4342,8 +4516,8 @@ fn copy_image(
     // GENERAL with the required transfer access. The copy covers one color layer within both
     // images.
     unsafe {
-        device.cmd_copy_image(
-            command,
+        recorder.device.cmd_copy_image(
+            recorder.command,
             image,
             vk::ImageLayout::GENERAL,
             target.image,
@@ -4522,6 +4696,91 @@ mod tests {
         assert!(!submission.waiting(ready_at + Duration::from_millis(50)));
         submission.submitted.store(true, Ordering::Release);
         assert!(!submission.waiting(ready_at));
+    }
+
+    #[test]
+    fn held_window_output_owns_separate_memory_across_new_frames_and_resize() {
+        crate::requires_capabilities!(Vulkan, Dxc);
+        let mut renderer = VulkanRenderer::new().unwrap();
+        renderer.window_target = Some(WindowScheduling::Default);
+        let scene = ObjectsWorld::demo().snapshot();
+        let graph = default_graph(RenderPath::Deferred);
+        let render = |renderer: &mut VulkanRenderer, width| {
+            let RenderSubmission::Pending(ticket) = renderer
+                .render_presented(
+                    &scene,
+                    Camera::default(),
+                    width,
+                    64,
+                    &graph,
+                    &BTreeMap::new(),
+                    &RenderOverrides::default(),
+                )
+                .unwrap()
+            else {
+                panic!("expected a Vulkan window flight");
+            };
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                if let Some(frame) = renderer.poll_presented(ticket).unwrap() {
+                    return frame.gpu.unwrap();
+                }
+                assert!(Instant::now() < deadline, "window flight did not complete");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
+        let first_lease = render(&mut renderer, 96);
+        let first = first_lease.as_any().downcast_ref::<WindowFrame>().unwrap();
+        let output_memory = first.image.memory.as_ref().unwrap();
+        assert!(
+            renderer.slots[0]
+                .resources
+                .as_ref()
+                .unwrap()
+                .images
+                .values()
+                .all(|image| { !Arc::ptr_eq(image.memory.as_ref().unwrap(), output_memory) })
+        );
+        for width in [96, 128, 96] {
+            let next = render(&mut renderer, width);
+            let next = next.as_any().downcast_ref::<WindowFrame>().unwrap();
+            assert_ne!(next.image(), first.image());
+            assert!(!Arc::ptr_eq(
+                next.image.memory.as_ref().unwrap(),
+                output_memory
+            ));
+        }
+
+        // Cancellation retires the compute flight without publishing its image.
+        let RenderSubmission::Pending(ticket) = renderer
+            .render_presented(
+                &scene,
+                Camera::default(),
+                96,
+                64,
+                &graph,
+                &BTreeMap::new(),
+                &RenderOverrides::default(),
+            )
+            .unwrap()
+        else {
+            panic!("expected a cancellable Vulkan window flight");
+        };
+        renderer.discard_presented(ticket).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while renderer.slots.iter().any(|slot| slot.pending.is_some()) {
+            assert!(renderer.poll_presented(ticket).unwrap().is_none());
+            assert!(
+                Instant::now() < deadline,
+                "cancelled window flight did not retire"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let next = render(&mut renderer, 96);
+        assert_ne!(
+            next.as_any().downcast_ref::<WindowFrame>().unwrap().image(),
+            first.image()
+        );
     }
 
     #[test]

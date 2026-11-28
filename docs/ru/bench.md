@@ -82,6 +82,31 @@ box-фильтром до 256 px по стороне, чтобы они поме
 [Эталон S4 для R2.5](evidence/r25-s4/README.md) содержит изображения Forward
 и Deferred при 1080p и замер соответствующей памяти изображений графа.
 
+<a id="r25-checks"></a>
+
+## R2.5. Сравнение S4
+
+Запустите оба штатных графа по [опубликованным условиям захвата при 1080p](evidence/r25-s4/README.md).
+Сравнение декодированных RGBA8 использует записанный кадр 000 для Forward и
+031 для Deferred. `image_quality_check --compare` пишет число изменившихся
+пикселей и максимальную разницу канала в новый JSON-отчёт. Сопоставление
+на эталонном адаптере требует точных пикселей.
+
+```text
+cargo run --locked --release -p module-engine-vulkan --example image_quality_check -- --compare docs/evidence/r25-s4/forward-000.png <forward-capture>/frame-000.png <new-forward-report.json>
+cargo run --locked --release -p module-engine-vulkan --example image_quality_check -- --compare docs/evidence/r25-s4/deferred-031.png <deferred-capture>/frame-031.png <new-deferred-report.json>
+python -B scripts/s4_graph_memory.py <forward-capture>/graph-memory.json --reference docs/evidence/r25-s4/forward-memory.json --minimum-reduction 30
+python -B scripts/s4_graph_memory.py <deferred-capture>/graph-memory.json --reference docs/evidence/r25-s4/deferred-memory.json --minimum-reduction 30
+```
+
+Замер памяти требует одинаковых имён и форматов изображений. Он объединяет
+их привязанные диапазоны в завершённом слоте, включая аппаратную глубину и
+закодированный выход. Сохраните манифесты захвата, сырые диапазоны, отчёты о
+сравнении изображений, логи validation и хеши сборок. `asynchronous_compute`
+в отчёте диапазонов кандидата показывает, какой путь использовался.
+Повторите проверку с `MODULE_ENGINE_GRAPH_COMPUTE=graphics` для контроля с
+одной очередью. Итоги приведены в [отчёте R2.5](evidence/r25-s4/receipt.md).
+
 <a id="r23-scene-checks"></a>
 
 ## Загрузки сцены и время R2.3
@@ -329,7 +354,7 @@ set (+4,19%, пороги 17,97% и 1,00%). В той серии у одного
 отчёты, их хеши, ряды измерений и причины исключения прогонов.
 
 **Объявленное изменение показа.** Когда проверяемое изменение — сам путь
-показа (R2.6: текущий путь через WGPU против прямого swapchain Vulkan),
+показа (R2.6: путь R0.6 через WGPU и прямой swapchain Vulkan),
 объявите каждое поле, которое может отличаться между сторонами:
 `--declare-change gui_graphics.backend` (а также `gui_graphics.renderer`,
 `gui_graphics.requested_renderer`, `gui_graphics.requested_gpu_backend`;
@@ -338,6 +363,34 @@ set (+4,19%, пороги 17,97% и 1,00%). В той серии у одного
 записываются в `compare.json` и `compare.md`, а остальные поля проверяются
 строго: другой адаптер, разрешение, нагрузка или фактический режим показа
 по-прежнему несравнимы. Без параметра сравнение полностью строгое.
+
+Для R2.6 используйте следующее сравнение. Проверяемый интервал кадра
+сохраняет наблюдение в UI. Раздел `window_swapchain` отчёта кандидата
+содержит замеры вызовов и интервалов в фактическом окне.
+
+Для парной проверки с R0.6 извлеките два точных исходных документа из
+[архива R2.6](../evidence/r26-player/r06-game-fixtures.zip). Он содержит
+`S1.json` и `S2.json`. Перед командой ниже укажите их абсолютный каталог в
+`MODULE_ENGINE_BENCHMARK_R06_GAME_FIXTURES`. Старый EXE создаёт эти документы
+самостоятельно. Кандидат сверяет байты с хешами R0.6, применяет текущий
+профиль и пины SDK в памяти и требует, чтобы результат побайтно совпал со
+штатным документом сцены. Хеши входного и принятого хостом документа остаются
+в `r06-game-fixture.json`. Обе стороны записывают хеш полного входного
+документа в `fixture.json`. Действуют обычные проверки сигнатур и времён.
+Если отличаются сцена, расписание или сохранённый в документе исходник
+шейдера либо Custom, прогон останавливается до открытия окна.
+
+| Вход | SHA-256 документа R0.6 |
+| --- | --- |
+| S1 | `71d44139df5d3c7eb42e5b1974bec80b37d4e3b496d0e9da77135d7c98ad73c8` |
+| S2 | `cd71b49d91a25c174016e47b17ce09d0f00aebba26ea527d03ce1e8ee1a77439` |
+
+```sh
+python -m zipfile -e docs/evidence/r26-player/r06-game-fixtures.zip work/r06-game-fixtures
+python scripts/bench.py --no-profiling --compare 731661c47e181847450e00480e60c0645abd4753 --scenes S1,S2 --declare-change gui_graphics.backend --declare-change gui_graphics.renderer --declare-change gui_graphics.requested_renderer --declare-change gui_graphics.requested_gpu_backend
+```
+
+[Зачётные замеры R2.6](../evidence/r26-player/README.ru.md).
 
 Каталог серии `outputs/bench/<дата>/<время>-compare/` содержит логи сборки
 и бинарники обеих сторон, `compare-manifest.json` с коммитами и правилом,

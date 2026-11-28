@@ -10,8 +10,8 @@ mod visibility;
 use eframe::egui;
 use fixtures::Fixture;
 use module_engine_core::{
-    FrameTimings, Graph, RenderOverrides, RenderSubmission, SceneChange, SceneChangeKind,
-    SceneUpdate,
+    CompositionContext, FrameTimings, Graph, GraphDocument, RenderOverrides, RenderSubmission,
+    SceneChange, SceneChangeKind, SceneUpdate,
 };
 use module_engine_host::{GameHost, HostOptions, RenderMode};
 use module_engine_player::{
@@ -134,9 +134,12 @@ fn s4_floor(
     let allocations = renderer
         .synchronous_graph_image_allocations()
         .ok_or("S4 benchmark has no completed synchronous graph allocations")?;
+    let work = renderer
+        .last_frame_work()
+        .ok_or("S4 benchmark has no completed graph frame")?;
     write(
         &folder.join("graph-memory.json"),
-        &json!({"graph": format!("{path:?}"), "slot": 0, "render_pixels": SIZE, "images": allocations}),
+        &json!({"graph": format!("{path:?}"), "slot": 0, "render_pixels": SIZE, "images": allocations, "asynchronous_compute": work.asynchronous_compute}),
     )
 }
 
@@ -155,6 +158,7 @@ fn game(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
         ));
     }
     let storage = folder.join("profile");
+    let mut reference = None;
     let mut host = ui::prepare_host(|| {
         let (document, asset_root, compile_root) = if g1 {
             (
@@ -169,9 +173,19 @@ fn game(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
                 Some(root.into()),
             )
         };
+        let composition = crate::host::composition_at(root)?;
+        let document =
+            if let Some(dir) = std::env::var_os("MODULE_ENGINE_BENCHMARK_R06_GAME_FIXTURES") {
+                let (prepared, proof) =
+                    prepare_r06_game_fixture(id, Path::new(&dir), document, &composition)?;
+                reference = Some(proof);
+                prepared
+            } else {
+                document
+            };
         let host = GameHost::build(
             document,
-            crate::host::composition_at(root)?,
+            composition,
             HostOptions {
                 asset_root,
                 backend_root: Some(root.into()),
@@ -185,7 +199,25 @@ fn game(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
         Ok(host)
     })?;
     let document = serde_json::to_vec(host.accepted_document()).map_err(|e| e.to_string())?;
-    let document_sha256 = module_engine_project::hash_bytes(&document);
+    let host_document_sha256 = module_engine_project::hash_bytes(&document);
+    let document_sha256 = if let Some((reference_sha256, prepared_sha256)) = reference {
+        if host_document_sha256 != prepared_sha256 {
+            return Err(format!(
+                "{id} host did not retain the checked benchmark document"
+            ));
+        }
+        write(
+            &folder.join("r06-game-fixture.json"),
+            &json!({
+                "reference_head": R06_REFERENCE_HEAD,
+                "input_document_sha256": reference_sha256,
+                "host_document_sha256": host_document_sha256,
+            }),
+        )?;
+        reference_sha256
+    } else {
+        host_document_sha256
+    };
     let mut input = json!({"fixture":"Two Arenas ARPG source template","input":"idle"});
     #[cfg(feature = "g1")]
     if g1 {
@@ -203,6 +235,42 @@ fn game(id: &str, root: &Path, folder: &Path) -> Result<(), String> {
     input["document_sha256"] = json!(document_sha256);
     write(&folder.join("fixture.json"), &input)?;
     module_engine_player::run_benchmark_host(host, folder)
+}
+
+const R06_REFERENCE_HEAD: &str = "731661c47e181847450e00480e60c0645abd4753";
+
+fn prepare_r06_game_fixture(
+    id: &str,
+    directory: &Path,
+    stock: GraphDocument,
+    composition: &CompositionContext,
+) -> Result<(GraphDocument, (String, String)), String> {
+    let expected = match id {
+        "S1" => "71d44139df5d3c7eb42e5b1974bec80b37d4e3b496d0e9da77135d7c98ad73c8",
+        "S2" => "cd71b49d91a25c174016e47b17ce09d0f00aebba26ea527d03ce1e8ee1a77439",
+        _ => return Err(format!("No R0.6 game fixture for {id}")),
+    };
+    let path = directory.join(format!("{id}.json"));
+    let bytes = fs::read(&path).map_err(|error| format!("Read {}: {error}", path.display()))?;
+    let input_sha256 = module_engine_project::hash_bytes(&bytes);
+    if input_sha256 != expected {
+        return Err(format!(
+            "{id} input does not match the pinned R0.6 document: {input_sha256}"
+        ));
+    }
+    let mut document = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+    let profile = module_engine_project::EngineProfile::from_document(&stock)?;
+    // The stock R0.6 binary validates this exact input with its own SDK.
+    // Reattach the installed profile in memory using the regular lock checks.
+    crate::engine_profiles::attach(&mut document, composition, &profile)?;
+    let prepared = serde_json::to_vec(&document).map_err(|error| error.to_string())?;
+    if prepared != serde_json::to_vec(&stock).map_err(|error| error.to_string())? {
+        return Err(format!(
+            "{id} replay differs from the current stock fixture after repinning"
+        ));
+    }
+    let prepared_sha256 = module_engine_project::hash_bytes(&prepared);
+    Ok((document, (input_sha256, prepared_sha256)))
 }
 
 fn write(path: &Path, value: &Value) -> Result<(), String> {

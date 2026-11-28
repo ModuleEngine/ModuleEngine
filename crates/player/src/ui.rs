@@ -13,8 +13,8 @@ use serde::Serialize;
 use std::{
     collections::{BTreeSet, VecDeque},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
-    time::Instant,
+    sync::{Arc, Mutex, Weak},
+    time::{Duration, Instant},
 };
 
 const BENCHMARK_WARMUP: usize = 30;
@@ -558,6 +558,7 @@ pub fn run_benchmark_host(mut host: GameHost, folder: &Path) -> Result<(), Strin
                     model_paths,
                     game_frames: vec![],
                     observed_game_frames: vec![],
+                    window_presents: WindowPresentations::default(),
                     frame_ages_ms: vec![],
                     missing_completion_timestamps: 0,
                     presentations: vec![],
@@ -734,8 +735,8 @@ pub fn update_render_diagnostic(
 }
 impl Player {
     fn update_logic(&mut self, ctx: &egui::Context) {
-        // eframe skips `ui` for a minimized native window. Suspend render work
-        // here; restoration requests the actual canvas again in `ui`.
+        // Suspend graph rendering while minimized. A restored window
+        // requests its actual canvas extent on the next draw.
         if ctx.input(|i| i.viewport().minimized == Some(true)) {
             self.request_viewport([0, 0]);
             self.dispatch(GameInput::default());
@@ -768,7 +769,6 @@ impl Player {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         }
-        ctx.request_repaint();
     }
 
     fn draw_native(&mut self, ui: &mut egui::Ui, cpu_usage: Option<f32>) {
@@ -1106,7 +1106,6 @@ impl Player {
                     });});
             }
         }
-        ui.ctx().request_repaint();
     }
 
     fn shutdown(&mut self) {
@@ -1122,27 +1121,34 @@ impl Player {
         }
     }
 }
-impl eframe::App for Player {
-    fn logic(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-        self.update_logic(ctx);
-    }
-    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        self.draw_native(ui, frame.info().cpu_usage);
-    }
-    fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
-        self.shutdown();
-    }
-}
-
 impl module_engine_native_ui::NativeApp for Player {
     fn frame_prepared(&mut self, elapsed: std::time::Duration) {
         self.previous_ui_seconds = Some(elapsed.as_secs_f32());
+    }
+    fn frame_presented(&mut self, frame: module_engine_native_ui::WindowPresentation) {
+        if let Some(benchmark) = &mut self.benchmark {
+            record_window_mode(frame.present_mode);
+            if benchmark.armed && !benchmark.finished && benchmark.completed >= BENCHMARK_WARMUP {
+                benchmark
+                    .window_presents
+                    .record(frame, self.uploaded.as_ref(), benchmark.started);
+            }
+        }
     }
     fn ui(&mut self, ui: &mut egui::Ui, _: &module_engine_native_ui::Window) {
         self.update_logic(ui.ctx());
         if !ui.ctx().input(|i| i.viewport().minimized == Some(true)) {
             self.draw_native(ui, self.previous_ui_seconds);
         }
+        // Winit input and GameWorker publication request immediate redraws.
+        // Retry a contended mailbox promptly. The idle wake also checks for
+        // worker exit and benchmark deadlines when the scene stops updating.
+        let delay = if self.pending_commands.is_empty() && self.pending_inputs.is_empty() {
+            Duration::from_millis(250)
+        } else {
+            Duration::from_millis(2)
+        };
+        ui.ctx().request_repaint_after(delay);
     }
     fn on_exit(&mut self) {
         self.shutdown();
@@ -1200,6 +1206,7 @@ struct NativeBenchmark {
     model_paths: BTreeSet<String>,
     game_frames: Vec<Instant>,
     observed_game_frames: Vec<Instant>,
+    window_presents: WindowPresentations,
     frame_ages_ms: Vec<f64>,
     missing_completion_timestamps: usize,
     presentations: Vec<NativePresentationObservation>,
@@ -1211,6 +1218,72 @@ struct NativeBenchmark {
     invalid_completion_timestamps: usize,
     finished: bool,
     gui_graphics: GuiGraphicsInfo,
+}
+
+#[derive(Default)]
+struct WindowPresentations {
+    frames: Vec<WindowPresentSample>,
+    worker_requests: usize,
+    last_game_frame: Option<Weak<module_engine_core::Frame>>,
+}
+
+#[derive(Serialize)]
+struct WindowPresentSample {
+    since_start_ms: f64,
+    paint_through_present_ms: f64,
+    present_cpu_ms: f64,
+    pixels: [u32; 2],
+    new_game_frame: bool,
+}
+
+impl WindowPresentations {
+    fn record(
+        &mut self,
+        frame: module_engine_native_ui::WindowPresentation,
+        game_frame: Option<&Arc<module_engine_core::Frame>>,
+        started: Instant,
+    ) {
+        let Some(present) = frame.present_elapsed else {
+            self.worker_requests += 1;
+            return;
+        };
+        let new_game_frame = game_frame.is_some_and(|frame| {
+            let current = Arc::downgrade(frame);
+            if self
+                .last_game_frame
+                .as_ref()
+                .is_some_and(|last| last.ptr_eq(&current))
+            {
+                return false;
+            }
+            self.last_game_frame = Some(current);
+            true
+        });
+        self.frames.push(WindowPresentSample {
+            since_start_ms: frame.time.saturating_duration_since(started).as_secs_f64() * 1000.,
+            paint_through_present_ms: frame.paint_elapsed.as_secs_f64() * 1000.,
+            present_cpu_ms: present.as_secs_f64() * 1000.,
+            pixels: frame.pixels,
+            new_game_frame,
+        });
+    }
+
+    fn report(&self) -> serde_json::Value {
+        let summarize_intervals = |times: Vec<f64>| {
+            timing_summary(times.windows(2).map(|pair| pair[1] - pair[0]).collect())
+        };
+        serde_json::json!({
+            "scope": "CPU observations after successful root queue_present calls. Presentation CPU time includes pre_present_notify. Software worker requests are counted separately.",
+            "queue_presented_frames": self.frames.len(),
+            "software_present_worker_requests": self.worker_requests,
+            "distinct_game_frames": self.frames.iter().filter(|frame| frame.new_game_frame).count(),
+            "queue_present_interval_ms": summarize_intervals(self.frames.iter().map(|frame| frame.since_start_ms).collect()),
+            "distinct_game_frame_present_interval_ms": summarize_intervals(self.frames.iter().filter(|frame| frame.new_game_frame).map(|frame| frame.since_start_ms).collect()),
+            "paint_through_present_ms": timing_summary(self.frames.iter().map(|frame| frame.paint_through_present_ms).collect()),
+            "present_cpu_ms": timing_summary(self.frames.iter().map(|frame| frame.present_cpu_ms).collect()),
+            "samples": self.frames,
+        })
+    }
 }
 
 #[derive(Serialize)]
@@ -1266,6 +1339,7 @@ impl NativeBenchmark {
         self.samples.clear();
         self.game_frames.clear();
         self.observed_game_frames.clear();
+        self.window_presents = WindowPresentations::default();
         self.frame_ages_ms.clear();
         self.presentations.clear();
         self.seen_presentations.clear();
@@ -1599,6 +1673,7 @@ impl NativeBenchmark {
             "effective_present_mode":present_mode.effective_present_mode,
             "effective_present_mode_unavailable_reason":present_mode.effective_present_mode_unavailable_reason,
             "observed_present_modes":present_mode.observed_present_modes,
+            "window_swapchain":self.window_presents.report(),
             "frame_profiling":self.frame_profiling,
             "native_vsync_requested":gui_vsync_requested().unwrap_or(true),"model_paths":self.model_paths,"world_kind":snapshot.map(|s|format!("{:?}",s.world_kind)),
             "enemy_count_min":self.samples.iter().map(|s|s.enemies).min(),"enemy_count_max":self.samples.iter().map(|s|s.enemies).max(),
@@ -1909,6 +1984,7 @@ mod timing_tests {
             model_paths: BTreeSet::new(),
             game_frames: vec![],
             observed_game_frames: vec![],
+            window_presents: WindowPresentations::default(),
             frame_ages_ms: vec![],
             missing_completion_timestamps: 0,
             presentations: vec![],

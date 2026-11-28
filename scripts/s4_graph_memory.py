@@ -30,7 +30,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("capture", type=Path, help="graph-memory.json from a benchmark run")
     parser.add_argument("--reference", type=Path, help="Saved graph-memory.json for the same graph")
+    parser.add_argument("--minimum-reduction", type=float, metavar="PERCENT")
     args = parser.parse_args()
+    if args.minimum_reduction is not None and (
+        args.reference is None or not 0 <= args.minimum_reduction <= 100
+    ):
+        parser.error("--minimum-reduction requires a reference and a percentage from 0 to 100")
     try:
         capture = json.loads(args.capture.read_text(encoding="utf-8"))
         used = occupied_bytes(capture)
@@ -40,7 +45,21 @@ def main():
             if any(reference[key] != capture[key] for key in ("graph", "render_pixels", "slot")):
                 raise ValueError("Compare the same graph, viewport and slot")
             baseline = occupied_bytes(reference)
-            print(f"Reduction from {baseline:,} bytes: {100 * (1 - used / baseline):.2f}%")
+            reduction = 100 * (baseline - used) / baseline
+            print(f"Reduction from {baseline:,} bytes: {reduction:.2f}%")
+            if args.minimum_reduction is not None:
+                def inventory(report):
+                    entries = [(image["resource"], image["format"]) for image in report["images"]]
+                    if len({name for name, _ in entries}) != len(entries):
+                        raise ValueError("Duplicate graph image name")
+                    return sorted(entries)
+
+                if inventory(capture) != inventory(reference):
+                    raise ValueError("Compare the same graph image names and formats")
+                if reduction < args.minimum_reduction:
+                    raise SystemExit(
+                        f"Reduction {reduction:.2f}% is below {args.minimum_reduction:g}%"
+                    )
     except (KeyError, OSError, ValueError) as error:
         parser.error(str(error))
 

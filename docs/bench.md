@@ -77,6 +77,31 @@ The Player example `gpu_presentation_check` exercises native interop and
 checks that two in-flight material versions produce their individual reference
 pixels while the second submission reuses the unchanged texture.
 
+<a id="r25-checks"></a>
+
+## R2.5 S4 comparison
+
+Run both stock graphs using the [published 1080p capture conditions](evidence/r25-s4/README.md).
+The decoded RGBA8 comparison uses the recorded Forward frame 000 and Deferred
+frame 031. `image_quality_check --compare` writes the changed pixel count and
+maximum channel delta to a new JSON report. The comparison on the reference
+adapter requires exact pixels.
+
+```text
+cargo run --locked --release -p module-engine-vulkan --example image_quality_check -- --compare docs/evidence/r25-s4/forward-000.png <forward-capture>/frame-000.png <new-forward-report.json>
+cargo run --locked --release -p module-engine-vulkan --example image_quality_check -- --compare docs/evidence/r25-s4/deferred-031.png <deferred-capture>/frame-031.png <new-deferred-report.json>
+python -B scripts/s4_graph_memory.py <forward-capture>/graph-memory.json --reference docs/evidence/r25-s4/forward-memory.json --minimum-reduction 30
+python -B scripts/s4_graph_memory.py <deferred-capture>/graph-memory.json --reference docs/evidence/r25-s4/deferred-memory.json --minimum-reduction 30
+```
+
+The memory check requires the same named images and formats. It unions
+their bound ranges within the completed slot, including hardware depth and
+the encoded output. Keep the capture manifests, raw ranges, image reports,
+validation logs and executable hashes. `asynchronous_compute` in each
+candidate range report records the route actually used. Repeat with
+`MODULE_ENGINE_GRAPH_COMPUTE=graphics` for the single-queue control.
+The [R2.5 receipt](evidence/r25-s4/receipt.md) records the verified results.
+
 <a id="r23-scene-checks"></a>
 
 ## R2.3 scene uploads and timing
@@ -313,7 +338,7 @@ rule and borderline rerun stay in force. The [recorded samples and calculation](
 identify each input report, its hash, the measured arrays and the excluded runs.
 
 **Declared presentation change.** When the presentation path itself is the
-change under test (R2.6: the current WGPU path against the direct Vulkan
+change under test (R2.6: the R0.6 WGPU path against the direct Vulkan
 swapchain), declare each field that may differ between the sides:
 `--declare-change gui_graphics.backend` (also `gui_graphics.renderer`,
 `gui_graphics.requested_renderer`, `gui_graphics.requested_gpu_backend`; the
@@ -322,6 +347,34 @@ reported (non-null) in every run on both sides and identical across all runs of 
 `compare.json` and `compare.md`, and every other field stays strict: a
 different adapter, resolution, workload or effective present mode is still
 incomparable. Without the option the comparison is fully strict.
+
+Use the following pair for R2.6. The blocking frame interval remains
+UI-observed. The candidate's `window_swapchain` report includes the measured
+calls and intervals on the actual window surface.
+
+For the R0.6 pair, extract the two exact source documents from the
+[R2.6 fixture archive](evidence/r26-player/r06-game-fixtures.zip). It contains
+`S1.json` and `S2.json`. Set `MODULE_ENGINE_BENCHMARK_R06_GAME_FIXTURES` to
+their absolute directory before invoking the command below.
+The old executable generates those documents itself. The candidate checks the
+input bytes against the R0.6 digests, attaches its current profile and SDK pins
+in memory, and requires the resulting bytes to match its stock scene document.
+It records the input and accepted host hashes in `r06-game-fixture.json`.
+Both sides report the same full input hash in `fixture.json`, and the normal
+signature and timing checks still apply. A difference in the scene, schedule, or
+document-owned shader or Custom source fails the replay before the window opens.
+
+| Input | R0.6 document SHA-256 |
+| --- | --- |
+| S1 | `71d44139df5d3c7eb42e5b1974bec80b37d4e3b496d0e9da77135d7c98ad73c8` |
+| S2 | `cd71b49d91a25c174016e47b17ce09d0f00aebba26ea527d03ce1e8ee1a77439` |
+
+```sh
+python -m zipfile -e docs/evidence/r26-player/r06-game-fixtures.zip work/r06-game-fixtures
+python scripts/bench.py --no-profiling --compare 731661c47e181847450e00480e60c0645abd4753 --scenes S1,S2 --declare-change gui_graphics.backend --declare-change gui_graphics.renderer --declare-change gui_graphics.requested_renderer --declare-change gui_graphics.requested_gpu_backend
+```
+
+[Measured R2.6 result](evidence/r26-player/README.md).
 
 The series directory `outputs/bench/<date>/<time>-compare/` contains both
 build logs and binaries, `compare-manifest.json` with the commits and rule,

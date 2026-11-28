@@ -1110,6 +1110,8 @@ const NATIVE_FILES: &[&str] = &[
     "crates/render-vulkan/src/compiler.rs",
     "crates/render-vulkan/src/geometry.rs",
     "crates/render-vulkan/src/graph.rs",
+    "crates/render-vulkan/src/graph_memory.rs",
+    "crates/render-vulkan/src/graph_record.rs",
     "crates/custom-rust/Cargo.toml",
     "crates/custom-rust/src/lib.rs",
     "crates/custom-rust/src/command.rs",

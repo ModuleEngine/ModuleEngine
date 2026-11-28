@@ -8,6 +8,26 @@ Project working directory: `E:\ModuleEngine`. The authored example is stored in 
 
 ## Native GPU presentation
 
+The window draws into a Vulkan swapchain with an RGBA8 or BGRA8 UNORM
+surface format and the sRGB nonlinear color space. With GUI vsync on, the
+shell prefers Mailbox and uses FIFO when Mailbox is unavailable. With it off,
+the selection order is Immediate, Mailbox, FIFO. Resize recreates the
+swapchain when the client extent or surface changes. The window pauses
+swapping while its extent is zero. HDR output belongs to R10.2.
+
+Player requests a redraw on game worker publication or window input.
+Pending mailbox actions have a short retry. An idle timer lets Player check
+for worker exit and keeps the benchmark watchdog responsive.
+
+The report's `window_swapchain` records successful calls to queue present
+and actual surface pixels. Its samples separate the CPU time through the
+paint and present stages, consecutive swapchain submissions, and submissions
+with a new game image. Software Vulkan worker requests have their own
+counter. The effective mode reflects the modes observed during presentation.
+The Bench pairing keeps its historical UI-observed frame interval. The
+additional swapchain intervals end at CPU submission. Offscreen render and
+readback timings are reported by their own routes.
+
 Editor and Player use winit, egui-winit and the Vulkan painter on Windows and Linux. Scene, Game and detached panes use the window’s logical device. The graph publishes its RGBA8 output image in shader-read layout. The egui texture descriptor retains that image through the draw. Its fragment shader premultiplies each texel before filtering. Normal presentation requires no CPU pixel transfer or intermediate display copy. A rejected frame preserves the previous texture.
 
 The Vulkan device admits two submissions on tier A with timeline support and one on the compatibility path. Player and the Editor Host each track one outstanding frame transaction. Four leased output images bound reuse independently of command slots. Admission returns `Pending(ticket)`. Polling publishes a completed ticket at most once. `Busy` admits no work. Software rendering can return `Ready(Frame)`. The previous image, identity, camera and provenance remain current until completion. A pending slot retains command resources, atlas and pipelines. Explicit CPU rendering and diagnostic captures may wait for readback. A conflicting CPU render is rejected while a native request is pending.
@@ -130,7 +150,7 @@ and failures observed during measurement; the corresponding `_final` fields
 report the last snapshot. A fallback is reported explicitly, including while
 paused, rather than being labeled as a high-resolution wait.
 
-Additionally, `eframe::Frame.info().cpu_usage` measures CPU work of the UI and native presentation for the previous frame, excluding vsync waiting. Conversion/enqueue figures describe preparation on the selected presentation route. Native GPU work and framework drawing occur separately; diagnostic CPU texture uploads, when explicitly selected, remain part of framework CPU and the overall period. These CPU timings do not establish consumer GPU completion or GPU-copy duration. This measures the window loop, not the time photons appear on the monitor or a separate GPU timestamp of the GUI renderer.
+The native framework CPU interval measures the previous frame from input processing through egui tessellation. Conversion and enqueue figures cover preparation on the selected presentation route. `window_swapchain` covers CPU time from painting through presentation and counts the window submissions. Consumer GPU completion and physical scanout require separate measurements.
 
 The window requests a client area of 1920×1080 physical pixels accounting for DPI. The report contains actual framebuffer and canvas area, game Vulkan renderer GPU and GUI backend, monitor/refresh rate, CPU identifier, models, living-enemy count, and player status/health. If the window manager reduced the window, `physical_resolution_met` shows this; offscreen render size stays 1920×1080.
 

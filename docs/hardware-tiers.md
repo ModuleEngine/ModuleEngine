@@ -13,7 +13,7 @@ The R0.4 snapshot came from
 
 | Tier | Required device capabilities | Path and fallback | RTX 4080 SUPER on Windows |
 | --- | --- | --- | --- |
-| A — base raster | Vulkan ≥1.3 with a graphics + compute queue and `dynamicRendering`, `synchronization2`, `bufferDeviceAddress`, `descriptorIndexing`, `shaderSampledImageArrayNonUniformIndexing`, `runtimeDescriptorArray`. These use core Vulkan. The current Player also needs the platform interop described below. | R2.1 adds [two frame slots](#r21-device). R2.2 adds [indexed material images](#r22-materials) on qualifying devices. The compatibility path retains the atlas. During R2 parity it remains available wherever its own requirements pass. The final Vulkan baseline has no promised lower tier. | All listed bits reported. The Windows DX12 bridge and R2.2 indexed material path were exercised on this adapter. |
+| A — base raster | Vulkan ≥1.3 with a graphics + compute queue and `dynamicRendering`, `synchronization2`, `bufferDeviceAddress`, `descriptorIndexing`, `shaderSampledImageArrayNonUniformIndexing`, `runtimeDescriptorArray`. These use core Vulkan. Native Player also requires Vulkan presentation support for its window. | R2.1 adds [two frame slots](#r21-device). R2.2 adds [indexed material images](#r22-materials) on qualifying devices. The compatibility path retains the atlas. During R2 parity it remains available wherever its own requirements pass. The final Vulkan baseline has no promised lower tier. | All listed bits reported. The Windows DX12 bridge and R2.2 indexed material path were exercised on this adapter. |
 | B — mesh shaders | A plus `VK_EXT_mesh_shader` with `meshShader` and `taskShader` for R8's task/mesh pipeline. | R8 falls back to compute culling and indexed indirect drawing on A using the same meshlet data. | Extension and both bits reported. R8 and its fallback are pending. |
 | C — hybrid rays | A plus `VK_KHR_acceleration_structure` (`accelerationStructure`), its dependency `VK_KHR_deferred_host_operations`, and `VK_KHR_ray_query` (`rayQuery`). A separate ray-tracing pipeline also needs `VK_KHR_ray_tracing_pipeline` (`rayTracingPipeline`). | R9 falls back to raster shadow maps, SSAO, screen-space reflections and IBL as applicable. B and C are independent upgrades over A. | All listed extensions and bits reported. R9 and its GPU timings are pending. |
 
@@ -40,27 +40,14 @@ and [ray pipelines](https://docs.vulkan.org/refpages/latest/refpages/source/VK_K
 ## What the current Player uses
 
 The [Vulkan producer](../crates/render-vulkan/src/vulkan.rs) requests Vulkan
-1.3 and a graphics + compute queue with dynamic rendering. It prefers a
-qualifying discrete adapter without a presentation target and matches the GUI
-adapter with a target. [Device selection and enabled features](#r21-device)
-are separate from the native presentation import contract.
-
-- **Windows.** WGPU uses DX12 for the window. The Vulkan device must match the
-  D3D12 adapter by valid LUID, expose and enable
-  `VK_KHR_external_memory_win32`, and import the shared D3D12
-  `D3D12_RESOURCE` image. The bridge checks import support for optimal-tiling
-  `R8G8B8A8_UNORM` with sampled and transfer source/destination usage.
-- **Linux.** WGPU uses Vulkan for the window. The two devices must match by
-  device and driver UUID, enable `VK_KHR_external_memory_fd`, and support
-  dedicated `OPAQUE_FD` export on the GUI device and import on the producer
-  for the shared RGBA8 image.
-
-Actual shared-image allocation and presentation must succeed. Interop failures
-report an error with no automatic CPU fallback. The explicit software and
-diagnostic routes have their own contracts. Vulkan-only game presentation is
-planned for R2.6. See the [import checks](../crates/render-vulkan/src/presentation.rs),
-[GUI bridge](../crates/player/src/gpu_presentation.rs) and [Player contract](player.md).
-
+1.3 and a graphics + compute queue with dynamic rendering. Without a
+window it prefers a qualifying discrete adapter. For a window, that queue
+must present to the native surface and the device must expose
+`VK_KHR_swapchain`. The window and graph producers share the same logical
+device on Windows and Linux. Window output uses the SDR formats, present
+modes and frame lifetimes in the [Player contract](player.md). The
+[graph execution path](gpu-hlsl.md#r25-graph) checks synchronization2 and
+timeline support independently of the tier A two-slot allocator path.
 
 <a id="r21-device"></a>
 
