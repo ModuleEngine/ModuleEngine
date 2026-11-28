@@ -29,7 +29,7 @@ fn plane(cube_y: Option<f32>) -> SceneSnapshot {
                 [20., -0.5, -20.],
             ],
             triangles: vec![[0, 1, 2], [0, 2, 3]],
-            texcoords: vec![],
+            ..Mesh::default()
         },
         model: Transform::default().matrix(),
         color: [100, 110, 120, 255],

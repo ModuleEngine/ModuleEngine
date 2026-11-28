@@ -6,7 +6,8 @@ pub use animation::AnimationClip;
 use animation::{Matrix, PrimitiveNode, PrimitiveSkin, Rig, SceneNode, Skin, row_major};
 use base64::Engine;
 use module_engine_core::{
-    Material, Mesh, RenderItem, SceneSnapshot, TextureImage, identity_matrix, multiply_matrices,
+    AlphaMode, Material, Mesh, MetallicRoughness, RenderItem, SceneSnapshot, TextureImage,
+    identity_matrix, multiply_matrices,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -485,6 +486,73 @@ struct SceneImport<'a> {
     influence_budget: usize,
 }
 
+fn read_material(
+    source: gltf::Material<'_>,
+    images: &[Arc<TextureImage>],
+    has_uv0: bool,
+) -> Result<Material, String> {
+    let image = |texture: gltf::Texture<'_>, uv_set: u32| {
+        if uv_set != 0 || !has_uv0 {
+            return Err("Material textures require TEXCOORD_0".to_owned());
+        }
+        images
+            .get(texture.source().index())
+            .cloned()
+            .ok_or_else(|| "Material image missing".to_owned())
+    };
+    let texture = |info: gltf::texture::Info<'_>| image(info.texture(), info.tex_coord());
+    let factors = source.pbr_metallic_roughness();
+    let base_color = factors.base_color_factor();
+    let metallic = factors.metallic_factor();
+    let roughness = factors.roughness_factor();
+    let normal = source.normal_texture();
+    let normal_scale = normal.as_ref().map_or(1., |info| info.scale());
+    let occlusion = source.occlusion_texture();
+    let occlusion_strength = occlusion.as_ref().map_or(1., |info| info.strength());
+    let emissive = source.emissive_factor();
+    let alpha_cutoff = source.alpha_cutoff().unwrap_or(0.5);
+    if !base_color
+        .into_iter()
+        .chain(emissive)
+        .chain([metallic, roughness, occlusion_strength])
+        .all(|value| (0. ..=1.).contains(&value))
+        || !normal_scale.is_finite()
+        || !alpha_cutoff.is_finite()
+        || alpha_cutoff < 0.
+    {
+        return Err("glTF material factors are out of range".into());
+    }
+    Ok(Material {
+        base_color,
+        base_color_texture: factors.base_color_texture().map(texture).transpose()?,
+        pbr: Some(MetallicRoughness {
+            metallic,
+            roughness,
+            metallic_roughness_texture: factors
+                .metallic_roughness_texture()
+                .map(texture)
+                .transpose()?,
+            normal_texture: normal
+                .map(|info| image(info.texture(), info.tex_coord()))
+                .transpose()?,
+            normal_scale,
+            occlusion_texture: occlusion
+                .map(|info| image(info.texture(), info.tex_coord()))
+                .transpose()?,
+            occlusion_strength,
+            emissive_texture: source.emissive_texture().map(texture).transpose()?,
+            emissive,
+            alpha_mode: match source.alpha_mode() {
+                gltf::material::AlphaMode::Opaque => AlphaMode::Opaque,
+                gltf::material::AlphaMode::Mask => AlphaMode::Mask,
+                gltf::material::AlphaMode::Blend => AlphaMode::Blend,
+            },
+            alpha_cutoff,
+            double_sided: source.double_sided(),
+        }),
+    })
+}
+
 impl SceneImport<'_> {
     fn extract_node(
         &mut self,
@@ -569,25 +637,38 @@ impl SceneImport<'_> {
         {
             return Err("Primitive UVs invalid".into());
         }
-        let material = primitive.material();
-        if material.alpha_mode() != gltf::material::AlphaMode::Opaque {
-            return Err("glTF importer currently requires opaque materials".into());
+        let normals = reader
+            .read_normals()
+            .map(Iterator::collect::<Vec<_>>)
+            .unwrap_or_default();
+        let mut tangents = reader
+            .read_tangents()
+            .map(Iterator::collect::<Vec<_>>)
+            .unwrap_or_default();
+        if (!normals.is_empty() && normals.len() != vertices.len())
+            || !normals.iter().flatten().all(|v| v.is_finite())
+            || (!tangents.is_empty() && tangents.len() != vertices.len())
+            || tangents.iter().any(|tangent| {
+                !tangent.iter().all(|v| v.is_finite()) || !matches!(tangent[3], -1. | 1.)
+            })
+        {
+            return Err("Primitive normal or tangent attributes invalid".into());
         }
-        let pbr = material.pbr_metallic_roughness();
-        let base_color = pbr.base_color_factor();
-        let base_color_texture = if let Some(info) = pbr.base_color_texture() {
-            if info.tex_coord() != 0 {
-                return Err("Only material UV set zero is supported".into());
-            }
-            Some(
-                self.images
-                    .get(info.texture().source().index())
-                    .ok_or("Material image missing")?
-                    .clone(),
-            )
-        } else {
-            None
+        if normals.is_empty() {
+            tangents.clear();
+        }
+        let mesh = Mesh {
+            vertices,
+            triangles,
+            texcoords,
+            normals,
+            tangents,
         };
+        let material = read_material(
+            primitive.material(),
+            self.images,
+            !mesh.texcoords.is_empty(),
+        )?;
         if let Some(rig) = &mut self.rig {
             let skin = skin
                 .map(|id| {
@@ -595,7 +676,7 @@ impl SceneImport<'_> {
                         id,
                         rig.skins[&id].joint_count(),
                         &primitive,
-                        &vertices,
+                        &mesh,
                         self.buffers,
                         &mut self.influence_budget,
                     )
@@ -604,15 +685,8 @@ impl SceneImport<'_> {
             rig.primitives.push(PrimitiveNode { node, skin });
         }
         self.primitives.push(ModelPrimitive {
-            mesh: Mesh {
-                vertices,
-                triangles,
-                texcoords,
-            },
-            material: Material {
-                base_color,
-                base_color_texture,
-            },
+            mesh,
+            material,
             transform,
         });
         Ok(())
@@ -622,6 +696,77 @@ impl SceneImport<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gltf_material_preserves_all_roles_factors_and_alpha() {
+        let gltf = gltf::Gltf::from_slice(
+            br#"{
+                "asset":{"version":"2.0"},
+                "images":[{"uri":"albedo.png"},{"uri":"orm.png"},
+                          {"uri":"normal.png"},{"uri":"emissive.png"}],
+                "textures":[{"source":0},{"source":1},{"source":2},{"source":3}],
+                "materials":[{
+                    "pbrMetallicRoughness":{
+                        "baseColorFactor":[0.25,0.5,0.75,0.5],
+                        "baseColorTexture":{"index":0},
+                        "metallicFactor":0.5,"roughnessFactor":0.25,
+                        "metallicRoughnessTexture":{"index":1}
+                    },
+                    "normalTexture":{"index":2,"scale":0.5},
+                    "occlusionTexture":{"index":1,"strength":0.25},
+                    "emissiveFactor":[0.5,0,1],"emissiveTexture":{"index":3},
+                    "alphaMode":"MASK","alphaCutoff":0.75,"doubleSided":true
+                },{"alphaMode":"BLEND"},{"normalTexture":{"index":2,"texCoord":1}}]
+            }"#,
+        )
+        .unwrap();
+        let images = (0..4)
+            .map(|red| {
+                Arc::new(TextureImage {
+                    width: 1,
+                    height: 1,
+                    rgba8: vec![red, 0, 0, 255],
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let mut sources = gltf.materials();
+        let mask_source = sources.next().unwrap();
+        assert!(read_material(mask_source.clone(), &images, false).is_err());
+        let material = read_material(mask_source, &images, true).unwrap();
+        let surface = material.pbr.unwrap();
+        assert_eq!(material.base_color, [0.25, 0.5, 0.75, 0.5]);
+        assert!(Arc::ptr_eq(
+            &images[0],
+            &material.base_color_texture.unwrap()
+        ));
+        assert!(Arc::ptr_eq(
+            &images[1],
+            &surface.metallic_roughness_texture.unwrap()
+        ));
+        assert!(Arc::ptr_eq(&images[1], &surface.occlusion_texture.unwrap()));
+        assert!(Arc::ptr_eq(&images[2], &surface.normal_texture.unwrap()));
+        assert!(Arc::ptr_eq(&images[3], &surface.emissive_texture.unwrap()));
+        assert_eq!(surface.emissive, [0.5, 0., 1.]);
+        assert_eq!(surface.metallic, 0.5);
+        assert_eq!(surface.roughness, 0.25);
+        assert_eq!(surface.normal_scale, 0.5);
+        assert_eq!(surface.occlusion_strength, 0.25);
+        assert_eq!(surface.alpha_mode, AlphaMode::Mask);
+        assert_eq!(surface.alpha_cutoff, 0.75);
+        assert!(surface.double_sided);
+
+        let blend = read_material(sources.next().unwrap(), &[], false).unwrap();
+        assert_eq!(
+            blend.pbr.unwrap(),
+            MetallicRoughness {
+                alpha_mode: AlphaMode::Blend,
+                ..Default::default()
+            }
+        );
+        assert!(read_material(sources.next().unwrap(), &images, true).is_err());
+    }
+
     #[test]
     fn stable_ids_load_models_and_mapping_changes_invalidate_old_dependency_paths() {
         let root = std::env::temp_dir().join(format!(

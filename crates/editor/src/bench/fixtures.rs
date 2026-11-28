@@ -464,7 +464,7 @@ fn dense() -> Result<Fixture, String> {
                 Mesh {
                     vertices,
                     triangles,
-                    texcoords: vec![],
+                    ..Mesh::default()
                 },
                 Transform::default(),
                 Material {

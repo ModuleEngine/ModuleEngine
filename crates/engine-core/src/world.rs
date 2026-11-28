@@ -20,13 +20,18 @@ pub enum WorldKind {
 }
 
 /// Renderer-neutral indexed triangle mesh.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Mesh {
     pub vertices: Vec<[f32; 3]>,
     pub triangles: Vec<[usize; 3]>,
     /// Per-vertex UV set zero. Missing values use `[0, 0]`.
     #[serde(default)]
     pub texcoords: Vec<[f32; 2]>,
+    /// Local-space normals and tangent frames from the mesh, when supplied.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub normals: Vec<[f32; 3]>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tangents: Vec<[f32; 4]>,
 }
 
 impl Mesh {
@@ -57,7 +62,7 @@ impl Mesh {
                 [1, 2, 6],
                 [1, 6, 5],
             ],
-            texcoords: vec![],
+            ..Self::default()
         }
     }
 }
@@ -73,7 +78,7 @@ pub struct RenderItem {
     pub material: Material,
 }
 
-/// Decoded, renderer-neutral RGBA8 base-color image. Shared between snapshots.
+/// Decoded renderer-neutral RGBA8 image. The material slot defines its color space.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct TextureImage {
     pub width: u32,
@@ -81,17 +86,66 @@ pub struct TextureImage {
     pub rgba8: Vec<u8>,
 }
 
-/// Opaque static base-color material. Texture RGB is sRGB; factors are linear.
+/// A legacy base-color material or a metallic/roughness surface. Factors are linear.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Material {
     pub base_color: [f32; 4],
     pub base_color_texture: Option<std::sync::Arc<TextureImage>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pbr: Option<MetallicRoughness>,
 }
 impl Default for Material {
     fn default() -> Self {
         Self {
             base_color: [1.; 4],
             base_color_texture: None,
+            pbr: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AlphaMode {
+    #[default]
+    Opaque,
+    Mask,
+    Blend,
+}
+
+/// glTF core surface values. The metallic/roughness texture uses G for roughness
+/// and B for metallic. Occlusion uses R. Only base color and emissive use sRGB.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct MetallicRoughness {
+    pub metallic: f32,
+    pub roughness: f32,
+    pub metallic_roughness_texture: Option<Arc<TextureImage>>,
+    pub normal_texture: Option<Arc<TextureImage>>,
+    pub normal_scale: f32,
+    pub occlusion_texture: Option<Arc<TextureImage>>,
+    pub occlusion_strength: f32,
+    pub emissive_texture: Option<Arc<TextureImage>>,
+    pub emissive: [f32; 3],
+    pub alpha_mode: AlphaMode,
+    pub alpha_cutoff: f32,
+    pub double_sided: bool,
+}
+
+impl Default for MetallicRoughness {
+    fn default() -> Self {
+        Self {
+            metallic: 1.,
+            roughness: 1.,
+            metallic_roughness_texture: None,
+            normal_texture: None,
+            normal_scale: 1.,
+            occlusion_texture: None,
+            occlusion_strength: 1.,
+            emissive_texture: None,
+            emissive: [0.; 3],
+            alpha_mode: AlphaMode::Opaque,
+            alpha_cutoff: 0.5,
+            double_sided: false,
         }
     }
 }

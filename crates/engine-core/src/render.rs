@@ -424,9 +424,9 @@ mod tests {
         RenderItem {
             id,
             mesh: Mesh {
-                texcoords: vec![],
                 vertices: vec![[-1., -1., z], [1., -1., z], [0., 1., z]],
                 triangles: vec![[0, 1, 2]],
+                ..Mesh::default()
             },
             model: identity_matrix(),
             material: Default::default(),
@@ -507,9 +507,9 @@ mod tests {
             material: Default::default(),
             id: 1,
             mesh: Mesh {
-                texcoords: vec![],
                 vertices: vec![[-0.2, -0.2, 0.4], [0.2, -0.2, 0.4], [0.0, 0.2, 1.2]],
                 triangles: vec![[0, 1, 2]],
+                ..Mesh::default()
             },
             model: identity_matrix(),
             color: [255; 4],

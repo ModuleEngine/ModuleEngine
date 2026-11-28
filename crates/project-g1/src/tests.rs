@@ -1272,8 +1272,7 @@ fn ambient_source_mesh(kind: &str) -> Mesh {
         .collect();
     Mesh {
         vertices,
-        triangles: vec![],
-        texcoords: vec![],
+        ..Mesh::default()
     }
 }
 
@@ -1432,6 +1431,7 @@ fn ambient_original_gardener_breathes_with_an_anchored_sole_plane_and_bounded_he
     let material = Material {
         base_color: [0.8, 0.7, 0.6, 0.9],
         base_color_texture: Some(texture.clone()),
+        ..Material::default()
     };
     let first = RenderItem {
         id: pawn,
