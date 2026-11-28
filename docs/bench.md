@@ -489,7 +489,9 @@ the original mode, a directional-only control, and the same scene with its
 256 specified point lights. Each stock Forward and Deferred mode warms up for
 12 frames and records 60 frames at 1920×1080 in Release, offscreen, on the
 RTX 4080 SUPER. The final scene captures show the point-light contribution
-relative to the directional-only control.
+relative to the directional-only control. An untimed frame fills every
+cluster with all 256 lights on the CPU. The route requires pixel-for-pixel
+agreement with this reference in each render path.
 
 The Deferred budget uses the per-frame sum of cluster dispatch and the
 `lighting` compute pass. Forward combines raster work with shading, so its

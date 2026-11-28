@@ -691,6 +691,8 @@ pub struct VulkanRenderer {
     gpu_scene: resident::GpuScene,
     culling_pipelines: Option<Arc<culling::Pipelines>>,
     light_pipeline: Option<Arc<lighting::Pipeline>>,
+    #[cfg(any(test, feature = "bench"))]
+    exhaustive_light_reference: bool,
     culling_mode: SceneCulling,
     culling_stats: bool,
     #[cfg(feature = "bench")]
@@ -1103,6 +1105,8 @@ impl VulkanRenderer {
                 producer_error: None,
                 detailed_stats: true,
                 frame_profiling: false,
+                #[cfg(any(test, feature = "bench"))]
+                exhaustive_light_reference: false,
                 timestamp_valid_bits,
                 timestamp_period_ns: f64::from(properties.limits.timestamp_period),
                 prepared_inputs: None,
@@ -1177,6 +1181,11 @@ impl VulkanRenderer {
     }
     pub fn set_frame_profiling(&mut self, enabled: bool) {
         self.frame_profiling = enabled;
+    }
+    /// Populate every cluster with all local lights for untimed image comparisons.
+    #[cfg(any(test, feature = "bench"))]
+    pub fn set_exhaustive_light_reference(&mut self, enabled: bool) {
+        self.exhaustive_light_reference = enabled;
     }
     pub fn performance(&self) -> RendererPerformance {
         self.performance
@@ -4275,6 +4284,49 @@ mod content_player_tests {
                     );
                 }
                 results.push(lit);
+
+                let mut sloped = surface.clone();
+                sloped.mesh.vertices[0][2] = 3.48;
+                sloped.mesh.vertices[1][2] = 2.;
+                sloped.mesh.vertices[2][2] = -2.;
+                let mut lights: Vec<_> = (0..35)
+                    .map(|id| SceneLight {
+                        id: id + 10,
+                        position: [30., 0., 0.],
+                        ..light
+                    })
+                    .collect();
+                lights[0].position = [-1., -1., 4.];
+                lights[31].position = [0., 0.2, 3.];
+                lights[32].position = [1.2, 0.4, 1.];
+                lights[34].position = [-0.4, 0.5, 0.5];
+                let scene = SceneSnapshot {
+                    items: vec![sloped],
+                    lights,
+                    time: 0.,
+                };
+                let render = |renderer: &mut VulkanRenderer| {
+                    renderer
+                        .render(
+                            &scene,
+                            camera,
+                            129,
+                            97,
+                            &graph,
+                            &BTreeMap::new(),
+                            &RenderOverrides::default(),
+                        )
+                        .unwrap()
+                        .rgba
+                };
+                let clustered = render(&mut renderer);
+                renderer.set_exhaustive_light_reference(true);
+                assert_eq!(
+                    render(&mut renderer),
+                    clustered,
+                    "{route:?}, atlas={force_atlas}"
+                );
+                renderer.set_exhaustive_light_reference(false);
             }
         }
     }
@@ -4771,6 +4823,34 @@ mod content_player_tests {
             )
             .unwrap();
         assert_eq!(frame.rgba.len(), 96 * 72 * 4);
+        let mut lit_scene = scene.clone();
+        lit_scene.lights.push(module_engine_core::SceneLight {
+            id: 10001,
+            kind: module_engine_core::LightKind::Point,
+            position: [0., 2., 0.],
+            direction: [0., -1., 0.],
+            color: [0.02, 1., 0.02],
+            intensity: 20.,
+            range: 6.,
+            inner_angle_cos: 1.,
+            outer_angle_cos: 0.,
+        });
+        let lit = renderer
+            .render(
+                &lit_scene,
+                Camera::default(),
+                96,
+                72,
+                &graph,
+                &sources,
+                &RenderOverrides::default(),
+            )
+            .unwrap();
+        assert_eq!(
+            renderer.last_frame_work().unwrap().clustered_local_lights,
+            1
+        );
+        assert_ne!(lit.rgba, frame.rgba);
         if renderer.capabilities().gpu_frustum_culling {
             let mut retained = ResidentScene::default();
             retained

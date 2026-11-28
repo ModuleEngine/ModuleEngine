@@ -85,6 +85,7 @@ pub(super) fn run(root: &Path, output: &Path) -> Result<(), String> {
         let mut sun_image = Vec::new();
         let mut sun_receiver_times = Vec::new();
         let mut lit_cost = Vec::new();
+        let mut clustered_image = Vec::new();
         let mut point_changed_pixels = 0;
         for (revision, (mode, lights)) in [
             ("original", &[][..]),
@@ -165,6 +166,7 @@ pub(super) fn run(root: &Path, output: &Path) -> Result<(), String> {
                             .zip(sun_image.as_chunks::<4>().0)
                             .filter(|(a, b)| a != b)
                             .count();
+                        clustered_image = frame.rgba;
                     }
                 }
             }
@@ -180,6 +182,36 @@ pub(super) fn run(root: &Path, output: &Path) -> Result<(), String> {
         if point_changed_pixels == 0 {
             return Err(format!(
                 "The 256 S4 point lights left the {name} frame unchanged"
+            ));
+        }
+        renderer.set_frame_profiling(false);
+        renderer.set_exhaustive_light_reference(true);
+        let reference = renderer
+            .render_scene(
+                SceneInput::Retained(&mut resident),
+                fixture.camera,
+                SIZE[0],
+                SIZE[1],
+                &graph,
+                &BTreeMap::new(),
+                &RenderOverrides::default(),
+            )
+            .map_err(|e| e.to_string())?;
+        if reference.rgba != clustered_image {
+            crate::write_png(
+                &output.join(format!("{name}-exhaustive-reference.png")),
+                &reference,
+            )?;
+            let changed = reference
+                .rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(clustered_image.as_chunks::<4>().0)
+                .filter(|(a, b)| a != b)
+                .count();
+            return Err(format!(
+                "{name} clustered lighting differs from the exhaustive 256-light reference at {changed} pixels"
             ));
         }
         let absolute = summarize(lit_cost.clone());
@@ -200,12 +232,13 @@ pub(super) fn run(root: &Path, output: &Path) -> Result<(), String> {
         report.push(json!({
             "path":name,"receiver":timer,"scopes":pairs,
             "point_lights_changed_pixels":point_changed_pixels,
+            "clustered_matches_exhaustive_rgba8":true,
             "absolute_cluster_and_receiver_ms":absolute,"paired_increment_over_sun_ms":incremental,
             "budget_metric":if route == RenderPath::Deferred {"absolute_cluster_and_receiver_ms"} else {"paired_increment_over_sun_ms"},
             "budget_p95_ms":p95,
         }));
     }
-    fixture.inventory["point_lights_rendered"] = json!(256);
+    fixture.inventory["point_lights_submitted"] = json!(256);
     write(
         &output.join("lighting-report.json"),
         &json!({

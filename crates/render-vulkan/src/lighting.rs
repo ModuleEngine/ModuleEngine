@@ -48,6 +48,8 @@ pub(super) struct Frame {
     cells: [u32; 3],
     local_count: usize,
     words: u32,
+    #[cfg(any(test, feature = "bench"))]
+    exhaustive: bool,
 }
 
 impl Frame {
@@ -119,7 +121,14 @@ impl Frame {
             return Err(VulkanError::SceneBufferLimit);
         }
         let (old_lights, old_grid) = reuse
-            .map(|frame| (Some(frame.lights), Some(frame.grid)))
+            .map(|frame| {
+                #[cfg(any(test, feature = "bench"))]
+                let grid =
+                    (frame.exhaustive == renderer.exhaustive_light_reference).then_some(frame.grid);
+                #[cfg(not(any(test, feature = "bench")))]
+                let grid = Some(frame.grid);
+                (Some(frame.lights), grid)
+            })
             .unwrap_or_default();
         let records = match old_lights.filter(|buffer| buffer.size >= bytes as u64) {
             Some(buffer) => buffer,
@@ -127,6 +136,10 @@ impl Frame {
         };
         let grid = match old_grid.filter(|buffer| buffer.size >= grid_bytes) {
             Some(buffer) => buffer,
+            #[cfg(any(test, feature = "bench"))]
+            None if renderer.exhaustive_light_reference => {
+                renderer.buffer(grid_bytes, vk::BufferUsageFlags::STORAGE_BUFFER)?
+            }
             None => renderer.device_buffer(grid_bytes, vk::BufferUsageFlags::STORAGE_BUFFER)?,
         };
         // SAFETY: This slot has retired. The independent row data fits the
@@ -140,12 +153,36 @@ impl Frame {
                     std::ptr::copy_nonoverlapping(rows.as_ptr().cast::<u8>(), mapped, bytes);
                 })?;
         }
+        #[cfg(any(test, feature = "bench"))]
+        if renderer.exhaustive_light_reference && words != 0 {
+            let mut mask = vec![u32::MAX; words as usize];
+            let tail = local_count % 32;
+            if tail != 0 {
+                mask[words as usize - 1] = (1 << tail) - 1;
+            }
+            // SAFETY: The test buffer is host visible and its slot has retired.
+            // Exactly one mask is written for every allocated cluster.
+            unsafe {
+                grid.memory.as_ref().unwrap().access(grid.size, |mapped| {
+                    let len = std::mem::size_of_val(mask.as_slice());
+                    for offset in (0..grid_bytes as usize).step_by(len) {
+                        std::ptr::copy_nonoverlapping(
+                            mask.as_ptr().cast::<u8>(),
+                            mapped.add(offset),
+                            len,
+                        );
+                    }
+                })?;
+            }
+        }
         Ok(Self {
             lights: records,
             grid,
             cells,
             local_count,
             words,
+            #[cfg(any(test, feature = "bench"))]
+            exhaustive: renderer.exhaustive_light_reference,
         })
     }
 
@@ -170,6 +207,10 @@ impl Frame {
         camera: [f32; 32],
     ) -> Result<(), VulkanError> {
         if self.words == 0 {
+            return Ok(());
+        }
+        #[cfg(any(test, feature = "bench"))]
+        if self.exhaustive {
             return Ok(());
         }
         let [light_data, light_grid] = self.descriptor_infos();
