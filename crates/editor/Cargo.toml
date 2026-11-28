@@ -29,6 +29,8 @@ module-engine-script = { path = "../runtime-script" }
 module-engine-project = { path = "../project-tools" }
 module-engine-content = { path = "../engine-content" }
 eframe.workspace = true
+glam.workspace = true
+rfd = "0.18.0"
 serde.workspace = true
 serde_json.workspace = true
 png.workspace = true

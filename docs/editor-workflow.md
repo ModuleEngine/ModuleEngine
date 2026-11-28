@@ -155,9 +155,9 @@ Native dialogs, import, copy preparation, checks, and export run in a worker thr
 
 Errors appear in the **Operation result** window. While the report is open, global menu and shortcut commands are locked; close the report to continue working on the project. For CLI checks and builds, full stdout/stderr is written to `.work/editor-jobs/<id>/` beside the open JSON; the path is included in the report. Native-dialog, import, or copying errors are shown directly. System cancellation of file/folder selection returns control to the current project.
 
-Native dialogs are available on Windows. The initial directory is an optional hint: the editor normalizes relative paths, `/`, `.`/`..`, and ordinary extended-length paths into a form understood by Windows Shell, separately from working project paths. If the directory disappeared, Shell does not support its path, or rejects the hint, the dialog opens in its default directory. Errors in the dialog itself and reading the selected result still appear to the user. Selected paths, Recent Projects, bindings, and file I/O are not rewritten for the hint.
+Open, Save As, folder selection and Import use `rfd` on Windows and Linux. Linux needs an XDG Desktop Portal file chooser or the Zenity fallback in a graphical session. The initial directory is an optional hint. The editor resolves relative and Unicode paths and converts compatible extended-length Windows paths for Shell. Missing or incompatible hints leave the picker's default location. The hint is independent of the selected path, Recent Projects, bindings and file I/O.
 
-On Linux, system file-selection dialogs currently return an explicit unsupported message. Editor/Player launch and CLI path operations are independent of this limitation. Dialog verification and fix boundaries are described in the [report](dialog-path-fixes-20261016.md).
+Save As uses the exact `.json` path returned by the picker after any native replacement confirmation. A selection without `.json` gets an explicit filename error. The adapter receives `None` from `rfd` when the picker returns no path, which leaves the current project open. Run the [native picker check](verification.md#native-pickers) to verify desktop selection and cancellation.
 
 The **Export project…** command in Module Library invokes the same asynchronous Full export command as the File menu. It uses system folder selection and checks unsaved changes and the Gameplay Systems draft. Copying runs outside library painting; results and errors appear in the shared operation report.
 
@@ -363,7 +363,7 @@ A separate Player check on the same packaged content with 20 enemies at 1920×10
 | --- | --- |
 | `crates/editor/src/editor_workflow.rs` | Shared menu/shortcut commands, Recent, change protection, background jobs, and reports. |
 | `crates/editor/src/activity.rs` | Shared preparation progress, time, result, and expandable diagnostics. |
-| `crates/editor/src/native_dialogs.rs` | Windows COM file/folder dialogs without a separate helper process. |
+| `crates/editor/src/native_dialogs.rs` | Native `rfd` file and folder pickers on Windows and Linux. |
 | `crates/editor/src/workspace_files.rs` | Project templates and verified copying of authored data and resources. |
 | `crates/editor/src/window_navigation.rs` | Finding existing areas, activation, and adjacent addition. |
 | `crates/editor/src/editor_benchmark.rs` | Native Editor measurement with Graph/Game/Scene, programmatic input, and project-preservation checks. |

@@ -67,7 +67,7 @@ arguments retain the previous heavy legacy suite**.
 | Profile | Scope | What it does not confirm |
 | --- | --- | --- |
 | `quick` | `cargo fmt --all -- --check`, all lib tests of `module-engine-core` and `module-engine-project`. | Not the workspace, Editor, Vulkan runtime, secondary Custom builds, or ignored acceptance. Cold compilation can still be slow. |
-| `contracts` | Quick plus `cargo_build::tests::`, four Inspector regressions, 99 Inspector property scenarios, four previous Save As tests, 28 workflow preservation scenarios, two `diagnostic_personal` tests for explicit-root validation and Recent/layout isolation with source permissions preserved, and headless G1/ARPG [collision replay](physics-rapier.md#verify). | Not all UI, native dialogs, or the full authoring suite. |
+| `contracts` | Quick plus Cargo product selection, Inspector and workflow preservation, diagnostic personal-path isolation, G1/ARPG [collision replay](physics-rapier.md#verify), Kira mixing and editor transform/picker contracts. | Headless. Use the explicit loopback and picker checks for device and desktop evidence. |
 | `clippy` | Strict Clippy on all workspace targets and features, followed by the default Release Editor binary. Both passes use `-D warnings` and the pinned native toolchain. | No formatting, tests, or runtime checks; not engine or delivery acceptance. |
 | `render` | CPU graph and cache checks, native DXC compilation, and offscreen Vulkan regressions including GameHost scene updates, rejected ticks and scene switches. | No desktop, delivery, or performance acceptance. |
 | `native` | Five explicit ignored tests: Stop/reuse, slow-UI/hot-apply, native linker, cache context, and Windows executable spellings. | Not desktop benchmark, screen latency, Full export, or strict 60 FPS. A Windows-only test is marked `skipped` on Linux, not passed. |
@@ -308,6 +308,18 @@ The registry does not provide an arbitrary `--step` that could silently enable t
 For each new ignored test, record its purpose and select a profile or an explicit exclusion.
 
 <a id="сохранность-сериализация-и-результат"></a>
+
+<a id="native-pickers"></a>
+
+### Native picker and transform checks
+
+`r64-scene-transforms` runs the Editor geometry and gesture suite, including small and singular parents, reflection, shear, and both gimbal-lock poles. Core tests check row-major storage and XYZ rotation order. `r64-dialog-paths` tests Unicode directory hints, absent directories, exact Save As paths and cancellation without opening any windows.
+
+On a Windows or Linux desktop, `native-dialogs` opens the production pickers for Open, Save As, folder selection and Import, then opens a picker for cancellation. Follow the test log to select the disposable files and folder. On Linux, have an XDG Desktop Portal file chooser or Zenity ready. The probe checks returned paths and verifies that selection leaves the fixture bytes and working directory intact.
+
+```sh
+cargo test --locked -p module-engine-editor --features verification --bin module-engine-editor native_dialogs::tests::native_dialogs_choose_and_cancel -- --exact --ignored --nocapture --test-threads=1
+```
 
 ## Preservation, Serialization, and Result
 

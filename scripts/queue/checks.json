@@ -68,6 +68,12 @@
     "interactive": true,
     "steps": [["cargo", "test", "--offline", "--locked", "--target", "x86_64-pc-windows-msvc", "-p", "module-engine-host-services", "--features", "audio", "--lib", "audio::tests::native_kira_loopback_receives_bound_cues_within_budget", "--", "--exact", "--ignored", "--nocapture", "--test-threads=1"]]
   },
+  "native-dialogs": {
+    "group": "gpu",
+    "timeout_seconds": 3600,
+    "interactive": true,
+    "steps": [["cargo", "test", "--offline", "--locked", "--target", "x86_64-pc-windows-msvc", "-p", "module-engine-editor", "--features", "verification", "--bin", "module-engine-editor", "native_dialogs::tests::native_dialogs_choose_and_cancel", "--", "--exact", "--ignored", "--nocapture", "--test-threads=1"]]
+  },
   "bench-once": {
     "group": "gpu",
     "timeout_seconds": 7200,

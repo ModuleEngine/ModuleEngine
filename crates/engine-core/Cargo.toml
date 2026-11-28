@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 bevy_ecs = { version = "=0.20.1", default-features = false, features = ["std", "bevy_reflect"] }
 bevy_reflect = { version = "=0.20.1", default-features = false, features = ["std"] }
+glam.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

@@ -51,6 +51,8 @@ Windows permissions as its daemon.
 | quick, contracts, clippy, native, package | gpu | Named verification profile and its own scope, logs and reports. |
 | render | gpu | Offscreen profile with required capabilities, including retained Host and Vulkan checks. |
 | window-graph | gpu | Release Player graph probe in a native window with the selected adapter and presentation mode. |
+| audio-loopback | gpu | Kira cue playback and latency on a quiet default WASAPI output with its loopback capture. |
+| native-dialogs | gpu | Open, Save As, folder selection, Import and cancellation with a desktop operator. |
 | bench-once | gpu | S1–S5 diagnostic pass with benchmark artifacts. Three-run repeatability and acceptance require their own benchmark evidence. |
 | queue-probe | gpu | Short diagnostic for ordering and Windows session evidence. It launches no renderer. |
 

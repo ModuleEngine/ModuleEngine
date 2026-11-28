@@ -6,9 +6,10 @@
 //! World rotation/scaling is rejected when its result cannot be stored as the
 //! project's local TRS (for example shear under a nonuniformly scaled parent).
 use eframe::egui::{Pos2, Rect, Vec2};
+use glam::{Affine3A, EulerRot, Mat3, Mat4, Vec3, Vec4};
 use module_engine_core::{
-    Camera, SceneSnapshot, Transform, WorldObject, identity_matrix, multiply_matrices,
-    transform_point,
+    Camera, SceneSnapshot, Transform, WorldObject, identity_matrix, matrix_from_rows,
+    matrix_to_rows, multiply_matrices, transform_point,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -382,26 +383,24 @@ pub fn object_matrices(objects: &[WorldObject], id: u64) -> Result<ObjectMatrice
 
 /// Invert an affine parent matrix. A zero/singular parent cannot map world edits.
 pub fn inverse_affine(matrix: Matrix) -> Result<Matrix, String> {
-    if !matrix.iter().flatten().all(|v| v.is_finite()) {
+    let matrix = matrix_from_rows(matrix);
+    if !matrix.is_finite() {
         return Err("Parent matrix is not finite".into());
     }
-    if matrix[3][..3].iter().any(|v| v.abs() > EPSILON) || (matrix[3][3] - 1.).abs() > EPSILON {
+    if !matrix.row(3).abs_diff_eq(Vec4::W, EPSILON) {
         return Err("Parent matrix must be affine".into());
     }
-    let [a, b, c] = [column(matrix, 0), column(matrix, 1), column(matrix, 2)];
-    let determinant = dot(a, cross(b, c));
-    let size = length(a) * length(b) * length(c);
-    if !size.is_finite() || size <= f32::MIN_POSITIVE || determinant.abs() <= size * EPSILON {
+    let basis = Mat3::from_mat4(matrix);
+    let size = basis.x_axis.length() * basis.y_axis.length() * basis.z_axis.length();
+    if !size.is_finite() || size <= f32::MIN_POSITIVE || basis.determinant().abs() <= size * EPSILON
+    {
         return Err("Parent transform is singular; this gesture cannot be applied".into());
     }
-    let rows = [cross(b, c), cross(c, a), cross(a, b)].map(|row| mul(row, 1. / determinant));
-    let translation = origin(matrix);
-    let mut inverse = identity_matrix();
-    for row in 0..3 {
-        inverse[row][..3].copy_from_slice(&rows[row]);
-        inverse[row][3] = -dot(rows[row], translation);
+    let result = Mat4::from(Affine3A::from_mat4(matrix).inverse());
+    if !result.is_finite() {
+        return Err("Parent matrix inverse is not finite".into());
     }
-    Ok(inverse)
+    Ok(matrix_to_rows(result))
 }
 
 /// Convert a desired world matrix to exact local T*Rz*Ry*Rx*S storage.
@@ -409,43 +408,38 @@ pub fn world_to_local(parent: Matrix, desired: Matrix) -> Result<Transform, Stri
     decompose_trs(multiply_matrices(inverse_affine(parent)?, desired))
 }
 fn decompose_trs(matrix: Matrix) -> Result<Transform, String> {
-    if matrix[3][..3].iter().any(|v| v.abs() > EPSILON) || (matrix[3][3] - 1.).abs() > EPSILON {
+    let affine = matrix_from_rows(matrix);
+    if !affine.row(3).abs_diff_eq(Vec4::W, EPSILON) {
         return Err("Desired world transform must be affine".into());
     }
-    let columns = [column(matrix, 0), column(matrix, 1), column(matrix, 2)];
-    let mut scale = columns.map(length);
-    if !matrix.iter().flatten().all(|v| v.is_finite()) || scale.iter().any(|s| *s <= EPSILON) {
+    let basis = Mat3::from_mat4(affine);
+    let mut scale = Vec3::new(
+        basis.x_axis.length(),
+        basis.y_axis.length(),
+        basis.z_axis.length(),
+    );
+    if !affine.is_finite() || !scale.is_finite() || scale.min_element() <= EPSILON {
         return Err("Gesture would create a zero or invalid scale".into());
     }
-    let determinant = dot(columns[0], cross(columns[1], columns[2]));
-    // A reflection is representable; keep it in one signed scale component.
-    if determinant < 0. {
-        scale[0] = -scale[0];
+    // Keep a reflection in one signed storage component.
+    if basis.determinant() < 0. {
+        scale.x = -scale.x;
     }
-    let normalized: [[f32; 3]; 3] = std::array::from_fn(|i| mul(columns[i], 1. / scale[i]));
-    if dot(normalized[0], normalized[1]).abs() > 0.0002
-        || dot(normalized[0], normalized[2]).abs() > 0.0002
-        || dot(normalized[1], normalized[2]).abs() > 0.0002
-    {
+    let (x, y, z) = (
+        basis.x_axis / scale.x,
+        basis.y_axis / scale.y,
+        basis.z_axis / scale.z,
+    );
+    if x.dot(y).abs() > 0.0002 || x.dot(z).abs() > 0.0002 || y.dot(z).abs() > 0.0002 {
         return Err(
             "World gesture would produce shear; use Local axes or change the parent scale".into(),
         );
     }
-    // Rz * Ry * Rx, matching Transform::matrix. At gimbal lock choose z=0.
-    let sy = (-normalized[0][2]).clamp(-1., 1.);
-    let y = sy.asin();
-    let (x, z) = if y.cos().abs() > 0.0001 {
-        (
-            normalized[1][2].atan2(normalized[2][2]),
-            normalized[0][1].atan2(normalized[0][0]),
-        )
-    } else {
-        ((sy * normalized[1][0]).atan2(normalized[1][1]), 0.)
-    };
+    let (x, y, z) = Mat3::from_cols(x, y, z).to_euler(EulerRot::XYZEx);
     let result = Transform {
-        translation: origin(matrix),
+        translation: affine.w_axis.truncate().to_array(),
         rotation: [x, y, z],
-        scale,
+        scale: scale.to_array(),
     };
     let rebuilt = result.matrix();
     let magnitude = matrix.iter().flatten().map(|v| v.abs()).fold(1., f32::max);
@@ -722,14 +716,17 @@ impl DragGesture {
             .matrix();
             let mut result = decompose_trs(multiply_matrices(
                 orientation,
-                rotation_matrix(self.axis.direction(), angle),
+                matrix_to_rows(Mat4::from_axis_angle(
+                    Vec3::from_array(self.axis.direction()),
+                    angle,
+                )),
             ))?;
             result.translation = self.initial.translation;
             result.scale = self.initial.scale;
             Ok(result)
         } else {
             let desired = linear_about_pivot(
-                rotation_matrix(self.direction, angle),
+                Mat4::from_axis_angle(Vec3::from_array(self.direction), angle),
                 self.pivot,
                 self.matrices.world,
             );
@@ -742,37 +739,24 @@ impl DragGesture {
             result.scale[self.axis.index()] *= factor;
             Ok(result)
         } else {
-            let mut linear = identity_matrix();
-            for (row, values) in linear.iter_mut().enumerate().take(3) {
-                for (column, value) in values.iter_mut().enumerate().take(3) {
-                    *value += (factor - 1.) * self.direction[row] * self.direction[column];
-                }
-            }
+            let mut scale = Vec3::ONE;
+            scale[self.axis.index()] = factor;
             world_to_local(
                 self.matrices.parent,
-                linear_about_pivot(linear, self.pivot, self.matrices.world),
+                linear_about_pivot(Mat4::from_scale(scale), self.pivot, self.matrices.world),
             )
         }
     }
 }
 
-fn linear_about_pivot(mut linear: Matrix, pivot: [f32; 3], original: Matrix) -> Matrix {
-    let displaced = transform_point(linear, pivot);
-    for row in 0..3 {
-        linear[row][3] = pivot[row] - displaced[row];
-    }
-    multiply_matrices(linear, original)
-}
-fn rotation_matrix(axis: [f32; 3], angle: f32) -> Matrix {
-    let [x, y, z] = axis;
-    let (s, c) = angle.sin_cos();
-    let t = 1. - c;
-    [
-        [t * x * x + c, t * x * y - s * z, t * x * z + s * y, 0.],
-        [t * x * y + s * z, t * y * y + c, t * y * z - s * x, 0.],
-        [t * x * z - s * y, t * y * z + s * x, t * z * z + c, 0.],
-        [0., 0., 0., 1.],
-    ]
+fn linear_about_pivot(linear: Mat4, pivot: [f32; 3], original: Matrix) -> Matrix {
+    let pivot = Vec3::from_array(pivot);
+    matrix_to_rows(
+        Mat4::from_translation(pivot)
+            * linear
+            * Mat4::from_translation(-pivot)
+            * matrix_from_rows(original),
+    )
 }
 fn axis_direction(matrix: Matrix, space: Space, axis: Axis) -> Result<[f32; 3], String> {
     if space == Space::World {

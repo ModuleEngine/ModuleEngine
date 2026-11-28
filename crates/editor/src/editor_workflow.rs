@@ -384,7 +384,7 @@ impl Editor {
         #[cfg(test)]
         {
             // Exercise real menu dispatch/worker completion without a native
-            // modal window. Native COM/Show acceptance is a separate boundary.
+            // modal window. The desktop picker has its own acceptance probe.
             self.workflow
                 .picker_requests
                 .push((purpose, initial.clone()));
@@ -3177,10 +3177,8 @@ pub(crate) mod workflow_tests {
     fn check_workflow_dialog_folder(project: &Path) {
         let folder = project.parent().unwrap();
         assert!(folder.is_dir());
-        #[cfg(windows)]
-        crate::native_dialogs::test_configure_initial_folder(folder).unwrap();
-        // This configures actual production COM dialog factories on Windows;
-        // no Show/user input or interactive native acceptance is claimed.
+        let hint = crate::native_dialogs::initial_directory(folder).expect("existing picker hint");
+        assert_eq!(hint.canonicalize().unwrap(), folder.canonicalize().unwrap());
     }
 
     fn stage_save_as_json_draft(fixture: &Fixture, editor: &mut Editor) -> GraphDocument {
