@@ -41,6 +41,10 @@ $binaryProofFile = Join-Path $artifactsRoot 'material-binaries.json'
 $binaryProof | ConvertTo-Json | Set-Content -Encoding utf8 -LiteralPath $binaryProofFile
 & $editor --seal-source-project $full
 if ($LASTEXITCODE -ne 0) { throw "Sealing the Full source delivery failed: $LASTEXITCODE" }
-& $editor --material-check (Join-Path $full 'game-project-v4.json') $fixtures $evidence
+$project = Join-Path $full 'r5-material-source.json'
+if (Test-Path -LiteralPath $project) { throw "Verification starter already exists: $project" }
+& $editor --new-game $project
+if ($LASTEXITCODE -ne 0) { throw "Creating the current SDK project failed: $LASTEXITCODE" }
+& $editor --material-check $project $fixtures $evidence
 if ($LASTEXITCODE -ne 0) { throw "Material verification exited with $LASTEXITCODE" }
 
