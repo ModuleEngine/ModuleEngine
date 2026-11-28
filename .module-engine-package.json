@@ -175,7 +175,7 @@
     "crates/host-services/src/audio.rs": "539a4ea255be5e8fbbaa71f0e570780e4eb008f5e574aae1a1cbac1d8a0c8f56",
     "crates/host-services/src/audio_codec.rs": "92eac71b123a280545aba5c69f4596a1aebfaa15c43e5794c540f6d9a12fcc81",
     "crates/host-services/src/audio_output.rs": "fb576d45f84c84269fa4295a2b73293938034e829787627a16fee79c3110edb1",
-    "crates/host-services/src/audio_tests.rs": "ff3ce0ad2eb7fa9eeed50437744a0489a3ddcb7de0ba7ade2da7bfd4eb3c3357",
+    "crates/host-services/src/audio_tests.rs": "3d4d562a6720bd9e2e525c8b2d51acc708f26f369a885078a89a0d0a76f6e665",
     "crates/host-services/src/lib.rs": "94cb350416d77e7b32e3dc4f2e348afe11621fca04690414727d950dac33f508",
     "crates/host-services/src/persistence.rs": "489856dcb2cf1b2031fb6d94ad8d7538e0dd6ca60d2876750ca80d19af3c01db",
     "crates/host-services/src/wav.rs": "5c3180d71317cce123e6a1bc62eab4c732de8a0e160157a2689a3e1225a3c7b8",

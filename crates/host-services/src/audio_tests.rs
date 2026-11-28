@@ -362,6 +362,7 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
     struct Onset {
         received: Instant,
         sample_estimate: Instant,
+        callback_frames: usize,
     }
 
     fn require_quiet(hits: &Receiver<Onset>, duration: Duration, label: &str) {
@@ -477,6 +478,7 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
                             let _ = hits.try_send(Onset {
                                 received: now,
                                 sample_estimate,
+                                callback_frames: input.len() / channels,
                             });
                         }
                         previous = audible;
@@ -522,10 +524,19 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
         let support = monitor.default_input_config().unwrap();
         (monitor, support)
     };
+    let mut config = support.config();
+    if native.id().name() == "PulseAudio"
+        && let cpal::SupportedBufferSize::Range { min, max } = *support.buffer_size()
+    {
+        // Request a 10 ms PulseAudio record fragment. The server's default can
+        // add a large delivery delay to this measurement of the output.
+        config.buffer_size = cpal::BufferSize::Fixed((config.sample_rate / 100).clamp(min, max));
+    }
     eprintln!(
-        "CPAL host {:?}, capture {}, config {support:?}",
+        "CPAL host {:?}, capture {}, config {config:?}, format {:?}",
         native.id(),
-        monitor.id().unwrap()
+        monitor.id().unwrap(),
+        support.sample_format()
     );
     let mut recording =
         std::env::var_os("MODULE_ENGINE_AUDIO_PROBE_RECORDING").map(|path| Recording {
@@ -545,27 +556,9 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
     let stream_errors = Arc::new(CaptureErrors::default());
     let (tx, rx) = sync_channel(128);
     let stream = match support.sample_format() {
-        SampleFormat::F32 => capture::<f32>(
-            &monitor,
-            support.config(),
-            tx,
-            samples,
-            stream_errors.clone(),
-        ),
-        SampleFormat::I16 => capture::<i16>(
-            &monitor,
-            support.config(),
-            tx,
-            samples,
-            stream_errors.clone(),
-        ),
-        SampleFormat::I32 => capture::<i32>(
-            &monitor,
-            support.config(),
-            tx,
-            samples,
-            stream_errors.clone(),
-        ),
+        SampleFormat::F32 => capture::<f32>(&monitor, config, tx, samples, stream_errors.clone()),
+        SampleFormat::I16 => capture::<i16>(&monitor, config, tx, samples, stream_errors.clone()),
+        SampleFormat::I32 => capture::<i32>(&monitor, config, tx, samples, stream_errors.clone()),
         format => panic!("Unsupported loopback format {format:?}"),
     };
     stream.play().unwrap();
@@ -628,10 +621,15 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
         // Callback arrival is an upper bound and uses the same clock as dispatch.
         // Keep the device's sample timestamp as a diagnostic for virtual drivers.
         let elapsed = (onset.received - dispatch).as_secs_f64() * 1000.;
-        let sample_estimate = onset.sample_estimate.duration_since(dispatch).as_secs_f64() * 1000.;
+        let sample_estimate = if onset.sample_estimate >= dispatch {
+            onset.sample_estimate.duration_since(dispatch).as_secs_f64()
+        } else {
+            -dispatch.duration_since(onset.sample_estimate).as_secs_f64()
+        } * 1000.;
         let latency = elapsed - source_lead_ms;
         eprintln!(
-            "Cue {name}, dispatch {index}, received onset {elapsed:.3} ms, sample onset estimate {sample_estimate:.3} ms, decoded source lead-in {source_lead_ms:.3} ms, output upper bound {latency:.3} ms"
+            "Cue {name}, dispatch {index}, received onset {elapsed:.3} ms, sample onset estimate {sample_estimate:.3} ms, decoded source lead-in {source_lead_ms:.3} ms, output upper bound {latency:.3} ms, callback frames {}",
+            onset.callback_frames
         );
         if index > 0 {
             latencies.push(latency);
