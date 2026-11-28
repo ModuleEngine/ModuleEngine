@@ -87,6 +87,7 @@
 - [CI ModuleEngine](ci.md)
 - [Лицензии и атрибуция](licensing.md)
 - [Маршруты проверок](verification.md)
+- [Локальная очередь проверок на Windows](local-queue.md)
 - [Диагностика редактора](editor-diagnostics.md)
 - [Независимое ревью изменений](review.md)
 - [Review: <задача>](review-template.md)

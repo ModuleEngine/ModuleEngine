@@ -1,0 +1,73 @@
+{
+  "roadmap": {
+    "group": "light",
+    "timeout_seconds": 60,
+    "steps": [["python", "-I", "-B", "-c", "import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); import roadmap_map; raise SystemExit(roadmap_map.main(['--check'], root=Path.cwd()))", "{tools}/../../site"]]
+  },
+  "format": {
+    "group": "gpu",
+    "timeout_seconds": 120,
+    "steps": [["cargo", "fmt", "--all", "--", "--check"]]
+  },
+  "queue-probe": {
+    "group": "gpu",
+    "timeout_seconds": 60,
+    "steps": [["pwsh", "-NoProfile", "-NonInteractive", "-File", "{tools}/probe.ps1"]]
+  },
+  "quick": {
+    "group": "gpu",
+    "timeout_seconds": 3600,
+    "snapshot_artifacts": ["outputs/verification"],
+    "steps": [["python", "-B", "scripts/verify.py", "--profile", "quick", "--output-root", "outputs/verification"]]
+  },
+  "contracts": {
+    "group": "gpu",
+    "timeout_seconds": 5400,
+    "snapshot_artifacts": ["outputs/verification"],
+    "steps": [["python", "-B", "scripts/verify.py", "--profile", "contracts", "--output-root", "outputs/verification"]]
+  },
+  "clippy": {
+    "group": "gpu",
+    "timeout_seconds": 5400,
+    "snapshot_artifacts": ["outputs/verification"],
+    "steps": [["python", "-B", "scripts/verify.py", "--profile", "clippy", "--output-root", "outputs/verification"]]
+  },
+  "native": {
+    "group": "gpu",
+    "timeout_seconds": 5400,
+    "snapshot_artifacts": ["outputs/verification"],
+    "steps": [["python", "-B", "scripts/verify.py", "--profile", "native", "--output-root", "outputs/verification"]]
+  },
+  "package": {
+    "group": "gpu",
+    "timeout_seconds": 5400,
+    "snapshot_artifacts": ["outputs/verification"],
+    "steps": [["python", "-B", "scripts/verify.py", "--profile", "package", "--output-root", "outputs/verification"]]
+  },
+  "render": {
+    "group": "gpu",
+    "timeout_seconds": 5400,
+    "render": "offscreen",
+    "snapshot_artifacts": ["outputs/verification"],
+    "steps": [["python", "-B", "scripts/verify.py", "--profile", "render", "--require-capabilities", "--output-root", "outputs/verification"]]
+  },
+  "window-graph": {
+    "group": "gpu",
+    "timeout_seconds": 5400,
+    "interactive": true,
+    "render": "window",
+    "artifacts": ["window.json"],
+    "steps": [
+      ["cargo", "build", "--offline", "--locked", "--release", "--target", "x86_64-pc-windows-msvc", "-p", "module-engine-player", "--example", "gpu_presentation_check", "--features", "ui,vulkan"],
+      ["window-probe", "{artifacts}/window.json", "--window"]
+    ]
+  },
+  "bench-once": {
+    "group": "gpu",
+    "timeout_seconds": 7200,
+    "interactive": true,
+    "render": "window",
+    "snapshot_artifacts": ["outputs/bench"],
+    "steps": [["python", "-B", "scripts/bench.py", "--once"]]
+  }
+}
