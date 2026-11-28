@@ -38,7 +38,10 @@ function buildFixture(fixture, phases) {
     cwd: fixture,
     stdio: 'inherit',
   });
-  return pathToFileURL(path.join(fixture, 'site/world/index.html')).href;
+  return {
+    graph: pathToFileURL(path.join(fixture, 'site/index.html')).href,
+    world: pathToFileURL(path.join(fixture, 'site/world/index.html')).href,
+  };
 }
 
 async function verifyMap(browser, url, phases, task) {
@@ -71,6 +74,22 @@ async function verifyMap(browser, url, phases, task) {
   assert.deepEqual(errors, [], `JavaScript errors without ${phases.join(', ')}`);
 }
 
+async function verifyCheckpointLabel(browser, url) {
+  const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
+  try {
+    await page.goto(url);
+    const gap = await page.locator('.node[data-k="g05"]').evaluate(async checkpoint => {
+      await document.fonts.ready;
+      const label = checkpoint.querySelector('.id').getBoundingClientRect();
+      const tag = checkpoint.querySelector('.tag').getBoundingClientRect();
+      return tag.left - label.right;
+    }, undefined, { timeout: 5000 });
+    assert.ok(gap > 0, `0.5 checkpoint label overlaps its status tag (gap: ${gap}px)`);
+  } finally {
+    await page.close();
+  }
+}
+
 async function main() {
   const group = fs.mkdtempSync(path.join(os.tmpdir(), 'moduleengine-roadmap-'));
   let browser;
@@ -81,8 +100,9 @@ async function main() {
       { phases: ['R0', 'R2', 'R5', 'R7', 'R9', 'R10'], task: 'R1.1' },
     ];
     for (const { phases, task } of cases) {
-      const url = buildFixture(path.join(group, phases[0]), phases);
-      await verifyMap(browser, url, phases, task);
+      const urls = buildFixture(path.join(group, phases[0]), phases);
+      await verifyMap(browser, urls.world, phases, task);
+      await verifyCheckpointLabel(browser, urls.graph);
     }
   } finally {
     try {
