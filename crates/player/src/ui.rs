@@ -735,8 +735,8 @@ pub fn update_render_diagnostic(
 }
 impl Player {
     fn update_logic(&mut self, ctx: &egui::Context) {
-        // eframe skips `ui` for a minimized native window. Suspend render work
-        // here; restoration requests the actual canvas again in `ui`.
+        // Suspend graph rendering while minimized. A restored window
+        // requests its actual canvas extent on the next draw.
         if ctx.input(|i| i.viewport().minimized == Some(true)) {
             self.request_viewport([0, 0]);
             self.dispatch(GameInput::default());
@@ -1121,19 +1121,6 @@ impl Player {
         }
     }
 }
-impl eframe::App for Player {
-    fn logic(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-        self.update_logic(ctx);
-        ctx.request_repaint();
-    }
-    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        self.draw_native(ui, frame.info().cpu_usage);
-    }
-    fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
-        self.shutdown();
-    }
-}
-
 impl module_engine_native_ui::NativeApp for Player {
     fn frame_prepared(&mut self, elapsed: std::time::Duration) {
         self.previous_ui_seconds = Some(elapsed.as_secs_f32());

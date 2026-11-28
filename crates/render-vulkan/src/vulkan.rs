@@ -635,7 +635,6 @@ pub struct VulkanRenderer {
     allocator: Option<Arc<DeviceAllocator>>,
     transfer: Option<TransferQueue>,
     compute: Option<ComputeQueue>,
-    legacy_graph: bool,
     staging: StagingRing,
     staging_alignment: u64,
     capabilities: DeviceCapabilities,
@@ -957,13 +956,11 @@ impl VulkanRenderer {
             let transfer = transfer_family
                 .map(|family| TransferQueue::new(&context, family))
                 .transpose()?;
-            let legacy_graph = std::env::var_os("MODULE_ENGINE_RENDER_GRAPH")
-                .is_some_and(|value| value == "legacy");
             let graphics_only = std::env::var_os("MODULE_ENGINE_GRAPH_COMPUTE")
                 .is_some_and(|value| value == "graphics");
             let compute = capabilities
                 .async_compute_queue
-                .filter(|_| !legacy_graph && !graphics_only)
+                .filter(|_| !graphics_only)
                 .map(|[family, index]| {
                     let queue = device.get_device_queue(family, index);
                     context.name(queue, || {
@@ -1029,7 +1026,6 @@ impl VulkanRenderer {
                 allocator,
                 transfer,
                 compute,
-                legacy_graph,
                 staging: StagingRing::default(),
                 staging_alignment: properties
                     .limits
@@ -2431,7 +2427,8 @@ impl VulkanRenderer {
             .find(|flight| flight.ticket == ticket)
             .map(|flight| flight.cancelled.clone())
     }
-    /// Only this exact request can complete; polling never submits or waits.
+    /// Poll this exact request without waiting. Async output may need a graphics-queue
+    /// visibility handoff before it can be published.
     pub fn poll_presented(&mut self, ticket: u64) -> Result<Option<Frame>, VulkanError> {
         if ticket == 0 || ticket > self.next_ticket {
             return Err(VulkanError::UnknownTicket(ticket));
@@ -2603,7 +2600,7 @@ impl VulkanRenderer {
             (first < plan.passes.len()).then_some(first)
         });
         let asynchronous_compute = compute_start.is_some();
-        let synchronization2 = self.capabilities.synchronization2 && !self.legacy_graph;
+        let synchronization2 = self.capabilities.synchronization2;
         let command = graphics;
         let descriptor_pool = self.slots[index].pools.descriptors;
         let active_passes = || {
@@ -2730,14 +2727,12 @@ impl VulkanRenderer {
         };
         let mut resource_key = frame_resource_key(&plan, width, height, &readback);
         resource_key.leased_output = direct.then(|| plan.output.clone());
-        let early_readback = !self.legacy_graph && !self.frame_profiling;
-        if !self.legacy_graph {
-            resource_key.lifetimes = graph_memory::lifetimes(&plan, &operations);
-            if !early_readback {
-                // The graph timestamps exclude the terminal diagnostic copy.
-                for plane in &readback {
-                    resource_key.lifetimes.get_mut(&plane.resource).unwrap().1 = plan.passes.len();
-                }
+        let early_readback = !self.frame_profiling;
+        resource_key.lifetimes = graph_memory::lifetimes(&plan, &operations);
+        if !early_readback {
+            // The graph timestamps exclude the terminal diagnostic copy.
+            for plane in &readback {
+                resource_key.lifetimes.get_mut(&plane.resource).unwrap().1 = plan.passes.len();
             }
         }
         let mut reused = self.slots[index]

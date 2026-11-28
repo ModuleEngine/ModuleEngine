@@ -155,8 +155,7 @@ graphics+compute. Профилирование тоже использует е�
 timestamp в одной очереди.
 
 `MODULE_ENGINE_GRAPH_COMPUTE=graphics` выбирает контроль с одной очередью.
-`MODULE_ENGINE_RENDER_GRAPH=legacy` выбирает прежний режим исполнения для
-сопоставления R2. См. [снимок S4 и замер памяти](bench.md#r25-checks) и
+См. [снимок S4 и замер памяти](bench.md#r25-checks) и
 [правила синхронизации Vulkan](https://docs.vulkan.org/spec/latest/chapters/synchronization.html).
 
 ## Показ кадров на GPU

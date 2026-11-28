@@ -157,8 +157,7 @@ The compatible route uses the combined graphics+compute queue. Profiling
 uses that queue so timestamps come from one domain.
 
 `MODULE_ENGINE_GRAPH_COMPUTE=graphics` selects the single-queue control.
-`MODULE_ENGINE_RENDER_GRAPH=legacy` selects the prior execution mode for
-the R2 parity comparison. See the [S4 capture and memory check](bench.md#r25-checks)
+See the [S4 capture and memory check](bench.md#r25-checks)
 and [Vulkan synchronization rules](https://docs.vulkan.org/spec/latest/chapters/synchronization.html).
 
 ## Native GPU presentation
