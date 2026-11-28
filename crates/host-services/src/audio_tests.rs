@@ -347,17 +347,48 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
         traits::{DeviceTrait, HostTrait, StreamTrait},
     };
     use std::{
-        sync::mpsc::{SyncSender, sync_channel},
+        io::{BufWriter, Write},
+        sync::{
+            Mutex,
+            mpsc::{SyncSender, sync_channel},
+        },
         thread,
         time::{Duration, Instant},
     };
 
     const ONSET: f32 = 0.035;
 
+    struct Recording {
+        path: std::path::PathBuf,
+        samples: Arc<Mutex<Vec<f32>>>,
+    }
+
+    impl Drop for Recording {
+        fn drop(&mut self) {
+            let save = || -> std::io::Result<()> {
+                let samples = self.samples.lock().unwrap_or_else(|err| err.into_inner());
+                let mut file = BufWriter::new(std::fs::File::create(&self.path)?);
+                for sample in samples.iter() {
+                    file.write_all(&sample.to_le_bytes())?;
+                }
+                file.flush()?;
+                eprintln!("Saved {} interleaved f32le capture samples", samples.len());
+                Ok(())
+            };
+            if let Err(error) = save() {
+                eprintln!(
+                    "Could not save loopback capture {}: {error}",
+                    self.path.display()
+                );
+            }
+        }
+    }
+
     fn capture<T>(
         device: &cpal::Device,
         config: cpal::StreamConfig,
         hits: SyncSender<Instant>,
+        recording: Option<Arc<Mutex<Vec<f32>>>>,
     ) -> cpal::Stream
     where
         T: SizedSample + Sample,
@@ -373,6 +404,17 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
                     let now = Instant::now();
                     let stamp = info.timestamp();
                     let delay = stamp.callback.duration_since(stamp.capture);
+                    if let Some(recording) = &recording {
+                        let mut samples = recording.lock().unwrap_or_else(|err| err.into_inner());
+                        let remaining = samples.capacity() - samples.len();
+                        let available = remaining.min(input.len());
+                        let complete_frames = available - available % channels;
+                        samples.extend(
+                            input[..complete_frames]
+                                .iter()
+                                .map(|sample| sample.to_sample::<f32>()),
+                        );
+                    }
                     for (offset, frame) in input.chunks_exact(channels).enumerate() {
                         let audible = frame
                             .iter()
@@ -395,6 +437,11 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
     let output = native
         .default_output_device()
         .expect("default output device");
+    eprintln!(
+        "CPAL output {}, {:?}",
+        output.id().unwrap(),
+        output.description().unwrap()
+    );
     let (monitor, support) = if cfg!(windows) {
         let support = output.default_output_config().unwrap();
         (output, support)
@@ -413,11 +460,20 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
         native.id(),
         monitor.id().unwrap()
     );
+    let recording = std::env::var_os("MODULE_ENGINE_AUDIO_PROBE_RECORDING").map(|path| Recording {
+        path: path.into(),
+        samples: Arc::new(Mutex::new(Vec::with_capacity(
+            (support.sample_rate() as usize * usize::from(support.channels()) * 12).min(4_000_000),
+        ))),
+    });
+    let samples = recording
+        .as_ref()
+        .map(|recording| recording.samples.clone());
     let (tx, rx) = sync_channel(128);
     let stream = match support.sample_format() {
-        SampleFormat::F32 => capture::<f32>(&monitor, support.config(), tx),
-        SampleFormat::I16 => capture::<i16>(&monitor, support.config(), tx),
-        SampleFormat::I32 => capture::<i32>(&monitor, support.config(), tx),
+        SampleFormat::F32 => capture::<f32>(&monitor, support.config(), tx, samples),
+        SampleFormat::I16 => capture::<i16>(&monitor, support.config(), tx, samples),
+        SampleFormat::I32 => capture::<i32>(&monitor, support.config(), tx, samples),
         format => panic!("Unsupported loopback format {format:?}"),
     };
     stream.play().unwrap();
