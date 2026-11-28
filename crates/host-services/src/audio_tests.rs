@@ -480,9 +480,14 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
         let id = std::env::var("MODULE_ENGINE_AUDIO_LOOPBACK_DEVICE").expect(
             "Set MODULE_ENGINE_AUDIO_LOOPBACK_DEVICE to the confirmed output monitor CPAL ID",
         );
-        let monitor = native
-            .device_by_id(&id.parse().unwrap())
-            .expect("loopback monitor");
+        let id: cpal::DeviceId = id.parse().expect("Valid CPAL monitor device ID");
+        assert_eq!(
+            native.id(),
+            id.host(),
+            "Default CPAL host differs from the requested monitor {id}. Requested host error: {:?}",
+            cpal::host_from_id(id.host()).err()
+        );
+        let monitor = native.device_by_id(&id).expect("loopback monitor");
         let support = monitor.default_input_config().unwrap();
         (monitor, support)
     };

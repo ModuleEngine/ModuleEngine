@@ -15,6 +15,11 @@ export LD_LIBRARY_PATH="$libs:$libs/pulseaudio${LD_LIBRARY_PATH:+:$LD_LIBRARY_PA
 export PULSE_SERVER=unix:/mnt/wslg/runtime-dir/pulse/native
 export MODULE_ENGINE_AUDIO_LOOPBACK_DEVICE=pulseaudio:RDPSink.monitor
 export MODULE_ENGINE_AUDIO_PROBE_RECORDING="$artifacts/capture.f32le"
+mkdir -- "$artifacts/fixture-tmp"
+# The WSLg Unix socket uses the desktop session identity. PulseAudio still
+# requires the AUTH message to contain a 256-byte field when there is no cookie.
+export PULSE_COOKIE="$artifacts/fixture-tmp/pulse-auth-field"
+head -c 256 /dev/zero > "$PULSE_COOKIE"
 
 printf 'WSLg virtual endpoint\n'
 uname -sr
@@ -49,7 +54,6 @@ probe="$artifacts/audio-loopback-probe"
 cp -- "$binary" "$probe"
 (cd "$artifacts" && sha256sum audio-loopback-probe > probe.sha256)
 cat "$artifacts/probe.sha256"
-mkdir -- "$artifacts/fixture-tmp"
 export TMPDIR="$artifacts/fixture-tmp"
 status=0
 "${as_desktop[@]}" "$probe" "$test_name" --exact --ignored --nocapture --test-threads=1 || status=$?
