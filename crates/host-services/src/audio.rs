@@ -305,10 +305,10 @@ impl<B: Backend> AudioService<B> {
             } => {
                 let gain = volume(gain)?;
                 validate_fade(fade_ms)?;
-                self.gains.set(bus, gain);
                 if let Some(output) = &mut self.output {
                     output.set_gain(bus, gain, fade(fade_ms))?;
                 }
+                self.gains.set(bus, gain);
             }
             AudioControl::Stop { bus, fade_ms } => {
                 validate_fade(fade_ms)?;
@@ -364,9 +364,28 @@ impl<B: Backend> AudioService<B> {
             .output
             .as_mut()
             .expect("Started owner output")
-            .play(cue.sound, cue.bus, emitter)?;
+            .queue(cue.sound, cue.bus, emitter)?;
         if stolen {
             self.stolen = self.stolen.saturating_add(1);
+        }
+        Ok(())
+    }
+
+    fn dispatch(&mut self, events: &[GameEvent]) -> Result<(), String>
+    where
+        B::Error: Debug,
+    {
+        for event in events {
+            if self.control_event.as_ref() == Some(&event.name) {
+                let command = serde_json::from_value(event.payload.clone())
+                    .map_err(|error| format!("Invalid audio control: {error}"))?;
+                self.control(command)?;
+            } else if event.name == self.event
+                && let Some(name) = event.payload.get(&self.cue_field).and_then(Value::as_str)
+                && let Some(cue) = self.cues.get(name).cloned()
+            {
+                self.play(cue, &event.payload)?;
+            }
         }
         Ok(())
     }
@@ -389,19 +408,12 @@ where
                 return Err(error);
             }
         }
-        for event in events {
-            if self.control_event.as_ref() == Some(&event.name) {
-                let command = serde_json::from_value(event.payload.clone())
-                    .map_err(|error| format!("Invalid audio control: {error}"))?;
-                self.control(command)?;
-            } else if event.name == self.event
-                && let Some(name) = event.payload.get(&self.cue_field).and_then(Value::as_str)
-                && let Some(cue) = self.cues.get(name).cloned()
-            {
-                self.play(cue, &event.payload)?;
-            }
-        }
-        Ok(())
+        let dispatched = self.dispatch(events);
+        let played = self
+            .output
+            .as_mut()
+            .map_or(Ok(()), AudioOutput::finish_batch);
+        dispatched.and(played)
     }
 
     fn reset(&mut self) -> Result<(), String> {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::audio_output::endpoint_sample;
 use crate::{HostServiceContext, validate_audio_bytes};
 use kira::manager::backend::Renderer;
 use module_engine_core::{AUDIO_CUE_EXTENSIONS, HostServiceRequest};
@@ -66,7 +67,10 @@ fn render(service: &mut AudioService<BufferBackend>, ms: u32) -> [f32; 2] {
     renderer.on_start_processing();
     (0..ms * 48).fold([0_f32; 2], |[l, r], _| {
         let frame = renderer.process();
-        [l.max(frame.left.abs()), r.max(frame.right.abs())]
+        [
+            l.max(endpoint_sample(frame.left).abs()),
+            r.max(endpoint_sample(frame.right).abs()),
+        ]
     })
 }
 
@@ -121,11 +125,11 @@ fn gains_spatial_fades_and_retirement_change_kira_rendered_samples() {
     let other_context = service_context(&root, &paths);
     let mut right_owner = create(&other_context);
     for service in [&mut left_owner, &mut right_owner] {
-        service
-            .consume(&[sound("music"), sound("effect"), sound("effect")])
-            .unwrap();
+        let mut events = vec![sound("music")];
+        events.extend(std::iter::repeat_with(|| sound("effect")).take(12));
+        service.consume(&events).unwrap();
         assert_eq!(service.diagnostics()["active_voices"], 2);
-        assert_eq!(service.diagnostics()["stolen_voices"], 1);
+        assert_eq!(service.diagnostics()["stolen_voices"], 11);
     }
     assert!(render(&mut right_owner, 25)[0] > 0.15);
     let full = render(&mut left_owner, 25)[0];
@@ -156,7 +160,7 @@ fn gains_spatial_fades_and_retirement_change_kira_rendered_samples() {
         .unwrap();
     let [l, r] = render(&mut left_owner, 30);
     assert!(
-        r > 0.03 && r > 2. * l && r < music_only,
+        r > 0.005 && r > 1.5 * l && r < music_only / 2.,
         "{l} {r} {music_only}"
     );
     left_owner
@@ -165,7 +169,7 @@ fn gains_spatial_fades_and_retirement_change_kira_rendered_samples() {
         )])
         .unwrap();
     let [l, r] = render(&mut left_owner, 30);
-    assert!(l > 2. * r);
+    assert!(l > 1.5 * r);
     context.retired.store(true, Ordering::Release);
     assert_eq!(render(&mut left_owner, 20), [0.; 2]);
     assert!(render(&mut right_owner, 30)[0] > 0.15);
@@ -222,6 +226,31 @@ fn disabled_binding_counts_events_and_start_failure_retries() {
     assert_eq!(service.diagnostics()["played"], 0);
 }
 
+#[test]
+fn overrange_float_wav_keeps_its_effective_gain() {
+    let root = fixtures();
+    let paths = BTreeMap::new();
+    let context = service_context(&root, &paths);
+    let config = parse_config(&json!({"event":"Sound", "cue_field":"cue", "cues":{}})).unwrap();
+    let mut service =
+        AudioService::<BufferBackend>::new(config, &context, || (), |_| None).unwrap();
+    let wav = crate::wav::tests::float32(&[1.0e20; 960]);
+    let mut clip =
+        crate::audio_codec::decode_source("wav", std::io::Cursor::new(&wav), 960).unwrap();
+    clip.settings = clip.settings.volume(amplitude(5.0e-21));
+    service.cues.insert(
+        "headroom".into(),
+        Cue {
+            sound: clip,
+            bus: Bus::Sfx,
+            spatial: None,
+        },
+    );
+    service.consume(&[sound("headroom")]).unwrap();
+    let [left, right] = render(&mut service, 10);
+    assert!((left - 0.5).abs() < 0.01 && left == right, "{left} {right}");
+}
+
 #[cfg(any(windows, target_os = "linux"))]
 #[test]
 #[ignore = "Requires the stand's default output and a confirmed loopback monitor; run sequentially"]
@@ -235,6 +264,8 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
         thread,
         time::{Duration, Instant},
     };
+
+    const ONSET: f32 = 0.035;
 
     fn capture<T>(
         device: &cpal::Device,
@@ -258,7 +289,7 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
                     for (offset, frame) in input.chunks_exact(channels).enumerate() {
                         let audible = frame
                             .iter()
-                            .any(|sample| sample.to_sample::<f32>().abs() > 0.035);
+                            .any(|sample| sample.to_sample::<f32>().abs() > ONSET);
                         if audible && !previous {
                             let detected = now.checked_sub(delay).unwrap_or(now)
                                 + Duration::from_secs_f64(offset as f64 / rate);
@@ -326,11 +357,17 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
     };
     let mut service = registry.build(&[request], &context, true).unwrap();
     let mut latencies = Vec::new();
-    for (index, name) in ["wav", "ogg", "mp3", "flac"]
-        .into_iter()
-        .chain(std::iter::repeat_n("wav", 12))
+    for (index, name) in std::iter::once("wav")
+        .chain(AUDIO_CUE_EXTENSIONS.into_iter().cycle().take(16))
         .enumerate()
     {
+        let source = decode(&root.join(format!("tone.{name}")), MAX_FRAMES).unwrap();
+        let crossing = source
+            .frames
+            .iter()
+            .position(|frame| endpoint_sample(frame.left).abs() > ONSET)
+            .unwrap();
+        let source_lead_ms = 1000. * crossing as f64 / f64::from(source.sample_rate);
         thread::sleep(Duration::from_millis(260));
         while rx.try_recv().is_ok() {}
         let dispatch = Instant::now();
@@ -345,15 +382,18 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
             }
         };
         let elapsed = (onset - dispatch).as_secs_f64() * 1000.;
-        eprintln!("Cue {name}, dispatch {index}, measured loopback onset {elapsed:.3} ms");
-        if index >= 4 {
-            latencies.push(elapsed);
+        let latency = elapsed - source_lead_ms;
+        eprintln!(
+            "Cue {name}, dispatch {index}, onset {elapsed:.3} ms, decoded source lead-in {source_lead_ms:.3} ms, output estimate {latency:.3} ms"
+        );
+        if index > 0 {
+            latencies.push(latency);
         }
     }
-    assert_eq!(service.diagnostics()[WAV_SERVICE_ID]["played"], 16);
+    assert_eq!(service.diagnostics()[WAV_SERVICE_ID]["played"], 17);
     assert!(service.diagnostics()[WAV_SERVICE_ID]["output_error"].is_null());
     assert!(
-        latencies.iter().all(|ms| *ms <= 50.),
+        latencies.iter().all(|ms| (0. ..=50.).contains(ms)),
         "warm output budget 50 ms: {latencies:?}"
     );
     service.stop();

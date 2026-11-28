@@ -257,7 +257,7 @@ explicit render call returns an error before decoding content.
 Active contributions can request generic native services. ARPG requests the
 optional `audio.wav` service only when its audio system is scheduled and has cues.
 Puzzle requests none. `module-engine-host-services` has no audio feature by default;
-the WAV implementation is compiled only when selected. An omitted/disabled build
+the Kira playback implementation is compiled only when selected. An omitted/disabled build
 creates zero service instances and performs no audio file reads or endpoint calls.
 Muting an already constructed service preserves logical event diagnostics while
 suppressing playback. Replacing its configuration starts fresh diagnostics.
@@ -269,7 +269,7 @@ and queued-edge cancellation follow the committed operation. Later successful
 frames do not silently hide the service failure.
 
 The actor has one generic retirement atomic. A UI handle can signal it without
-waiting for a slow Custom call. WAV ownership prevents a retiring actor from
+waiting for a slow Custom call. Audio stream ownership prevents a retiring actor from
 playing over or stopping its successor's voice. See the service crate README.
 
 ## UI boundary and shutdown

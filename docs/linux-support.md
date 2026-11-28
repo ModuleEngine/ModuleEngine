@@ -64,7 +64,7 @@ editor="${CARGO_TARGET_DIR:-$PWD/.work/linux-target/$host}/$host/release/module-
 "$editor" --editor-ui-check game-project-v4.json outputs/linux-verification/workflow
 ```
 
-These commands require the corresponding runtime/SDK/DXC. Native Linux acceptance was performed for snapshots specified in the [reports](current-status.md#choosing-evidence); the commands alone do not confirm the current HEAD. Acceptance can create temporary Full/Team/Player packages; run sequentially. An active request for unsupported native audio must first be explicitly removed in a separate verification project; the production project is not changed automatically.
+These commands require the corresponding runtime/SDK/DXC. Native Linux acceptance was performed for snapshots specified in the [reports](current-status.md#choosing-evidence). Acceptance can create temporary Full/Team/Player packages. Run sequentially. Use a working audio endpoint when the selected scenario verifies sound.
 
 <a id="wayland-x11-и-диагностика"></a>
 
@@ -141,7 +141,5 @@ Reusing ready scheduled Rust Custom after Stop is implemented in the [compiled-p
 ## Optional services
 
 The optional `audio.wav` service uses Kira and CPAL on Linux. WAV, OGG/Vorbis, MP3 and FLAC cues retain the same game-event bindings. Export retains requested audio and its asset references. Playback opens the default output on the first enabled cue and reports device failures in `output_error`. A disabled or omitted service still permits a headless session. Use the [loopback check](../crates/host-services/README.md#concurrent-wav-music-and-effects) on a confirmed capture monitor for output and latency evidence.
-
-For Linux GUI/export verification, use a project that explicitly does not request WAV, for example Puzzle or your own profile without audio. Current ARPG settings with sound cues require an explicit change to a separate project copy. A complete Linux audio backend is the next separate stage.
 
 Native File/Folder dialogs are currently implemented only on Windows. On Linux, file/folder selection commands report this limitation. Opening a graph through a CLI path, saving an already selected file and CLI export do not depend on these dialogs; interactive Import/Open/Save As require the next stage. A window-launch check does not prove parity of all menus with Windows.

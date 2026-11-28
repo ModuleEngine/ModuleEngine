@@ -247,6 +247,13 @@ pub(crate) mod tests {
     pub(crate) fn pcm8(samples: &[u8], channels: u16, rate: u32) -> Vec<u8> {
         wave(&format(1, 8, channels, rate), samples)
     }
+    pub(crate) fn float32(samples: &[f32]) -> Vec<u8> {
+        let data: Vec<_> = samples
+            .iter()
+            .flat_map(|sample| sample.to_le_bytes())
+            .collect();
+        wave(&format(3, 32, 1, 48_000), &data)
+    }
     fn assert_mono(bytes: &[u8], expected: &[f32]) {
         let decoded = DecodedWav::decode(bytes).unwrap();
         let stereo = expected

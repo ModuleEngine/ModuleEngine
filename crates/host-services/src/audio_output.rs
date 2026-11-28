@@ -1,4 +1,5 @@
 //! Per-host Kira mixer and an owned CPAL stream.
+use crate::audio_codec::PCM_HEADROOM;
 use cpal::{
     FromSample, Sample, SampleFormat, SizedSample, Stream, SupportedBufferSize,
     traits::{DeviceTrait, HostTrait, StreamTrait},
@@ -115,11 +116,11 @@ impl NativeBackend {
                     match samples {
                         [mono] => {
                             *mono =
-                                T::from_sample(((frame.left + frame.right) * 0.5).clamp(-1., 1.))
+                                T::from_sample(endpoint_sample((frame.left + frame.right) * 0.5))
                         }
                         [left, right, extra @ ..] => {
-                            *left = T::from_sample(frame.left.clamp(-1., 1.));
-                            *right = T::from_sample(frame.right.clamp(-1., 1.));
+                            *left = T::from_sample(endpoint_sample(frame.left));
+                            *right = T::from_sample(endpoint_sample(frame.right));
                             extra.fill(T::EQUILIBRIUM);
                         }
                         [] => unreachable!(),
@@ -144,6 +145,10 @@ pub(crate) enum Bus {
     #[default]
     Sfx,
     Music,
+}
+
+pub(crate) fn endpoint_sample(sample: f32) -> f32 {
+    (f64::from(sample) * f64::from(PCM_HEADROOM)).clamp(-1., 1.) as f32
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -233,11 +238,31 @@ struct Voice {
     handle: StaticSoundHandle,
     // The emitter must outlive the sound and any stop fade.
     _emitter: Option<EmitterHandle>,
-    stopping: bool,
+    fade_out: Option<Tween>,
+}
+
+impl Voice {
+    fn stop(&mut self, tween: Tween) -> Result<(), String> {
+        if self
+            .fade_out
+            .is_none_or(|old| !old.duration.is_zero() && tween.duration.is_zero())
+        {
+            self.handle.stop(tween).map_err(|error| error.to_string())?;
+            self.fade_out = Some(tween);
+        }
+        Ok(())
+    }
+}
+
+struct PendingVoice {
+    data: StaticSoundData,
+    bus: Bus,
+    emitter: Option<([f32; 3], SpatialDistances)>,
 }
 
 pub(crate) struct AudioOutput<B: Backend> {
     voices: Vec<Voice>,
+    pending: Vec<PendingVoice>,
     music: MixerBus,
     sfx: MixerBus,
     pub manager: AudioManager<B>,
@@ -295,18 +320,83 @@ impl<B: Backend> AudioOutput<B> {
             music,
             sfx,
             voices: Vec::new(),
+            pending: Vec::with_capacity(max_voices),
             max_voices,
             rendered_blocks,
         })
     }
 
-    pub fn play(
+    pub fn queue(
         &mut self,
-        mut data: StaticSoundData,
+        data: StaticSoundData,
         bus: Bus,
         emitter: Option<([f32; 3], SpatialDistances)>,
     ) -> Result<bool, String> {
-        self.reap();
+        if bus == Bus::Music {
+            self.stop(Some(Bus::Music), fade(0))?;
+        }
+        let active = self
+            .voices
+            .iter()
+            .filter(|voice| voice.fade_out.is_none())
+            .count();
+        let stolen = active + self.pending.len() >= self.max_voices;
+        if stolen {
+            if let Some(oldest) = self
+                .voices
+                .iter_mut()
+                .find(|voice| voice.fade_out.is_none() && voice.bus == Bus::Sfx)
+            {
+                oldest.stop(fade(0))?;
+            } else {
+                let oldest = self
+                    .pending
+                    .iter()
+                    .position(|voice| voice.bus == Bus::Sfx)
+                    .expect("A full voice set has an effect voice");
+                self.pending.remove(oldest);
+            }
+        }
+        self.pending.push(PendingVoice { data, bus, emitter });
+        Ok(stolen)
+    }
+
+    pub fn finish_batch(&mut self) -> Result<(), String> {
+        // Kira releases reservations at callback boundaries. Keep selected
+        // voices pending until slots are free and shorten older tails under load.
+        let available = self
+            .manager
+            .sound_capacity()
+            .saturating_sub(self.manager.num_sounds());
+        for voice in self
+            .voices
+            .iter_mut()
+            .filter(|voice| {
+                voice
+                    .fade_out
+                    .is_some_and(|tween| !tween.duration.is_zero())
+            })
+            .take(self.pending.len().saturating_sub(available))
+        {
+            voice.stop(fade(0))?;
+        }
+        let mut pending = std::mem::take(&mut self.pending);
+        let count = pending.len().min(available);
+        let result = pending
+            .drain(..count)
+            .try_for_each(|voice| self.play(voice));
+        self.pending = pending;
+        result
+    }
+
+    fn play(
+        &mut self,
+        PendingVoice {
+            mut data,
+            bus,
+            emitter,
+        }: PendingVoice,
+    ) -> Result<(), String> {
         let destination = match bus {
             Bus::Music => &mut self.music,
             Bus::Sfx => &mut self.sfx,
@@ -327,42 +417,24 @@ impl<B: Backend> AudioOutput<B> {
             None
         };
         let handle = self.manager.play(data).map_err(|error| error.to_string())?;
-        if bus == Bus::Music {
-            self.stop(Some(Bus::Music), fade(0))?;
-        }
-        let stolen = self.voices.iter().filter(|voice| !voice.stopping).count() >= self.max_voices;
-        if stolen {
-            let oldest = self
-                .voices
-                .iter_mut()
-                .find(|voice| !voice.stopping && voice.bus == Bus::Sfx)
-                .expect("A full voice set has an effect voice");
-            oldest
-                .handle
-                .stop(fade(0))
-                .map_err(|error| error.to_string())?;
-            oldest.stopping = true;
-        }
         self.voices.push(Voice {
             bus,
             handle,
             _emitter: emitter,
-            stopping: false,
+            fade_out: None,
         });
-        Ok(stolen)
+        Ok(())
     }
 
     pub fn stop(&mut self, bus: Option<Bus>, tween: Tween) -> Result<(), String> {
+        self.pending
+            .retain(|voice| bus.is_some_and(|bus| voice.bus != bus));
         for voice in self
             .voices
             .iter_mut()
-            .filter(|voice| bus.is_none_or(|bus| voice.bus == bus) && !voice.stopping)
+            .filter(|voice| bus.is_none_or(|bus| voice.bus == bus))
         {
-            voice
-                .handle
-                .stop(tween)
-                .map_err(|error| error.to_string())?;
-            voice.stopping = true;
+            voice.stop(tween)?;
         }
         Ok(())
     }
@@ -397,8 +469,11 @@ impl<B: Backend> AudioOutput<B> {
     pub fn active_voices(&self) -> usize {
         self.voices
             .iter()
-            .filter(|voice| !voice.stopping && voice.handle.state() != PlaybackState::Stopped)
+            .filter(|voice| {
+                voice.fade_out.is_none() && voice.handle.state() != PlaybackState::Stopped
+            })
             .count()
+            + self.pending.len()
     }
 
     pub fn rendered_blocks(&self) -> u64 {

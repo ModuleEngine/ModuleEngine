@@ -62,7 +62,7 @@ The service ID remains `audio.wav`. Requests still bind a named game event and t
 
 A legacy string plays a one-shot at full cue gain on `sfx`. A rich cue also defaults to that bus, volume 1, no looping and no fade. WAV, OGG/Vorbis, MP3 and FLAC accept mono or stereo at 8,000–192,000 Hz. WAV retains RIFF validation and its PCM8/16/24/32, finite float32 and extensible PCM/float channel placement rules. Clip inputs are bounded to 128 MiB each and the decoded cues to 32 Mi stereo frames total. Each owner can bind up to 256 cues.
 
-Each owner has its own Kira mixer and CPAL output on Windows and Linux. Effects overlap. Music replaces the owner's previous music voice. The default limit of 32 active voices can be configured from 2 to 128. At the limit a new voice replaces the oldest effect. Per-cue, master and bus gains multiply and each is within 0..=1. The endpoint receives clamped samples.
+Each owner has its own Kira mixer and CPAL output on Windows and Linux. Effects overlap. Music replaces the owner's previous music voice. The default limit of 32 active voices can be configured from 2 to 128. At the limit a new voice replaces the oldest effect. Kira can shorten old fade tails when the output is waiting for voice slots. Per-cue, master and bus gains multiply and each is within 0..=1. The endpoint receives clamped samples.
 
 The configured control event accepts the following payloads.
 
@@ -74,7 +74,7 @@ With a spatial cue, its usual game event also carries `"position":[x,y,z]` in wo
 
 The device opens on the first enabled known cue. Muting still counts matching `played` events. Muting, reset and Stop release the owner's stream and voices. Reset clears counters and listener pose while preserving bus volumes. The current `output_error` reports native startup and streaming errors. A later cue retries failed output. The retirement flag silences the outgoing Kira mix while ownership is released.
 
-`rendered_blocks` counts blocks processed by Kira. The `r63-audio-contract` check runs the same mixer with in-memory output and checks formats, gains, fading, spatial audio, retirement and error handling. The explicit `audio-loopback` check opens the default Windows WASAPI output for loopback, or on Linux uses the confirmed capture device identified by `MODULE_ENGINE_AUDIO_LOOPBACK_DEVICE`. It reports the onset times of the four bound formats and checks 12 warm dispatch-to-loopback times against 50 ms. It requires a quiet output and runs separately from other stand work. Loopback measures the operating system path before the physical speaker.
+`rendered_blocks` counts blocks processed by Kira. The `r63-audio-contract` check runs the same mixer with in-memory output and checks formats, gains, fading, spatial audio, retirement and error handling. The explicit `audio-loopback` check opens the default Windows WASAPI output for loopback, or on Linux uses the confirmed capture device identified by `MODULE_ENGINE_AUDIO_LOOPBACK_DEVICE`. It reports first-cue onset separately, then measures four warm plays per format. It records raw onset and the decoded clip's lead-in and checks their difference against 50 ms. It requires a quiet output and runs separately from other stand work. Loopback measures the operating system path before the physical speaker.
 
 ```sh
 cargo test --locked -p module-engine-host-services --features audio --lib audio::tests::native_kira_loopback_receives_bound_cues_within_budget -- --exact --ignored --nocapture --test-threads=1

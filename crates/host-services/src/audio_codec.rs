@@ -8,6 +8,9 @@ use std::{
 
 pub(crate) const MAX_FRAMES: usize = 32 * 1024 * 1024;
 const MAX_FILE_BYTES: u64 = 128 * 1024 * 1024;
+// Power-of-two scaling leaves room for Kira's resampling and bounded voice
+// sum even for finite float WAV data near f32::MAX.
+pub(crate) const PCM_HEADROOM: f32 = 4096.;
 
 pub(crate) fn decode(path: &Path, limit: usize) -> Result<StaticSoundData, String> {
     let file = File::open(path).map_err(|error| error.to_string())?;
@@ -38,12 +41,12 @@ fn check_file_size(bytes: u64) -> Result<(), String> {
     Ok(())
 }
 
-fn decode_source(
+pub(crate) fn decode_source(
     extension: &str,
     source: impl Read + Seek,
     limit: usize,
 ) -> Result<StaticSoundData, String> {
-    let (sample_rate, frames) = match extension.to_ascii_lowercase().as_str() {
+    let (sample_rate, mut frames) = match extension.to_ascii_lowercase().as_str() {
         "ogg" => decode_vorbis(source, limit)?,
         "flac" => decode_flac(source, limit)?,
         "mp3" => decode_mp3(source, limit)?,
@@ -51,19 +54,22 @@ fn decode_source(
             // Legacy cue paths did not require a .wav extension.
             let wave = crate::wav::DecodedWav::read(source)?;
             let mut frames = Vec::new();
-            // Keep overrange float WAV finite through Kira's resampling and mixing.
             append_frames(
                 &mut frames,
                 wave.samples.chunks_exact(2),
                 2,
                 limit,
-                |sample| sample.clamp(-1.0e10, 1.0e10),
+                |sample| sample,
             )?;
             (wave.sample_rate, frames)
         }
     };
     if frames.is_empty() || !(8000..=192_000).contains(&sample_rate) {
         return Err("Audio clips need frames at an 8000..=192000 Hz sample rate".into());
+    }
+    for frame in &mut frames {
+        frame.left /= PCM_HEADROOM;
+        frame.right /= PCM_HEADROOM;
     }
     Ok(StaticSoundData {
         sample_rate,
