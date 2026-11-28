@@ -6,7 +6,7 @@ use egui::{TextureId, TexturesDelta, epaint::ClippedPrimitive};
 use egui_ash_renderer::{
     DynamicRendering, Options, RenderMode, Renderer, allocator::DefaultAllocator,
 };
-use module_engine_vulkan::EditorDeviceHandles;
+use module_engine_vulkan::{EditorDeviceHandles, WindowFrame};
 use std::path::Path;
 
 pub(super) struct Painter {
@@ -101,14 +101,8 @@ impl Painter {
             Backend::Library(renderer) => {
                 let set = self.descriptors.image_set(view)?;
                 let id = renderer.add_graph_texture(set);
-                self.bindings.insert(
-                    id,
-                    crate::sampled::Binding {
-                        token,
-                        set,
-                        _lease: lease,
-                    },
-                );
+                self.bindings
+                    .insert(id, crate::sampled::Binding { token, set, lease });
                 Ok(id)
             }
             #[cfg(feature = "spike")]
@@ -134,6 +128,17 @@ impl Painter {
             self.bindings.remove(&id);
         }
         Ok(())
+    }
+
+    pub fn note_ui_submission(&self, primitives: &[ClippedPrimitive]) {
+        for primitive in primitives {
+            if let egui::epaint::Primitive::Mesh(mesh) = &primitive.primitive
+                && let Some(binding) = self.bindings.get(&mesh.texture_id)
+                && let Some(frame) = binding.lease.as_any().downcast_ref::<WindowFrame>()
+            {
+                frame.note_ui_submission();
+            }
+        }
     }
 
     pub fn update_textures(

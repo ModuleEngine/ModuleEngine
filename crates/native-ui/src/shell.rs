@@ -259,7 +259,7 @@ impl<A: NativeApp, F: FnOnce(&Context, &Arc<Window>, crate::FrameBridge) -> Resu
             );
             let mut info = ViewportInfo::default();
             egui_winit::update_viewport_info(&mut info, &self.context, &window, true);
-            let app = create(&self.context, &window, gpu.bridge())?;
+            let app = create(&self.context, &window, gpu.interactive_bridge())?;
             window.request_redraw();
             Ok::<_, String>(Session {
                 app,

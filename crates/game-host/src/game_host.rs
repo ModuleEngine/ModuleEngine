@@ -708,6 +708,12 @@ pub struct RenderedPresentation {
     pub provenance: PresentationProvenance,
 }
 
+pub(crate) enum InterpolatedPresentationAttempt {
+    NoFrame,
+    Busy,
+    Ready(RenderedPresentation),
+}
+
 #[derive(Clone, PartialEq)]
 struct PresentationSample {
     scene: String,
@@ -2320,6 +2326,20 @@ impl GameHost {
         height: usize,
         alpha: f64,
     ) -> Result<Option<RenderedPresentation>, String> {
+        match self.attempt_interpolated_presentation(width, height, alpha)? {
+            InterpolatedPresentationAttempt::Ready(rendered) => Ok(Some(rendered)),
+            InterpolatedPresentationAttempt::NoFrame | InterpolatedPresentationAttempt::Busy => {
+                Ok(None)
+            }
+        }
+    }
+
+    pub(crate) fn attempt_interpolated_presentation(
+        &mut self,
+        width: usize,
+        height: usize,
+        alpha: f64,
+    ) -> Result<InterpolatedPresentationAttempt, String> {
         if !alpha.is_finite() {
             return Err("Presentation alpha must be finite".into());
         }
@@ -2354,10 +2374,10 @@ impl GameHost {
             self.discard_pending_presentation();
         }
         if let Some(rendered) = self.poll_interpolated_presentation()? {
-            return Ok(Some(rendered));
+            return Ok(InterpolatedPresentationAttempt::Ready(rendered));
         }
         if self.pending_presentation.is_some() {
-            return Ok(None);
+            return Ok(InterpolatedPresentationAttempt::NoFrame);
         }
         let InterpolatedScene {
             current,
@@ -2410,7 +2430,7 @@ impl GameHost {
             Some(old) if old.models != models || old.camera != camera => {
                 PresentationOrigin::InterpolatedPose
             }
-            Some(_) => return Ok(None),
+            Some(_) => return Ok(InterpolatedPresentationAttempt::NoFrame),
         };
         let provenance = PresentationProvenance {
             generation: self.presentation_generation,
@@ -2453,7 +2473,7 @@ impl GameHost {
             renderer.render_retained_presented(camera, width, height, &actual_controls)
         }?;
         match submission {
-            RenderSubmission::Busy => Ok(None),
+            RenderSubmission::Busy => Ok(InterpolatedPresentationAttempt::Busy),
             RenderSubmission::Pending(ticket) => {
                 self.pending_presentation = Some(PendingPresentation {
                     ticket,
@@ -2465,7 +2485,7 @@ impl GameHost {
                     },
                 });
                 self.consume_render_batch(batch_len)?;
-                Ok(None)
+                Ok(InterpolatedPresentationAttempt::NoFrame)
             }
             RenderSubmission::Ready(mut frame) => {
                 if let Some(timings) = self.accept_frame_timings(extraction_ms) {
@@ -2475,12 +2495,14 @@ impl GameHost {
                 self.last_render_ms = started.elapsed().as_secs_f64() * 1000.;
                 let source_revision = evaluation.revision;
                 self.presentation_evaluation = Some(evaluation);
-                Ok(Some(RenderedPresentation {
-                    frame: Arc::new(frame),
-                    camera,
-                    source_revision,
-                    provenance,
-                }))
+                Ok(InterpolatedPresentationAttempt::Ready(
+                    RenderedPresentation {
+                        frame: Arc::new(frame),
+                        camera,
+                        source_revision,
+                        provenance,
+                    },
+                ))
             }
         }
     }

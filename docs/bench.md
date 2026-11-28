@@ -376,12 +376,6 @@ python scripts/bench.py --no-profiling --compare 731661c47e181847450e00480e60c06
 
 [Measured R2.6 result](evidence/r26-player/README.md).
 
-**Not covered yet: R3.5 open-to-first-frame.** The launcher does not measure
-editor start to first frame, and the R0.6 report has no such value, so a
-passing `--compare` is not R3.5 evidence. The R3.5 check remains outstanding:
-it needs defined start and first-frame events and a paired command under this
-rule before R3.5 can be accepted.
-
 The series directory `outputs/bench/<date>/<time>-compare/` contains both
 build logs and binaries, `compare-manifest.json` with the commits and rule,
 per-run scene JSON in `session-1/` (and `session-2/` after a rerun),
@@ -389,6 +383,44 @@ per-run scene JSON in `session-1/` (and `session-2/` after a rerun),
 that is also printed. A full S1–S5 comparison runs 12 passes and takes much
 longer than the repeatability series; limit `--scenes` to what the criterion
 names when appropriate.
+
+<a id="editor-first-frame"></a>
+
+### First visible Editor frame (R3.5)
+
+Use [the paired Windows startup benchmark](../scripts/bench_editor_start.py)
+with Release executables built from the candidate and the R0.6 source
+`731661c47e181847450e00480e60c0645abd4753`. Use `bench` on R0.6 and
+`bench,verification` on the current sources to enable isolated personal
+settings. Retain the build commands, feature
+sets, source revisions and binary hashes. Use each binary's own Full source
+directory and the same disposable project with its scene files. Run on one
+unlocked 100% DPI desktop with room for the default 1580×940 client.
+
+```powershell
+python scripts/bench_editor_start.py `
+  --baseline-editor $baselineEditor --baseline-root $baselineSources `
+  --candidate-editor $candidateEditor --candidate-root $candidateSources `
+  --project $isolatedProject --out outputs/bench/editor-start
+```
+
+Each sample starts just before launching the ordinary Editor process. The
+probe raises only its own root window without activating it and samples the
+desktop until the client displays the File, Edit, Tools and Windows menu
+labels. It retains the first matching toolbar image, the interval from the
+last negative observation to the first positive observation, and the actual
+graphics backend and adapter. The Editor's UI capture route takes a later
+snapshot and closes the process normally. This later readback is outside
+the timed interval. A launch without a valid readback or a clean shutdown
+invalidates the series. Keep the desktop unobstructed and avoid input.
+
+After one unscored launch per side, the probe alternates five fresh processes
+per side and submits the first positive observations to the timing rule above,
+including its single borderline repeat. The report verifies the common
+adapter, monitor, DPI and client size, along with unchanged fixture and
+binary bytes. It measures the first Editor UI on a prewarmed desktop, before
+Scene or Game needs to finish loading. It provides no cold-cache or physical
+scanout result. The R0.6 S1–S5 report has no startup number.
 
 <a id="vulkan-validation"></a>
 

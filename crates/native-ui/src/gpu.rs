@@ -53,6 +53,7 @@ struct WindowFrames {
     window: Arc<Window>,
     benchmark: bool,
     recreate: bool,
+    notify_ui_submission: bool,
     software_present: Option<SoftwarePresent>,
 }
 
@@ -164,6 +165,7 @@ impl Gpu {
                 window: window.clone(),
                 benchmark,
                 recreate: false,
+                notify_ui_submission: software_present.is_some(),
                 software_present,
             },
             children: Default::default(),
@@ -174,9 +176,23 @@ impl Gpu {
     }
 
     pub fn bridge(&self) -> crate::FrameBridge {
+        self.frame_bridge(self.owner.target())
+    }
+
+    pub(crate) fn interactive_bridge(&self) -> crate::FrameBridge {
+        let target = self.owner.target();
+        let target = if self.root.notify_ui_submission {
+            target.prioritize_ui()
+        } else {
+            target
+        };
+        self.frame_bridge(target)
+    }
+
+    fn frame_bridge(&self, target: module_engine_vulkan::WindowTarget) -> crate::FrameBridge {
         crate::FrameBridge {
             painter: Arc::downgrade(&self.painter),
-            target: Arc::new(self.owner.target()),
+            target: Arc::new(target),
             adapter: self.info.adapter.clone(),
             present_mode: self.info.present_mode,
         }
@@ -244,6 +260,7 @@ impl Gpu {
                 window,
                 benchmark: false,
                 recreate: false,
+                notify_ui_submission: self.root.notify_ui_submission,
                 software_present: None,
             },
         );
@@ -435,6 +452,9 @@ impl WindowFrames {
             true
         };
         let time = Instant::now();
+        if self.notify_ui_submission {
+            painter.note_ui_submission(primitives);
+        }
         if self.recreate && self.benchmark {
             return Err("R3.1 presentation became suboptimal".into());
         }
