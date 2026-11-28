@@ -627,7 +627,7 @@ impl GpuScene {
                 (item.color[c] as f32 / 255.0 * item.material.base_color[c]).to_bits()
             });
             rows.draws[slot] = [mesh.count, 1, mesh.first, slot as u32];
-            rows.images[slot + 1] = [materials.index(item.material.base_color_texture.as_ref())];
+            rows.images[slot + 1] = [materials.index(&item.material)];
         }
         if gpu_culling {
             rows.cull_runs.extend(runs.iter().map(|run| {

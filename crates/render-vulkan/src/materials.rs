@@ -41,7 +41,7 @@ fn surface_maps(material: &Material) -> [(Option<&Arc<TextureImage>>, TextureEnc
         ),
         (
             surface.and_then(|pbr| pbr.emissive_texture.as_ref()),
-            TextureEncoding::SrgbEmissive,
+            TextureEncoding::SrgbOpaque,
         ),
     ]
 }
@@ -221,9 +221,9 @@ impl MaterialSet {
         count
     }
 
-    pub(super) fn index(&self, source: Option<&Arc<TextureImage>>) -> u32 {
-        source.map_or(0, |image| {
-            self.slots[&image_key(image, TextureEncoding::Srgb)]
+    pub(super) fn index(&self, material: &Material) -> u32 {
+        material.base_color_texture.as_ref().map_or(0, |image| {
+            self.slots[&image_key(image, material.base_color_encoding())]
         })
     }
 }
@@ -312,7 +312,7 @@ impl VulkanRenderer {
                     .base_color_texture
                     .as_ref()
                     .map_or((0, TextureEncoding::Srgb), |image| {
-                        image_key(image, TextureEncoding::Srgb)
+                        image_key(image, item.material.base_color_encoding())
                     })
             })
             .collect();
@@ -360,7 +360,7 @@ impl VulkanRenderer {
         for item in &scene.items {
             for (source, encoding) in surface_maps(&item.material).into_iter().chain([(
                 item.material.base_color_texture.as_ref(),
-                TextureEncoding::Srgb,
+                item.material.base_color_encoding(),
             )]) {
                 if let Some(source) = source {
                     sources.entry(image_key(source, encoding)).or_insert(source);
@@ -637,14 +637,12 @@ impl VulkanRenderer {
                     })
             });
         let format = match blocks {
-            Some(TextureEncoding::Srgb | TextureEncoding::SrgbEmissive) => {
-                vk::Format::BC7_SRGB_BLOCK
-            }
+            Some(TextureEncoding::Srgb | TextureEncoding::SrgbOpaque) => vk::Format::BC7_SRGB_BLOCK,
             Some(TextureEncoding::Linear) => vk::Format::BC7_UNORM_BLOCK,
             Some(TextureEncoding::Normal) => vk::Format::BC5_UNORM_BLOCK,
             None if matches!(
                 encoding,
-                TextureEncoding::Srgb | TextureEncoding::SrgbEmissive
+                TextureEncoding::Srgb | TextureEncoding::SrgbOpaque
             ) =>
             {
                 SRGB

@@ -59,6 +59,8 @@ pub struct ContentLibrary {
     textures: BTreeMap<String, Arc<TextureImage>>,
     texture_encodings: BTreeMap<(String, TextureEncoding), Arc<TextureImage>>,
     materials: BTreeMap<String, Arc<material::LoadedMaterial>>,
+    inherited_color_variants:
+        BTreeMap<(usize, TextureEncoding), (Arc<TextureImage>, Arc<TextureImage>)>,
 }
 impl ContentLibrary {
     pub fn new(root: impl AsRef<Path>) -> Result<Self, String> {
@@ -73,6 +75,7 @@ impl ContentLibrary {
             textures: BTreeMap::new(),
             texture_encodings: BTreeMap::new(),
             materials: BTreeMap::new(),
+            inherited_color_variants: BTreeMap::new(),
         })
     }
     pub fn invalidate(&mut self) {
@@ -80,6 +83,7 @@ impl ContentLibrary {
         self.textures.clear();
         self.texture_encodings.clear();
         self.materials.clear();
+        self.inherited_color_variants.clear();
     }
     /// Install the project's stable asset index. A changed mapping invalidates
     /// decoded files so moved assets never reuse an obsolete dependency root.

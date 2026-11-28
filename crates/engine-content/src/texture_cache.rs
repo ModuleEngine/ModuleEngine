@@ -14,7 +14,7 @@ fn cache_name(image: &TextureImage, encoding: TextureEncoding) -> String {
     let mut digest = Sha256::new();
     let role = match encoding {
         TextureEncoding::Srgb => b"sRGB",
-        TextureEncoding::SrgbEmissive => b"emit",
+        TextureEncoding::SrgbOpaque => b"opaq",
         TextureEncoding::Linear => b"data",
         TextureEncoding::Normal => b"norm",
     };
@@ -72,8 +72,9 @@ pub(super) fn for_each_map(
     material: &mut Material,
     mut f: impl FnMut(&mut Arc<TextureImage>, TextureEncoding),
 ) {
+    let encoding = material.base_color_encoding();
     if let Some(texture) = &mut material.base_color_texture {
-        f(texture, TextureEncoding::Srgb);
+        f(texture, encoding);
     }
     if let Some(surface) = &mut material.pbr {
         for (texture, encoding) in [
@@ -83,7 +84,7 @@ pub(super) fn for_each_map(
             ),
             (&mut surface.normal_texture, TextureEncoding::Normal),
             (&mut surface.occlusion_texture, TextureEncoding::Linear),
-            (&mut surface.emissive_texture, TextureEncoding::SrgbEmissive),
+            (&mut surface.emissive_texture, TextureEncoding::SrgbOpaque),
         ] {
             if let Some(texture) = texture {
                 f(texture, encoding);
@@ -114,16 +115,25 @@ pub(super) fn resolve(
     mut texture: Arc<TextureImage>,
     encoding: TextureEncoding,
 ) -> Arc<TextureImage> {
-    if (root.join(PACKAGE_TEXTURE_DIR).is_dir() || root.join(AUTHOR_TEXTURE_DIR).is_dir())
-        && let Some(blocks) = cached(root, &cache_name(&texture, encoding), &texture, encoding)
+    if texture
+        .blocks
+        .as_ref()
+        .is_some_and(|compressed| compressed.encoding == encoding)
     {
-        Arc::make_mut(&mut texture).blocks = Some(blocks);
+        return texture;
+    }
+    let blocks = (root.join(PACKAGE_TEXTURE_DIR).is_dir()
+        || root.join(AUTHOR_TEXTURE_DIR).is_dir())
+    .then(|| cached(root, &cache_name(&texture, encoding), &texture, encoding))
+    .flatten();
+    if texture.blocks.is_some() || blocks.is_some() {
+        Arc::make_mut(&mut texture).blocks = blocks;
     }
     texture
 }
 
 #[cfg(feature = "texture-bake")]
-pub(super) use bake::{bake_author, bake_delivery, encoding_for_key};
+pub(super) use bake::{bake_author, bake_delivery};
 
 #[cfg(feature = "texture-bake")]
 mod bake {
@@ -135,15 +145,6 @@ mod bake {
         path::PathBuf,
         sync::atomic::{AtomicU64, Ordering},
     };
-
-    pub fn encoding_for_key(field: &str) -> TextureEncoding {
-        match field {
-            "base_color_texture" => TextureEncoding::Srgb,
-            "emissive_texture" => TextureEncoding::SrgbEmissive,
-            "normal_texture" => TextureEncoding::Normal,
-            _ => TextureEncoding::Linear,
-        }
-    }
 
     pub fn bake_author<'a>(
         root: &Path,
@@ -250,6 +251,9 @@ mod bake {
                 for x in 0..padded_w {
                     let start = ((row + x.min(width - 1)) * 4) as usize;
                     padded.extend_from_slice(&pixels[start..start + channels as usize]);
+                    if encoding == TextureEncoding::SrgbOpaque {
+                        *padded.last_mut().unwrap() = 255;
+                    }
                 }
             }
             let stride = padded_w * channels;
@@ -308,13 +312,13 @@ mod bake {
                     for column in xs.clone() {
                         let offset = ((row * width + column) * 4) as usize;
                         let rgba = &input[offset..offset + 4];
-                        let alpha = if encoding == TextureEncoding::SrgbEmissive {
+                        let alpha = if encoding == TextureEncoding::SrgbOpaque {
                             1.
                         } else {
                             f32::from(rgba[3]) / 255.
                         };
                         let sample = match encoding {
-                            TextureEncoding::Srgb | TextureEncoding::SrgbEmissive => [
+                            TextureEncoding::Srgb | TextureEncoding::SrgbOpaque => [
                                 decode[rgba[0] as usize] * alpha,
                                 decode[rgba[1] as usize] * alpha,
                                 decode[rgba[2] as usize] * alpha,
@@ -335,7 +339,7 @@ mod bake {
                     }
                 }
                 let result = match encoding {
-                    TextureEncoding::Srgb | TextureEncoding::SrgbEmissive => {
+                    TextureEncoding::Srgb | TextureEncoding::SrgbOpaque => {
                         let scale = sum[3].max(f32::MIN_POSITIVE).recip();
                         [
                             srgb(sum[0] * scale),
@@ -372,11 +376,42 @@ mod bake {
         };
         let formats = [
             TextureEncoding::Srgb,
-            TextureEncoding::SrgbEmissive,
+            TextureEncoding::SrgbOpaque,
             TextureEncoding::Linear,
             TextureEncoding::Normal,
         ];
         bake_author(&root, formats.map(|encoding| (&image, encoding))).unwrap();
+        let source = Arc::new(image.clone());
+        let mut materials = [
+            module_engine_core::AlphaMode::Opaque,
+            module_engine_core::AlphaMode::Blend,
+        ]
+        .map(|alpha_mode| Material {
+            base_color_texture: Some(source.clone()),
+            pbr: Some(module_engine_core::MetallicRoughness {
+                alpha_mode,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        attach(&root, &mut materials);
+        let [opaque, blend] = materials.map(|material| material.base_color_texture.unwrap());
+        assert_eq!(
+            opaque.blocks.as_ref().unwrap().encoding,
+            TextureEncoding::SrgbOpaque
+        );
+        assert_eq!(
+            blend.blocks.as_ref().unwrap().encoding,
+            TextureEncoding::Srgb
+        );
+        assert_ne!(
+            opaque.blocks.as_ref().unwrap().bytes,
+            blend.blocks.as_ref().unwrap().bytes
+        );
+        assert_eq!(
+            resolve(&root, opaque, TextureEncoding::Srgb).blocks,
+            blend.blocks
+        );
         for encoding in formats {
             let file = cache_name(&image, encoding);
             let restored = resolve(&root, Arc::new(image.clone()), encoding);
@@ -398,15 +433,28 @@ mod bake {
 
     #[cfg(test)]
     #[test]
-    fn emissive_mips_ignore_source_alpha() {
+    fn opaque_and_emissive_mips_ignore_source_alpha() {
         let opaque = [160, 42, 210, 255].repeat(4);
         let transparent = [160, 42, 210, 0].repeat(4);
+        let make_image = |pixels| TextureImage {
+            width: 2,
+            height: 2,
+            rgba8: pixels,
+            blocks: None,
+        };
         assert_eq!(
-            downsample(&transparent, 2, 2, TextureEncoding::SrgbEmissive),
+            encode(
+                &make_image(transparent.clone()),
+                TextureEncoding::SrgbOpaque
+            ),
+            encode(&make_image(opaque.clone()), TextureEncoding::SrgbOpaque),
+        );
+        assert_eq!(
+            downsample(&transparent, 2, 2, TextureEncoding::SrgbOpaque),
             [160, 42, 210, 255]
         );
         assert_eq!(
-            downsample(&opaque, 2, 2, TextureEncoding::SrgbEmissive),
+            downsample(&opaque, 2, 2, TextureEncoding::SrgbOpaque),
             [160, 42, 210, 255]
         );
         assert_eq!(

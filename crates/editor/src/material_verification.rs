@@ -318,7 +318,7 @@ fn inspect_model(name: &str, primitive_count: usize, model: &LoadedModel) -> Res
             (
                 "base color",
                 &material.base_color_texture,
-                TextureEncoding::Srgb,
+                material.base_color_encoding(),
             ),
             ("normal", &surface.normal_texture, TextureEncoding::Normal),
             (
@@ -334,7 +334,7 @@ fn inspect_model(name: &str, primitive_count: usize, model: &LoadedModel) -> Res
             (
                 "emissive",
                 &surface.emissive_texture,
-                TextureEncoding::SrgbEmissive,
+                TextureEncoding::SrgbOpaque,
             ),
         ] {
             if role == "emissive" && name == "FlightHelmet" && texture.is_none() {

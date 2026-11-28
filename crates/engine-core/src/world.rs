@@ -94,7 +94,7 @@ pub struct TextureImage {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TextureEncoding {
     Srgb,
-    SrgbEmissive,
+    SrgbOpaque,
     Linear,
     Normal,
 }
@@ -122,6 +122,15 @@ pub struct Material {
     pub base_color_texture: Option<std::sync::Arc<TextureImage>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pbr: Option<MetallicRoughness>,
+}
+impl Material {
+    /// Legacy shading and mask/blend can use the sampled alpha. Opaque PBR only uses RGB.
+    pub fn base_color_encoding(&self) -> TextureEncoding {
+        match self.pbr.as_ref().map(|surface| surface.alpha_mode) {
+            Some(AlphaMode::Opaque) => TextureEncoding::SrgbOpaque,
+            _ => TextureEncoding::Srgb,
+        }
+    }
 }
 impl Default for Material {
     fn default() -> Self {
