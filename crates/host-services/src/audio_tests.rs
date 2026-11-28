@@ -359,11 +359,28 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
 
     const ONSET: f32 = 0.035;
 
-    fn require_quiet(hits: &Receiver<Instant>, duration: Duration, label: &str) {
+    struct Onset {
+        received: Instant,
+        sample_estimate: Instant,
+    }
+
+    fn require_quiet(hits: &Receiver<Onset>, duration: Duration, label: &str) {
         assert!(
             matches!(hits.recv_timeout(duration), Err(RecvTimeoutError::Timeout)),
             "Loopback needs a quiet live capture before {label}"
         );
+    }
+
+    fn require_quiet_start(hits: &Receiver<Onset>) {
+        let quiet_window = Duration::from_millis(150);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match hits.recv_timeout(quiet_window) {
+                Err(RecvTimeoutError::Timeout) => return,
+                Ok(_) if Instant::now() + quiet_window <= deadline => {}
+                _ => panic!("Loopback needs 150 ms of quiet live capture before startup"),
+            }
+        }
     }
 
     struct CaptureSamples {
@@ -420,7 +437,7 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
     fn capture<T>(
         device: &cpal::Device,
         config: cpal::StreamConfig,
-        hits: SyncSender<Instant>,
+        hits: SyncSender<Onset>,
         recording: Option<Arc<Mutex<CaptureSamples>>>,
         stream_errors: Arc<CaptureErrors>,
     ) -> cpal::Stream
@@ -455,9 +472,12 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
                             .iter()
                             .any(|sample| sample.to_sample::<f32>().abs() > ONSET);
                         if audible && !previous {
-                            let detected = now.checked_sub(delay).unwrap_or(now)
+                            let sample_estimate = now.checked_sub(delay).unwrap_or(now)
                                 + Duration::from_secs_f64(offset as f64 / rate);
-                            let _ = hits.try_send(detected);
+                            let _ = hits.try_send(Onset {
+                                received: now,
+                                sample_estimate,
+                            });
                         }
                         previous = audible;
                     }
@@ -549,7 +569,7 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
         format => panic!("Unsupported loopback format {format:?}"),
     };
     stream.play().unwrap();
-    require_quiet(&rx, Duration::from_millis(150), "startup");
+    require_quiet_start(&rx);
 
     let root = fixtures();
     let paths = [("legacy".into(), "tone.wav".into())].into();
@@ -591,24 +611,27 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
                 .as_ref()
                 .map(|recording| recording.samples.lock().unwrap().frames.len());
             eprintln!(
-                "Warm measurement starts at capture sample offset {sample_offset:?}; startup capture overruns {startup_overruns}"
+                "Warm measurement starts at capture sample offset {sample_offset:?}. Startup capture overruns {startup_overruns}"
             );
         }
         let dispatch = Instant::now();
         service.consume(&[sound(name)]).unwrap();
         let deadline = dispatch + Duration::from_secs(2);
         let onset = loop {
-            let instant = rx
+            let onset = rx
                 .recv_timeout(deadline.saturating_duration_since(Instant::now()))
                 .expect("bound cue absent from loopback");
-            if instant > dispatch {
-                break instant;
+            if onset.received > dispatch {
+                break onset;
             }
         };
-        let elapsed = (onset - dispatch).as_secs_f64() * 1000.;
+        // Callback arrival is an upper bound and uses the same clock as dispatch.
+        // Keep the device's sample timestamp as a diagnostic for virtual drivers.
+        let elapsed = (onset.received - dispatch).as_secs_f64() * 1000.;
+        let sample_estimate = onset.sample_estimate.duration_since(dispatch).as_secs_f64() * 1000.;
         let latency = elapsed - source_lead_ms;
         eprintln!(
-            "Cue {name}, dispatch {index}, onset {elapsed:.3} ms, decoded source lead-in {source_lead_ms:.3} ms, output estimate {latency:.3} ms"
+            "Cue {name}, dispatch {index}, received onset {elapsed:.3} ms, sample onset estimate {sample_estimate:.3} ms, decoded source lead-in {source_lead_ms:.3} ms, output upper bound {latency:.3} ms"
         );
         if index > 0 {
             latencies.push(latency);

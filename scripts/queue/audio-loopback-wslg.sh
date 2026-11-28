@@ -10,6 +10,7 @@ source "$toolchain"
 set -u
 
 export CARGO_TARGET_DIR="$PWD/target/wslg-audio"
+export CARGO_PROFILE_TEST_DEBUG=0
 export PKG_CONFIG_LIBDIR="$libs/pkgconfig" PKG_CONFIG_SYSROOT_DIR="$sysroot"
 export LD_LIBRARY_PATH="$libs:$libs/pulseaudio${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export PULSE_SERVER=unix:/mnt/wslg/runtime-dir/pulse/native

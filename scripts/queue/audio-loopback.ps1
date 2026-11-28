@@ -20,6 +20,7 @@ if ($Endpoint -eq 'wslg') {
 
 & rustc -vV
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$env:CARGO_PROFILE_TEST_DEBUG = '0'
 $executables = @( & cargo test --offline --locked --target x86_64-pc-windows-msvc `
     -p module-engine-host-services --features audio --lib --no-run --message-format=json | ForEach-Object {
         $message = $_ | ConvertFrom-Json
