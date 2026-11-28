@@ -925,6 +925,7 @@ const NATIVE_FILES: &[&str] = &[
     "crates/host-services/Cargo.toml",
     "crates/host-services/src/lib.rs",
     "crates/host-services/src/audio.rs",
+    "crates/host-services/src/audio_codec.rs",
     "crates/host-services/src/persistence.rs",
     "crates/host-services/src/wav.rs",
     "crates/host-services/src/audio_output.rs",

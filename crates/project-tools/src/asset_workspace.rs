@@ -61,7 +61,7 @@ impl AssetKind {
         {
             "gltf" | "glb" => Self::Model,
             "png" | "jpg" | "jpeg" => Self::Texture,
-            "wav" => Self::Audio,
+            ext if module_engine_core::AUDIO_CUE_EXTENSIONS.contains(&ext) => Self::Audio,
             "hlsl" | "hlsli" => Self::Shader,
             _ => Self::Other,
         }

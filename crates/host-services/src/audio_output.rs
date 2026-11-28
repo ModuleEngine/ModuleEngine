@@ -1,300 +1,438 @@
-//! Each mixer owns its own WinMM handle and buffers. No process-global sound,
-//! device-volume operation, callback pointer or borrowed buffer crosses owners.
-use crate::audio::Mixer;
-use std::sync::{Arc, Mutex, atomic::AtomicBool};
+//! Per-host Kira mixer and an owned CPAL stream.
+use cpal::{
+    FromSample, Sample, SampleFormat, SizedSample, Stream, SupportedBufferSize,
+    traits::{DeviceTrait, HostTrait, StreamTrait},
+};
+use kira::{
+    Volume,
+    clock::clock_info::ClockInfoProvider,
+    dsp::Frame,
+    manager::{
+        AudioManager, AudioManagerSettings, Capacities,
+        backend::{Backend, Renderer},
+    },
+    modulator::value_provider::ModulatorValueProvider,
+    sound::{
+        PlaybackState,
+        static_sound::{StaticSoundData, StaticSoundHandle},
+    },
+    spatial::{
+        emitter::{EmitterHandle, EmitterSettings},
+        listener::{ListenerHandle, ListenerSettings},
+        scene::{SpatialSceneHandle, SpatialSceneSettings},
+    },
+    track::{
+        TrackBuilder, TrackHandle,
+        effect::{Effect, EffectBuilder},
+    },
+    tween::Tween,
+};
+use serde::Deserialize;
+use std::{
+    fmt::Debug,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc::{Receiver, SyncSender, sync_channel},
+    },
+    time::Duration,
+};
 
-#[cfg(windows)]
-pub(crate) use native::AudioOutput;
-#[cfg(not(windows))]
-pub(crate) struct AudioOutput;
-#[cfg(not(windows))]
-impl AudioOutput {
-    pub(crate) fn start(_: Arc<Mutex<Mixer>>, _: Arc<AtomicBool>) -> Result<Self, String> {
-        Err("Native WAV playback is not implemented on this platform".into())
-    }
-    pub(crate) fn stop(self) {}
-    pub(crate) fn wake(&self) {}
+pub(crate) struct NativeBackend {
+    device: cpal::Device,
+    supported: cpal::SupportedStreamConfig,
+    stream: Option<Stream>,
+    errors: Receiver<cpal::Error>,
+    error_sender: SyncSender<cpal::Error>,
 }
 
-#[cfg(windows)]
-mod native {
-    use super::*;
-    use crate::audio::OUTPUT_RATE;
-    use std::{
-        ffi::c_void,
-        mem, ptr,
-        sync::atomic::Ordering,
-        thread::{self, JoinHandle},
-        time::Duration,
-    };
-    const DONE: u32 = 1;
-    #[repr(C, packed(1))]
-    struct WaveFormat {
-        tag: u16,
-        channels: u16,
-        rate: u32,
-        bytes_per_second: u32,
-        alignment: u16,
-        bits: u16,
-        extra: u16,
-    }
-    #[repr(C)]
-    struct WaveHeader {
-        data: *mut c_void,
-        length: u32,
-        recorded: u32,
-        user: usize,
-        flags: u32,
-        loops: u32,
-        next: *mut WaveHeader,
-        reserved: usize,
-    }
-    struct Buffer {
-        header: WaveHeader,
-        samples: Vec<i16>,
-        prepared: bool,
-        queued: bool,
-    }
-    impl Buffer {
-        fn new() -> Box<Self> {
-            let samples = vec![0_i16; OUTPUT_RATE as usize / 100 * 2];
-            let mut buffer = Box::new(Self {
-                header: WaveHeader {
-                    data: ptr::null_mut(),
-                    length: (samples.len() * 2) as u32,
-                    recorded: 0,
-                    user: 0,
-                    flags: 0,
-                    loops: 0,
-                    next: ptr::null_mut(),
-                    reserved: 0,
-                },
-                samples,
-                prepared: false,
-                queued: false,
-            });
-            buffer.header.data = buffer.samples.as_mut_ptr().cast();
-            buffer
+impl Backend for NativeBackend {
+    type Settings = ();
+    type Error = String;
+
+    fn setup(_: ()) -> Result<(Self, u32), String> {
+        let device = cpal::default_host()
+            .default_output_device()
+            .ok_or("No default output device")?;
+        let supported = device
+            .default_output_config()
+            .map_err(|error| error.to_string())?;
+        let rate = supported.sample_rate();
+        if supported.channels() == 0 {
+            return Err("The audio device reported zero output channels".into());
         }
+        let (error_sender, errors) = sync_channel(8);
+        Ok((
+            Self {
+                device,
+                supported,
+                stream: None,
+                errors,
+                error_sender,
+            },
+            rate,
+        ))
     }
-    struct Device {
-        handle: usize,
-    }
-    impl Drop for Device {
-        fn drop(&mut self) {
-            if self.handle != 0 {
-                unsafe {
-                    waveOutClose(self.handle);
-                }
-            }
+
+    fn start(&mut self, renderer: Renderer) -> Result<(), String> {
+        let mut config = self.supported.config();
+        if let SupportedBufferSize::Range { min, max } = *self.supported.buffer_size() {
+            config.buffer_size = cpal::BufferSize::Fixed(256_u32.clamp(min, max));
         }
-    }
-    impl Device {
-        fn open() -> Result<Self, String> {
-            let format = WaveFormat {
-                tag: 1,
-                channels: 2,
-                rate: OUTPUT_RATE,
-                bytes_per_second: OUTPUT_RATE * 4,
-                alignment: 4,
-                bits: 16,
-                extra: 0,
-            };
-            let mut handle = 0_usize;
-            check(
-                unsafe { waveOutOpen(&mut handle, u32::MAX, &format, 0, 0, 0) },
-                "open",
-            )?;
-            Ok(Self { handle })
+        let stream = match self.supported.sample_format() {
+            SampleFormat::F32 => self.build_stream::<f32>(config, renderer),
+            SampleFormat::F64 => self.build_stream::<f64>(config, renderer),
+            SampleFormat::I16 => self.build_stream::<i16>(config, renderer),
+            SampleFormat::I24 => self.build_stream::<cpal::I24>(config, renderer),
+            SampleFormat::I32 => self.build_stream::<i32>(config, renderer),
+            SampleFormat::U16 => self.build_stream::<u16>(config, renderer),
+            format => return Err(format!("Unsupported audio device sample format {format:?}")),
         }
-        fn stream(
-            mut self,
-            shared: &Arc<Mutex<Mixer>>,
-            retired: &AtomicBool,
-            stopping: &AtomicBool,
-        ) -> Result<(), String> {
-            // Keep 40 ms queued: the native clock regression catches gaps that
-            // a 30 ms queue can leave between WinMM completion/refill batches.
-            let mut buffers = (0..4).map(|_| Buffer::new()).collect::<Vec<_>>();
-            let result = (|| {
-                for buffer in &mut buffers {
-                    check(
-                        unsafe {
-                            waveOutPrepareHeader(
-                                self.handle,
-                                &mut buffer.header,
-                                mem::size_of::<WaveHeader>() as u32,
-                            )
-                        },
-                        "prepare buffer",
-                    )?;
-                    buffer.prepared = true;
-                }
-                while !stopping.load(Ordering::Acquire) && !retired.load(Ordering::Acquire) {
-                    for buffer in &mut buffers {
-                        if buffer.queued {
-                            // WinMM owns flags while a header is submitted.
-                            if unsafe { ptr::read_volatile(ptr::addr_of!(buffer.header.flags)) }
-                                & DONE
-                                == 0
-                            {
-                                continue;
-                            }
-                            buffer.queued = false;
-                            let mut mixer = shared
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner);
-                            mixer.completed = mixer.completed.saturating_add(1);
+        .map_err(|error| error.to_string())?;
+        stream.play().map_err(|error| error.to_string())?;
+        self.stream = Some(stream);
+        Ok(())
+    }
+}
+
+impl NativeBackend {
+    fn build_stream<T>(
+        &self,
+        config: cpal::StreamConfig,
+        mut renderer: Renderer,
+    ) -> Result<Stream, cpal::Error>
+    where
+        T: SizedSample + Sample + FromSample<f32>,
+    {
+        let channels = usize::from(config.channels);
+        let errors = self.error_sender.clone();
+        self.device.build_output_stream(
+            config,
+            move |output: &mut [T], _: &cpal::OutputCallbackInfo| {
+                renderer.on_start_processing();
+                for samples in output.chunks_exact_mut(channels) {
+                    let frame = renderer.process();
+                    match samples {
+                        [mono] => {
+                            *mono =
+                                T::from_sample(((frame.left + frame.right) * 0.5).clamp(-1., 1.))
                         }
-                        let active = shared
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .mix(&mut buffer.samples);
-                        if active
-                            && !stopping.load(Ordering::Acquire)
-                            && !retired.load(Ordering::Acquire)
-                        {
-                            check(
-                                unsafe {
-                                    waveOutWrite(
-                                        self.handle,
-                                        &mut buffer.header,
-                                        mem::size_of::<WaveHeader>() as u32,
-                                    )
-                                },
-                                "submit buffer",
-                            )?;
-                            buffer.queued = true;
-                            let mut mixer = shared
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner);
-                            mixer.submitted = mixer.submitted.saturating_add(1);
+                        [left, right, extra @ ..] => {
+                            *left = T::from_sample(frame.left.clamp(-1., 1.));
+                            *right = T::from_sample(frame.right.clamp(-1., 1.));
+                            extra.fill(T::EQUILIBRIUM);
                         }
-                    }
-                    if buffers.iter().any(|buffer| buffer.queued) {
-                        thread::sleep(Duration::from_millis(2));
-                    } else {
-                        thread::park_timeout(Duration::from_millis(50));
+                        [] => unreachable!(),
                     }
                 }
-                Ok(())
-            })();
-            // Reset returns every queued buffer before its allocation can die.
-            // On an unconfirmed driver failure retain the native owner and pins.
-            if let Err(error) = check(unsafe { waveOutReset(self.handle) }, "reset") {
-                mem::forget(buffers);
-                self.handle = 0;
-                return Err(format!("{error}; native audio resources retained"));
-            }
-            let mut cleanup_error = None;
-            for mut buffer in buffers {
-                if buffer.prepared
-                    && let Err(error) = check(
-                        unsafe {
-                            waveOutUnprepareHeader(
-                                self.handle,
-                                &mut buffer.header,
-                                mem::size_of::<WaveHeader>() as u32,
-                            )
-                        },
-                        "release buffer",
-                    )
-                {
-                    cleanup_error = Some(error);
-                    mem::forget(buffer);
-                }
-            }
-            if let Some(error) = cleanup_error {
-                self.handle = 0;
-                return Err(format!("{error}; native audio resources retained"));
-            }
-            check(unsafe { waveOutClose(self.handle) }, "close")?;
-            self.handle = 0;
-            result
+            },
+            move |error| {
+                let _ = errors.try_send(error);
+            },
+            None,
+        )
+    }
+
+    pub fn poll_error(&mut self) -> Option<String> {
+        self.errors.try_recv().ok().map(|error| error.to_string())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Bus {
+    #[default]
+    Sfx,
+    Music,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum VolumeBus {
+    Master,
+    Music,
+    Sfx,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct Gains {
+    pub master: f32,
+    pub music: f32,
+    pub sfx: f32,
+}
+impl Gains {
+    pub fn set(&mut self, bus: VolumeBus, gain: f32) {
+        match bus {
+            VolumeBus::Master => self.master = gain,
+            VolumeBus::Music => self.music = gain,
+            VolumeBus::Sfx => self.sfx = gain,
         }
     }
-    pub(crate) struct AudioOutput {
-        stopping: Arc<AtomicBool>,
-        thread: Option<JoinHandle<()>>,
-        shared: Arc<Mutex<Mixer>>,
-    }
-    impl AudioOutput {
-        pub(crate) fn start(
-            shared: Arc<Mutex<Mixer>>,
-            retired: Arc<AtomicBool>,
-        ) -> Result<Self, String> {
-            let device = Device::open()?;
-            let stopping = Arc::new(AtomicBool::new(false));
-            let flag = stopping.clone();
-            let worker_shared = shared.clone();
-            let thread = thread::Builder::new()
-                .name("ModuleEngine WAV mixer".into())
-                .spawn(move || {
-                    if let Err(error) = device.stream(&worker_shared, &retired, &flag) {
-                        worker_shared
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .fault = Some(error);
-                    }
-                })
-                .map_err(|error| format!("Cannot start audio mixer: {error}"))?;
-            Ok(Self {
-                stopping,
-                thread: Some(thread),
-                shared,
-            })
-        }
-        fn finish(&mut self) {
-            self.stopping.store(true, Ordering::Release);
-            self.wake();
-            if self
-                .thread
-                .take()
-                .is_some_and(|thread| thread.join().is_err())
-            {
-                self.shared
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .fault = Some("Native audio mixer thread panicked".into());
-            }
-        }
-        pub(crate) fn stop(mut self) {
-            self.finish();
-        }
-        pub(crate) fn wake(&self) {
-            if let Some(thread) = &self.thread {
-                thread.thread().unpark();
-            }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ListenerPose {
+    pub position: [f32; 3],
+    pub orientation: [f32; 4],
+}
+impl Default for ListenerPose {
+    fn default() -> Self {
+        Self {
+            position: [0.; 3],
+            orientation: [0., 0., 0., 1.],
         }
     }
-    impl Drop for AudioOutput {
-        fn drop(&mut self) {
-            self.finish();
-        }
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SpatialDistances {
+    pub min_distance: f32,
+    pub max_distance: f32,
+}
+
+struct MixerBus {
+    track: TrackHandle,
+    scene: SpatialSceneHandle,
+    listener: ListenerHandle,
+}
+impl MixerBus {
+    fn new<B: Backend>(
+        manager: &mut AudioManager<B>,
+        pose: ListenerPose,
+        gain: f32,
+        capacity: usize,
+    ) -> Result<Self, String> {
+        let track = manager
+            .add_sub_track(TrackBuilder::new().volume(amplitude(gain)))
+            .map_err(|error| error.to_string())?;
+        let mut scene = manager
+            .add_spatial_scene(
+                SpatialSceneSettings::new()
+                    .emitter_capacity(capacity)
+                    .listener_capacity(1),
+            )
+            .map_err(|error| error.to_string())?;
+        let listener = scene
+            .add_listener(
+                pose.position,
+                pose.orientation,
+                ListenerSettings::new().track(&track),
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(Self {
+            track,
+            scene,
+            listener,
+        })
     }
-    fn check(code: u32, operation: &str) -> Result<(), String> {
-        if code == 0 {
-            Ok(())
+}
+
+struct Voice {
+    bus: Bus,
+    handle: StaticSoundHandle,
+    // The emitter must outlive the sound and any stop fade.
+    _emitter: Option<EmitterHandle>,
+    stopping: bool,
+}
+
+pub(crate) struct AudioOutput<B: Backend> {
+    voices: Vec<Voice>,
+    music: MixerBus,
+    sfx: MixerBus,
+    pub manager: AudioManager<B>,
+    rendered_blocks: Arc<AtomicU64>,
+    max_voices: usize,
+}
+
+pub(crate) fn amplitude(gain: f32) -> Volume {
+    Volume::Amplitude(f64::from(gain))
+}
+
+pub(crate) fn fade(duration_ms: u32) -> Tween {
+    Tween {
+        duration: Duration::from_millis(u64::from(duration_ms)),
+        ..Tween::default()
+    }
+}
+
+impl<B: Backend> AudioOutput<B> {
+    pub fn start(
+        backend_settings: B::Settings,
+        gains: Gains,
+        pose: ListenerPose,
+        max_voices: usize,
+        retired: Arc<AtomicBool>,
+    ) -> Result<Self, String>
+    where
+        B::Error: Debug,
+    {
+        let rendered_blocks = Arc::new(AtomicU64::new(0));
+        let mut main_track = TrackBuilder::new().volume(amplitude(gains.master));
+        main_track.add_effect(OutputGate {
+            retired,
+            rendered_blocks: rendered_blocks.clone(),
+            silent: false,
+        });
+        // Leave room for replacements while the output callback retires old voices.
+        let capacity = 2 * max_voices + 1;
+        let mut manager = AudioManager::<B>::new(AudioManagerSettings {
+            capacities: Capacities {
+                sub_track_capacity: 2,
+                spatial_scene_capacity: 2,
+                command_capacity: capacity * 8,
+                sound_capacity: capacity,
+                ..Capacities::default()
+            },
+            main_track_builder: main_track,
+            backend_settings,
+        })
+        .map_err(|error| format!("Kira could not start native audio: {error:?}"))?;
+        let music = MixerBus::new(&mut manager, pose, gains.music, capacity)?;
+        let sfx = MixerBus::new(&mut manager, pose, gains.sfx, capacity)?;
+        Ok(Self {
+            manager,
+            music,
+            sfx,
+            voices: Vec::new(),
+            max_voices,
+            rendered_blocks,
+        })
+    }
+
+    pub fn play(
+        &mut self,
+        mut data: StaticSoundData,
+        bus: Bus,
+        emitter: Option<([f32; 3], SpatialDistances)>,
+    ) -> Result<bool, String> {
+        self.reap();
+        let destination = match bus {
+            Bus::Music => &mut self.music,
+            Bus::Sfx => &mut self.sfx,
+        };
+        let emitter = if let Some((position, distances)) = emitter {
+            let emitter = destination
+                .scene
+                .add_emitter(
+                    position,
+                    EmitterSettings::new()
+                        .distances((distances.min_distance, distances.max_distance)),
+                )
+                .map_err(|error| error.to_string())?;
+            data.settings = data.settings.output_destination(&emitter);
+            Some(emitter)
         } else {
-            Err(format!(
-                "WinMM could not {operation} for the owned WAV mixer (code {code})"
-            ))
+            data.settings = data.settings.output_destination(&destination.track);
+            None
+        };
+        let handle = self.manager.play(data).map_err(|error| error.to_string())?;
+        if bus == Bus::Music {
+            self.stop(Some(Bus::Music), fade(0))?;
+        }
+        let stolen = self.voices.iter().filter(|voice| !voice.stopping).count() >= self.max_voices;
+        if stolen {
+            let oldest = self
+                .voices
+                .iter_mut()
+                .find(|voice| !voice.stopping && voice.bus == Bus::Sfx)
+                .expect("A full voice set has an effect voice");
+            oldest
+                .handle
+                .stop(fade(0))
+                .map_err(|error| error.to_string())?;
+            oldest.stopping = true;
+        }
+        self.voices.push(Voice {
+            bus,
+            handle,
+            _emitter: emitter,
+            stopping: false,
+        });
+        Ok(stolen)
+    }
+
+    pub fn stop(&mut self, bus: Option<Bus>, tween: Tween) -> Result<(), String> {
+        for voice in self
+            .voices
+            .iter_mut()
+            .filter(|voice| bus.is_none_or(|bus| voice.bus == bus) && !voice.stopping)
+        {
+            voice
+                .handle
+                .stop(tween)
+                .map_err(|error| error.to_string())?;
+            voice.stopping = true;
+        }
+        Ok(())
+    }
+
+    pub fn set_gain(&mut self, bus: VolumeBus, gain: f32, tween: Tween) -> Result<(), String> {
+        let gain = amplitude(gain);
+        match bus {
+            VolumeBus::Master => self.manager.main_track().set_volume(gain, tween),
+            VolumeBus::Music => self.music.track.set_volume(gain, tween),
+            VolumeBus::Sfx => self.sfx.track.set_volume(gain, tween),
+        }
+        .map_err(|error| error.to_string())
+    }
+
+    pub fn set_listener(&mut self, pose: ListenerPose, tween: Tween) -> Result<(), String> {
+        for bus in [&mut self.music, &mut self.sfx] {
+            bus.listener
+                .set_position(pose.position, tween)
+                .map_err(|error| error.to_string())?;
+            bus.listener
+                .set_orientation(pose.orientation, tween)
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+
+    pub fn reap(&mut self) {
+        self.voices
+            .retain(|voice| voice.handle.state() != PlaybackState::Stopped);
+    }
+
+    pub fn active_voices(&self) -> usize {
+        self.voices
+            .iter()
+            .filter(|voice| !voice.stopping && voice.handle.state() != PlaybackState::Stopped)
+            .count()
+    }
+
+    pub fn rendered_blocks(&self) -> u64 {
+        self.rendered_blocks.load(Ordering::Relaxed)
+    }
+}
+
+struct OutputGate {
+    retired: Arc<AtomicBool>,
+    rendered_blocks: Arc<AtomicU64>,
+    silent: bool,
+}
+impl EffectBuilder for OutputGate {
+    type Handle = ();
+
+    fn build(self) -> (Box<dyn Effect>, ()) {
+        (Box::new(self), ())
+    }
+}
+impl Effect for OutputGate {
+    fn on_start_processing(&mut self) {
+        self.silent = self.retired.load(Ordering::Acquire);
+        if !self.silent {
+            self.rendered_blocks.fetch_add(1, Ordering::Relaxed);
         }
     }
-    #[link(name = "winmm")]
-    unsafe extern "system" {
-        fn waveOutOpen(
-            handle: *mut usize,
-            device: u32,
-            format: *const WaveFormat,
-            callback: usize,
-            instance: usize,
-            flags: u32,
-        ) -> u32;
-        fn waveOutPrepareHeader(handle: usize, header: *mut WaveHeader, size: u32) -> u32;
-        fn waveOutWrite(handle: usize, header: *mut WaveHeader, size: u32) -> u32;
-        fn waveOutReset(handle: usize) -> u32;
-        fn waveOutUnprepareHeader(handle: usize, header: *mut WaveHeader, size: u32) -> u32;
-        fn waveOutClose(handle: usize) -> u32;
+
+    fn process(
+        &mut self,
+        input: Frame,
+        _: f64,
+        _: &ClockInfoProvider,
+        _: &ModulatorValueProvider,
+    ) -> Frame {
+        if self.silent { Frame::ZERO } else { input }
     }
 }

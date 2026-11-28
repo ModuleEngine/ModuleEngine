@@ -1798,16 +1798,12 @@ fn import_resource_transaction<T>(
         .unwrap_or_default()
         .to_string_lossy()
         .to_ascii_lowercase();
-    if !matches!(
-        extension.as_str(),
-        "glb" | "gltf" | "png" | "jpg" | "jpeg" | "wav"
-    ) {
-        return Err("Supported formats: glTF/GLB, PNG/JPEG, and WAV".into());
+    let audio = module_engine_core::AUDIO_CUE_EXTENSIONS.contains(&extension.as_str());
+    if !audio && !matches!(extension.as_str(), "glb" | "gltf" | "png" | "jpg" | "jpeg") {
+        return Err("Supported formats: glTF/GLB, PNG/JPEG, and WAV/OGG/MP3/FLAC".into());
     }
-    if extension == "wav"
-        && (bytes.len() < 12 || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WAVE")
-    {
-        return Err("Expected a RIFF WAV file".into());
+    if audio {
+        module_engine_host_services::validate_audio_bytes(&extension, &bytes)?;
     }
     let root = root.canonicalize().map_err(|error| error.to_string())?;
     let parent = root.join(&folder);
@@ -1850,7 +1846,7 @@ fn import_resource_transaction<T>(
             "png" | "jpg" | "jpeg" => {
                 library.import_texture(source, &format!("{directory}/{name}"))
             }
-            "wav" => AssetWorkspace::new(&root, Vec::<String>::new())?
+            _ if audio => AssetWorkspace::new(&root, Vec::<String>::new())?
                 .write_new_file(&format!("{directory}/{name}"), &bytes),
             _ => unreachable!(),
         }?;

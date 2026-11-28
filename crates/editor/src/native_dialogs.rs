@@ -495,10 +495,16 @@ mod platform {
                 &[("ModuleEngine project (*.json)", "*.json")]
             }
             DialogKind::ImportAsset => &[
-                ("Supported assets", "*.gltf;*.glb;*.png;*.jpg;*.jpeg;*.wav"),
+                (
+                    "Supported assets",
+                    "*.gltf;*.glb;*.png;*.jpg;*.jpeg;*.wav;*.ogg;*.mp3;*.flac",
+                ),
                 ("3D models (*.gltf;*.glb)", "*.gltf;*.glb"),
                 ("Textures (*.png;*.jpg;*.jpeg)", "*.png;*.jpg;*.jpeg"),
-                ("Audio (*.wav)", "*.wav"),
+                (
+                    "Audio (*.wav;*.ogg;*.mp3;*.flac)",
+                    "*.wav;*.ogg;*.mp3;*.flac",
+                ),
             ],
         };
         let filter_text: Vec<_> = filters

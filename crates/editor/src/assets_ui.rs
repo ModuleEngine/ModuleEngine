@@ -32,7 +32,7 @@ impl AssetKind {
         match self {
             Self::Model => "3D",
             Self::Texture => "IMG",
-            Self::Audio => "WAV",
+            Self::Audio => "AUD",
             Self::Shader => "HLSL",
             Self::Other => "FILE",
             Self::Scene => "SCENE",

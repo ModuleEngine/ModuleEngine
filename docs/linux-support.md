@@ -14,6 +14,7 @@ Policy checks with a Linux flag on Windows do not replace native building and ex
 
 * Native Linux Rust/Cargo 1.99.0 is the verified version; earlier versions were not checked in this run. rustfmt/Clippy components, a C compiler/linker and pkg-config are required. The commands below do not install tools.
 * For GUI: a working Wayland or X11 session, window-system and xkbcommon runtime libraries, a Vulkan loader and compatible ICD. Development/linking may require dev packages for the selected distribution. Install them explicitly through your system's tools.
+* For native audio: an ALSA default output. Builds with the `audio` feature also require ALSA development headers and pkg-config, for example `libasound2-dev` on Ubuntu.
 * For new HLSL: native Linux DXC. Windows `dxc.exe` is not used through Wine/interop. A precompiled Player needs neither DXC nor Rust, but needs system runtime libraries and a GPU driver.
 * Native packages are built on their own OS/architecture. A Windows export does not become a Linux package by renaming the EXE. The `native_platform` tag does not prove glibc/driver compatibility with every distribution.
 
@@ -32,7 +33,7 @@ Code 2 means the selected mode's requirements are missing. A successful probe do
 
 ## Building and running
 
-Use the existing checkout through a native Linux environment or an explicitly created Full acceptance package, after preparing tools. Ordinary development does not require a new checkout. For GUI, choose a format 4 project with no active WAV request; `/path/to/linux-project-v4.json` below means its actual path. This checkout's root `project.json` has the old format 3 and is preserved without automatic migration. `game-project-v4.json` has the current format, but its audio request requires an explicit change to a separate verification project.
+Use the existing checkout through a native Linux environment or an explicitly created Full acceptance package, after preparing tools. Ordinary development does not require a new checkout. `/path/to/linux-project-v4.json` below means the path of a format 4 project. The root `project.json` has the old format 3 and is preserved without automatic migration. Projects that request audio need a working default output for playback.
 
 ```sh
 rustc -vV
@@ -139,7 +140,7 @@ Reusing ready scheduled Rust Custom after Stop is implemented in the [compiled-p
 
 ## Optional services
 
-Native WAV is implemented on Windows. On Linux, an active `audio.wav` request produces an error before assets load; export is also rejected. An absent/disabled service is allowed. Export does not silently remove sound or alter authored data. A passed silent/headless check cannot be treated as proof of audio operation.
+The optional `audio.wav` service uses Kira and CPAL on Linux. WAV, OGG/Vorbis, MP3 and FLAC cues retain the same game-event bindings. Export retains requested audio and its asset references. Playback opens the default output on the first enabled cue and reports device failures in `output_error`. A disabled or omitted service still permits a headless session. Use the [loopback check](../crates/host-services/README.md#concurrent-wav-music-and-effects) on a confirmed capture monitor for output and latency evidence.
 
 For Linux GUI/export verification, use a project that explicitly does not request WAV, for example Puzzle or your own profile without audio. Current ARPG settings with sound cues require an explicit change to a separate project copy. A complete Linux audio backend is the next separate stage.
 

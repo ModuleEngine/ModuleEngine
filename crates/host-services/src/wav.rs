@@ -1,5 +1,5 @@
 //! Bounded RIFF PCM/IEEE-float decoding; no device calls or game metadata.
-use std::{fs, io::Read, path::Path};
+use std::io::Read;
 const MAX_WAV_BYTES: usize = 128 * 1024 * 1024;
 const MAX_DECODED_SAMPLES: usize = 64 * 1024 * 1024;
 const PCM_GUID: [u8; 16] = [
@@ -124,10 +124,10 @@ impl Format {
     }
 }
 impl DecodedWav {
-    pub(crate) fn read(path: &Path) -> Result<Self, String> {
-        let file = fs::File::open(path).map_err(|error| error.to_string())?;
+    pub(crate) fn read(source: impl Read) -> Result<Self, String> {
         let mut bytes = Vec::new();
-        file.take(MAX_WAV_BYTES as u64 + 1)
+        source
+            .take(MAX_WAV_BYTES as u64 + 1)
             .read_to_end(&mut bytes)
             .map_err(|error| error.to_string())?;
         Self::decode(&bytes)

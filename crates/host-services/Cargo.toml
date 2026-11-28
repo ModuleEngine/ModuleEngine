@@ -7,11 +7,16 @@ publish = false
 
 [features]
 default = []
-audio = ["dep:module-engine-project", "dep:serde"]
+audio = ["dep:claxon", "dep:cpal", "dep:kira", "dep:lewton", "dep:module-engine-project", "dep:nanomp3", "dep:serde"]
 persistence = ["dep:serde"]
 
 [dependencies]
+claxon = { version = "0.4.3", optional = true }
+cpal = { version = "0.18.2", optional = true }
+kira = { version = "0.8.7", default-features = false, optional = true }
+lewton = { version = "0.10.2", optional = true }
 module-engine-core = { path = "../engine-core" }
 module-engine-project = { path = "../project-tools", optional = true }
 serde = { workspace = true, optional = true }
 serde_json.workspace = true
+nanomp3 = { version = "0.1.1", optional = true }
