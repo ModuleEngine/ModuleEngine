@@ -508,6 +508,64 @@ mod tests {
     }
 
     #[test]
+    fn legacy_renderer_lock_opens_and_explicit_publication_offers_surface_materials() {
+        let mut document = demo_document(WorldKind::Ecs);
+        document.schema_version = ENGINE_LOCK_DOCUMENT_VERSION;
+        let renderer = document
+            .root
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == "renderer")
+            .unwrap();
+        let mut modules = ModuleRegistry::builtin();
+        let mut descriptor = modules.descriptor(&renderer.module).unwrap().clone();
+        descriptor.id = "render.vulkan".into();
+        renderer.module.clone_from(&descriptor.id);
+        modules.register_module(descriptor).unwrap();
+        let composition = CompositionContext::new(modules, SystemRegistry::builtin()).unwrap();
+
+        composition
+            .capture_lock(&document, profile(), None)
+            .unwrap()
+            .apply_to(&mut document);
+        let original_pin =
+            document.engine_lock.as_ref().unwrap().component_schemas["material"].clone();
+        document
+            .engine_lock
+            .as_mut()
+            .unwrap()
+            .component_schemas
+            .remove(crate::MATERIAL_ASSET_COMPONENT)
+            .unwrap();
+        reseal(&mut document);
+        composition.validate_lock(&document, None).unwrap();
+        assert!(
+            !composition
+                .activity(&document)
+                .unwrap()
+                .components
+                .contains(crate::MATERIAL_ASSET_COMPONENT)
+        );
+
+        composition
+            .capture_lock(&document, profile(), None)
+            .unwrap()
+            .apply_to(&mut document);
+        composition.validate_lock(&document, None).unwrap();
+        assert!(
+            composition
+                .activity(&document)
+                .unwrap()
+                .components
+                .contains(crate::MATERIAL_ASSET_COMPONENT)
+        );
+        assert_eq!(
+            document.engine_lock.as_ref().unwrap().component_schemas["material"],
+            original_pin
+        );
+    }
+
+    #[test]
     fn canonical_sha256_is_sorted_recursive_and_preserves_array_contract_order() {
         assert_eq!(
             canonical_contract_hash(&json!({})).unwrap(),

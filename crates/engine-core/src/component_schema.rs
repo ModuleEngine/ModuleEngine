@@ -843,7 +843,7 @@ mod tests {
                 .schemas()
                 .map(|schema| schema.id.as_str())
                 .collect::<BTreeSet<_>>(),
-            BTreeSet::from(["material", "mesh"])
+            BTreeSet::from(["material", "mesh", crate::MATERIAL_ASSET_COMPONENT])
         );
         let active = BTreeSet::from(["material".into()]);
         let scenes = BTreeMap::new();
