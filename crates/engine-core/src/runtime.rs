@@ -1307,6 +1307,7 @@ mod tests {
             fn step(&mut self, _: f32, _: f32) {}
             fn snapshot(&self) -> SceneSnapshot {
                 SceneSnapshot {
+                    lights: Vec::new(),
                     items: vec![RenderItem {
                         material: Default::default(),
                         id: 90,

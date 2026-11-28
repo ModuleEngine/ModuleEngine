@@ -23,6 +23,7 @@ impl WorldProvider for PyramidWorld {
 
     fn snapshot(&self) -> SceneSnapshot {
         SceneSnapshot {
+            lights: Vec::new(),
             time: self.time,
             items: vec![RenderItem {
                 material: Default::default(),

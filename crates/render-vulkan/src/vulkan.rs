@@ -4122,7 +4122,11 @@ mod content_player_tests {
             |renderer: &mut VulkanRenderer, graph: &Graph, items: Vec<RenderItem>| {
                 let frame = renderer
                     .render(
-                        &SceneSnapshot { items, time: 0. },
+                        &SceneSnapshot {
+                            lights: Vec::new(),
+                            items,
+                            time: 0.,
+                        },
                         camera,
                         64,
                         64,
@@ -4322,7 +4326,11 @@ mod content_player_tests {
             retained
                 .apply(module_engine_core::SceneUpdate::Reset {
                     revision,
-                    snapshot: SceneSnapshot { items, time: 0. },
+                    snapshot: SceneSnapshot {
+                        lights: Vec::new(),
+                        items,
+                        time: 0.,
+                    },
                 })
                 .unwrap();
             renderer
@@ -4349,6 +4357,7 @@ mod content_player_tests {
         let reference = renderer
             .render(
                 &SceneSnapshot {
+                    lights: Vec::new(),
                     items: next.clone(),
                     time: 0.,
                 },
@@ -4369,6 +4378,7 @@ mod content_player_tests {
         for (revision, items) in [(3, &extreme), (4, &next)] {
             retained
                 .apply(module_engine_core::SceneUpdate::Delta {
+                    lights: &[],
                     base: revision - 1,
                     revision,
                     time: 0.,
@@ -4399,6 +4409,7 @@ mod content_player_tests {
             let reference = renderer
                 .render(
                     &SceneSnapshot {
+                        lights: Vec::new(),
                         items: items.clone(),
                         time: 0.,
                     },

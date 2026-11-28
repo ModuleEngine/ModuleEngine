@@ -597,6 +597,7 @@ impl Fixture<'_> {
             })?;
             let a_ticket = submit(SceneInput::Retained(&mut retained))?;
             retained.apply(SceneUpdate::Delta {
+                lights: &[],
                 base: 0,
                 revision: 1,
                 time: 0.,
@@ -689,6 +690,7 @@ impl Fixture<'_> {
                 "Cancelled transform positive control did not change pixels",
             )?;
             retained.apply(SceneUpdate::Delta {
+                lights: &[],
                 base: 1,
                 revision: 2,
                 time: 0.,

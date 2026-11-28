@@ -39,6 +39,7 @@ pub(super) struct RetainedPresentation {
     animated: BTreeSet<u64>,
     projected_time: Option<f32>,
     drawables: BTreeMap<u64, Drawables>,
+    lights: Vec<SceneLight>,
     revision: u64,
     base: u64,
     delta: BTreeMap<u64, SceneChangeKind>,
@@ -153,6 +154,7 @@ impl RetainedPresentation {
                 .extend(self.appearance.union(&appearance).copied());
             self.appearance = appearance;
             let mut input = SceneSnapshot {
+                lights: Vec::new(),
                 time: sample.time as f32,
                 items: scoped
                     .into_iter()
@@ -263,6 +265,7 @@ impl RetainedPresentation {
         &mut self,
         models: &BTreeMap<u64, Model>,
         time: f32,
+        lights: Vec<SceneLight>,
         enrich: impl FnOnce(SceneSnapshot) -> Result<(SceneSnapshot, BTreeSet<u64>), String>,
     ) -> Result<(), String> {
         let mut dirty = self.dirty.clone();
@@ -275,10 +278,12 @@ impl RetainedPresentation {
                 dirty.insert(*id);
             }
         }
-        if dirty.is_empty() {
+        let lighting_changed = self.lights != lights;
+        if dirty.is_empty() && !lighting_changed {
             return Ok(());
         }
         let (snapshot, animated) = enrich(SceneSnapshot {
+            lights: Vec::new(),
             time,
             items: dirty
                 .iter()
@@ -348,7 +353,8 @@ impl RetainedPresentation {
         debug_assert!(items.next().is_none());
         self.dirty.clear();
         self.last_interpolated.clone_from(models);
-        if !delta.is_empty() {
+        self.lights = lights;
+        if !delta.is_empty() || lighting_changed {
             self.base = self.revision;
             self.revision = next_presentation_revision();
             self.delta = delta;
@@ -365,6 +371,7 @@ impl RetainedPresentation {
     fn snapshot(&self, time: f32) -> SceneSnapshot {
         SceneSnapshot {
             time,
+            lights: self.lights.clone(),
             items: self
                 .drawables
                 .values()
@@ -381,6 +388,7 @@ impl RetainedPresentation {
                 base: self.revision,
                 revision: self.revision,
                 time,
+                lights: &self.lights,
                 changes: &[],
             }
         } else if ready == SceneSync::At(self.base) {
@@ -400,6 +408,7 @@ impl RetainedPresentation {
                 base: self.base,
                 revision: self.revision,
                 time,
+                lights: &self.lights,
                 changes: &changes,
             }
         } else {

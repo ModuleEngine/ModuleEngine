@@ -262,18 +262,14 @@ impl CompositionContext {
             .map(|lock| lock.component_schemas.clone())
             .unwrap_or_default();
         component_schemas.extend(required.component_schemas);
-        // Explicit publication can offer the material asset to projects whose
-        // previous profile predates the surface_material contribution.
-        if crate::connected_modules(document).contains("render.vulkan")
-            && let Some(schema) = self
-                .systems
-                .components()
-                .schema(crate::MATERIAL_ASSET_COMPONENT)
-        {
-            component_schemas.insert(
-                crate::MATERIAL_ASSET_COMPONENT.into(),
-                SchemaPin::capture(schema)?,
-            );
+        // Explicit publication offers new stock Vulkan components even when
+        // an older exact profile did not publish their schemas.
+        if crate::connected_modules(document).contains("render.vulkan") {
+            for name in [crate::MATERIAL_ASSET_COMPONENT, crate::LIGHT_COMPONENT] {
+                if let Some(schema) = self.systems.components().schema(name) {
+                    component_schemas.insert(name.into(), SchemaPin::capture(schema)?);
+                }
+            }
         }
         let mut system_state_schemas = archive
             .map(|lock| lock.system_state_schemas.clone())

@@ -418,7 +418,17 @@ impl GameSession {
     pub fn snapshot(&self) -> SceneSnapshot {
         let mut snapshot = self.provider.as_ref().map_or_else(
             || self.state.world.snapshot(),
-            |provider| provider.snapshot(),
+            |provider| {
+                let mut snapshot = provider.snapshot();
+                let world = &self.state.world;
+                snapshot
+                    .lights
+                    .extend(world.render_lights(&BTreeMap::new()));
+                if !snapshot.lights.is_empty() {
+                    snapshot.items.retain(|item| !world.is_light_only(item.id));
+                }
+                snapshot
+            },
         );
         snapshot.time = self.state.time as f32;
         snapshot

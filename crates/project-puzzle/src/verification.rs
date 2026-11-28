@@ -1,7 +1,8 @@
 //! Game-owned Puzzle composition and hosted runtime acceptance scenarios.
 use crate::{Direction, PuzzleOutcome, direction_input, frame};
 use module_engine_core::{
-    GameInput, GameSession, GameState, GraphDocument, MATERIAL_ASSET_COMPONENT, WorldKind,
+    GameInput, GameSession, GameState, GraphDocument, LIGHT_COMPONENT, MATERIAL_ASSET_COMPONENT,
+    WorldKind,
 };
 use module_engine_host::GameHost;
 use serde_json::{Value, json};
@@ -58,7 +59,12 @@ pub fn independent_activity(
     let allowed_component = |id: &str| {
         matches!(
             id,
-            "puzzle.board" | "puzzle.cell" | "mesh" | "material" | MATERIAL_ASSET_COMPONENT
+            "puzzle.board"
+                | "puzzle.cell"
+                | "mesh"
+                | "material"
+                | MATERIAL_ASSET_COMPONENT
+                | LIGHT_COMPONENT
         )
     };
     require(

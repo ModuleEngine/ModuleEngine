@@ -38,6 +38,7 @@ pub enum SceneUpdate<'a> {
         base: u64,
         revision: u64,
         time: f32,
+        lights: &'a [crate::SceneLight],
         changes: &'a [SceneChange<'a>],
     },
 }
@@ -81,6 +82,7 @@ impl RenderScene {
                 base,
                 revision,
                 time,
+                lights,
                 changes,
             } => {
                 if self.revision != Some(base) {
@@ -137,6 +139,8 @@ impl RenderScene {
                     }
                 }
                 self.scene.time = time;
+                self.scene.lights.clear();
+                self.scene.lights.extend_from_slice(lights);
                 self.revision = Some(revision);
             }
         }

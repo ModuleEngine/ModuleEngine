@@ -702,6 +702,7 @@ impl SceneApp {
                         })
                         .collect();
                     retained.apply(SceneUpdate::Delta {
+                        lights: &[],
                         base: self.submitted as u64,
                         revision: self.submitted as u64 + 1,
                         time: self.fixture.scene.time,

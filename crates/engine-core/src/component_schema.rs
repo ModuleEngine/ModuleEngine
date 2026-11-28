@@ -692,6 +692,60 @@ pub fn register_builtin_component_schemas(registry: &mut ComponentRegistry) -> R
     surface_material.label = "Surface Material".into();
     surface_material.fields[0].label = "Material asset".into();
     registry.register(surface_material)?;
+    let channel = PropertyType::Number { min: 0., max: 1. };
+    let angle = PropertyType::Number { min: 0., max: 89. };
+    let mut light = schema(
+        crate::LIGHT_COMPONENT,
+        "scene.extract",
+        json!({"kind":"point","color":[1.,1.,1.],"intensity":100.,"range":6.,
+               "inner_angle_degrees":15.,"outer_angle_degrees":30.}),
+        vec![
+            (
+                "kind",
+                PropertyType::Enum {
+                    choices: ["directional", "point", "spot"].map(str::to_owned).into(),
+                },
+            ),
+            ("color.0", channel.clone()),
+            ("color.1", channel.clone()),
+            ("color.2", channel),
+            (
+                "intensity",
+                PropertyType::Number {
+                    min: 0.,
+                    max: 1_000_000.,
+                },
+            ),
+            (
+                "range",
+                PropertyType::Number {
+                    min: 0.001,
+                    max: 10_000.,
+                },
+            ),
+            ("inner_angle_degrees", angle.clone()),
+            ("outer_angle_degrees", angle),
+        ],
+    );
+    light.label = "Light".into();
+    for (field, label) in light.fields.iter_mut().zip([
+        "Type",
+        "Red (linear)",
+        "Green (linear)",
+        "Blue (linear)",
+        "Intensity (lux / cd)",
+        "Range",
+        "Inner cone (degrees)",
+        "Outer cone (degrees)",
+    ]) {
+        field.label = label.into();
+    }
+    registry.register_with_validator(light, |entity, _| {
+        let settings =
+            crate::lighting::LightSettings::deserialize(&entity.components[crate::LIGHT_COMPONENT])
+                .map_err(|error| format!("Object {} light: {error}", entity.object.id))?;
+        settings.validate()
+    })?;
     Ok(())
 }
 
@@ -843,7 +897,12 @@ mod tests {
                 .schemas()
                 .map(|schema| schema.id.as_str())
                 .collect::<BTreeSet<_>>(),
-            BTreeSet::from(["material", "mesh", crate::MATERIAL_ASSET_COMPONENT])
+            BTreeSet::from([
+                "material",
+                "mesh",
+                crate::MATERIAL_ASSET_COMPONENT,
+                crate::LIGHT_COMPONENT
+            ])
         );
         let active = BTreeSet::from(["material".into()]);
         let scenes = BTreeMap::new();

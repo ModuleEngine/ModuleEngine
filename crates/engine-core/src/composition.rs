@@ -169,12 +169,16 @@ impl CompositionContext {
             components.extend(["mesh".into(), "material".into()]);
             if connected.contains("render.vulkan")
                 && document.schema_version >= crate::ENGINE_LOCK_DOCUMENT_VERSION
-                && document.engine_lock.as_ref().is_none_or(|lock| {
-                    lock.component_schemas
-                        .contains_key(crate::MATERIAL_ASSET_COMPONENT)
-                })
             {
-                components.insert(crate::MATERIAL_ASSET_COMPONENT.into());
+                for name in [crate::MATERIAL_ASSET_COMPONENT, crate::LIGHT_COMPONENT] {
+                    if document
+                        .engine_lock
+                        .as_ref()
+                        .is_none_or(|lock| lock.component_schemas.contains_key(name))
+                    {
+                        components.insert(name.into());
+                    }
+                }
             }
         } else {
             for component in ["mesh", "material"] {

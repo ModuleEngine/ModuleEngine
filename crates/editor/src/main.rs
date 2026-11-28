@@ -1199,6 +1199,7 @@ mod tests {
             fn step(&mut self, _: f32, _: f32) {}
             fn snapshot(&self) -> module_engine_core::SceneSnapshot {
                 module_engine_core::SceneSnapshot {
+                    lights: Vec::new(),
                     items: vec![],
                     time: 0.,
                 }

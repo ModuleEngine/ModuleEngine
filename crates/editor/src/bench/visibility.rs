@@ -93,7 +93,11 @@ pub(super) fn run(root: &Path, output: &Path) -> Result<(), String> {
                         };
                         cube(i as u64 + 110, position, [0.18; 3], [117, 27, 143, 255])
                     }));
-                    let scene = SceneSnapshot { items, time: 0. };
+                    let scene = SceneSnapshot {
+                        lights: Vec::new(),
+                        items,
+                        time: 0.,
+                    };
                     let mut expected_scene = ResidentScene::default();
                     let mut actual_scene = ResidentScene::default();
                     for retained in [&mut expected_scene, &mut actual_scene] {
@@ -124,6 +128,7 @@ pub(super) fn run(root: &Path, output: &Path) -> Result<(), String> {
                     }];
                     for scene in [&mut expected_scene, &mut actual_scene] {
                         scene.apply(SceneUpdate::Delta {
+                            lights: &[],
                             base: 0,
                             revision: 1,
                             time: 0.,
@@ -155,6 +160,7 @@ pub(super) fn run(root: &Path, output: &Path) -> Result<(), String> {
                             }];
                             for scene in [&mut expected_scene, &mut actual_scene] {
                                 scene.apply(SceneUpdate::Delta {
+                                    lights: &[],
                                     base: 1,
                                     revision: 2,
                                     time: 0.,
