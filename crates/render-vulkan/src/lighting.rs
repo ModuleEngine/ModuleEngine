@@ -1,6 +1,7 @@
-use super::{Buffer, VulkanError, VulkanRenderer, culling::Layout};
+use super::{Buffer, DeviceLifetime, VulkanError, VulkanRenderer, culling::Layout};
 use ash::vk;
 use module_engine_core::{LightKind, SceneLight};
+use std::sync::Arc;
 
 pub(crate) const SHADER: (&str, &str, &str) = (
     concat!(
@@ -22,6 +23,7 @@ const STORAGE: vk::DescriptorType = vk::DescriptorType::STORAGE_BUFFER;
 pub(super) struct Pipeline {
     layout: Layout,
     pipeline: vk::Pipeline,
+    _context: Arc<DeviceLifetime>,
 }
 
 impl Pipeline {
@@ -38,7 +40,11 @@ impl Pipeline {
         renderer
             .context
             .name(pipeline, || "Cluster punctual lights".into());
-        Ok(Self { layout, pipeline })
+        Ok(Self {
+            layout,
+            pipeline,
+            _context: renderer.context.clone(),
+        })
     }
 }
 
