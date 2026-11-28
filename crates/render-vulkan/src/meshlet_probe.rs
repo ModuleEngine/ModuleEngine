@@ -471,7 +471,7 @@ mod tests {
                     material: Default::default(),
                 })
                 .collect(),
-            time: 0.,
+            ..Default::default()
         };
         let packed = PackedGeometry::build(&scene).unwrap();
         let mut generated = Vec::new();

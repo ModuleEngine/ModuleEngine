@@ -201,9 +201,11 @@ The Vulkan composition publishes the shared `light` schema with the Engine lock.
 The component accepts `directional`, `point` and `spot`. It has linear RGB,
 directional illuminance in lux or local intensity in candela, a local range,
 and inner and outer cone half-angles in degrees. An authored transform sets
-position and aims the local −Z axis after parent transforms. A light without
-a `mesh` attachment contributes no geometry. Scene, the retained Game
+position and aims the local −Z axis after parent transforms. A valid light
+without a `mesh` attachment contributes no geometry. Scene, the retained Game
 snapshot and the exported Player consume the same committed light records.
+Direct ECS snapshots skip invalid light records and use the legacy geometry
+presentation when none of their light records are valid.
 
 Stock Forward, the paired G-buffer and Deferred route, and the stock transparent
 pass use one GGX BRDF and punctual attenuation. With no `light` attachments,
