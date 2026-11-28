@@ -1120,6 +1120,7 @@ mod tests {
         for (base, (id, kind, items, expected)) in changes.into_iter().enumerate() {
             source
                 .apply(SceneUpdate::Delta {
+                    lights: &[],
                     base: base as u64,
                     revision: base as u64 + 1,
                     time: 0.,
@@ -1195,6 +1196,7 @@ mod tests {
                 .collect();
             source
                 .apply(SceneUpdate::Delta {
+                    lights: &[],
                     base: revision - 1,
                     revision,
                     time: 0.,

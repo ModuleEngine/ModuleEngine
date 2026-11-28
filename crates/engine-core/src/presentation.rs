@@ -130,6 +130,7 @@ mod tests {
     use crate::{Material, Mesh, RenderItem, Transform, transform_point};
     fn snapshot(transform: Transform) -> SceneSnapshot {
         SceneSnapshot {
+            lights: Vec::new(),
             items: vec![RenderItem {
                 id: 1,
                 mesh: Mesh::cube(),

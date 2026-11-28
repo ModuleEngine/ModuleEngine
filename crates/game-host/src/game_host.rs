@@ -1808,7 +1808,8 @@ impl GameHost {
         let content = &mut self.content;
         let state = self.session.state();
         let contributions = &self.contributions;
-        self.retained.project(models, time, |snapshot| {
+        let lights = state.world.render_lights(models);
+        self.retained.project(models, time, lights, |snapshot| {
             Self::enrich_items(content, state, contributions, snapshot)
         })
     }
@@ -1840,6 +1841,11 @@ impl GameHost {
         contributions: &[GameContribution],
         mut snapshot: SceneSnapshot,
     ) -> Result<(SceneSnapshot, BTreeSet<u64>), String> {
+        if state.world.has_lights() {
+            snapshot
+                .items
+                .retain(|item| !state.world.is_light_only(item.id));
+        }
         let animated = content.enrich_animated_items(&mut snapshot, |id| {
             state.world.component(id, "mesh")?.get("path")?.as_str()
         })?;

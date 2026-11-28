@@ -46,6 +46,7 @@ pub(super) fn run(root: &Path, output: &Path) -> Result<(), String> {
     for count in [1000, fixture.scene.items.len()] {
         let mut scene = SceneSnapshot {
             items: fixture.scene.items[..count].to_vec(),
+            lights: Vec::new(),
             time: 0.,
         };
         for item in &mut scene.items {
@@ -111,6 +112,7 @@ pub(super) fn run(root: &Path, output: &Path) -> Result<(), String> {
                 for i in 0..=REPEATS {
                     let at = Instant::now();
                     retained.apply(SceneUpdate::Delta {
+                        lights: &[],
                         base: i as u64 * 2,
                         revision: i as u64 * 2 + 1,
                         time: 0.,
@@ -135,6 +137,7 @@ pub(super) fn run(root: &Path, output: &Path) -> Result<(), String> {
                         fixed.push(unchanged);
                     }
                     retained.apply(SceneUpdate::Delta {
+                        lights: &[],
                         base: i as u64 * 2 + 1,
                         revision: i as u64 * 2 + 2,
                         time: 0.,

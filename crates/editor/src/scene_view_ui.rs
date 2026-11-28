@@ -1629,6 +1629,7 @@ mod tests {
     }
     fn snapshot() -> SceneSnapshot {
         SceneSnapshot {
+            lights: Vec::new(),
             items: vec![RenderItem {
                 id: 7,
                 mesh: Mesh::cube(),

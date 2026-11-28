@@ -621,7 +621,11 @@ impl WorldProvider for SourceWorld {
                 material: Material::default(),
             });
         }
-        SceneSnapshot { items, time: 0. }
+        SceneSnapshot {
+            lights: Vec::new(),
+            items,
+            time: 0.,
+        }
     }
     fn apply_commands(
         &mut self,

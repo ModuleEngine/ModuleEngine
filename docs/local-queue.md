@@ -51,6 +51,7 @@ Windows permissions as its daemon.
 | quick, contracts, clippy, native, package | gpu | Named verification profile and its own scope, logs and reports. |
 | render | gpu | Offscreen profile with required capabilities, including retained Host and Vulkan checks. |
 | r5-materials | gpu | Offscreen run of the original Khronos helmets, BC7/BC5, and the saved Editor material in the exported Player. |
+| r52-lighting | gpu | Offscreen S4 timestamps and captures with 256 point lights on the reference GPU. |
 | window-graph | gpu | Release Player graph probe in a native window with the selected adapter and presentation mode. |
 | audio-loopback | gpu | Kira cue playback and latency on a quiet default WASAPI output with its loopback capture. |
 | audio-loopback-wslg | gpu | Linux Kira cue playback and latency on the virtual WSLg RDPSink and its monitor. |
@@ -171,3 +172,9 @@ artifacts outside the snapshot, ensure its processes have finished, verify the
 exact registered path against the report and remove only that snapshot through
 **git worktree remove** from its owning repository. An unfinished job still
 needs its registered checkout. Preserve failure material needed for diagnosis.
+
+For `r52-lighting`, populate `fixtures/sponza/e124e8d8d7330a5372bc2b4d00d39a4a9d7997ea`
+inside the queue root using the files in the
+[Sponza inventory](../examples/bench/sponza/manifest.json). The route checks
+their SHA-256 values and stages them in the queue snapshot. The job retains
+its exact Editor, adapter, timestamp report and S4 captures. See [the measurement contract](bench.md#r52-checks).

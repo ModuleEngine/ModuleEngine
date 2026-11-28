@@ -49,7 +49,11 @@ fn plane(cube_y: Option<f32>) -> SceneSnapshot {
             material: Material::default(),
         });
     }
-    SceneSnapshot { items, time: 0. }
+    SceneSnapshot {
+        lights: Vec::new(),
+        items,
+        time: 0.,
+    }
 }
 
 fn reference() -> Result<SceneSnapshot, String> {

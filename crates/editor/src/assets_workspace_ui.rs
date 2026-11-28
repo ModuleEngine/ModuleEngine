@@ -950,6 +950,7 @@ fn make_thumbnail(
         [0., 0., 0., 1.],
     ];
     let scene = SceneSnapshot {
+        lights: Vec::new(),
         time: 0.0,
         items: model
             .primitives

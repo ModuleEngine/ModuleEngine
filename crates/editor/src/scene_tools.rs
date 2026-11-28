@@ -976,6 +976,7 @@ mod tests {
     fn triangle_pick_selects_nearest_actual_mesh_and_retains_duplicate_primitive_id() {
         let ray = Ray::new([0., 0., 10.], [0., 0., -1.]).unwrap();
         let scene = SceneSnapshot {
+            lights: Vec::new(),
             items: vec![
                 cube(4, [0., 0., 0.]),
                 cube(9, [0., 0., 4.]),
@@ -988,6 +989,7 @@ mod tests {
         close(hit.distance, 5.);
         close(hit.point[2], 5.);
         let hole = SceneSnapshot {
+            lights: Vec::new(),
             items: vec![RenderItem {
                 mesh: Mesh {
                     vertices: vec![[2., 2., 0.], [3., 2., 0.], [2., 3., 0.]],
@@ -1017,6 +1019,7 @@ mod tests {
     fn placement_prefers_surface_then_ground_and_rejects_parallel_ray() {
         let ray = Ray::new([0., 10., 0.], [0., -1., 0.]).unwrap();
         let scene = SceneSnapshot {
+            lights: Vec::new(),
             items: vec![cube(1, [0.; 3])],
             time: 0.,
         };

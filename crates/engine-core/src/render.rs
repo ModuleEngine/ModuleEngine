@@ -446,6 +446,7 @@ mod tests {
         let far = triangle(2, 0., [20, 20, 230, 255]);
         let frame = render_scene(
             &SceneSnapshot {
+                lights: Vec::new(),
                 items: vec![near.clone(), far.clone()],
                 time: 0.,
             },
@@ -455,6 +456,7 @@ mod tests {
         );
         let reverse = render_scene(
             &SceneSnapshot {
+                lights: Vec::new(),
                 items: vec![far, near],
                 time: 0.,
             },
@@ -516,6 +518,7 @@ mod tests {
         };
         let clipped = render_scene(
             &SceneSnapshot {
+                lights: Vec::new(),
                 items: vec![item],
                 time: 0.,
             },
@@ -528,6 +531,7 @@ mod tests {
         behind.model = Transform::default().matrix();
         let frame = render_scene(
             &SceneSnapshot {
+                lights: Vec::new(),
                 items: vec![behind],
                 time: 0.,
             },

@@ -12,7 +12,12 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-const RENDER_COMPONENTS: [&str; 3] = ["mesh", "material", crate::MATERIAL_ASSET_COMPONENT];
+const RENDER_COMPONENTS: [&str; 4] = [
+    "mesh",
+    "material",
+    crate::MATERIAL_ASSET_COMPONENT,
+    crate::LIGHT_COMPONENT,
+];
 
 /// Identifies built-in world storage or a separately registered source provider.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -193,6 +198,8 @@ impl Default for MetallicRoughness {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct SceneSnapshot {
     pub items: Vec<RenderItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lights: Vec<crate::SceneLight>,
     pub time: f32,
 }
 
@@ -500,6 +507,7 @@ impl WorldProvider for ObjectsWorld {
         }
         items.sort_by_key(|item| item.id);
         SceneSnapshot {
+            lights: Vec::new(),
             items,
             time: self.time,
         }
@@ -1741,8 +1749,10 @@ impl WorldProvider for EcsWorld {
 
     fn snapshot(&self) -> SceneSnapshot {
         let mut cache = BTreeMap::new();
+        let lights = self.render_lights(&BTreeMap::new());
         let items = self
             .entity_ids()
+            .filter(|&entity| lights.is_empty() || !self.is_light_only(entity))
             .map(|entity| RenderItem {
                 id: entity,
                 mesh: Mesh::cube(),
@@ -1753,6 +1763,7 @@ impl WorldProvider for EcsWorld {
             .collect();
         SceneSnapshot {
             items,
+            lights,
             time: self.time,
         }
     }

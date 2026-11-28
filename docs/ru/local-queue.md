@@ -55,6 +55,7 @@ checkout. Сначала закоммитьте необходимые исхо�
 | quick, contracts, clippy, native, package | gpu | Указанный профиль в его собственных границах, с логами и отчётами. |
 | render | gpu | Offscreen-профиль с обязательными возможностями, проверками retained Host и Vulkan. |
 | r5-materials | gpu | Offscreen-прогон оригинальных шлемов Khronos, BC7/BC5 и сохранённого материала из Editor в экспортированном Player. |
+| r52-lighting | gpu | Offscreen-замер S4 с 256 точечными источниками, GPU timestamps и кадрами на эталонном GPU. |
 | window-graph | gpu | Графический тест Player в Release и нативном окне с выбранным адаптером и режимом показа. |
 | audio-loopback | gpu | Воспроизведение сигналов Kira и задержка на тихом выходе WASAPI по умолчанию с захватом loopback. |
 | audio-loopback-wslg | gpu | Воспроизведение сигналов Kira в Linux и задержка на виртуальном выходе WSLg RDPSink с его монитором. |
@@ -180,3 +181,10 @@ $config = 'E:\ModuleEngine-queue\pueue.yml'
 зарегистрированный путь с отчётом и удаляйте только этот снимок через
 **git worktree remove** из его Git-репозитория. Незавершённой заявке по-прежнему
 нужен зарегистрированный checkout. Сохраняйте материалы незакрытых ошибок.
+
+Для `r52-lighting` поместите файлы из
+[описи Sponza](../../examples/bench/sponza/manifest.json) в
+`fixtures/sponza/e124e8d8d7330a5372bc2b4d00d39a4a9d7997ea` внутри корня очереди.
+Маршрут сверяет SHA-256 и подготавливает входы внутри снимка. Заявка сохраняет
+точный Editor, выбранный адаптер, отчёт GPU timestamps и кадры S4.
+См. [контракт измерения](bench.md#r52-checks).

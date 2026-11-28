@@ -602,7 +602,15 @@ pub fn precompile_graph_at(
                 .flat_map(|plan| &plan.passes)
                 .filter(|pass| pass.transparency()),
         )
+        .flat_map(|pass| {
+            let clustered = pass.light_receiver().then(|| Pass {
+                clustered_lights: true,
+                ..pass.clone()
+            });
+            std::iter::once(pass.clone()).chain(clustered)
+        })
     {
+        let pass = &pass;
         let profile = if pass.manifest.stage == "compute" {
             "cs_6_0"
         } else {
@@ -647,6 +655,16 @@ pub fn precompile_graph_at(
             jobs.insert(shader_key(root, source, entry, "vs_6_0")?, shader.words);
         }
     }
+    if plan.passes.iter().any(Pass::light_receiver)
+        || surface_plan
+            .as_ref()
+            .is_some_and(|plan| plan.passes.iter().any(Pass::light_receiver))
+    {
+        let (source, entry, profile) = crate::vulkan::lighting::SHADER;
+        let shader = compile_hlsl_at(root, source, entry, profile)?;
+        verify_light_grid(&shader.words)?;
+        jobs.insert(shader_key(root, source, entry, profile)?, shader.words);
+    }
     if plan.passes.iter().any(Pass::resident_geometry) {
         let resident = crate::vulkan::resident::VERTEX_SHADER;
         let culled = crate::vulkan::resident::culled_vertex_source();
@@ -676,6 +694,14 @@ pub fn precompile_graph_at(
 }
 
 pub(crate) fn compatibility_source(pass: &Pass) -> std::borrow::Cow<'_, str> {
+    let lighting = if pass.clustered_lights {
+        concat!(
+            "#define MODULE_ENGINE_CLUSTERED_LIGHTS 1\n",
+            include_str!("../../../assets/gpu/cluster_lights.hlsli")
+        )
+    } else {
+        ""
+    };
     if pass.surface_materials() {
         let (define, source) = if pass.transparency() {
             (
@@ -691,13 +717,13 @@ pub(crate) fn compatibility_source(pass: &Pass) -> std::borrow::Cow<'_, str> {
             ("", pass.source.as_str())
         };
         format!(
-            "#define MODULE_ENGINE_SURFACE_MATERIALS 1\n{define}{}\n{source}",
+            "{lighting}\n#define MODULE_ENGINE_SURFACE_MATERIALS 1\n{define}{}\n{source}",
             include_str!("../../../assets/gpu/surface_material.hlsli"),
         )
         .into()
     } else if pass.reads_surface_materials() {
         format!(
-            "#define MODULE_ENGINE_DEFERRED_SURFACE 1\n{}\n{}",
+            "{lighting}\n#define MODULE_ENGINE_DEFERRED_SURFACE 1\n{}\n{}",
             include_str!("../../../assets/gpu/surface_material.hlsli"),
             pass.source,
         )
@@ -727,6 +753,8 @@ enum SceneDescriptors {
     AtlasSurface,
     IndexedBlend,
     AtlasBlend,
+    DeferredLighting,
+    LightGrid,
     Resident,
     Culled,
 }
@@ -739,12 +767,12 @@ pub(crate) fn verify_bindless_shader(pass: &Pass, words: &[u32]) -> Result<(), S
     } else {
         SceneDescriptors::Bindless
     };
-    verify_scene_descriptors(&pass.id, words, descriptors)
+    verify_scene_descriptors(&pass.id, words, descriptors, pass.clustered_lights)
 }
 
 #[cfg(feature = "bench")]
 pub(crate) fn verify_meshlet_fragment(pass: &Pass, words: &[u32]) -> Result<(), ShaderError> {
-    verify_scene_descriptors(&pass.id, words, SceneDescriptors::Bindless)
+    verify_scene_descriptors(&pass.id, words, SceneDescriptors::Bindless, false)
 }
 
 pub(crate) fn verify_resident_vertex(words: &[u32], culling: bool) -> Result<(), ShaderError> {
@@ -753,13 +781,18 @@ pub(crate) fn verify_resident_vertex(words: &[u32], culling: bool) -> Result<(),
     } else {
         SceneDescriptors::Resident
     };
-    verify_scene_descriptors("resident vertex", words, descriptors)
+    verify_scene_descriptors("resident vertex", words, descriptors, false)
+}
+
+pub(crate) fn verify_light_grid(words: &[u32]) -> Result<(), ShaderError> {
+    verify_scene_descriptors("cluster lights", words, SceneDescriptors::LightGrid, true)
 }
 
 fn verify_scene_descriptors(
     name: &str,
     words: &[u32],
     descriptors: SceneDescriptors,
+    clustered: bool,
 ) -> Result<(), ShaderError> {
     let mut bindings = BTreeMap::new();
     let mut sets = BTreeMap::new();
@@ -767,6 +800,7 @@ fn verify_scene_descriptors(
     let mut variables = BTreeMap::new();
     let mut strides = BTreeMap::new();
     let mut read_only_rows = std::collections::BTreeSet::new();
+    let mut locals = None;
     let mut index = 5;
     while index < words.len() {
         let instruction = words[index];
@@ -777,6 +811,7 @@ fn verify_scene_descriptors(
         let opcode = instruction & 0xffff;
         let a = &words[index + 1..index + count];
         match opcode {
+            16 if a.len() >= 5 && a[1] == 17 => locals = Some([a[2], a[3], a[4]]),
             71 if a.len() >= 3 && a[1] == 33 => {
                 bindings.insert(a[0], a[2]);
             }
@@ -817,6 +852,29 @@ fn verify_scene_descriptors(
             };
             read_only_rows.contains(element).then_some(*rows)
         };
+        if clustered && set == 0 && matches!(binding, 8 | 9) {
+            if binding == 9 && matches!(descriptors, SceneDescriptors::LightGrid) {
+                let (12, 30, [rows]) = (storage, opcode, operands) else {
+                    return None;
+                };
+                return (!read_only_rows.contains(element) && strides.get(rows) == Some(&4))
+                    .then_some(());
+            }
+            return (strides.get(&storage_array()?) == Some(&if binding == 8 { 16 } else { 4 }))
+                .then_some(());
+        }
+        if matches!(descriptors, SceneDescriptors::DeferredLighting) && set == 0 {
+            return match binding {
+                0..=3 => sampled_float(opcode, operands),
+                4 => {
+                    let (25, [component, 1, _, 0, 0, 2, 1, ..]) = (opcode, operands) else {
+                        return None;
+                    };
+                    (types.get(component).copied() == Some((22, &[32]))).then_some(())
+                }
+                _ => None,
+            };
+        }
         if matches!(
             descriptors,
             SceneDescriptors::Resident | SceneDescriptors::Culled
@@ -893,11 +951,26 @@ fn verify_scene_descriptors(
         SceneDescriptors::AtlasSurface => &[(0, 0), (0, 1)],
         SceneDescriptors::IndexedBlend => &[(0, 1), (1, 0), (1, 1), (1, 2), (1, 3)],
         SceneDescriptors::AtlasBlend => &[(0, 1), (0, 2), (0, 3)],
+        SceneDescriptors::DeferredLighting => &[(0, 0), (0, 1), (0, 2), (0, 3), (0, 4)],
+        SceneDescriptors::LightGrid => &[],
         SceneDescriptors::Resident => &[(0, 1), (0, 2), (0, 3), (0, 4)],
         SceneDescriptors::Culled => &[(0, 1), (0, 2), (0, 3), (0, 4), (0, 5)],
     };
+    let mut expected = expected
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
+    if clustered {
+        expected.extend([(0, 8), (0, 9)]);
+    }
+    let expected_locals = match descriptors {
+        SceneDescriptors::DeferredLighting => Some([8, 8, 1]),
+        SceneDescriptors::LightGrid => Some([32, 1, 1]),
+        _ => None,
+    };
     if bindings.len() != expected.len()
-        || !actual.iter().copied().eq(expected.iter().copied())
+        || actual != expected
+        || expected_locals.is_some_and(|expected| locals != Some(expected))
         || bindings.iter().any(|(id, binding)| {
             matches(id, sets.get(id).copied().unwrap_or(u32::MAX), *binding).is_none()
         })
@@ -910,13 +983,16 @@ fn verify_scene_descriptors(
 }
 
 pub(crate) fn verify_shader(pass: &Pass, words: &[u32], vertex: bool) -> Result<(), ShaderError> {
+    if !vertex && pass.clustered_lights && pass.reads_surface_materials() {
+        return verify_scene_descriptors(&pass.id, words, SceneDescriptors::DeferredLighting, true);
+    }
     if !vertex && pass.surface_materials() {
         let descriptor = if pass.transparency() {
             SceneDescriptors::AtlasBlend
         } else {
             SceneDescriptors::AtlasSurface
         };
-        return verify_scene_descriptors(&pass.id, words, descriptor);
+        return verify_scene_descriptors(&pass.id, words, descriptor, pass.clustered_lights);
     }
     let mut bindings = BTreeMap::new();
     let mut sets = BTreeMap::new();

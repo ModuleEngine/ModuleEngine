@@ -1443,6 +1443,7 @@ fn ambient_original_gardener_breathes_with_an_anchored_sole_plane_and_bounded_he
         material: material.clone(),
     };
     let original = SceneSnapshot {
+        lights: Vec::new(),
         items: vec![first],
         time: 0.,
     };

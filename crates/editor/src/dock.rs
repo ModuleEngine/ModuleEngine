@@ -1497,6 +1497,7 @@ mod tests {
                                         egui::UiBuilder::new().id_salt(pane.id).max_rect(pane.rect),
                                         |ui| {
                                             let snapshot = SceneSnapshot {
+                                                lights: Vec::new(),
                                                 items: vec![],
                                                 time: 0.,
                                             };
