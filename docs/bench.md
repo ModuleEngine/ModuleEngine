@@ -487,7 +487,7 @@ Submit `r52-lighting` in the [local queue](local-queue.md). The route verifies
 the pinned Sponza files, loads the original S4 geometry and camera, and renders
 the original mode, a directional-only control, and the same scene with its
 256 specified point lights. Each stock Forward and Deferred mode warms up for
-12 frames and records 60 frames at 1920×1080 in Release, offscreen, on the
+90 frames and measures the next 60 frames at 1920×1080 in Release, offscreen, on the
 RTX 4080 SUPER. The final scene captures show the point-light contribution
 relative to the directional-only control. An untimed frame fills every
 cluster with all 256 lights on the CPU. The route requires pixel-for-pixel
@@ -497,7 +497,8 @@ The Deferred budget uses the per-frame sum of cluster dispatch and the
 `lighting` compute pass. Forward combines raster work with shading, so its
 paired increment subtracts the direction-only geometry pass from the
 corresponding lit geometry plus cluster time. The report also retains the
-absolute Forward number and raw timestamps. The route requires a p95 of
+absolute Forward number and raw timestamps, including all 90 warmup frames for
+each mode. The route requires a warmed p95 of
 at most 2 ms for each reported budget metric. The original scene timing,
 culling, postprocessing and the completed GPU graph time remain identifiable
 in the report.

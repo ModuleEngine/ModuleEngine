@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::Path};
 
-const WARMUP: usize = 12;
+const WARMUP: usize = 90;
 const FRAMES: usize = 60;
 const BUDGET_MS: f64 = 2.0;
 const REFERENCE_ADAPTER: &str = "NVIDIA GeForce RTX 4080 SUPER";
@@ -101,6 +101,7 @@ pub(super) fn run(root: &Path, output: &Path) -> Result<(), String> {
                 snapshot: fixture.scene.clone(),
             })?;
             let mut samples = Vec::with_capacity(FRAMES);
+            let mut warmup = Vec::with_capacity(WARMUP);
             let mut costs = Vec::with_capacity(FRAMES);
             let mut receiver_times = Vec::with_capacity(FRAMES);
             for index in 0..WARMUP + FRAMES {
@@ -148,10 +149,13 @@ pub(super) fn run(root: &Path, output: &Path) -> Result<(), String> {
                 {
                     return Err("R5.2 frame has invalid clustered lighting timing scopes".into());
                 }
-                if index >= WARMUP {
+                let sample = json!({ "cluster_ms":cluster, "receiver_ms":receiver, "graph_ms":graph_ms, "passes":passes });
+                if index < WARMUP {
+                    warmup.push(sample);
+                } else {
                     receiver_times.push(receiver);
                     costs.push(receiver + cluster.unwrap_or(0.));
-                    samples.push(json!({ "cluster_ms":cluster, "receiver_ms":receiver, "graph_ms":graph_ms, "passes":passes }));
+                    samples.push(sample);
                 }
                 if index == WARMUP + FRAMES - 1 {
                     crate::write_png(&output.join(format!("{name}-{mode}.png")), &frame)?;
@@ -175,9 +179,10 @@ pub(super) fn run(root: &Path, output: &Path) -> Result<(), String> {
             } else if mode == "256_points" {
                 lit_cost = costs.clone();
             }
-            pairs.push(
-                json!({"mode":mode,"cluster_and_receiver_ms":summarize(costs),"samples":samples}),
-            );
+            pairs.push(json!({
+                "mode":mode,"cluster_and_receiver_ms":summarize(costs),
+                "warmup":warmup,"samples":samples,
+            }));
         }
         if point_changed_pixels == 0 {
             return Err(format!(
@@ -238,7 +243,13 @@ pub(super) fn run(root: &Path, output: &Path) -> Result<(), String> {
             "budget_p95_ms":p95,
         }));
     }
-    fixture.inventory["point_lights_submitted"] = json!(256);
+    let inventory = fixture
+        .inventory
+        .as_object_mut()
+        .ok_or("Invalid S4 fixture inventory")?;
+    inventory.remove("point_lights_rendered");
+    inventory.insert("point_lights_submitted".into(), json!(256));
+    fixture.inventory["sun"]["binding"] = json!("ECS-compatible directional record in lit modes");
     write(
         &output.join("lighting-report.json"),
         &json!({

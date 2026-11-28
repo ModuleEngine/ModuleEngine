@@ -111,8 +111,13 @@ impl Frame {
                 -1.
             };
             let [x, y, z] = light.direction;
+            let inv_range_sq = if light.kind == LightKind::Directional {
+                0.
+            } else {
+                1. / (light.range * light.range)
+            };
             rows.extend([
-                [position[0], position[1], position[2], light.range],
+                [position[0], position[1], position[2], inv_range_sq],
                 [red, green, blue, inner],
                 [x, y, z, light.outer_angle_cos],
                 [view[0], view[1], view[2], light.range],

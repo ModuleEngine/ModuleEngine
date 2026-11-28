@@ -1,5 +1,6 @@
 // GPU/host contract: two uint4 header rows, four float4 rows per light.
 // Directional lights precede local lights. Local indices map to cluster bits.
+// The first light row has world XYZ and inverse squared range.
 static const uint LIGHT_TILE = 64u;
 static const uint LIGHT_Z_SLICES = 16u;
 [[vk::binding(8, 0)]] StructuredBuffer<float4> lightData;
