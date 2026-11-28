@@ -848,7 +848,9 @@ def compare_series(series, sides, scenes, rounds, rule, declared=()):
     })
     with (series / "compare.md").open("x", encoding="utf-8", newline="\n") as output:
         output.write(table)
-    print(table, flush=True)
+    # The report may contain glyphs unavailable in a redirected Windows console.
+    encoding = sys.stdout.encoding or "utf-8"
+    print(table.encode(encoding, "backslashreplace").decode(encoding), flush=True)
     if not intact:
         print("Sources or binaries changed during the series", flush=True)
     print("ACCEPTED: not worse than baseline" if accepted else "REJECTED", flush=True)

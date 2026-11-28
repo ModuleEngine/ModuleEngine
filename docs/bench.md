@@ -352,16 +352,17 @@ Use the following pair for R2.6. The blocking frame interval remains
 UI-observed. The candidate's `window_swapchain` report includes the measured
 calls and intervals on the actual window surface.
 
-For the R0.6 pair, extract the two exact source documents from the R2.6
-verification artifacts as `S1.json` and `S2.json`. Supply their directory in
-`MODULE_ENGINE_BENCHMARK_R06_GAME_FIXTURES` when invoking the command below.
+For the R0.6 pair, extract the two exact source documents from the
+[R2.6 fixture archive](evidence/r26-player/r06-game-fixtures.zip). It contains
+`S1.json` and `S2.json`. Set `MODULE_ENGINE_BENCHMARK_R06_GAME_FIXTURES` to
+their absolute directory before invoking the command below.
 The old executable generates those documents itself. The candidate checks the
 input bytes against the R0.6 digests, attaches its current profile and SDK pins
 in memory, and requires the resulting bytes to match its stock scene document.
 It records the input and accepted host hashes in `r06-game-fixture.json`.
 Both sides report the same full input hash in `fixture.json`, and the normal
-signature and timing checks still apply. A different scene, schedule, shader
-source or Custom source fails the replay before the window opens.
+signature and timing checks still apply. A difference in the scene, schedule, or
+document-owned shader or Custom source fails the replay before the window opens.
 
 | Input | R0.6 document SHA-256 |
 | --- | --- |
@@ -369,8 +370,11 @@ source or Custom source fails the replay before the window opens.
 | S2 | `cd71b49d91a25c174016e47b17ce09d0f00aebba26ea527d03ce1e8ee1a77439` |
 
 ```sh
+python -m zipfile -e docs/evidence/r26-player/r06-game-fixtures.zip work/r06-game-fixtures
 python scripts/bench.py --no-profiling --compare 731661c47e181847450e00480e60c0645abd4753 --scenes S1,S2 --declare-change gui_graphics.backend --declare-change gui_graphics.renderer --declare-change gui_graphics.requested_renderer --declare-change gui_graphics.requested_gpu_backend
 ```
+
+[Measured R2.6 result](evidence/r26-player/README.md).
 
 **Not covered yet: R3.5 open-to-first-frame.** The launcher does not measure
 editor start to first frame, and the R0.6 report has no such value, so a

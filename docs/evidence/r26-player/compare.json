@@ -1,0 +1,405 @@
+{
+  "accepted": true,
+  "integrity": {
+    "baseline": {
+      "source_matches": true,
+      "binary_matches": true
+    },
+    "candidate": {
+      "source_matches": true,
+      "binary_matches": true
+    }
+  },
+  "rerun_scenes": [],
+  "rule": {
+    "rounds_per_side": 5,
+    "order": "interleaved ABAB…; a rerun starts with B",
+    "statistic": "median of per-run values",
+    "tolerance": "max(floor, 2 × baseline (max − min) / median)",
+    "timing_floor_percent": 5.0,
+    "memory_floor_percent": 1.0,
+    "spread_factor": 2.0,
+    "borderline": "|change − tolerance| ≤ 0.25 × tolerance",
+    "blocking": "mean and p95 of declared timing metrics, peak working set",
+    "tracked": "p99 of declared timing metrics",
+    "required_evidence": [
+      "effective_present_mode",
+      "vsync_requested",
+      "frame_profiling"
+    ],
+    "declared_changes": [
+      "gui_graphics.backend",
+      "gui_graphics.renderer",
+      "gui_graphics.requested_renderer",
+      "gui_graphics.requested_gpu_backend"
+    ]
+  },
+  "sides": {
+    "baseline": {
+      "ref": "731661c47e181847450e00480e60c0645abd4753",
+      "head": "731661c47e181847450e00480e60c0645abd4753",
+      "source_digest": "2ea46137f7fd19ed5d4a739fa367b634f3a5426ca7d0b1404acfeca07be1d873",
+      "binary_sha256": "29e673db9e632ca491e7d8b2ac91e8c44f6116ee1c0361e43f4a0626edf694b1"
+    },
+    "candidate": {
+      "ref": "current checkout",
+      "head": "692394558fa482377dcf458523be2cafc882516e",
+      "source_digest": "0293be5d3cb6b6fcf49d93f5e2f38092208d3a7e32b04b41d4e3530d14fb2486",
+      "binary_sha256": "8d6251cdf7a7d3f275bdacadc0565e2815282cd98ace5b7bd01aee4b6c67fc45"
+    }
+  },
+  "scenes": {
+    "S1": {
+      "comparable": true,
+      "reasons": [],
+      "passed": true,
+      "borderline": false,
+      "runs": {
+        "baseline": 5,
+        "candidate": 5
+      },
+      "declared_changes": {
+        "gui_graphics.backend": {
+          "baseline": "Dx12",
+          "candidate": "Vulkan"
+        },
+        "gui_graphics.renderer": {
+          "baseline": "Wgpu",
+          "candidate": "Ash"
+        },
+        "gui_graphics.requested_renderer": {
+          "baseline": "Wgpu",
+          "candidate": "Ash"
+        },
+        "gui_graphics.requested_gpu_backend": {
+          "baseline": "DX12",
+          "candidate": "Vulkan"
+        }
+      },
+      "metrics": [
+        {
+          "metric": "frame_interval_ms",
+          "statistic": "mean_ms",
+          "kind": "timing",
+          "blocking": true,
+          "baseline": [
+            8.402174058577405,
+            8.40324853556485,
+            8.370259414225941,
+            8.401332217573222,
+            8.401081171548121
+          ],
+          "candidate": [
+            8.33475020920502,
+            8.349958158995815,
+            8.338252719665274,
+            8.33883472803348,
+            8.333284100418412
+          ],
+          "baseline_median": 8.401332217573222,
+          "candidate_median": 8.338252719665274,
+          "baseline_spread_percent": 0.3926653593093884,
+          "tolerance_percent": 5.0,
+          "change_percent": -0.750827324456987,
+          "verdict": "same",
+          "borderline": false
+        },
+        {
+          "metric": "frame_interval_ms",
+          "statistic": "p95_ms",
+          "kind": "timing",
+          "blocking": true,
+          "baseline": [
+            9.457500000000001,
+            9.8202,
+            9.6108,
+            9.2151,
+            9.4865
+          ],
+          "candidate": [
+            9.5606,
+            9.8537,
+            10.5084,
+            9.6789,
+            9.2372
+          ],
+          "baseline_median": 9.4865,
+          "candidate_median": 9.6789,
+          "baseline_spread_percent": 6.378537922310654,
+          "tolerance_percent": 12.757075844621308,
+          "change_percent": 2.0281452590523483,
+          "verdict": "same",
+          "borderline": false
+        },
+        {
+          "metric": "frame_interval_ms",
+          "statistic": "p99_ms",
+          "kind": "tail",
+          "blocking": false,
+          "baseline": [
+            12.2439,
+            12.6731,
+            10.1471,
+            9.7846,
+            10.106399999999999
+          ],
+          "candidate": [
+            9.9294,
+            10.3399,
+            11.007,
+            10.1932,
+            9.5799
+          ],
+          "baseline_median": 10.1471,
+          "candidate_median": 10.1932,
+          "baseline_spread_percent": 28.466261296330973,
+          "tolerance_percent": 56.93252259266195,
+          "change_percent": 0.45431699697449657,
+          "verdict": "same",
+          "borderline": false
+        },
+        {
+          "metric": "peak_working_set_bytes",
+          "statistic": null,
+          "kind": "memory",
+          "blocking": true,
+          "baseline": [
+            272039936,
+            273473536,
+            272506880,
+            273219584,
+            270147584
+          ],
+          "candidate": [
+            231194624,
+            230686720,
+            232071168,
+            232517632,
+            231477248
+          ],
+          "baseline_median": 272506880,
+          "candidate_median": 231477248,
+          "baseline_spread_percent": 1.2205020291597775,
+          "tolerance_percent": 2.441004058319555,
+          "change_percent": -15.05636554937622,
+          "verdict": "better",
+          "borderline": false
+        }
+      ]
+    },
+    "S2": {
+      "comparable": true,
+      "reasons": [],
+      "passed": true,
+      "borderline": false,
+      "runs": {
+        "baseline": 5,
+        "candidate": 5
+      },
+      "declared_changes": {
+        "gui_graphics.backend": {
+          "baseline": "Dx12",
+          "candidate": "Vulkan"
+        },
+        "gui_graphics.renderer": {
+          "baseline": "Wgpu",
+          "candidate": "Ash"
+        },
+        "gui_graphics.requested_renderer": {
+          "baseline": "Wgpu",
+          "candidate": "Ash"
+        },
+        "gui_graphics.requested_gpu_backend": {
+          "baseline": "DX12",
+          "candidate": "Vulkan"
+        }
+      },
+      "metrics": [
+        {
+          "metric": "frame_interval_ms",
+          "statistic": "mean_ms",
+          "kind": "timing",
+          "blocking": true,
+          "baseline": [
+            8.697479079497908,
+            8.747518828451884,
+            8.79370878661088,
+            8.72887866108787,
+            8.75827447698745
+          ],
+          "candidate": [
+            8.638915481171548,
+            8.62146192468619,
+            8.596070292887031,
+            8.610941841004184,
+            8.58231757322176
+          ],
+          "baseline_median": 8.747518828451884,
+          "candidate_median": 8.610941841004184,
+          "baseline_spread_percent": 1.1000800226914442,
+          "tolerance_percent": 5.0,
+          "change_percent": -1.561322589023468,
+          "verdict": "same",
+          "borderline": false
+        },
+        {
+          "metric": "frame_interval_ms",
+          "statistic": "p95_ms",
+          "kind": "timing",
+          "blocking": true,
+          "baseline": [
+            9.4158,
+            9.639,
+            9.657300000000001,
+            9.0902,
+            9.2332
+          ],
+          "candidate": [
+            9.8234,
+            9.3382,
+            10.6453,
+            9.0516,
+            10.674299999999999
+          ],
+          "baseline_median": 9.4158,
+          "candidate_median": 9.8234,
+          "baseline_spread_percent": 6.022855200832661,
+          "tolerance_percent": 12.045710401665321,
+          "change_percent": 4.328893986703186,
+          "verdict": "same",
+          "borderline": false
+        },
+        {
+          "metric": "frame_interval_ms",
+          "statistic": "p99_ms",
+          "kind": "tail",
+          "blocking": false,
+          "baseline": [
+            14.186300000000001,
+            13.5222,
+            15.2631,
+            11.3189,
+            13.2513
+          ],
+          "candidate": [
+            12.2726,
+            10.4433,
+            11.5157,
+            9.4538,
+            11.417200000000001
+          ],
+          "baseline_median": 13.5222,
+          "candidate_median": 11.417200000000001,
+          "baseline_spread_percent": 29.16833059709219,
+          "tolerance_percent": 58.33666119418438,
+          "change_percent": -15.566993536554692,
+          "verdict": "same",
+          "borderline": false
+        },
+        {
+          "metric": "game_step_ms",
+          "statistic": "mean_ms",
+          "kind": "timing",
+          "blocking": true,
+          "baseline": [
+            3.560261428144599,
+            3.42387725998603,
+            3.5375599344653237,
+            3.150754485596728,
+            3.0729123564789216
+          ],
+          "candidate": [
+            2.9258495833333344,
+            2.8324008759124166,
+            2.719904432132964,
+            2.6986654218533834,
+            2.6819506241331483
+          ],
+          "baseline_median": 3.42387725998603,
+          "candidate_median": 2.719904432132964,
+          "baseline_spread_percent": 14.233835931013074,
+          "tolerance_percent": 28.467671862026148,
+          "change_percent": -20.56069112290369,
+          "verdict": "same",
+          "borderline": false
+        },
+        {
+          "metric": "game_step_ms",
+          "statistic": "p95_ms",
+          "kind": "timing",
+          "blocking": true,
+          "baseline": [
+            4.7367,
+            4.0334,
+            4.6756,
+            3.6017,
+            3.8593
+          ],
+          "candidate": [
+            3.3404,
+            3.1933000000000002,
+            2.9726000000000004,
+            2.9551,
+            2.8828
+          ],
+          "baseline_median": 4.0334,
+          "candidate_median": 2.9726000000000004,
+          "baseline_spread_percent": 28.14003074329349,
+          "tolerance_percent": 56.28006148658698,
+          "change_percent": -26.300391729062326,
+          "verdict": "same",
+          "borderline": false
+        },
+        {
+          "metric": "game_step_ms",
+          "statistic": "p99_ms",
+          "kind": "tail",
+          "blocking": false,
+          "baseline": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "candidate": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "verdict": "missing",
+          "borderline": false
+        },
+        {
+          "metric": "peak_working_set_bytes",
+          "statistic": null,
+          "kind": "memory",
+          "blocking": true,
+          "baseline": [
+            238940160,
+            238018560,
+            239681536,
+            240693248,
+            239935488
+          ],
+          "candidate": [
+            200867840,
+            200224768,
+            201789440,
+            201342976,
+            201117696
+          ],
+          "baseline_median": 239681536,
+          "candidate_median": 201117696,
+          "baseline_spread_percent": 1.1159341034930617,
+          "tolerance_percent": 2.2318682069861233,
+          "change_percent": -16.08961651514116,
+          "verdict": "better",
+          "borderline": false
+        }
+      ]
+    }
+  }
+}
