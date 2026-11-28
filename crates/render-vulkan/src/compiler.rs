@@ -805,7 +805,7 @@ fn verify_scene_descriptors(
             return None;
         };
         let (opcode, operands) = types.get(element).copied()?;
-        let sampled_float = |opcode, operands| {
+        let sampled_float = |opcode, operands: &[u32]| {
             let (25, [component, 1, _, 0, 0, 1, ..]) = (opcode, operands) else {
                 return None;
             };

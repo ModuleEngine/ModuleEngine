@@ -1,5 +1,7 @@
 use crate::VulkanError;
-use module_engine_core::{AlphaMode, Camera, SceneSnapshot, transform_point};
+use module_engine_core::{
+    AlphaMode, Camera, Material, SceneSnapshot, TextureImage, transform_point,
+};
 use std::{collections::BTreeMap, sync::Arc};
 
 pub(crate) const VERTEX_BYTES: usize = 88;
@@ -21,11 +23,28 @@ pub(crate) struct TextureAtlas {
     pub rects: BTreeMap<usize, [f32; 4]>,
     pub _textures: Vec<Arc<module_engine_core::TextureImage>>,
 }
+
+fn texture_sources(material: &Material) -> impl Iterator<Item = &Arc<TextureImage>> {
+    material
+        .base_color_texture
+        .iter()
+        .chain(material.pbr.iter().flat_map(|surface| {
+            [
+                &surface.metallic_roughness_texture,
+                &surface.normal_texture,
+                &surface.occlusion_texture,
+                &surface.emissive_texture,
+            ]
+            .into_iter()
+            .flatten()
+        }))
+}
+
 pub(crate) fn texture_keys(scene: &SceneSnapshot) -> Vec<usize> {
     let mut keys = scene
         .items
         .iter()
-        .flat_map(|i| super::materials::texture_sources(&i.material))
+        .flat_map(|i| texture_sources(&i.material))
         .map(|texture| Arc::as_ptr(texture) as usize)
         .collect::<Vec<_>>();
     keys.sort_unstable();
@@ -35,7 +54,7 @@ pub(crate) fn texture_keys(scene: &SceneSnapshot) -> Vec<usize> {
 pub(crate) fn texture_atlas(scene: &SceneSnapshot) -> Result<TextureAtlas, VulkanError> {
     let mut textures = BTreeMap::new();
     for item in &scene.items {
-        for t in super::materials::texture_sources(&item.material) {
+        for t in texture_sources(&item.material) {
             textures.entry(Arc::as_ptr(t) as usize).or_insert(t.clone());
         }
     }

@@ -50,14 +50,6 @@ fn surface_maps(material: &Material) -> [(Option<&Arc<TextureImage>>, TextureEnc
     ]
 }
 
-pub(super) fn texture_sources(material: &Material) -> impl Iterator<Item = &Arc<TextureImage>> {
-    material.base_color_texture.iter().chain(
-        surface_maps(material)
-            .into_iter()
-            .filter_map(|(texture, _)| texture),
-    )
-}
-
 /// Mirrors the stock HLSL Surface layout. Row zero selects legacy shading.
 type SurfaceRow = [u32; 16];
 pub(super) type AtlasSurfaceRow = [u32; 32];
