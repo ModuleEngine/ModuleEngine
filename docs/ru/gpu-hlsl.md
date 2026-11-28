@@ -120,8 +120,6 @@ Backend сохраняет изображения проходов и vertex buf
 
 Renderer отдельно измеряется командой `cargo run --locked --release -p module-engine-vulkan --example gpu_benchmark`: 20 импортированных текстурированных моделей, полная стандартная цепочка Forward/SSAO/tonemap/FXAA/encoding, 1920×1080, 10 кадров прогрева и 120 измеряемых кадров. На RTX 4080 SUPER после исправления readback memory получено в среднем 3.11 ms, p95 3.98 ms. Это диагностический замер renderer с CPU readback, без игровых подсистем и вывода egui; критерию готового Player соответствует отдельный полный замер. JSON пишется в `.work/gpu-benchmark.json`.
 
-<a id="native-gpu-показ"></a>
-
 <a id="r25-graph"></a>
 
 ## R2.5. Сроки жизни изображений и исполнение графа
@@ -157,6 +155,8 @@ timestamp в одной очереди.
 `MODULE_ENGINE_GRAPH_COMPUTE=graphics` выбирает контроль с одной очередью.
 См. [снимок S4 и замер памяти](bench.md#r25-checks) и
 [правила синхронизации Vulkan](https://docs.vulkan.org/spec/latest/chapters/synchronization.html).
+
+<a id="native-gpu-показ"></a>
 
 ## Показ кадров на GPU
 

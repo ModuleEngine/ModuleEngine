@@ -134,9 +134,12 @@ fn s4_floor(
     let allocations = renderer
         .synchronous_graph_image_allocations()
         .ok_or("S4 benchmark has no completed synchronous graph allocations")?;
+    let work = renderer
+        .last_frame_work()
+        .ok_or("S4 benchmark has no completed graph frame")?;
     write(
         &folder.join("graph-memory.json"),
-        &json!({"graph": format!("{path:?}"), "slot": 0, "render_pixels": SIZE, "images": allocations, "asynchronous_compute": renderer.last_frame_work().unwrap().asynchronous_compute}),
+        &json!({"graph": format!("{path:?}"), "slot": 0, "render_pixels": SIZE, "images": allocations, "asynchronous_compute": work.asynchronous_compute}),
     )
 }
 
