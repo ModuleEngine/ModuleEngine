@@ -47,4 +47,3 @@ if (Test-Path -LiteralPath $project) { throw "Verification starter already exist
 if ($LASTEXITCODE -ne 0) { throw "Creating the current SDK project failed: $LASTEXITCODE" }
 & $editor --material-check $project $fixtures $evidence
 if ($LASTEXITCODE -ne 0) { throw "Material verification exited with $LASTEXITCODE" }
-
