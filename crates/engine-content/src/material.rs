@@ -87,7 +87,10 @@ impl ContentLibrary {
             )?,
             normal: read_texture(asset.normal_texture.as_deref(), TextureEncoding::Normal)?,
             occlusion: read_texture(asset.occlusion_texture.as_deref(), TextureEncoding::Linear)?,
-            emissive: read_texture(asset.emissive_texture.as_deref(), TextureEncoding::Srgb)?,
+            emissive: read_texture(
+                asset.emissive_texture.as_deref(),
+                TextureEncoding::SrgbEmissive,
+            )?,
             asset,
         });
         self.materials.insert(path, material.clone());

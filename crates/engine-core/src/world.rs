@@ -94,6 +94,7 @@ pub struct TextureImage {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TextureEncoding {
     Srgb,
+    SrgbEmissive,
     Linear,
     Normal,
 }

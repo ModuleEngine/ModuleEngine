@@ -14,6 +14,7 @@ fn cache_name(image: &TextureImage, encoding: TextureEncoding) -> String {
     let mut digest = Sha256::new();
     let role = match encoding {
         TextureEncoding::Srgb => b"sRGB",
+        TextureEncoding::SrgbEmissive => b"emit",
         TextureEncoding::Linear => b"data",
         TextureEncoding::Normal => b"norm",
     };
@@ -82,7 +83,7 @@ pub(super) fn for_each_map(
             ),
             (&mut surface.normal_texture, TextureEncoding::Normal),
             (&mut surface.occlusion_texture, TextureEncoding::Linear),
-            (&mut surface.emissive_texture, TextureEncoding::Srgb),
+            (&mut surface.emissive_texture, TextureEncoding::SrgbEmissive),
         ] {
             if let Some(texture) = texture {
                 f(texture, encoding);
@@ -137,7 +138,8 @@ mod bake {
 
     pub fn encoding_for_key(field: &str) -> TextureEncoding {
         match field {
-            "base_color_texture" | "emissive_texture" => TextureEncoding::Srgb,
+            "base_color_texture" => TextureEncoding::Srgb,
+            "emissive_texture" => TextureEncoding::SrgbEmissive,
             "normal_texture" => TextureEncoding::Normal,
             _ => TextureEncoding::Linear,
         }
@@ -227,7 +229,8 @@ mod bake {
     fn encode(image: &TextureImage, encoding: TextureEncoding) -> Vec<u8> {
         let mut mips = Vec::new();
         let mut pixels = std::borrow::Cow::Borrowed(image.rgba8.as_slice());
-        let alpha = image.rgba8.chunks_exact(4).any(|rgba| rgba[3] != 255);
+        let alpha = encoding == TextureEncoding::Srgb
+            && image.rgba8.chunks_exact(4).any(|rgba| rgba[3] != 255);
         let settings = if alpha {
             intel_tex_2::bc7::alpha_fast_settings()
         } else {
@@ -305,9 +308,13 @@ mod bake {
                     for column in xs.clone() {
                         let offset = ((row * width + column) * 4) as usize;
                         let rgba = &input[offset..offset + 4];
-                        let alpha = f32::from(rgba[3]) / 255.;
+                        let alpha = if encoding == TextureEncoding::SrgbEmissive {
+                            1.
+                        } else {
+                            f32::from(rgba[3]) / 255.
+                        };
                         let sample = match encoding {
-                            TextureEncoding::Srgb => [
+                            TextureEncoding::Srgb | TextureEncoding::SrgbEmissive => [
                                 decode[rgba[0] as usize] * alpha,
                                 decode[rgba[1] as usize] * alpha,
                                 decode[rgba[2] as usize] * alpha,
@@ -328,7 +335,7 @@ mod bake {
                     }
                 }
                 let result = match encoding {
-                    TextureEncoding::Srgb => {
+                    TextureEncoding::Srgb | TextureEncoding::SrgbEmissive => {
                         let scale = sum[3].max(f32::MIN_POSITIVE).recip();
                         [
                             srgb(sum[0] * scale),
@@ -365,6 +372,7 @@ mod bake {
         };
         let formats = [
             TextureEncoding::Srgb,
+            TextureEncoding::SrgbEmissive,
             TextureEncoding::Linear,
             TextureEncoding::Normal,
         ];
@@ -386,5 +394,24 @@ mod bake {
             );
         }
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(test)]
+    #[test]
+    fn emissive_mips_ignore_source_alpha() {
+        let opaque = [160, 42, 210, 255].repeat(4);
+        let transparent = [160, 42, 210, 0].repeat(4);
+        assert_eq!(
+            downsample(&transparent, 2, 2, TextureEncoding::SrgbEmissive),
+            [160, 42, 210, 255]
+        );
+        assert_eq!(
+            downsample(&opaque, 2, 2, TextureEncoding::SrgbEmissive),
+            [160, 42, 210, 255]
+        );
+        assert_eq!(
+            downsample(&transparent, 2, 2, TextureEncoding::Srgb),
+            [0, 0, 0, 0]
+        );
     }
 }

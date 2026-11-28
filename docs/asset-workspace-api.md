@@ -112,7 +112,9 @@ glTF/GLB: literal buffer and image URIs are rewritten. Moving the model itself r
 
 HLSL: literal `#include "..."` and `<...>` are rewritten while preserving the rest of the line. Macro-dependent includes are rejected before file changes. For `"..."`, search starts in the file's directory, then checks `assets/gpu` and the root; for `<...>`, only `assets/gpu` and the root. Inline shader source uses the latter two areas. Inline source can depend on a separately installed backend: an include unavailable in the game directory is not declared game-owned.
 
-Move support does not extend to unknown glTF extensions, remote URIs, dynamic include selection, or arbitrary dependency formats. The service reports an error before changing files. Detach is prohibited for a resource needed inside a model or shader: deleting a URI/buffer/include would damage the file. A compatible replacement or prior removal of the consuming resource is required instead.
+Optional `KHR_materials_transmission` is allowed during import registration and relocation because its texture indices use the core glTF image table. The renderer uses the core material. Unknown glTF extensions, remote URIs, dynamic includes and unsupported dependency formats cause an error before changing files.
+
+A `.material` file links PNG/JPEG maps by project-relative path. Move and compatible replacement update these fields and preserve the asset ID. Create and Apply use the file transaction journal and reject a stale draft before replacing bytes. A map used inside a model, material or shader requires compatible replacement or removal of the reference before deleting that file. [Surface Material](content.md#surface-materials).
 
 Arbitrary Rust cannot be reliably rewritten through string search. If Custom contains a literal old path or computed file access without `asset_path`, moving/deleting is rejected with Custom identified. Mixed code that uses the ID API while also constructing other paths manually still requires author review: a helper's presence does not turn Rust into a fully analyzable dependency description. The service does not modify program text itself.
 

@@ -331,7 +331,11 @@ fn inspect_model(name: &str, primitive_count: usize, model: &LoadedModel) -> Res
                 &surface.occlusion_texture,
                 TextureEncoding::Linear,
             ),
-            ("emissive", &surface.emissive_texture, TextureEncoding::Srgb),
+            (
+                "emissive",
+                &surface.emissive_texture,
+                TextureEncoding::SrgbEmissive,
+            ),
         ] {
             if role == "emissive" && name == "FlightHelmet" && texture.is_none() {
                 continue;

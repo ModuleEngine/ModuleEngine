@@ -41,7 +41,7 @@ fn surface_maps(material: &Material) -> [(Option<&Arc<TextureImage>>, TextureEnc
         ),
         (
             surface.and_then(|pbr| pbr.emissive_texture.as_ref()),
-            TextureEncoding::Srgb,
+            TextureEncoding::SrgbEmissive,
         ),
     ]
 }
@@ -637,10 +637,18 @@ impl VulkanRenderer {
                     })
             });
         let format = match blocks {
-            Some(TextureEncoding::Srgb) => vk::Format::BC7_SRGB_BLOCK,
+            Some(TextureEncoding::Srgb | TextureEncoding::SrgbEmissive) => {
+                vk::Format::BC7_SRGB_BLOCK
+            }
             Some(TextureEncoding::Linear) => vk::Format::BC7_UNORM_BLOCK,
             Some(TextureEncoding::Normal) => vk::Format::BC5_UNORM_BLOCK,
-            None if encoding == TextureEncoding::Srgb => SRGB,
+            None if matches!(
+                encoding,
+                TextureEncoding::Srgb | TextureEncoding::SrgbEmissive
+            ) =>
+            {
+                SRGB
+            }
             None => LINEAR,
         };
         let mut usage = vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST;
