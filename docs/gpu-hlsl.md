@@ -192,3 +192,30 @@ Viewport images have one layer, samples=1; maximum 4096 on each axis and 4 milli
 Clear/copy commands address pass_id.output_name and execute after the producer in submission order. An invalid resource, incompatible copy or write after the first consumer is rejected. A portable Rust enabled override takes priority over params.enabled; disabling is allowed only with a compatible single-image bypass.
 
 For built-in geometry, the renderer reads visible IDs and measures ownership. An arbitrary custom scene shader has submitted triangles and coverage available; zero ownership counts mean this measurement is absent, not proof that visible geometry is absent.
+
+<a id="punctual-lighting"></a>
+
+## Stock punctual lighting
+
+The Vulkan composition publishes the shared `light` schema with the Engine lock.
+The component accepts `directional`, `point` and `spot`. It has linear RGB,
+directional illuminance in lux or local intensity in candela, a local range,
+and inner and outer cone half-angles in degrees. An authored transform sets
+position and aims the local −Z axis after parent transforms. A light without
+a `mesh` attachment contributes no geometry. Scene, the retained Game
+snapshot and the exported Player consume the same committed light records.
+
+Stock Forward, the paired G-buffer and Deferred route, and the stock transparent
+pass use one GGX BRDF and punctual attenuation. With no `light` attachments,
+existing scenes keep their default lighting. Cluster compute assigns local
+lights to 64×64 pixel tiles and 16 logarithmic camera-depth slices using
+conservative sphere intersections. Directional lights are global. Each
+cluster uses a bitset over the complete local light list. The current stock
+path accepts at most 1,024 lights and reports an over-limit scene as an error.
+
+The two cluster buffers are private stock shader resources. They are not part
+of the Custom manifest or its push constants. Both the compatibility atlas and
+indexed paths can shade the clusters. If the device cannot fit the extra storage
+descriptors alongside indexed or resident resources, the renderer selects a
+compatible path. Use [the S4 check](bench.md#r52-checks) for an offscreen
+measurement on the reference GPU.

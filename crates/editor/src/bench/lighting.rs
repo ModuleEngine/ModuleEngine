@@ -150,7 +150,7 @@ pub(super) fn run(root: &Path, output: &Path) -> Result<(), String> {
                 if index >= WARMUP {
                     receiver_times.push(receiver);
                     costs.push(receiver + cluster.unwrap_or(0.));
-                    samples.push(json!({ "cluster_ms":cluster, "receiver_ms":receiver, "graph_ms":graph_ms }));
+                    samples.push(json!({ "cluster_ms":cluster, "receiver_ms":receiver, "graph_ms":graph_ms, "passes":passes }));
                 }
                 if index == WARMUP + FRAMES - 1 {
                     crate::write_png(&output.join(format!("{name}-{mode}.png")), &frame)?;
@@ -205,6 +205,7 @@ pub(super) fn run(root: &Path, output: &Path) -> Result<(), String> {
             "budget_p95_ms":p95,
         }));
     }
+    fixture.inventory["point_lights_rendered"] = json!(256);
     write(
         &output.join("lighting-report.json"),
         &json!({

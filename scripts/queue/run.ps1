@@ -226,6 +226,11 @@ try {
             $materials = Read-QueueJson $materialReport
             $report.environment.actual_adapters = @($materials.captures.graphs.adapter | Sort-Object -Unique)
         }
+        $lightingReport = Join-Path $artifacts 'r52/lighting-report.json'
+        if ($request.check -eq 'r52-lighting' -and (Test-Path -LiteralPath $lightingReport -PathType Leaf)) {
+            $lighting = Read-QueueJson $lightingReport
+            $report.environment.actual_adapters = @($lighting.adapter | Where-Object { $_ })
+        }
         if ($report.environment.actual_adapters.Count) {
             $report.environment.selected_adapter_evidence = @($report.environment.actual_adapters | ForEach-Object {
                 Get-AdapterEvidence $_ $report.environment.video_controllers

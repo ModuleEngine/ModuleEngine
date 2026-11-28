@@ -61,6 +61,16 @@
       ["pwsh", "-NoProfile", "-NonInteractive", "-File", "{tools}/r5-materials.ps1", "-Artifacts", "{artifacts}", "-FixtureRoot", "{tools}/../../../../fixtures/khronos/e124e8d8d7330a5372bc2b4d00d39a4a9d7997ea"]
     ]
   },
+  "r52-lighting": {
+    "group": "gpu",
+    "timeout_seconds": 7200,
+    "render": "offscreen",
+    "artifacts": ["ModuleEngine.exe", "lighting-binary.json", "r52/lighting-report.json"],
+    "steps": [
+      ["cargo", "build", "--offline", "--locked", "--release", "--target", "x86_64-pc-windows-msvc", "-p", "module-engine-editor", "--features", "bench"],
+      ["pwsh", "-NoProfile", "-NonInteractive", "-File", "{tools}/r52-lighting.ps1", "-Artifacts", "{artifacts}", "-FixtureRoot", "{tools}/../../../../fixtures/sponza/e124e8d8d7330a5372bc2b4d00d39a4a9d7997ea"]
+    ]
+  },
   "window-graph": {
     "group": "gpu",
     "timeout_seconds": 5400,

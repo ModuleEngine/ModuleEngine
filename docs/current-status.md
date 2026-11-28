@@ -27,6 +27,7 @@ Editor and Player use the shared Vulkan shell. The root and detached windows pre
 - **Physics.** An optional [Rapier step](physics-rapier.md) adds bodies, colliders, joints, collision events and queries at 60 Hz. Scene displays physics geometry and Player selects the native feature from the authored schedule.
 - **glTF animation.** The importer loads joint hierarchies, inverse binds, skin weights and TRS tracks. GameHost loops the first applicable clip and deforms vertex positions on the CPU. The Khronos playback check covers CesiumMan and Fox alongside the static crystal. See [content and verification](content.md#gltf-animation).
 - **Surface materials.** Stock Vulkan paths support metallic/roughness factors and maps, alpha mask and blend. Assets can edit shared surface materials. Vulkan Player exports the source maps and derived BC7/BC5 mip chains. [Material contract](content.md#surface-materials).
+- **Lighting.** Vulkan publishes directional, point and spot lights through the shared ECS schema. The stock paths use clustered culling for local lights and share the BRDF. [Light contract](gpu-hlsl.md#punctual-lighting).
 - **Delivery.** Player uses built game logic and SPIR-V. Crate Garden has ten levels and a Windows acceptance record on the reference machine. Two Arenas is the technical ARPG example. See the [Crate Garden receipt](g1-verification-20261101.md), [game authoring](editor-game.md) and [Player](player.md).
 
 <a id="открыто-и-не-подтверждено"></a>
