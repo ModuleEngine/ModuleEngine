@@ -14,6 +14,7 @@ Policy checks with a Linux flag on Windows do not replace native building and ex
 
 * Native Linux Rust/Cargo 1.99.0 is the verified version; earlier versions were not checked in this run. rustfmt/Clippy components, a C compiler/linker and pkg-config are required. The commands below do not install tools.
 * For GUI: a working Wayland or X11 session, window-system and xkbcommon runtime libraries, a Vulkan loader and compatible ICD. Development/linking may require dev packages for the selected distribution. Install them explicitly through your system's tools.
+* For native audio: a working PulseAudio-compatible server such as `pipewire-pulse`, or an ALSA default output. CPAL tries PulseAudio first and retains ALSA as fallback. An audio-enabled Player needs the system `libasound.so.2` at runtime. Native audio builds also require the ALSA development package and pkg-config, for example `libasound2-dev` on Ubuntu.
 * For new HLSL: native Linux DXC. Windows `dxc.exe` is not used through Wine/interop. A precompiled Player needs neither DXC nor Rust, but needs system runtime libraries and a GPU driver.
 * Native packages are built on their own OS/architecture. A Windows export does not become a Linux package by renaming the EXE. The `native_platform` tag does not prove glibc/driver compatibility with every distribution.
 
@@ -32,7 +33,7 @@ Code 2 means the selected mode's requirements are missing. A successful probe do
 
 ## Building and running
 
-Use the existing checkout through a native Linux environment or an explicitly created Full acceptance package, after preparing tools. Ordinary development does not require a new checkout. For GUI, choose a format 4 project with no active WAV request; `/path/to/linux-project-v4.json` below means its actual path. This checkout's root `project.json` has the old format 3 and is preserved without automatic migration. `game-project-v4.json` has the current format, but its audio request requires an explicit change to a separate verification project.
+Use the existing checkout through a native Linux environment or an explicitly created Full acceptance package, after preparing tools. Ordinary development does not require a new checkout. `/path/to/linux-project-v4.json` below means the path of a format 4 project. The root `project.json` has the old format 3 and is preserved without automatic migration. Projects that request audio need a working default output for playback.
 
 ```sh
 rustc -vV
@@ -63,7 +64,7 @@ editor="${CARGO_TARGET_DIR:-$PWD/.work/linux-target/$host}/$host/release/module-
 "$editor" --editor-ui-check game-project-v4.json outputs/linux-verification/workflow
 ```
 
-These commands require the corresponding runtime/SDK/DXC. Native Linux acceptance was performed for snapshots specified in the [reports](current-status.md#choosing-evidence); the commands alone do not confirm the current HEAD. Acceptance can create temporary Full/Team/Player packages; run sequentially. An active request for unsupported native audio must first be explicitly removed in a separate verification project; the production project is not changed automatically.
+These commands require the corresponding runtime/SDK/DXC. Native Linux acceptance was performed for snapshots specified in the [reports](current-status.md#choosing-evidence). Acceptance can create temporary Full/Team/Player packages. Run sequentially. Use a working audio endpoint when the selected scenario verifies sound.
 
 <a id="wayland-x11-и-диагностика"></a>
 
@@ -139,8 +140,6 @@ Reusing ready scheduled Rust Custom after Stop is implemented in the [compiled-p
 
 ## Optional services
 
-Native WAV is implemented on Windows. On Linux, an active `audio.wav` request produces an error before assets load; export is also rejected. An absent/disabled service is allowed. Export does not silently remove sound or alter authored data. A passed silent/headless check cannot be treated as proof of audio operation.
+The optional `audio.wav` service uses Kira and CPAL on Linux. WAV, OGG/Vorbis, MP3 and FLAC cues retain the same game-event bindings. Export retains requested audio and its asset references. Playback opens the default output on the first enabled cue and reports device failures in `output_error`. A disabled or omitted service still permits a headless session. Use the [loopback check](../crates/host-services/README.md#concurrent-wav-music-and-effects) on a confirmed capture monitor for output and latency evidence.
 
-For Linux GUI/export verification, use a project that explicitly does not request WAV, for example Puzzle or your own profile without audio. Current ARPG settings with sound cues require an explicit change to a separate project copy. A complete Linux audio backend is the next separate stage.
-
-Native File/Folder dialogs are currently implemented only on Windows. On Linux, file/folder selection commands report this limitation. Opening a graph through a CLI path, saving an already selected file and CLI export do not depend on these dialogs; interactive Import/Open/Save As require the next stage. A window-launch check does not prove parity of all menus with Windows.
+Native file and folder dialogs use `rfd`. Provide an XDG Desktop Portal file chooser or Zenity in the running Linux desktop session. Open, Save As, folder selection and Import share this adapter. CLI path operations use their explicit paths. See the [desktop picker check](verification.md#native-pickers).

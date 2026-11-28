@@ -72,6 +72,33 @@
       ["window-probe", "{artifacts}/window.json", "--window"]
     ]
   },
+  "audio-loopback": {
+    "group": "gpu",
+    "timeout_seconds": 3600,
+    "interactive": true,
+    "artifacts": ["capture.f32le", "capture.sha256", "audio-loopback-probe.exe", "probe.sha256"],
+    "steps": [["pwsh", "-NoProfile", "-NonInteractive", "-File", "{tools}/audio-loopback.ps1", "-Endpoint", "wasapi", "-Artifacts", "{artifacts}"]]
+  },
+  "audio-loopback-wslg": {
+    "group": "gpu",
+    "timeout_seconds": 3600,
+    "interactive": true,
+    "artifacts": ["capture.f32le", "capture.sha256", "audio-loopback-probe", "probe.sha256", "cargo.jsonl"],
+    "steps": [["pwsh", "-NoProfile", "-NonInteractive", "-File", "{tools}/audio-loopback.ps1", "-Endpoint", "wslg", "-Artifacts", "{artifacts}"]]
+  },
+  "native-dialogs": {
+    "group": "gpu",
+    "timeout_seconds": 3600,
+    "interactive": true,
+    "steps": [["cargo", "test", "--offline", "--locked", "--target", "x86_64-pc-windows-msvc", "-p", "module-engine-editor", "--features", "verification", "--bin", "module-engine-editor", "native_dialogs::tests::native_dialogs_choose_and_cancel", "--", "--exact", "--ignored", "--nocapture", "--test-threads=1"]]
+  },
+  "native-dialogs-wslg": {
+    "group": "gpu",
+    "timeout_seconds": 5400,
+    "interactive": true,
+    "artifacts": ["native-dialogs-probe", "probe.sha256", "cargo.jsonl"],
+    "steps": [["pwsh", "-NoProfile", "-NonInteractive", "-File", "{tools}/native-dialogs-wslg.ps1", "-Artifacts", "{artifacts}"]]
+  },
   "bench-once": {
     "group": "gpu",
     "timeout_seconds": 7200,

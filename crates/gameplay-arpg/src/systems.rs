@@ -280,6 +280,7 @@ fn collision_system(
 ) -> Result<(), String> {
     let previous: BTreeMap<u64, PreviousPosition> =
         serde_json::from_value(ctx.resource("previous")?.clone()).map_err(|e| e.to_string())?;
+    let physics_available = ctx.physics_queries_available();
     let obstacles: Vec<_> = ctx
         .game
         .world
@@ -287,10 +288,21 @@ fn collision_system(
         .into_iter()
         .filter_map(|id| {
             Some((
+                id,
                 ctx.game.world.object(id)?.transform.translation,
                 world_component::<Obstacle>(&ctx.game.world, id, "obstacle")?.half_extents,
+                physics_available
+                    && ctx
+                        .game
+                        .world
+                        .component(id, "physics.collider")
+                        .is_some_and(|collider| collider["sensor"].as_bool() == Some(false)),
             ))
         })
+        .collect();
+    let physics_obstacles: BTreeSet<_> = obstacles
+        .iter()
+        .filter_map(|&(id, _, _, physics)| physics.then_some(id))
         .collect();
     for (id, previous) in previous {
         let start = match previous {
@@ -305,10 +317,10 @@ fn collision_system(
         let Some(actor) = world_component::<Actor>(&ctx.game.world, id, "actor") else {
             continue;
         };
-        let Some(transform) = ctx.game.world.transform_mut(id) else {
+        let Some(object) = ctx.game.world.object(id) else {
             continue;
         };
-        let wanted = transform.translation;
+        let wanted = object.transform.translation;
         let mut p = start;
         // Bound movement increments to the body radius to prevent tunnelling,
         // and resolve axes separately so actors slide along blocking geometry.
@@ -318,26 +330,61 @@ fn collision_system(
             (wanted[0] - start[0]) / count as f32,
             (wanted[2] - start[2]) / count as f32,
         ];
-        let blocks = |p: [f32; 3]| {
-            obstacles.iter().any(|(center, extents)| {
+        // The legacy sweep allows exact tangency. Rapier's overlap includes it.
+        let query_radius = actor.radius.next_down();
+        let use_physics =
+            !physics_obstacles.is_empty() && (0.001..=10_000.).contains(&query_radius);
+        let blocks = |p: [f32; 3]| -> Result<bool, String> {
+            if obstacles.iter().any(|(_, center, extents, physics)| {
+                if *physics && use_physics {
+                    return false;
+                }
                 let dx = (p[0] - center[0]).abs() - extents[0];
                 let dz = (p[2] - center[2]).abs() - extents[1];
                 dx.max(0.).powi(2) + dz.max(0.).powi(2) < actor.radius * actor.radius
-            })
+            }) {
+                return Ok(true);
+            }
+            if use_physics {
+                let result = ctx
+                    .query_physics(&PhysicsQuery::Overlap {
+                        shape: PhysicsShape::Ball {
+                            radius: query_radius,
+                        },
+                        pose: PhysicsPose {
+                            position: p,
+                            ..Default::default()
+                        },
+                        filter: PhysicsQueryFilter {
+                            exclude_object: Some(id),
+                            ..Default::default()
+                        },
+                    })
+                    .map_err(|error| error.to_string())?;
+                let PhysicsQueryResult::Overlap(hits) = result else {
+                    return Err("Expected a physics overlap for ARPG obstacles".into());
+                };
+                return Ok(hits.iter().any(|hit| physics_obstacles.contains(hit)));
+            }
+            Ok(false)
         };
         for _ in 0..count {
             let mut next = p;
             next[0] += delta[0];
-            if !blocks(next) {
+            if delta[0] != 0. && !blocks(next)? {
                 p = next;
             }
             next = p;
             next[2] += delta[1];
-            if !blocks(next) {
+            if delta[1] != 0. && !blocks(next)? {
                 p = next;
             }
         }
-        transform.translation = p;
+        ctx.game
+            .world
+            .transform_mut(id)
+            .expect("Existing actor")
+            .translation = p;
     }
     Ok(())
 }

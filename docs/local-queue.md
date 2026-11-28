@@ -52,6 +52,10 @@ Windows permissions as its daemon.
 | render | gpu | Offscreen profile with required capabilities, including retained Host and Vulkan checks. |
 | r5-materials | gpu | Offscreen run of the original Khronos helmets, BC7/BC5, and the saved Editor material in the exported Player. |
 | window-graph | gpu | Release Player graph probe in a native window with the selected adapter and presentation mode. |
+| audio-loopback | gpu | Kira cue playback and latency on a quiet default WASAPI output with its loopback capture. |
+| audio-loopback-wslg | gpu | Linux Kira cue playback and latency on the virtual WSLg RDPSink and its monitor. |
+| native-dialogs | gpu | Open, Save As, folder selection, Import and cancellation with a desktop operator. |
+| native-dialogs-wslg | gpu | The Linux picker sequence on the WSLg desktop with a desktop operator. |
 | bench-once | gpu | S1–S5 diagnostic pass with benchmark artifacts. Three-run repeatability and acceptance require their own benchmark evidence. |
 | queue-probe | gpu | Short diagnostic for ordering and Windows session evidence. It launches no renderer. |
 
@@ -65,6 +69,18 @@ default. **artifacts/** contains the outputs declared by the route. A failed,
 timed out or wrong-commit result returns a nonzero exit code. A task that the
 daemon or OS interrupted may have only a request, a partial log and Pueue's
 terminal status. Retain that evidence and resubmit for a fresh ID.
+
+Both audio routes need a quiet output. They preserve the exact probe binary,
+its hash and the original interleaved `f32le` capture with its own hash.
+The task log records the endpoint, channel count, sample rate and individual
+cue timings. The first cue is a startup diagnostic. The log records the start
+of the warm capture and any earlier discontinuity. A discontinuity during the
+warm measurement fails the check. On this stand, the WSLg routes use Ubuntu with the pinned Linux
+toolchain environment at `E:/ModuleEngine/.tools/linux-x86_64/env.sh`. Place
+an extracted Ubuntu ALSA development and PulseAudio utilities sysroot
+under `E:/ModuleEngine-queue/tools/r6-wsl-alsa/sysroot`. The desktop picker
+also uses a Zenity and GTK sysroot under `E:/ModuleEngine-queue/tools/r6-wsl-zenity/sysroot`.
+The WSLg audio evidence describes a virtual endpoint.
 
 The byte inventory covers tracked files and non-ignored untracked sources as
 described in [Independent Change Review](review.md#привязка-к-исходникам).

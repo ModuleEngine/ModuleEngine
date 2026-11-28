@@ -10,11 +10,15 @@ use std::{
 #[cfg(feature = "audio")]
 mod audio;
 #[cfg(feature = "audio")]
+mod audio_codec;
+#[cfg(feature = "audio")]
 mod audio_output;
 #[cfg(feature = "audio")]
 mod wav;
 #[cfg(feature = "audio")]
 pub use audio::{WAV_PLAYBACK_SUPPORTED, install_audio};
+#[cfg(feature = "audio")]
+pub use audio_codec::validate_audio_bytes;
 #[cfg(feature = "persistence")]
 mod persistence;
 #[cfg(feature = "persistence")]
@@ -223,7 +227,7 @@ impl HostServiceRegistry {
 /// Source descriptions are independent of native factory construction.
 pub fn audio_capability_metadata() -> module_engine_core::CapabilityMetadata {
     use module_engine_core::*;
-    CapabilityMetadata::new("WAV playback service", "Play explicitly requested WAV cues, looping music and independent volume buses; games own event/cue policy.", CapabilityOwner::Engine, CapabilityKind::Service, env!("CARGO_PKG_NAME"))
+    CapabilityMetadata::new("Audio playback service", "Play explicitly requested audio cues through Kira with looping music, mix buses, fades and spatial tracks. Games own event and cue bindings.", CapabilityOwner::Engine, CapabilityKind::Service, env!("CARGO_PKG_NAME"))
         .configured_by([CapabilityConfiguration::NativeSource])
 }
 pub fn persistence_capability_metadata() -> module_engine_core::CapabilityMetadata {

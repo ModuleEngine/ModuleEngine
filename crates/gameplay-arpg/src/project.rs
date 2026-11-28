@@ -22,8 +22,9 @@ fn validate_audio_project(
     context: &ComponentValidationContext<'_>,
 ) -> Result<(), String> {
     if audio_active(project) {
+        let extensions = AUDIO_CUE_EXTENSIONS.map(str::to_owned);
         for reference in project.audio_cues.values() {
-            validate_component_asset_reference(reference, &["wav".into()], context)?;
+            validate_component_asset_reference(reference, &extensions, context)?;
         }
     }
     Ok(())

@@ -84,8 +84,9 @@ participation; it does not turn failures into an empty active set. A known empty
 offered set differs from missing evidence. Unknown modules and missing service
 factories remain visible with diagnostics; undescribed metadata retains unknown
 ownership/package instead of guesses. Requested but unavailable
-audio can therefore have `participation=true` and `available=false`. On Linux
-the existing lack of native WAV playback remains explicit.
+audio can therefore have `participation=true` and `available=false`. Windows
+and Linux audio availability denotes the compiled backend. Device selection and
+errors appear when the game plays an enabled cue.
 
 Authored participation does not mean that a pass is enabled, the graph is fully
 valid, a shader compiled or Play is running. Pass enable state, worker progress,

@@ -169,6 +169,8 @@ and [worker](game-worker.md#interpolated-presentation).
 
 In the old Runtime, Object stores an actual recursive hierarchy, while ECS uses independent component tables. In the game path, mutable transforms, parents, colors, references, and dynamic components belong to one ECS. Native systems use column queries, and object DTOs are extracted for UI, IPC, and checks; see the [contract and lifetime](ecs-world.md). `from_objects` creates both stores from the resolved authored scene without demo angular velocities. Their commands and snapshots are equivalent for identical data. The renderer receives vertices/UVs, matrices, color, and Material; it does not query ECS or object storage. Matrices are row-major, and vectors are column vectors.
 
+CPU matrix operations use `glam`. The Core adapters preserve row-major matrices for the renderer and SDK. Authored `Transform` separates translation, XYZ Euler radians and scale. The operation order is `T * Rz * Ry * Rx * S`. The editor rejects a world gesture that cannot be represented by its local transform.
+
 ContentLibrary attaches imported primitives by stable object ID. It applies the authored object's transform to imported or sampled geometry and shares TextureImage between snapshots through Arc. Import and export are restricted to the selected project/package root. Stock Vulkan passes consume glTF metallic/roughness materials and the active Surface Material asset override. Indexed Vulkan devices use BC7/BC5 mip chains where supported. [Content, materials and CPU skinning](content.md).
 
 <a id="авторство-и-сохранённые-данные"></a>

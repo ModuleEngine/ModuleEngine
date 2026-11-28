@@ -679,42 +679,13 @@ fn owner_pose_delta(game: &GameState, id: u64, pose: [[f32; 4]; 4]) -> Option<[[
 }
 
 fn inverse_pose_frame(frame: [[f32; 4]; 4]) -> Option<[[f32; 4]; 4]> {
-    let column = |index: usize| {
-        [
-            frame[0][index] as f64,
-            frame[1][index] as f64,
-            frame[2][index] as f64,
-        ]
-    };
-    let cross = |a: [f64; 3], b: [f64; 3]| {
-        [
-            a[1] * b[2] - a[2] * b[1],
-            a[2] * b[0] - a[0] * b[2],
-            a[0] * b[1] - a[1] * b[0],
-        ]
-    };
-    let dot = |a: [f64; 3], b: [f64; 3]| a.into_iter().zip(b).map(|(a, b)| a * b).sum::<f64>();
-    let [x, y, z] = [column(0), column(1), column(2)];
-    let determinant = dot(x, cross(y, z));
+    let matrix: glam::DMat4 = matrix_from_rows(frame).as_dmat4();
+    let determinant = matrix.determinant();
     if !determinant.is_finite() || determinant == 0. {
         return None;
     }
-    let mut inverse = identity_matrix();
-    for (index, axis) in [cross(y, z), cross(z, x), cross(x, y)]
-        .into_iter()
-        .enumerate()
-    {
-        let row = axis.map(|value| value / determinant);
-        for (column, value) in row.into_iter().enumerate() {
-            inverse[index][column] = value as f32;
-        }
-        inverse[index][3] = -dot(row, column(3)) as f32;
-    }
-    inverse
-        .iter()
-        .flatten()
-        .all(|value| value.is_finite())
-        .then_some(inverse)
+    let inverse = matrix.inverse().as_mat4();
+    inverse.is_finite().then(|| matrix_to_rows(inverse))
 }
 
 fn cue(events: &mut Vec<GameEvent>, name: &str) {

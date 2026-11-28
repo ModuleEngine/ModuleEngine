@@ -243,6 +243,7 @@ impl AssetsWorkbench {
                 metadata.push(("Dependencies".into(), info.dependencies.len().to_string()));
             }
             if kind == AssetKind::Audio
+                && info.path.to_ascii_lowercase().ends_with(".wav")
                 && !info.missing
                 && let Ok(path) = resolve_relative(root, &info.path)
             {

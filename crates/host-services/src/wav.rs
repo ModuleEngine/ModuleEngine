@@ -1,5 +1,5 @@
 //! Bounded RIFF PCM/IEEE-float decoding; no device calls or game metadata.
-use std::{fs, io::Read, path::Path};
+use std::io::Read;
 const MAX_WAV_BYTES: usize = 128 * 1024 * 1024;
 const MAX_DECODED_SAMPLES: usize = 64 * 1024 * 1024;
 const PCM_GUID: [u8; 16] = [
@@ -99,7 +99,10 @@ impl Format {
             return if value.is_finite() {
                 Ok(value)
             } else {
-                Err("WAV IEEE float samples must be finite".into())
+                Err(
+                    "WAV float samples must be finite. The file contains a NaN or infinite sample."
+                        .into(),
+                )
             };
         }
         let raw = bytes.iter().enumerate().fold(0_u32, |bits, (index, byte)| {
@@ -124,10 +127,10 @@ impl Format {
     }
 }
 impl DecodedWav {
-    pub(crate) fn read(path: &Path) -> Result<Self, String> {
-        let file = fs::File::open(path).map_err(|error| error.to_string())?;
+    pub(crate) fn read(source: impl Read) -> Result<Self, String> {
         let mut bytes = Vec::new();
-        file.take(MAX_WAV_BYTES as u64 + 1)
+        source
+            .take(MAX_WAV_BYTES as u64 + 1)
             .read_to_end(&mut bytes)
             .map_err(|error| error.to_string())?;
         Self::decode(&bytes)
@@ -246,6 +249,13 @@ pub(crate) mod tests {
     }
     pub(crate) fn pcm8(samples: &[u8], channels: u16, rate: u32) -> Vec<u8> {
         wave(&format(1, 8, channels, rate), samples)
+    }
+    pub(crate) fn float32(samples: &[f32]) -> Vec<u8> {
+        let data: Vec<_> = samples
+            .iter()
+            .flat_map(|sample| sample.to_le_bytes())
+            .collect();
+        wave(&format(3, 32, 1, 48_000), &data)
     }
     fn assert_mono(bytes: &[u8], expected: &[f32]) {
         let decoded = DecodedWav::decode(bytes).unwrap();

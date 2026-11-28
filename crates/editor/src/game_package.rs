@@ -393,7 +393,7 @@ fn native_cache_root(backend: &Path, directory: &str) -> PathBuf {
 fn require_native_service_support(features: &BTreeSet<String>) -> Result<(), String> {
     if features.contains("audio") && !module_engine_host_services::WAV_PLAYBACK_SUPPORTED {
         return Err(format!(
-            "Native Player export requests host service 'audio.wav', but native WAV playback is unavailable on {}. Explicitly remove the audio request/cues or choose an Engine profile without this service; the exporter will not change authored data or silently disable sound.",
+            "Native Player export requests host service 'audio.wav', but native audio playback is unavailable on {}. Explicitly remove the audio request/cues or choose an Engine profile without this service; the exporter will not change authored data or silently disable sound.",
             std::env::consts::OS
         ));
     }
@@ -2087,7 +2087,7 @@ mod tests {
         }
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     #[test]
     fn unsupported_requested_audio_rejects_export_without_mutating_the_project() {
         let backend = backend_root();

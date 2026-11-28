@@ -64,7 +64,7 @@ python3 scripts/verify.py --profile native --plan
 | Профиль | Объём | Чего он не подтверждает |
 | --- | --- | --- |
 | `quick` | `cargo fmt --all -- --check`, все lib tests пакетов `module-engine-core` и `module-engine-project`. | Не workspace, Editor, Vulkan runtime, secondary Custom builds или ignored acceptance. Холодная компиляция всё равно может быть долгой. |
-| `contracts` | Quick плюс `cargo_build::tests::`, четыре Inspector-регрессии, 99 сценариев свойств Inspector, четыре прежних Save As tests, 28 сценариев сохранности workflow и два теста `diagnostic_personal` для проверки явного root и изоляции Recent/layout с сохранением source permissions. | Не всё UI, native dialogs или полный authoring suite. |
+| `contracts` | Quick плюс выбор продуктов Cargo, сохранность Inspector и пользовательских операций, изоляция путей диагностики, [воспроизведение столкновений](physics-rapier.md#verify) G1/ARPG, микширование Kira и контракты трансформов и диалогов редактора. | Без графического вывода. Для устройства и рабочего стола есть отдельные проверки loopback и диалогов. |
 | `clippy` | Строгий Clippy для всех целей и features workspace, затем для обычного исполняемого файла Editor в Release. Оба шага используют `-D warnings` и закреплённый нативный toolchain. | Без formatting, tests или runtime-проверок; не приёмка движка или поставки. |
 | `render` | Импорт glTF, CPU-проверки графа и кеша, компиляция HLSL через DXC и offscreen-регрессии Vulkan, включая обновления сцены GameHost, отклонение тика и смену сцены. | Без окна, доставки и проверки производительности. |
 | `native` | Пять явных ignored tests: Stop/reuse, slow-UI/hot-apply, native linker, cache context и Windows executable spellings. | Не desktop benchmark, screen latency, Full export или строгие 60 FPS. Windows-only test на Linux отмечается `skipped`, а не пройденным. |
@@ -272,11 +272,11 @@ picker error, same-path publication failure, copy и invalid JSON.
   не gate нового поведения или производительности.
 - `app::panes::tests::g1_team_registered_palette_pointer_apply_history_save_preserves_frozen_execution`
   требует настоящей экспортированной Team-поставки в `MODULE_ENGINE_TEST_TEAM_ROOT`.
-- Четыре нативные проверки `audio::tests` в `module-engine-host-services` требуют
-  feature `audio` и настоящего аудиоустройства Windows. Они проверяют скорость
-  подачи звука, зарегистрированное воспроизведение PCM8, повтор запуска после ошибки
-  и освобождение независимых владельцев. Запускайте их отдельно и последовательно
-  по [руководству Host Services](../../crates/host-services/README.ru.md#одновременные-wav-музыка-и-эффекты).
+- Нативная проверка Kira loopback в `module-engine-host-services` требует
+  feature `audio` и тихого выхода с проверенным монитором. Она проигрывает
+  привязанные сигналы WAV, OGG, MP3 и FLAC через штатный бэкенд и сравнивает
+  16 замеров прогретого выхода с пределом 50 мс. В [очереди](local-queue.md)
+  есть именованные маршруты для выхода WASAPI по умолчанию и виртуального выхода WSLg.
 - `tests::diagnostic_long_attempt_and_idle_cpu_cost` в `module-engine-g1` —
   добровольно запускаемая release-диагностика времени CPU без конкурирующей нагрузки.
   Её результаты не подтверждают производительность отрисованных кадров,
@@ -299,6 +299,18 @@ picker error, same-path publication failure, copy и invalid JSON.
 
 Registry не даёт произвольного `--step`, который незаметно включал бы emitter.
 Для каждого нового теста с `#[ignore]` укажите назначение и выберите профиль или явное исключение из профилей.
+
+<a id="native-pickers"></a>
+
+### Проверки нативных диалогов и трансформов
+
+`r64-scene-transforms` запускает набор проверок геометрии и жестов Editor. В него входят малые и вырожденные родительские трансформы, отражение, сдвиг осей и оба полюса gimbal lock. Тесты Core проверяют представление row-major и порядок вращений XYZ. `r64-dialog-paths` проверяет пути Unicode, отсутствующие папки, точный путь Save As и отмену без открытия окон.
+
+Проверка на рабочем столе открывает штатные диалоги Open, Save As, выбора папки и Import. По подсказкам в логе выберите временные файлы и папку. В Save As проверяются новое имя, отказ от замены существующего файла и согласие на замену. Последний Open нужно отменить. Сценарий сверяет байты фикстуры и текущую папку процесса. В Linux заранее подготовьте диалог XDG Desktop Portal или Zenity. На общем стенде используйте маршрут `native-dialogs` для Windows или `native-dialogs-wslg` для Linux.
+
+```sh
+cargo test --locked -p module-engine-editor --features verification --bin module-engine-editor native_dialogs::tests::native_dialogs_choose_and_cancel -- --exact --ignored --nocapture --test-threads=1
+```
 
 ## Сохранность, сериализация и результат
 
