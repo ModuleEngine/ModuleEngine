@@ -74,7 +74,7 @@ its hash and the original interleaved `f32le` capture with its own hash.
 The task log records the endpoint, channel count, sample rate and individual
 cue timings. On this stand, the WSLg routes use Ubuntu with the pinned Linux
 toolchain environment at `E:/ModuleEngine/.tools/linux-x86_64/env.sh`. Place
-an extracted Ubuntu ALSA development and PulseAudio plugin/utilities sysroot
+an extracted Ubuntu ALSA development and PulseAudio utilities sysroot
 under `E:/ModuleEngine-queue/tools/r6-wsl-alsa/sysroot`. The desktop picker
 also uses a Zenity and GTK sysroot under `E:/ModuleEngine-queue/tools/r6-wsl-zenity/sysroot`.
 The WSLg audio evidence describes a virtual endpoint.

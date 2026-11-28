@@ -78,7 +78,7 @@ SHA, дайджесты до и после, время, команды, итог
 собственным хешем. В логе указаны устройство, число каналов, частота дискретизации
 и задержки отдельных сигналов. На этом стенде маршруты WSLg используют Ubuntu
 с закреплённым окружением Linux по пути `E:/ModuleEngine/.tools/linux-x86_64/env.sh`.
-Распакуйте пакеты разработки ALSA, плагин PulseAudio и его утилиты Ubuntu в
+Распакуйте пакеты разработки ALSA и утилиты PulseAudio для Ubuntu в
 `E:/ModuleEngine-queue/tools/r6-wsl-alsa/sysroot`. Для диалогов также нужна
 копия Zenity и GTK в `E:/ModuleEngine-queue/tools/r6-wsl-zenity/sysroot`.
 Звуковой отчёт WSLg описывает виртуальный выход.

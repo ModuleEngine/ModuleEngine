@@ -350,13 +350,20 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
         io::{BufWriter, Write},
         sync::{
             Mutex,
-            mpsc::{SyncSender, sync_channel},
+            mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel},
         },
         thread,
         time::{Duration, Instant},
     };
 
     const ONSET: f32 = 0.035;
+
+    fn require_quiet(hits: &Receiver<Instant>, duration: Duration, label: &str) {
+        assert!(
+            matches!(hits.recv_timeout(duration), Err(RecvTimeoutError::Timeout)),
+            "Loopback needs a quiet live capture before {label}"
+        );
+    }
 
     struct CaptureSamples {
         frames: Vec<f32>,
@@ -526,10 +533,7 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
         format => panic!("Unsupported loopback format {format:?}"),
     };
     stream.play().unwrap();
-    assert!(
-        rx.recv_timeout(Duration::from_millis(150)).is_err(),
-        "Loopback must start quiet"
-    );
+    require_quiet(&rx, Duration::from_millis(150), "startup");
 
     let root = fixtures();
     let paths = [("legacy".into(), "tone.wav".into())].into();
@@ -560,8 +564,9 @@ fn native_kira_loopback_receives_bound_cues_within_budget() {
             .position(|frame| endpoint_sample(frame.left).abs() > ONSET)
             .unwrap();
         let source_lead_ms = 1000. * crossing as f64 / f64::from(source.sample_rate);
-        thread::sleep(Duration::from_millis(260));
+        thread::sleep(Duration::from_millis(210));
         while rx.try_recv().is_ok() {}
+        require_quiet(&rx, Duration::from_millis(50), name);
         let dispatch = Instant::now();
         service.consume(&[sound(name)]).unwrap();
         let deadline = dispatch + Duration::from_secs(2);

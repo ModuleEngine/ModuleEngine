@@ -82,6 +82,7 @@ impl Backend for NativeBackend {
         let stream = match self.supported.sample_format() {
             SampleFormat::F32 => self.build_stream::<f32>(config, renderer),
             SampleFormat::F64 => self.build_stream::<f64>(config, renderer),
+            SampleFormat::U8 => self.build_stream::<u8>(config, renderer),
             SampleFormat::I16 => self.build_stream::<i16>(config, renderer),
             SampleFormat::I24 => self.build_stream::<cpal::I24>(config, renderer),
             SampleFormat::I32 => self.build_stream::<i32>(config, renderer),

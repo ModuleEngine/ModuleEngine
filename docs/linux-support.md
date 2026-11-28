@@ -14,7 +14,7 @@ Policy checks with a Linux flag on Windows do not replace native building and ex
 
 * Native Linux Rust/Cargo 1.99.0 is the verified version; earlier versions were not checked in this run. rustfmt/Clippy components, a C compiler/linker and pkg-config are required. The commands below do not install tools.
 * For GUI: a working Wayland or X11 session, window-system and xkbcommon runtime libraries, a Vulkan loader and compatible ICD. Development/linking may require dev packages for the selected distribution. Install them explicitly through your system's tools.
-* For native audio: an ALSA default output. Builds with the `audio` feature also require ALSA development headers and pkg-config, for example `libasound2-dev` on Ubuntu.
+* For native audio: a working PulseAudio-compatible server such as `pipewire-pulse`, or an ALSA default output. CPAL tries PulseAudio first and retains ALSA as fallback. Builds with the `audio` feature require the ALSA development package and pkg-config, for example `libasound2-dev` on Ubuntu.
 * For new HLSL: native Linux DXC. Windows `dxc.exe` is not used through Wine/interop. A precompiled Player needs neither DXC nor Rust, but needs system runtime libraries and a GPU driver.
 * Native packages are built on their own OS/architecture. A Windows export does not become a Linux package by renaming the EXE. The `native_platform` tag does not prove glibc/driver compatibility with every distribution.
 

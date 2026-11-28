@@ -73,7 +73,7 @@
     "group": "gpu",
     "timeout_seconds": 3600,
     "interactive": true,
-    "artifacts": ["capture.f32le", "capture.sha256", "audio-loopback-probe", "probe.sha256", "alsa.conf", "cargo.jsonl"],
+    "artifacts": ["capture.f32le", "capture.sha256", "audio-loopback-probe", "probe.sha256", "cargo.jsonl"],
     "steps": [["pwsh", "-NoProfile", "-NonInteractive", "-File", "{tools}/audio-loopback.ps1", "-Endpoint", "wslg", "-Artifacts", "{artifacts}"]]
   },
   "native-dialogs": {
