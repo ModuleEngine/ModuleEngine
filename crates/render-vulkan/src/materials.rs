@@ -1,7 +1,10 @@
 use super::{Buffer, DeviceLifetime, Image, VulkanError, VulkanRenderer, range};
 use crate::capabilities::MATERIAL_IMAGE_COUNT;
 use ash::vk;
-use module_engine_core::{AlphaMode, Material, SceneSnapshot, TextureImage};
+use module_engine_core::{
+    AlphaMode, Material, SceneSnapshot, TextureEncoding, TextureImage, texture_block_mip_bytes,
+    texture_mip_extents,
+};
 use std::{collections::BTreeMap, sync::Arc};
 
 pub(super) const FIRST_MATERIAL_ROW: u32 = 1;
@@ -16,13 +19,6 @@ const DESCRIPTORS: [(vk::DescriptorType, u32); 4] = [
 ];
 
 type ImageKey = (usize, TextureEncoding);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum TextureEncoding {
-    Srgb,
-    Linear,
-    Normal,
-}
 
 fn image_key(texture: &Arc<TextureImage>, encoding: TextureEncoding) -> ImageKey {
     (Arc::as_ptr(texture) as usize, encoding)
@@ -178,6 +174,7 @@ impl Drop for MaterialLayout {
 struct MaterialTexture {
     image: Image,
     source: Option<Arc<TextureImage>>,
+    blocks: Option<TextureEncoding>,
 }
 
 impl MaterialTexture {
@@ -186,9 +183,13 @@ impl MaterialTexture {
     }
 
     fn pixels(&self) -> &[u8] {
-        self.source
-            .as_ref()
-            .map_or(&[255; 4], |t| t.rgba8.as_slice())
+        self.source.as_ref().map_or(&[255; 4], |texture| {
+            if self.blocks.is_some() {
+                &texture.blocks.as_ref().unwrap().bytes
+            } else {
+                &texture.rgba8
+            }
+        })
     }
 }
 
@@ -208,6 +209,16 @@ pub(super) struct MaterialSet {
 impl MaterialSet {
     pub(super) fn image_count(&self) -> usize {
         self.textures.len()
+    }
+
+    pub(super) fn block_image_counts(&self) -> [usize; 2] {
+        let mut count = [0; 2];
+        for texture in self.textures.values() {
+            if let Some(encoding) = texture.blocks {
+                count[usize::from(encoding == TextureEncoding::Normal)] += 1;
+            }
+        }
+        count
     }
 
     pub(super) fn index(&self, source: Option<&Arc<TextureImage>>) -> u32 {
@@ -238,6 +249,9 @@ pub(super) struct MaterialUploads {
 
 impl MaterialUploads {
     fn add(&mut self, texture: Arc<MaterialTexture>) {
+        if texture.blocks.is_some() {
+            self.bytes = self.bytes.next_multiple_of(16);
+        }
         self.regions.push((texture.clone(), self.bytes as u64));
         self.bytes += texture.pixels().len();
     }
@@ -606,13 +620,36 @@ impl VulkanRenderer {
                 "Base-color image {width}×{height} exceeds device dimension {max_dimension}"
             )));
         }
+        let blocks = self
+            .capabilities
+            .material_block_compression
+            .then_some(encoding)
+            .filter(|&encoding| {
+                source
+                    .as_ref()
+                    .and_then(|texture| texture.blocks.as_ref())
+                    .is_some_and(|block_chain| {
+                        block_chain.encoding == encoding
+                            && block_chain.bytes.len() as u64
+                                == texture_mip_extents(width, height)
+                                    .map(|[w, h]| texture_block_mip_bytes(w, h))
+                                    .sum::<u64>()
+                    })
+            });
+        let format = match blocks {
+            Some(TextureEncoding::Srgb) => vk::Format::BC7_SRGB_BLOCK,
+            Some(TextureEncoding::Linear) => vk::Format::BC7_UNORM_BLOCK,
+            Some(TextureEncoding::Normal) => vk::Format::BC5_UNORM_BLOCK,
+            None if encoding == TextureEncoding::Srgb => SRGB,
+            None => LINEAR,
+        };
+        let mut usage = vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST;
+        if blocks.is_none() {
+            usage |= vk::ImageUsageFlags::TRANSFER_SRC;
+        }
         let info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
-            .format(if encoding == TextureEncoding::Srgb {
-                SRGB
-            } else {
-                LINEAR
-            })
+            .format(format)
             .extent(vk::Extent3D {
                 width,
                 height,
@@ -622,14 +659,14 @@ impl VulkanRenderer {
             .array_layers(1)
             .samples(vk::SampleCountFlags::TYPE_1)
             .tiling(vk::ImageTiling::OPTIMAL)
-            .usage(
-                vk::ImageUsageFlags::SAMPLED
-                    | vk::ImageUsageFlags::TRANSFER_SRC
-                    | vk::ImageUsageFlags::TRANSFER_DST,
-            )
+            .usage(usage)
             .initial_layout(vk::ImageLayout::UNDEFINED);
         let image = self.allocate_image(&info, vk::ImageAspectFlags::COLOR)?;
-        Ok(MaterialTexture { image, source })
+        Ok(MaterialTexture {
+            image,
+            source,
+            blocks,
+        })
     }
 }
 
@@ -692,6 +729,38 @@ fn record_mip_upload(
         (vk::PipelineStageFlags2::NONE, vk::AccessFlags2::NONE),
         (transfer, write),
     );
+    if texture.blocks.is_some() {
+        let mut cursor = offset;
+        let regions = texture_mip_extents(width, height)
+            .enumerate()
+            .map(|(level, [width, height])| {
+                let region = vk::BufferImageCopy::default()
+                    .buffer_offset(cursor)
+                    .image_subresource(subresource(level as u32))
+                    .image_extent(vk::Extent3D {
+                        width,
+                        height,
+                        depth: 1,
+                    });
+                cursor += texture_block_mip_bytes(width, height);
+                region
+            })
+            .collect::<Vec<_>>();
+        // SAFETY: The staging slice is aligned to a BC block and includes every
+        // mip. All copied image subresources were transitioned to TRANSFER_DST.
+        unsafe { device.cmd_copy_buffer_to_image(command, staging, image, dst, &regions) };
+        barrier(
+            all_levels,
+            dst,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            (transfer, write),
+            (
+                vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                vk::AccessFlags2::SHADER_SAMPLED_READ,
+            ),
+        );
+        return;
+    }
     let region = vk::BufferImageCopy::default()
         .buffer_offset(offset)
         .image_subresource(subresource(0))

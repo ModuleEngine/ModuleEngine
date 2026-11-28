@@ -540,6 +540,8 @@ pub struct FrameWork {
     pub cpu_wait_ms: f64,
     pub atlas_upload_bytes: usize,
     pub material_images: usize,
+    pub material_bc7_images: usize,
+    pub material_bc5_images: usize,
     pub material_uploaded_images: usize,
     pub material_upload_bytes: usize,
 }
@@ -896,6 +898,7 @@ impl VulkanRenderer {
                 .runtime_descriptor_array(bindless);
             let features = vk::PhysicalDeviceFeatures::default()
                 .sampler_anisotropy(bindless)
+                .texture_compression_bc(capabilities.material_block_compression)
                 .multi_draw_indirect(capabilities.resident_scene)
                 .draw_indirect_first_instance(capabilities.resident_scene);
             let mut extensions = Vec::new();
@@ -3033,6 +3036,10 @@ impl VulkanRenderer {
             .map(|r| &r.materials)
             .or(materials.as_ref());
         frame_work.material_images = bound_materials.map_or(0, |set| set.image_count());
+        [
+            frame_work.material_bc7_images,
+            frame_work.material_bc5_images,
+        ] = bound_materials.map_or([0; 2], |set| set.block_image_counts());
         frame_work.material_uploaded_images = uploads.image_count();
         frame_work.material_upload_bytes = uploads.bytes;
         let material_upload = uploads.stage(self)?;
@@ -4091,6 +4098,7 @@ mod content_player_tests {
                     width: 1,
                     height: 1,
                     rgba8: vec![255, 255, 255, alpha],
+                    blocks: None,
                 })),
                 pbr: Some(MetallicRoughness {
                     emissive,
@@ -4293,7 +4301,8 @@ mod content_player_tests {
             return;
         }
         // Two cube meshes fit; a third would overflow either pool buffer.
-        renderer.storage_buffer_limit = 400;
+        renderer.storage_buffer_limit =
+            (2 * 8 * geometry::RESIDENT_VERTEX_BYTES).max(2 * 36 * 4) as u64;
         let scene = ObjectsWorld::demo().snapshot();
         let original = scene.items[0].clone();
         let item = |id, offset| {
@@ -4588,6 +4597,7 @@ mod content_player_tests {
                             width: 1,
                             height: 1,
                             rgba8: vec![i as u8, (i >> 8) as u8, 160, 255],
+                            blocks: None,
                         }));
                     item
                 })
@@ -5598,6 +5608,7 @@ mod conversion_tests {
                 232, 163, 38, 255, 16, 18, 193, 255, 49, 224, 58, 255, 186, 24, 139, 255, 22, 175,
                 98, 255, 243, 201, 143, 255,
             ],
+            blocks: None,
         }));
         for path in [RenderPath::Forward, RenderPath::Deferred] {
             let mut graph = default_graph(path);

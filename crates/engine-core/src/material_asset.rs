@@ -3,6 +3,7 @@ use serde::Deserialize;
 
 pub const MATERIAL_ASSET_EXTENSION: &str = "material";
 pub const MATERIAL_ASSET_COMPONENT: &str = "surface_material";
+pub const PACKAGE_TEXTURE_DIR: &str = ".textures";
 
 /// Sparse overrides for an imported or built-in surface. Texture paths are
 /// project-relative. An omitted field or null inherits the underlying value.

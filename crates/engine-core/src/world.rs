@@ -81,11 +81,37 @@ pub struct RenderItem {
 }
 
 /// Decoded renderer-neutral RGBA8 image. The material slot defines its color space.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct TextureImage {
     pub width: u32,
     pub height: u32,
     pub rgba8: Vec<u8>,
+    /// An optional derived GPU representation. The neutral wire format retains RGBA8.
+    #[serde(skip)]
+    pub blocks: Option<TextureBlockChain>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TextureEncoding {
+    Srgb,
+    Linear,
+    Normal,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextureBlockChain {
+    pub encoding: TextureEncoding,
+    pub bytes: Vec<u8>,
+}
+
+/// All R5.1 BC formats use sixteen bytes per 4×4 block.
+pub fn texture_block_mip_bytes(width: u32, height: u32) -> u64 {
+    16 * u64::from(width.div_ceil(4)) * u64::from(height.div_ceil(4))
+}
+
+pub fn texture_mip_extents(width: u32, height: u32) -> impl Iterator<Item = [u32; 2]> {
+    let levels = u32::BITS - width.max(height).leading_zeros();
+    (0..levels).map(move |level| [(width >> level).max(1), (height >> level).max(1)])
 }
 
 /// A legacy base-color material or a metallic/roughness surface. Factors are linear.

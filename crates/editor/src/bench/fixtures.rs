@@ -129,6 +129,7 @@ fn stress(scaled: bool) -> Result<Fixture, String> {
                 width: 8,
                 height: 8,
                 rgba8,
+                blocks: None,
             })
         })
         .collect();
@@ -295,6 +296,7 @@ fn downscale(image: &TextureImage, side: u32) -> Result<TextureImage, String> {
         width,
         height,
         rgba8,
+        blocks: None,
     })
 }
 

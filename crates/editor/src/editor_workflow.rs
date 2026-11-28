@@ -730,9 +730,7 @@ impl Editor {
                     bytes,
                 } => {
                     let mut library = module_engine_content::ContentLibrary::new(&root)?;
-                    for (_, path) in module_engine_core::MaterialAsset::parse(&bytes)?.textures() {
-                        library.load_texture(path)?;
-                    }
+                    library.bake_material_asset(&bytes)?;
                     workspace.edit_material(&before, &id, &expected_hash, bytes)?
                 }
                 BrowserAction::Rename { id, name } => {

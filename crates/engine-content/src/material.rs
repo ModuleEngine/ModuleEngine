@@ -1,5 +1,7 @@
 use crate::{ContentLibrary, owned_path};
-use module_engine_core::{MATERIAL_ASSET_EXTENSION, Material, MaterialAsset, TextureImage};
+use module_engine_core::{
+    MATERIAL_ASSET_EXTENSION, Material, MaterialAsset, TextureEncoding, TextureImage,
+};
 use serde_json::Value;
 use std::{collections::BTreeSet, fs::File, io::Read, path::Path, sync::Arc};
 
@@ -69,20 +71,23 @@ impl ContentLibrary {
             .and_then(|file| file.take(65_537).read_to_end(&mut bytes))
             .map_err(|e| format!("{path}: {e}"))?;
         let asset = MaterialAsset::parse(&bytes).map_err(|e| format!("{path}: {e}"))?;
-        let mut read_texture = |reference: Option<&str>| {
+        let mut read_texture = |reference: Option<&str>, encoding| {
             reference
-                .map(|reference| self.load_texture(reference))
+                .map(|reference| self.load_material_texture(reference, encoding))
                 .transpose()
         };
         let mut dependencies = BTreeSet::from([path.clone()]);
         dependencies.extend(asset.textures().map(|(_, path)| path.to_owned()));
         let material = Arc::new(LoadedMaterial {
             dependencies,
-            base_color: read_texture(asset.base_color_texture.as_deref())?,
-            metallic_roughness: read_texture(asset.metallic_roughness_texture.as_deref())?,
-            normal: read_texture(asset.normal_texture.as_deref())?,
-            occlusion: read_texture(asset.occlusion_texture.as_deref())?,
-            emissive: read_texture(asset.emissive_texture.as_deref())?,
+            base_color: read_texture(asset.base_color_texture.as_deref(), TextureEncoding::Srgb)?,
+            metallic_roughness: read_texture(
+                asset.metallic_roughness_texture.as_deref(),
+                TextureEncoding::Linear,
+            )?,
+            normal: read_texture(asset.normal_texture.as_deref(), TextureEncoding::Normal)?,
+            occlusion: read_texture(asset.occlusion_texture.as_deref(), TextureEncoding::Linear)?,
+            emissive: read_texture(asset.emissive_texture.as_deref(), TextureEncoding::Srgb)?,
             asset,
         });
         self.materials.insert(path, material.clone());
@@ -100,7 +105,8 @@ impl ContentLibrary {
             material.base_color = color;
         }
         if let Some(reference) = texture_override(legacy) {
-            material.base_color_texture = Some(self.load_texture(reference)?);
+            material.base_color_texture =
+                Some(self.load_material_texture(reference, TextureEncoding::Srgb)?);
         }
         if let Some(reference) = material_reference(surface) {
             self.load_material(reference)?.apply(material);
@@ -125,6 +131,91 @@ impl ContentLibrary {
         }
         Ok(dependencies)
     }
+
+    #[cfg(feature = "texture-bake")]
+    pub fn bake_material_asset(&mut self, bytes: &[u8]) -> Result<(), String> {
+        let asset = MaterialAsset::parse(bytes)?;
+        let maps = asset
+            .textures()
+            .map(|(key, reference)| {
+                self.load_texture(reference)
+                    .map(|image| (image, crate::texture_cache::encoding_for_key(key)))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        crate::texture_cache::bake_author(
+            &self.root,
+            maps.iter()
+                .map(|(image, encoding)| (image.as_ref(), *encoding)),
+        )
+    }
+
+    /// Bake the exact source images already copied into this unpublished Player.
+    /// An author cache hit can reuse bytes only for identical pixels and role.
+    #[cfg(feature = "texture-bake")]
+    pub fn bake_player_textures(
+        &mut self,
+        author_root: &Path,
+        entities: &[module_engine_core::GameEntity],
+    ) -> Result<(), String> {
+        let mut maps = Vec::new();
+        for entity in entities {
+            if let Some(reference) = entity
+                .components
+                .get("mesh")
+                .and_then(|value| value.get("path"))
+                .and_then(Value::as_str)
+            {
+                let model = self.load_model(reference)?;
+                for primitive in &model.primitives {
+                    let mut material = primitive.material.clone();
+                    crate::texture_cache::for_each_map(&mut material, |image, encoding| {
+                        maps.push((image.clone(), encoding))
+                    });
+                }
+            }
+            if let Some(reference) = texture_override(entity.components.get("material")) {
+                maps.push((self.load_texture(reference)?, TextureEncoding::Srgb));
+            }
+            if let Some(reference) = material_reference(
+                entity
+                    .components
+                    .get(module_engine_core::MATERIAL_ASSET_COMPONENT),
+            ) {
+                let asset = self.load_material(reference)?;
+                let mut material = Material::default();
+                asset.apply(&mut material);
+                crate::texture_cache::for_each_map(&mut material, |image, encoding| {
+                    maps.push((image.clone(), encoding))
+                });
+            }
+        }
+        maps.sort_unstable_by_key(|(image, encoding)| (Arc::as_ptr(image) as usize, *encoding));
+        maps.dedup_by_key(|(image, encoding)| (Arc::as_ptr(image) as usize, *encoding));
+        crate::texture_cache::bake_delivery(
+            author_root,
+            &self.root,
+            maps.iter()
+                .map(|(image, encoding)| (image.as_ref(), *encoding)),
+        )
+    }
+}
+
+#[cfg(feature = "texture-bake")]
+pub(super) fn bake_model(root: &Path, model: &crate::LoadedModel) -> Result<(), String> {
+    let mut maps = Vec::new();
+    for primitive in &model.primitives {
+        let mut material = primitive.material.clone();
+        crate::texture_cache::for_each_map(&mut material, |image, encoding| {
+            maps.push((image.clone(), encoding))
+        });
+    }
+    maps.sort_unstable_by_key(|(image, encoding)| (Arc::as_ptr(image) as usize, *encoding));
+    maps.dedup_by_key(|(image, encoding)| (Arc::as_ptr(image) as usize, *encoding));
+    crate::texture_cache::bake_author(
+        root,
+        maps.iter()
+            .map(|(image, encoding)| (image.as_ref(), *encoding)),
+    )
 }
 
 fn color_override(component: Option<&Value>) -> Result<Option<[f32; 4]>, String> {

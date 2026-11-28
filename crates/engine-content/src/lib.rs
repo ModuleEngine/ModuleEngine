@@ -2,13 +2,14 @@
 //! No glTF document or GPU handle is required by either world implementation.
 mod animation;
 mod material;
+mod texture_cache;
 
 pub use animation::AnimationClip;
 use animation::{Matrix, PrimitiveNode, PrimitiveSkin, Rig, SceneNode, Skin, row_major};
 use base64::Engine;
 use module_engine_core::{
-    AlphaMode, Material, Mesh, MetallicRoughness, RenderItem, SceneSnapshot, TextureImage,
-    identity_matrix, multiply_matrices,
+    AlphaMode, Material, Mesh, MetallicRoughness, RenderItem, SceneSnapshot, TextureEncoding,
+    TextureImage, identity_matrix, multiply_matrices,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -56,6 +57,7 @@ pub struct ContentLibrary {
     asset_paths: BTreeMap<String, String>,
     models: BTreeMap<String, Arc<LoadedModel>>,
     textures: BTreeMap<String, Arc<TextureImage>>,
+    texture_encodings: BTreeMap<(String, TextureEncoding), Arc<TextureImage>>,
     materials: BTreeMap<String, Arc<material::LoadedMaterial>>,
 }
 impl ContentLibrary {
@@ -69,12 +71,14 @@ impl ContentLibrary {
             asset_paths: BTreeMap::new(),
             models: BTreeMap::new(),
             textures: BTreeMap::new(),
+            texture_encodings: BTreeMap::new(),
             materials: BTreeMap::new(),
         })
     }
     pub fn invalidate(&mut self) {
         self.models.clear();
         self.textures.clear();
+        self.texture_encodings.clear();
         self.materials.clear();
     }
     /// Install the project's stable asset index. A changed mapping invalidates
@@ -102,7 +106,15 @@ impl ContentLibrary {
             return Ok(model.clone());
         }
         let file = owned_path(&self.root, path)?;
-        let model = Arc::new(load_model(&self.root, &file)?);
+        let mut model = load_model(&self.root, &file)?;
+        texture_cache::attach(
+            &self.root,
+            model
+                .primitives
+                .iter_mut()
+                .map(|primitive| &mut primitive.material),
+        );
+        let model = Arc::new(model);
         self.models.insert(path.into(), model.clone());
         Ok(model)
     }
@@ -117,6 +129,22 @@ impl ContentLibrary {
         let bytes = std::fs::read(file).map_err(|e| format!("Texture {path}: {e}"))?;
         let texture = decode_texture(bytes)?;
         self.textures.insert(path.into(), texture.clone());
+        Ok(texture)
+    }
+
+    fn load_material_texture(
+        &mut self,
+        reference: &str,
+        encoding: TextureEncoding,
+    ) -> Result<Arc<TextureImage>, String> {
+        let path = self.resolve_reference(reference)?;
+        let key = (path, encoding);
+        if let Some(texture) = self.texture_encodings.get(&key) {
+            return Ok(texture.clone());
+        }
+        let raw = self.load_texture(&key.0)?;
+        let texture = texture_cache::resolve(&self.root, raw, encoding);
+        self.texture_encodings.insert(key, texture.clone());
         Ok(texture)
     }
     /// Copy one validated PNG/JPEG to a project-relative filename.
@@ -228,6 +256,8 @@ impl ContentLibrary {
             .iter()
             .map(|p| owned_path(source_root, p).map(|s| (p.clone(), s)))
             .collect::<Result<Vec<_>, _>>()?;
+        #[cfg(feature = "texture-bake")]
+        material::bake_model(&self.root, &model)?;
         for (relative, from) in sources {
             let to = target.join(relative);
             if let Some(parent) = to.parent() {
@@ -364,6 +394,7 @@ fn decode_texture(bytes: Vec<u8>) -> Result<Arc<TextureImage>, String> {
         width: decoded.width(),
         height: decoded.height(),
         rgba8: decoded.into_raw(),
+        blocks: None,
     }))
 }
 fn load_model(root: &Path, path: &Path) -> Result<LoadedModel, String> {
@@ -730,6 +761,7 @@ mod tests {
                     width: 1,
                     height: 1,
                     rgba8: vec![red, 0, 0, 255],
+                    blocks: None,
                 })
             })
             .collect::<Vec<_>>();

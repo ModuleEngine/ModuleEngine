@@ -76,6 +76,7 @@ pub(super) fn check(root: &Path, folder: &Path) -> Result<(), String> {
                 width: SIDE,
                 height: SIDE,
                 rgba8: color.repeat((SIDE * SIDE) as usize),
+                blocks: None,
             })),
             ..Material::default()
         };

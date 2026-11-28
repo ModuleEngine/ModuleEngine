@@ -1042,6 +1042,7 @@ mod tests {
                 width: 1,
                 height: 1,
                 rgba8: vec![45 + i as u8 * 180, 120, 55, 255],
+                blocks: None,
             }));
         }
         let mut source = ResidentScene::default();

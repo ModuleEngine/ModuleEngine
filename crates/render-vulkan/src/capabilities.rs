@@ -15,6 +15,7 @@ pub struct DeviceCapabilities {
     pub timeline_semaphore: bool,
     pub synchronization2: bool,
     pub bindless_materials: bool,
+    pub material_block_compression: bool,
     pub resident_scene: bool,
     pub gpu_frustum_culling: bool,
     pub hiz_occlusion_culling: bool,
@@ -104,6 +105,24 @@ impl DeviceCapabilities {
             && texture_format
                 .optimal_tiling_features
                 .contains(texture_features);
+        let material_block_compression = bindless_materials
+            && core.texture_compression_bc != 0
+            && [
+                vk::Format::BC7_SRGB_BLOCK,
+                vk::Format::BC7_UNORM_BLOCK,
+                vk::Format::BC5_UNORM_BLOCK,
+            ]
+            .into_iter()
+            .all(|format| {
+                // SAFETY: physical is the enumerated device used for this feature query.
+                unsafe { instance.get_physical_device_format_properties(physical, format) }
+                    .optimal_tiling_features
+                    .contains(
+                        vk::FormatFeatureFlags::SAMPLED_IMAGE
+                            | vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR
+                            | vk::FormatFeatureFlags::TRANSFER_DST,
+                    )
+            });
         let resident_scene = bindless_materials
             && core.multi_draw_indirect != 0
             && core.draw_indirect_first_instance != 0
@@ -138,6 +157,7 @@ impl DeviceCapabilities {
             timeline_semaphore: core12.timeline_semaphore != 0,
             synchronization2,
             bindless_materials,
+            material_block_compression,
             resident_scene,
             gpu_frustum_culling,
             hiz_occlusion_culling,
