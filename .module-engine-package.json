@@ -49,7 +49,7 @@
     "crates/editor/src/bench/materials.rs": "11b6970b311a14a39d4c02d1aa0c4178ea8ab169ce6538547e4c944245448e35",
     "crates/editor/src/bench/meshlets.rs": "b55907300625fee8fd71ea557e6ce24fd4faf05d74805202dc4dd213cc8fba06",
     "crates/editor/src/bench/mod.rs": "127801f608cca77cbd847402819abe3c60f08d0c0d2feb769b868aae82caac6b",
-    "crates/editor/src/bench/structure.rs": "f496a4c88bae1ee2e524a1d1e17a9e1cb4a122368c5cdfc0a134814de8b240bd",
+    "crates/editor/src/bench/structure.rs": "31034dba5c875562de6c8aea9a293294be53ba748035ebe69149ae361b53ea3b",
     "crates/editor/src/bench/visibility.rs": "8971ba89edb3a6c87565936ac9d456308c57a491370d7f3ab96306a5ce98f656",
     "crates/editor/src/canvas.rs": "4a8eb7a67fafa103fe5c378355f1f3d362ec141319d2751594c0d4bcbdf1e1b6",
     "crates/editor/src/distribution.rs": "2d342c4e00c5bffcfe806f60981877ed917b44914063dc3f8206f117a53835a2",

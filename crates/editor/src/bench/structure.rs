@@ -46,6 +46,7 @@ pub(super) fn run(root: &Path, output: &Path) -> Result<(), String> {
     for count in [1000, fixture.scene.items.len()] {
         let mut scene = SceneSnapshot {
             items: fixture.scene.items[..count].to_vec(),
+            lights: Vec::new(),
             time: 0.,
         };
         for item in &mut scene.items {
