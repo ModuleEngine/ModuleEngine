@@ -4,7 +4,7 @@
 
 [English](current-status.md) | [Русский](ru/current-status.md) | [Documentation](README.md)
 
-**27 November 2026.** The [Cargo workspace version](../Cargo.toml) is `0.4.0`. The owner closed milestone 0.4.2 on 17 November. The current priority is the [R engine rebuild](product-roadmap.md#rebuild). Work on 0.5 and new UI features remains paused until the core R1, R3 and R4 phases are accepted. The [roadmap](product-roadmap.md#map) tracks stage decisions separately from the version printed by Editor and Player.
+**28 November 2026.** The [Cargo workspace version](../Cargo.toml) is `0.4.0`. The owner closed milestone 0.4.2 on 17 November. The current priority is the [R engine rebuild](product-roadmap.md#rebuild). Work on 0.5 and new UI features remains paused until the core R1, R3 and R4 phases are accepted. The [roadmap](product-roadmap.md#map) tracks stage decisions separately from the version printed by Editor and Player.
 
 Editor and Player use the shared Vulkan shell. The root and detached windows present Scene and Game graph images on the same device. On CPU Vulkan, the interactive shell lets the UI submit a completed image before more work from its producer. The [Player contract](player.md) describes the wait limit, image lifetime and diagnostic checks. The [Windows startup benchmark](bench.md#editor-first-frame) compares the first visible Editor frame with a rebuilt reference. The [paired S1/S2 result](evidence/r26-player/README.md) records the effect of native window pacing against R0.6.
 
