@@ -31,6 +31,55 @@ pub fn document(mut document: GraphDocument) -> GraphDocument {
         .retain(|e| ids.contains(&e.from_node) && ids.contains(&e.to_node));
     document.custom_sources.clear();
     let mut game = demo_project();
+    for scene in game.scenes.values_mut() {
+        if let Some(player) = scene.objects.iter_mut().find(|o| o.object.id == 1) {
+            player.components.insert(
+                "mesh".into(),
+                json!({"path":"assets/models/demo_crystal.glb"}),
+            );
+        }
+    }
+    game.execution.stages.push(SystemStage {
+        name: "Custom game logic".into(),
+        nodes: vec![SystemNode {
+            id: "game-controller".into(),
+            module: "custom.rust.update".into(),
+            params: json!({"source_id":"game-controller"}),
+            bindings: BTreeMap::from([
+                ("world".into(), "world".into()),
+                ("input".into(), "input".into()),
+                ("events".into(), "events".into()),
+            ]),
+            after: vec!["system-7".into()],
+        }],
+    });
+    document.custom_sources.insert(
+        "game-controller".into(),
+        r#"// module-engine-state: {"schema":"game.counter.v1","initial":{"ticks":0,"hits":0}}
+fn update(ctx: &mut ScriptContext) {
+    let ticks = ctx.state["ticks"].as_u64().unwrap_or(0) + 1;
+    let hits = ctx.state["hits"].as_u64().unwrap_or(0)
+        + ctx.events.iter().filter(|event| event.get("Hit").is_some()).count() as u64;
+    ctx.state["ticks"] = serde_json::json!(ticks);
+    ctx.state["hits"] = serde_json::json!(hits);
+    if ctx.input["interact"].as_bool() == Some(true) {
+        ctx.set_color(1, [250, 180, 75, 255]);
+        ctx.emit_event(serde_json::json!({"Sound":{"cue":"hit","object":1}}));
+    }
+}
+"#
+        .into(),
+    );
+    document.name = "ModuleEngine / Two arenas".into();
+    document.game = Some(game);
+    document
+}
+
+/// Create the stock authored template with the optional Rapier capability selected.
+/// The caller supplies a composition with the physics module installed.
+pub fn document_with_rapier(base: GraphDocument) -> GraphDocument {
+    let mut document = document(base);
+    let game = document.game.as_mut().expect("Two Arenas content");
     let stages = &mut game.execution.stages;
     let collision = stages
         .iter()
@@ -73,46 +122,7 @@ pub fn document(mut document: GraphDocument) -> GraphDocument {
                 json!({"half_extents": obstacle.object.transform.scale}),
             );
         }
-        if let Some(player) = scene.objects.iter_mut().find(|o| o.object.id == 1) {
-            player.components.insert(
-                "mesh".into(),
-                json!({"path":"assets/models/demo_crystal.glb"}),
-            );
-        }
     }
-    game.execution.stages.push(SystemStage {
-        name: "Custom game logic".into(),
-        nodes: vec![SystemNode {
-            id: "game-controller".into(),
-            module: "custom.rust.update".into(),
-            params: json!({"source_id":"game-controller"}),
-            bindings: BTreeMap::from([
-                ("world".into(), "world".into()),
-                ("input".into(), "input".into()),
-                ("events".into(), "events".into()),
-            ]),
-            after: vec!["system-7".into()],
-        }],
-    });
-    document.custom_sources.insert(
-        "game-controller".into(),
-        r#"// module-engine-state: {"schema":"game.counter.v1","initial":{"ticks":0,"hits":0}}
-fn update(ctx: &mut ScriptContext) {
-    let ticks = ctx.state["ticks"].as_u64().unwrap_or(0) + 1;
-    let hits = ctx.state["hits"].as_u64().unwrap_or(0)
-        + ctx.events.iter().filter(|event| event.get("Hit").is_some()).count() as u64;
-    ctx.state["ticks"] = serde_json::json!(ticks);
-    ctx.state["hits"] = serde_json::json!(hits);
-    if ctx.input["interact"].as_bool() == Some(true) {
-        ctx.set_color(1, [250, 180, 75, 255]);
-        ctx.emit_event(serde_json::json!({"Sound":{"cue":"hit","object":1}}));
-    }
-}
-"#
-        .into(),
-    );
-    document.name = "ModuleEngine / Two arenas".into();
-    document.game = Some(game);
     document
 }
 
