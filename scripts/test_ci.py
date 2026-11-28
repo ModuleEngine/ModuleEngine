@@ -1,7 +1,9 @@
 """CI path and aggregate policy: no Actions service, Cargo or GPU required."""
+from contextlib import ExitStack
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -24,7 +26,7 @@ class PolicyTests(unittest.TestCase):
 
     @staticmethod
     def route(paths, regular=True):
-        with patch.object(ci_plan, "changed_files", return_value=(paths, regular)):
+        with patch.object(ci_plan, "changed_files", return_value=(dict.fromkeys(paths), regular)):
             return ci_plan.plan("a" * 40)
 
     def test_every_tracked_file_has_an_explicit_route(self):
@@ -105,7 +107,7 @@ class PolicyTests(unittest.TestCase):
 
     def test_diff_uses_nul_separation_no_rename_and_no_shell(self):
         with patch("ci_plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, b":000000 100644 0 a A\0docs/a.md\0:100755 000000 b 0 D\0crates/space name.rs\0")) as process:
-            self.assertEqual(ci_plan.changed_files("a" * 40), (["crates/space name.rs", "docs/a.md"], False))
+            self.assertEqual(ci_plan.changed_files("a" * 40), ({"crates/space name.rs": None, "docs/a.md": None}, False))
             argv = process.call_args.args[0]
             self.assertIn("-z", argv)
             self.assertIn("--no-renames", argv)
@@ -118,8 +120,25 @@ class PolicyTests(unittest.TestCase):
             with self.assertRaises(subprocess.CalledProcessError):
                 ci_plan.changed_files("a" * 40)
 
+    def test_policy_cli_runs_checks_before_emitting_outputs(self):
+        for route in ("docs", "site", "policy", "full"):
+            with ExitStack() as patches:
+                patches.enter_context(patch.object(ci_plan, "plan", return_value={"route": route}))
+                run = patches.enter_context(patch.object(ci_plan.subprocess, "run"))
+                patches.enter_context(patch.object(ci_plan.sys, "argv", ["ci_plan.py"]))
+                patches.enter_context(patch.dict(os.environ, {}, clear=True))
+                patches.enter_context(patch("builtins.print"))
+                ci_plan.main()
+                if route == "policy":
+                    run.assert_called_once_with(
+                        [ci_plan.sys.executable, "-B", str(Path(ci_plan.__file__).with_name("test_ci.py"))],
+                        check=True,
+                    )
+                else:
+                    run.assert_not_called()
+
     def test_gate_rejects_every_non_success_prerequisite(self):
-        for route in ("docs", "site", "full"):
+        for route in ("docs", "site", "policy", "full"):
             light = route != "full"
             native = package = not light
             selected = {"light": str(light).lower(), "native": str(native).lower(),
@@ -215,6 +234,97 @@ class PolicyTests(unittest.TestCase):
                     cancelled.append(active)
                 groups[key] = (active, run) if active else (run, None)
             self.assertCountEqual(cancelled, expected)
+
+
+class PackagePinRouteTests(unittest.TestCase):
+    doc = "docs/a.md"
+    site = "site/map.html"
+    plan_script = "scripts/ci_plan.py"
+    test_script = "scripts/test_ci.py"
+    code = "scripts/verify.py"
+
+    def route(self, writes, edit_manifest, field="backend_files", profile="full", executable=None,
+              extra_pins=(), stale_base_pin=None):
+        def git(*args):
+            return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout.strip()
+
+        def commit(executable=None):
+            git("add", "--all")
+            if executable:
+                git("update-index", "--chmod=+x", executable)
+            git("-c", "user.name=CI Fixture", "-c", "user.email=fixture@example.invalid",
+                "-c", "commit.gpgsign=false", "commit", "-qm", "fixture")
+            return git("rev-parse", "HEAD")
+
+        def update_pins(manifest, paths):
+            for path in paths:
+                manifest[field][path] = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+        with ExitStack() as fixture:
+            directory = fixture.enter_context(tempfile.TemporaryDirectory())
+            fixture.callback(os.chdir, Path.cwd())
+            os.chdir(directory)
+            git("init", "-q")
+            git("config", "core.autocrlf", "false")
+            initial_paths = (self.doc, self.site, self.plan_script, self.test_script, self.code, *extra_pins)
+            for path in initial_paths:
+                Path(path).parent.mkdir(parents=True, exist_ok=True)
+                Path(path).write_bytes(b"old\n")
+            manifest = {"schema_version": 1, "engine_version": "0.4.0", "profile": profile, "files": {},
+                        "module_sources": {}, "gameplay_source_ids": [], "blueprint_hash": None,
+                        "sdk_files": {}, "backend_files": {}}
+            update_pins(manifest, initial_paths)
+            if stale_base_pin:
+                manifest[field][stale_base_pin] = "0" * 64
+            manifest_path = Path(ci_plan.PACKAGE_MANIFEST)
+            manifest_path.write_bytes(json.dumps(manifest).encode())
+            base = commit()
+            for path in writes:
+                Path(path).write_bytes(b"new\r\n")
+            if edit_manifest is not None:
+                update_pins(manifest, writes)
+                payload = edit_manifest(manifest, manifest[field])
+                manifest_path.write_bytes((payload if payload is not None else json.dumps(manifest)).encode())
+            head = commit(executable)
+            for path in writes:
+                Path(path).write_bytes(b"uncommitted\n")
+            manifest_path.write_bytes(b"not json in the working tree")
+            return ci_plan.plan(base, head)["route"]
+
+    def test_verified_blob_pins_keep_light_routes(self):
+        for field, profile in (("sdk_files", "team"), ("backend_files", "full")):
+            for paths, expected in (((self.doc,), "docs"), ((self.doc, self.site), "site"),
+                                    ((self.plan_script, self.test_script, self.doc), "policy")):
+                with self.subTest(field=field, expected=expected):
+                    self.assertEqual(self.route(paths, lambda *_: None, field, profile), expected)
+        text_paths = ("README.md", "AGENTS.md", "examples/crate-garden/README.ru.md")
+        self.assertEqual(self.route(text_paths, lambda *_: None, extra_pins=text_paths), "docs")
+        self.assertEqual(self.route((self.doc,), lambda *_: None, stale_base_pin=self.doc), "docs")
+
+    def test_other_changes_and_unverified_pins_are_full(self):
+        no_op = lambda *_: None
+        cases = [
+            ((self.doc, self.code), no_op, {}),
+            ((self.plan_script, self.code), no_op, {}),
+            ((self.doc,), no_op, {"profile": "team"}),
+            ((self.doc,), no_op, {"executable": self.doc}),
+            ((self.doc,), lambda manifest, _: manifest.update(engine_version="0.4.1"), {}),
+            ((self.doc,), lambda manifest, _: manifest.update(schema_version=2), {}),
+            ((self.doc,), lambda manifest, _: manifest.update(unknown=[]), {}),
+            ((self.doc,), lambda manifest, _: json.dumps(manifest)[:-1] + ', "files": {}}', {}),
+            ((self.doc,), lambda _, pins: pins.update({self.doc: "0" * 64}), {}),
+            ((self.doc,), lambda _, pins: pins.update({self.doc: "invalid"}), {}),
+            ((self.doc,), lambda _, pins: pins.update({self.site: "0" * 64}), {}),
+            ((self.doc,), lambda _, pins: pins.update({"docs/new.md": "0" * 64}), {}),
+            ((self.doc,), lambda _, pins: (pins.pop(self.site), None)[1], {}),
+            ((self.doc,), lambda *_: "{", {}),
+            ((self.plan_script,), None, {}),
+        ]
+        for index, (paths, edit, options) in enumerate(cases):
+            with self.subTest(case=index):
+                self.assertEqual(self.route(paths, edit, **options), "full")
+        self.assertEqual(self.route((self.doc,), no_op, executable=ci_plan.PACKAGE_MANIFEST), "full")
+        self.assertEqual(self.route(("scripts/other.py",), no_op, extra_pins=("scripts/other.py",)), "full")
 
 
 class WorkspaceReportingTests(unittest.TestCase):
