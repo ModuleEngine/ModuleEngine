@@ -56,7 +56,10 @@ mod contracts {
         }
     }
 
-    fn render(service: &mut AudioService<BufferBackend>, ms: u32) -> [f32; 2] {
+    fn render_frames(
+        service: &mut AudioService<BufferBackend>,
+        frames: u32,
+    ) -> impl Iterator<Item = [f32; 2]> + '_ {
         let renderer = service
             .output
             .as_mut()
@@ -67,12 +70,15 @@ mod contracts {
             .as_mut()
             .unwrap();
         renderer.on_start_processing();
-        (0..ms * 48).fold([0_f32; 2], |[l, r], _| {
+        (0..frames).map(move |_| {
             let frame = renderer.process();
-            [
-                l.max(endpoint_sample(frame.left).abs()),
-                r.max(endpoint_sample(frame.right).abs()),
-            ]
+            [endpoint_sample(frame.left), endpoint_sample(frame.right)]
+        })
+    }
+
+    fn render(service: &mut AudioService<BufferBackend>, ms: u32) -> [f32; 2] {
+        render_frames(service, ms * 48).fold([0_f32; 2], |[left, right], frame| {
+            [left.max(frame[0].abs()), right.max(frame[1].abs())]
         })
     }
 
@@ -229,28 +235,67 @@ mod contracts {
     }
 
     #[test]
-    fn overrange_float_wav_keeps_its_effective_gain() {
+    fn wav_cues_reject_nonfinite_and_peaks_above_24_dbfs() {
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let error =
+                validate_audio_bytes("wav", &crate::wav::tests::float32(&[invalid])).unwrap_err();
+            assert!(error.contains("NaN or infinite"), "{error}");
+        }
+        for invalid in [16., -16.] {
+            let error =
+                validate_audio_bytes("wav", &crate::wav::tests::float32(&[invalid])).unwrap_err();
+            assert!(error.contains("exceeds +24 dBFS"), "{error}");
+        }
+        validate_audio_bytes("wav", &crate::wav::tests::float32(&[15.8, -15.8])).unwrap();
+    }
+
+    #[test]
+    fn voice_cancellation_matches_f64_at_normal_levels() {
         let root = fixtures();
         let paths = BTreeMap::new();
         let context = service_context(&root, &paths);
-        let config = parse_config(&json!({"event":"Sound", "cue_field":"cue", "cues":{}})).unwrap();
+        let config = parse_config(&json!({
+            "event":"Sound", "cue_field":"cue", "cues":{}, "max_voices":128
+        }))
+        .unwrap();
         let mut service =
             AudioService::<BufferBackend>::new(config, &context, || (), |_| None).unwrap();
-        let wav = crate::wav::tests::float32(&[1.0e20; 960]);
-        let mut clip =
-            crate::audio_codec::decode_source("wav", std::io::Cursor::new(&wav), 960).unwrap();
-        clip.settings = clip.settings.volume(amplitude(5.0e-21));
-        service.cues.insert(
-            "headroom".into(),
-            Cue {
-                sound: clip,
-                bus: Bus::Sfx,
-                spatial: None,
-            },
+        let mut reference = 0_f64;
+        let mut events = Vec::new();
+        for (name, value, count) in [
+            ("up", 0.141_31, 64),
+            ("down", -0.141_31, 63),
+            ("tail", -0.126_82, 1),
+        ] {
+            let wav = crate::wav::tests::float32(&[value; 960]);
+            let clip =
+                crate::audio_codec::decode_source("wav", std::io::Cursor::new(&wav), 960).unwrap();
+            service.cues.insert(
+                name.into(),
+                Cue {
+                    sound: clip,
+                    bus: Bus::Sfx,
+                    spatial: None,
+                },
+            );
+            events.extend(std::iter::repeat_with(|| sound(name)).take(count));
+            reference += f64::from(value) * count as f64;
+        }
+        service.consume(&events).unwrap();
+        assert_eq!(service.diagnostics()["active_voices"], 128);
+        let maximum_error = render_frames(&mut service, 480)
+            .skip(24)
+            .flatten()
+            .map(|sample| (f64::from(sample) - reference).abs())
+            .fold(0., f64::max);
+        eprintln!(
+            "128-voice f32 vs f64 peak error {maximum_error:e} ({:.1} dBFS)",
+            20. * maximum_error.log10()
         );
-        service.consume(&[sound("headroom")]).unwrap();
-        let [left, right] = render(&mut service, 10);
-        assert!((left - 0.5).abs() < 0.01 && left == right, "{left} {right}");
+        assert!(
+            maximum_error <= 1.0e-5,
+            "maximum cancellation error {maximum_error:e} exceeds -100 dBFS"
+        );
     }
 
     #[test]
@@ -282,6 +327,8 @@ mod contracts {
         }
         service.consume(&[]).unwrap();
         let one_voice = render(&mut service, 12);
+        // The first callback marks dropped emitters. The next reclaims them.
+        render(&mut service, 8);
         service.consume(&[]).unwrap();
         let two_voices = render(&mut service, 12);
         assert!(

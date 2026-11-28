@@ -8,9 +8,8 @@ use std::{
 
 pub(crate) const MAX_FRAMES: usize = 32 * 1024 * 1024;
 const MAX_FILE_BYTES: u64 = 128 * 1024 * 1024;
-// Power-of-two scaling leaves room for Kira's resampling and bounded voice
-// sum even for finite float WAV data near f32::MAX.
-pub(crate) const PCM_HEADROOM: f32 = 4096.;
+// +24 dBFS relative to a normalized sample of 1.0.
+const MAX_WAV_PEAK: f32 = 15.848_932;
 
 pub(crate) fn decode(path: &Path, limit: usize) -> Result<StaticSoundData, String> {
     let file = File::open(path).map_err(|error| error.to_string())?;
@@ -46,13 +45,24 @@ pub(crate) fn decode_source(
     source: impl Read + Seek,
     limit: usize,
 ) -> Result<StaticSoundData, String> {
-    let (sample_rate, mut frames) = match extension.to_ascii_lowercase().as_str() {
+    let (sample_rate, frames) = match extension.to_ascii_lowercase().as_str() {
         "ogg" => decode_vorbis(source, limit)?,
         "flac" => decode_flac(source, limit)?,
         "mp3" => decode_mp3(source, limit)?,
         _ => {
             // Legacy cue paths did not require a .wav extension.
             let wave = crate::wav::DecodedWav::read(source)?;
+            let peak = wave
+                .samples
+                .iter()
+                .map(|sample| sample.abs())
+                .fold(0_f32, f32::max);
+            if peak > MAX_WAV_PEAK {
+                let dbfs = 20. * peak.log10();
+                return Err(format!(
+                    "WAV peak {dbfs:+.1} dBFS exceeds +24 dBFS. Lower the level of the source file."
+                ));
+            }
             let mut frames = Vec::new();
             append_frames(
                 &mut frames,
@@ -66,10 +76,6 @@ pub(crate) fn decode_source(
     };
     if frames.is_empty() || !(8000..=192_000).contains(&sample_rate) {
         return Err("Audio clips need frames at an 8000..=192000 Hz sample rate".into());
-    }
-    for frame in &mut frames {
-        frame.left /= PCM_HEADROOM;
-        frame.right /= PCM_HEADROOM;
     }
     Ok(StaticSoundData {
         sample_rate,

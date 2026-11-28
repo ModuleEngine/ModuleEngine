@@ -1,5 +1,4 @@
 //! Per-host Kira mixer and an owned CPAL stream.
-use crate::audio_codec::PCM_HEADROOM;
 use cpal::{
     FromSample, Sample, SampleFormat, SizedSample, Stream, SupportedBufferSize,
     traits::{DeviceTrait, HostTrait, StreamTrait},
@@ -148,7 +147,7 @@ pub(crate) enum Bus {
 }
 
 pub(crate) fn endpoint_sample(sample: f32) -> f32 {
-    (f64::from(sample) * f64::from(PCM_HEADROOM)).clamp(-1., 1.) as f32
+    sample.clamp(-1., 1.)
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -388,8 +387,8 @@ impl<B: Backend> AudioOutput<B> {
                 Bus::Music => &self.music,
                 Bus::Sfx => &self.sfx,
             };
-            // An emitter may remain reserved for one more callback after its
-            // sound has released its own slot and reap has dropped the handle.
+            // Kira marks an emitter finished during processing and reclaims it
+            // at a later callback boundary after reap drops its handle.
             if next.emitter.is_some()
                 && destination.scene.num_emitters() >= self.manager.sound_capacity()
             {

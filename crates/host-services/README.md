@@ -60,7 +60,9 @@ The service ID remains `audio.wav`. Requests still bind a named game event and t
 }
 ```
 
-A legacy string plays a one-shot at full cue gain on `sfx`. A rich cue also defaults to that bus, volume 1, no looping and no fade. WAV, OGG/Vorbis, MP3 and FLAC accept mono or stereo at 8,000–192,000 Hz. WAV retains RIFF validation and its PCM8/16/24/32, finite float32 and extensible PCM/float channel placement rules. Clip inputs are bounded to 128 MiB each and the decoded cues to 32 Mi stereo frames total. Each owner can bind up to 256 cues.
+A legacy string plays a one-shot at full cue gain on `sfx`. A rich cue also defaults to that bus, volume 1, no looping and no fade. WAV, OGG/Vorbis, MP3 and FLAC accept mono or stereo at 8,000–192,000 Hz. WAV retains RIFF validation, PCM8/16/24/32 and extensible PCM/float channel placement rules. Import and runtime loading reject NaN, infinity and WAV peaks above +24 dBFS with a diagnostic. Clip inputs are bounded to 128 MiB each and the decoded cues to 32 Mi stereo frames total. Each owner can bind up to 256 cues.
+
+Kira accumulates in `f32`. The cancellation test sums 128 voices at ordinary levels and compares each sample with an `f64` reference at a maximum absolute error of −100 dBFS. Revisit `f64` support in Kira if an actual asset requires greater precision.
 
 Each owner has its own Kira mixer and CPAL output on Windows and Linux. Effects overlap. Music replaces the owner's previous music voice. The default limit of 32 active voices can be configured from 2 to 128. At the limit a new voice replaces the oldest effect. Kira can shorten old fade tails when the output is waiting for voice slots. Per-cue, master and bus gains multiply and each is within 0..=1. The endpoint receives clamped samples.
 

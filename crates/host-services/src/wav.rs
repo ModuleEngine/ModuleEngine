@@ -99,7 +99,7 @@ impl Format {
             return if value.is_finite() {
                 Ok(value)
             } else {
-                Err("WAV IEEE float samples must be finite".into())
+                Err("WAV contains a NaN or infinite sample".into())
             };
         }
         let raw = bytes.iter().enumerate().fold(0_u32, |bits, (index, byte)| {
