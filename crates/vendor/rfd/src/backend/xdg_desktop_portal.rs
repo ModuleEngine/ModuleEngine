@@ -74,13 +74,32 @@ fn path_to_cstring(value: Option<&Path>) -> Option<portal::FilePath> {
         .map(portal::FilePath)
 }
 
-//
-// File Picker
-//
+fn select_path(
+    response: Option<portal::Response>,
+    fallback: impl FnOnce() -> zenity::ZenityResult<Option<PathBuf>>,
+) -> Result<Option<PathBuf>, String> {
+    match response {
+        Some(portal::Response::Selected(paths)) => paths
+            .into_iter()
+            .next()
+            .map(Some)
+            .ok_or_else(|| "The XDG file chooser returned no local file path.".into()),
+        Some(portal::Response::Canceled) => Ok(None),
+        Some(portal::Response::Failed(code)) => {
+            Err(format!("The XDG file chooser failed (response {code})."))
+        }
+        None => {
+            warn!("Using zenity fallback");
+            fallback().map_err(|error| {
+                format!("The XDG file chooser was unavailable and Zenity failed: {error}")
+            })
+        }
+    }
+}
 
-use crate::backend::FilePickerDialogImpl;
-impl FilePickerDialogImpl for FileDialog {
-    fn pick_file(self) -> Option<PathBuf> {
+impl FileDialog {
+    /// Pick a file, distinguishing a backend failure from cancellation.
+    pub fn try_pick_file(self) -> Result<Option<PathBuf>, String> {
         let window_identifier = to_window_identifier(self.parent, self.parent_display);
         let res = portal::open_file(portal::OpenFileOptions {
             parent_window: window_identifier
@@ -94,22 +113,58 @@ impl FilePickerDialogImpl for FileDialog {
             ..Default::default()
         });
 
-        if let Some(res) = res {
-            match res {
-                portal::Response::Selected(res) if res.is_empty() => None,
-                portal::Response::Selected(mut res) => Some(res.remove(0)),
-                portal::Response::Canceled => None,
-            }
-        } else {
-            warn!("Using zenity fallback");
-            match block_on(zenity::pick_file(&self)) {
-                Ok(res) => res,
-                Err(err) => {
-                    error!("Failed to pick file with zenity: {err}");
-                    None
-                }
-            }
-        }
+        select_path(res, || block_on(zenity::pick_file(&self)))
+    }
+
+    /// Pick a folder, distinguishing a backend failure from cancellation.
+    pub fn try_pick_folder(self) -> Result<Option<PathBuf>, String> {
+        let window_identifier = to_window_identifier(self.parent, self.parent_display);
+        let res = portal::open_file(portal::OpenFileOptions {
+            parent_window: window_identifier
+                .as_ref()
+                .and_then(|w| CString::new(w.to_string()).ok())
+                .unwrap_or_default(),
+            title: str_to_cstring(self.title.as_deref()).unwrap_or_default(),
+            multiple: Some(false),
+            directory: Some(true),
+            filters: self.filters.iter().map(Into::into).collect(),
+            current_folder: path_to_cstring(self.starting_directory.as_deref()),
+            ..Default::default()
+        });
+
+        select_path(res, || block_on(zenity::pick_folder(&self)))
+    }
+
+    /// Pick a save path, distinguishing a backend failure from cancellation.
+    pub fn try_save_file(self) -> Result<Option<PathBuf>, String> {
+        let window_identifier = to_window_identifier(self.parent, self.parent_display);
+        let res = portal::save_file(portal::SaveFileOptions {
+            parent_window: window_identifier
+                .as_ref()
+                .and_then(|w| CString::new(w.to_string()).ok())
+                .unwrap_or_default(),
+            title: str_to_cstring(self.title.as_deref()).unwrap_or_default(),
+            filters: self.filters.iter().map(Into::into).collect(),
+            current_folder: path_to_cstring(self.starting_directory.as_deref()),
+            current_name: str_to_cstring(self.file_name.as_deref()),
+            ..Default::default()
+        });
+
+        select_path(res, || block_on(zenity::save_file(&self)))
+    }
+}
+
+//
+// File Picker
+//
+
+use crate::backend::FilePickerDialogImpl;
+impl FilePickerDialogImpl for FileDialog {
+    fn pick_file(self) -> Option<PathBuf> {
+        self.try_pick_file()
+            .inspect_err(|error| error!("{error}"))
+            .ok()
+            .flatten()
     }
 
     fn pick_files(self) -> Option<Vec<PathBuf>> {
@@ -129,7 +184,7 @@ impl FilePickerDialogImpl for FileDialog {
         if let Some(res) = res {
             match res {
                 portal::Response::Selected(res) => Some(res),
-                portal::Response::Canceled => None,
+                portal::Response::Canceled | portal::Response::Failed(_) => None,
             }
         } else {
             warn!("Using zenity fallback");
@@ -164,36 +219,10 @@ impl AsyncFilePickerDialogImpl for FileDialog {
 use crate::backend::FolderPickerDialogImpl;
 impl FolderPickerDialogImpl for FileDialog {
     fn pick_folder(self) -> Option<PathBuf> {
-        let window_identifier = to_window_identifier(self.parent, self.parent_display);
-        let res = portal::open_file(portal::OpenFileOptions {
-            parent_window: window_identifier
-                .as_ref()
-                .and_then(|w| CString::new(w.to_string()).ok())
-                .unwrap_or_default(),
-            title: str_to_cstring(self.title.as_deref()).unwrap_or_default(),
-            multiple: Some(false),
-            directory: Some(true),
-            filters: self.filters.iter().map(Into::into).collect(),
-            current_folder: path_to_cstring(self.starting_directory.as_deref()),
-            ..Default::default()
-        });
-
-        if let Some(res) = res {
-            match res {
-                portal::Response::Selected(res) if res.is_empty() => None,
-                portal::Response::Selected(mut res) => Some(res.remove(0)),
-                portal::Response::Canceled => None,
-            }
-        } else {
-            warn!("Using zenity fallback");
-            match block_on(zenity::pick_folder(&self)) {
-                Ok(res) => res,
-                Err(err) => {
-                    error!("Failed to pick folder with zenity: {err}");
-                    None
-                }
-            }
-        }
+        self.try_pick_folder()
+            .inspect_err(|error| error!("{error}"))
+            .ok()
+            .flatten()
     }
 
     fn pick_folders(self) -> Option<Vec<PathBuf>> {
@@ -214,7 +243,7 @@ impl FolderPickerDialogImpl for FileDialog {
         if let Some(res) = res {
             match res {
                 portal::Response::Selected(res) => Some(res),
-                portal::Response::Canceled => None,
+                portal::Response::Canceled | portal::Response::Failed(_) => None,
             }
         } else {
             warn!("Using zenity fallback");
@@ -249,35 +278,10 @@ impl AsyncFolderPickerDialogImpl for FileDialog {
 use crate::backend::FileSaveDialogImpl;
 impl FileSaveDialogImpl for FileDialog {
     fn save_file(self) -> Option<PathBuf> {
-        let window_identifier = to_window_identifier(self.parent, self.parent_display);
-        let res = portal::save_file(portal::SaveFileOptions {
-            parent_window: window_identifier
-                .as_ref()
-                .and_then(|w| CString::new(w.to_string()).ok())
-                .unwrap_or_default(),
-            title: str_to_cstring(self.title.as_deref()).unwrap_or_default(),
-            filters: self.filters.iter().map(Into::into).collect(),
-            current_folder: path_to_cstring(self.starting_directory.as_deref()),
-            current_name: str_to_cstring(self.file_name.as_deref()),
-            ..Default::default()
-        });
-
-        if let Some(res) = res {
-            match res {
-                portal::Response::Selected(res) if res.is_empty() => None,
-                portal::Response::Selected(mut res) => Some(res.remove(0)),
-                portal::Response::Canceled => None,
-            }
-        } else {
-            warn!("Using zenity fallback");
-            match block_on(zenity::save_file(&self)) {
-                Ok(res) => res,
-                Err(err) => {
-                    error!("Failed to save file with zenity: {err}");
-                    None
-                }
-            }
-        }
+        self.try_save_file()
+            .inspect_err(|error| error!("{error}"))
+            .ok()
+            .flatten()
     }
 }
 

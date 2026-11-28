@@ -3,6 +3,29 @@ use module_engine_core::AUDIO_CUE_EXTENSIONS;
 use rfd::FileDialog;
 use std::path::{Path, PathBuf};
 
+// rfd exposes detailed outcomes for the Windows and Linux backends used by the editor.
+#[cfg(not(any(windows, target_os = "linux")))]
+trait OptionalPicker {
+    fn try_pick_file(self) -> Result<Option<PathBuf>, String>;
+    fn try_pick_folder(self) -> Result<Option<PathBuf>, String>;
+    fn try_save_file(self) -> Result<Option<PathBuf>, String>;
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+impl OptionalPicker for FileDialog {
+    fn try_pick_file(self) -> Result<Option<PathBuf>, String> {
+        Ok(self.pick_file())
+    }
+
+    fn try_pick_folder(self) -> Result<Option<PathBuf>, String> {
+        Ok(self.pick_folder())
+    }
+
+    fn try_save_file(self) -> Result<Option<PathBuf>, String> {
+        Ok(self.save_file())
+    }
+}
+
 pub(crate) fn initial_directory(path: &Path) -> Option<PathBuf> {
     #[cfg(windows)]
     {
@@ -28,7 +51,7 @@ fn project_dialog(title: &str, directory: &Path) -> FileDialog {
 }
 
 pub fn open_project(directory: &Path) -> Result<Option<PathBuf>, String> {
-    Ok(project_dialog("Open ModuleEngine Project", directory).pick_file())
+    project_dialog("Open ModuleEngine Project", directory).try_pick_file()
 }
 
 pub fn save_project(initial_path: &Path) -> Result<Option<PathBuf>, String> {
@@ -40,7 +63,7 @@ pub fn save_project(initial_path: &Path) -> Result<Option<PathBuf>, String> {
     if let Some(name) = initial_path.file_name().and_then(|name| name.to_str()) {
         dialog = dialog.set_file_name(name);
     }
-    save_selection(dialog.save_file())
+    save_selection(dialog.try_save_file()?)
 }
 
 fn save_selection(path: Option<PathBuf>) -> Result<Option<PathBuf>, String> {
@@ -58,18 +81,18 @@ fn save_selection(path: Option<PathBuf>) -> Result<Option<PathBuf>, String> {
 }
 
 pub fn pick_folder(title: &str, directory: &Path) -> Result<Option<PathBuf>, String> {
-    Ok(dialog(title, directory).pick_folder())
+    dialog(title, directory).try_pick_folder()
 }
 
 pub fn import_asset(directory: &Path) -> Result<Option<PathBuf>, String> {
     let render_formats = ["gltf", "glb", "png", "jpg", "jpeg"];
     let supported = [render_formats.as_slice(), &AUDIO_CUE_EXTENSIONS].concat();
-    Ok(dialog("Import Asset", directory)
+    dialog("Import Asset", directory)
         .add_filter("Supported assets", &supported)
         .add_filter("3D models", &render_formats[..2])
         .add_filter("Textures", &render_formats[2..])
         .add_filter("Audio", &AUDIO_CUE_EXTENSIONS)
-        .pick_file())
+        .try_pick_file()
 }
 
 #[cfg(windows)]
@@ -221,6 +244,64 @@ mod tests {
                 save_selection(Some("existing".into()))
                     .unwrap_err()
                     .contains(".json")
+            );
+        }
+
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn linux_picker_distinguishes_backend_errors_and_cancellation() {
+            const CHILD: &str = "MODULE_ENGINE_MISSING_PICKERS_TEST_CHILD";
+            if std::env::var_os(CHILD).is_some() {
+                use std::{fs, os::unix::fs::PermissionsExt};
+
+                let error = open_project(Path::new(".")).unwrap_err();
+                assert!(error.contains("XDG file chooser"), "{error}");
+                assert!(error.contains("Zenity failed"), "{error}");
+
+                let fixture = Path::new("zenity");
+                let set_picker = |script: &str| {
+                    fs::write(fixture, format!("#!/bin/sh\n{script}\n")).unwrap();
+                    fs::set_permissions(fixture, fs::Permissions::from_mode(0o700)).unwrap();
+                };
+                set_picker("exit 2");
+                let error = open_project(Path::new(".")).unwrap_err();
+                assert!(error.contains("exit status: 2"), "{error}");
+                set_picker("exit 1");
+                assert_eq!(open_project(Path::new(".")).unwrap(), None);
+                set_picker("exit 0");
+                let error = open_project(Path::new(".")).unwrap_err();
+                assert!(error.contains("no local file path"), "{error}");
+                set_picker("printf '/tmp/project.json\\n'");
+                assert_eq!(
+                    open_project(Path::new(".")).unwrap(),
+                    Some(PathBuf::from("/tmp/project.json"))
+                );
+                return;
+            }
+            let fixture = module_engine_script::TestArtifactGuard::new(
+                &std::env::temp_dir(),
+                "r64-missing-pickers",
+            )
+            .unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "native_dialogs::tests::contracts::linux_picker_distinguishes_backend_errors_and_cancellation",
+                ])
+                .current_dir(fixture.path())
+                .env(CHILD, "1")
+                .env("PATH", fixture.path())
+                .env(
+                    "DBUS_SESSION_BUS_ADDRESS",
+                    format!("unix:path={}", fixture.path().join("no-bus").display()),
+                )
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("1 passed"),
+                "{stdout}\n{}",
+                String::from_utf8_lossy(&output.stderr)
             );
         }
     }

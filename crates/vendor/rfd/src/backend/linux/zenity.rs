@@ -1,4 +1,9 @@
-use std::{error::Error, fmt::Display, path::PathBuf, process::Command};
+use std::{
+    error::Error,
+    fmt::Display,
+    path::PathBuf,
+    process::{Command, ExitStatus, Output},
+};
 
 use crate::{
     message_dialog::{MessageButtons, MessageLevel},
@@ -9,6 +14,8 @@ use crate::{
 pub enum ZenityError {
     Io(std::io::Error),
     FromUtf8Error(std::string::FromUtf8Error),
+    Failed(ExitStatus),
+    NoLocalPath,
 }
 
 impl Error for ZenityError {}
@@ -18,6 +25,8 @@ impl Display for ZenityError {
         match self {
             ZenityError::Io(io) => write!(f, "{io}"),
             ZenityError::FromUtf8Error(err) => err.fmt(f),
+            ZenityError::Failed(status) => write!(f, "file chooser exited with {status}"),
+            ZenityError::NoLocalPath => f.write_str("file chooser returned no local file path"),
         }
     }
 }
@@ -73,17 +82,43 @@ fn file_dialog_command(dialog: &FileDialog) -> Command {
     command
 }
 
-async fn run(mut command: Command) -> ZenityResult<Option<String>> {
-    let res = {
-        let (tx, rx) = crate::oneshot::channel();
-        std::thread::spawn(move || {
-            tx.send(command.output()).ok();
-        });
-        rx.await.map_err(std::io::Error::other)??
-    };
+async fn output(mut command: Command) -> ZenityResult<Output> {
+    let (tx, rx) = crate::oneshot::channel();
+    std::thread::spawn(move || {
+        tx.send(command.output()).ok();
+    });
+    Ok(rx.await.map_err(std::io::Error::other)??)
+}
+
+async fn run(command: Command) -> ZenityResult<Option<String>> {
+    let res = output(command).await?;
     let buffer = String::from_utf8(res.stdout)?;
 
     Ok((res.status.success() || !buffer.is_empty()).then_some(buffer))
+}
+
+async fn run_path(mut command: Command) -> ZenityResult<Option<PathBuf>> {
+    // Keep the file picker exit protocol stable even if the session overrides it.
+    command.envs([
+        ("ZENITY_OK", "0"),
+        ("ZENITY_CANCEL", "1"),
+        ("ZENITY_ESC", "1"),
+        ("ZENITY_ERROR", "255"),
+    ]);
+    let res = output(command).await?;
+    match res.status.code() {
+        Some(0) => {
+            let buffer = String::from_utf8(res.stdout)?;
+            let path = PathBuf::from(strip_newline(&buffer));
+            if path.is_absolute() {
+                Ok(Some(path))
+            } else {
+                Err(ZenityError::NoLocalPath)
+            }
+        }
+        Some(1) => Ok(None),
+        _ => Err(ZenityError::Failed(res.status)),
+    }
 }
 
 /// Strip the single newline zenity prints after its output
@@ -95,11 +130,7 @@ pub async fn pick_file(dialog: &FileDialog) -> ZenityResult<Option<PathBuf>> {
     let mut command = file_dialog_command(dialog);
     command.arg("--file-selection");
 
-    Ok(run(command)
-        .await?
-        .as_deref()
-        .map(strip_newline)
-        .map(PathBuf::from))
+    run_path(command).await
 }
 
 pub async fn pick_files(dialog: &FileDialog) -> ZenityResult<Vec<PathBuf>> {
@@ -118,11 +149,7 @@ pub async fn pick_folder(dialog: &FileDialog) -> ZenityResult<Option<PathBuf>> {
     let mut command = file_dialog_command(dialog);
     command.args(["--file-selection", "--directory"]);
 
-    Ok(run(command)
-        .await?
-        .as_deref()
-        .map(strip_newline)
-        .map(PathBuf::from))
+    run_path(command).await
 }
 
 pub async fn pick_folders(dialog: &FileDialog) -> ZenityResult<Vec<PathBuf>> {
@@ -146,11 +173,7 @@ pub async fn save_file(dialog: &FileDialog) -> ZenityResult<Option<PathBuf>> {
     let mut command = file_dialog_command(dialog);
     command.args(["--file-selection", "--save", "--confirm-overwrite"]);
 
-    Ok(run(command)
-        .await?
-        .as_deref()
-        .map(strip_newline)
-        .map(PathBuf::from))
+    run_path(command).await
 }
 
 pub async fn message(

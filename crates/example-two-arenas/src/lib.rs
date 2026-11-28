@@ -81,17 +81,19 @@ pub fn document_with_rapier(base: GraphDocument) -> GraphDocument {
     let mut document = document(base);
     let game = document.game.as_mut().expect("Two Arenas content");
     let stages = &mut game.execution.stages;
-    let collision = stages
+    let (collision, node) = stages
         .iter()
-        .position(|stage| {
+        .enumerate()
+        .find_map(|(stage_index, stage)| {
             stage
                 .nodes
                 .iter()
-                .any(|node| node.module == "game.collision")
+                .position(|node| node.module == "game.collision")
+                .map(|node_index| (stage_index, node_index))
         })
         .expect("Two Arenas movement schedule");
     let after_movement = std::mem::replace(
-        &mut stages[collision].nodes[0].after,
+        &mut stages[collision].nodes[node].after,
         vec!["physics".into()],
     );
     stages.insert(

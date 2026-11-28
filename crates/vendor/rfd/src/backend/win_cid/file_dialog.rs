@@ -28,6 +28,45 @@ where
     })
 }
 
+fn select_path(
+    options: &FileDialog,
+    build: impl FnOnce(&FileDialog) -> Result<IDialog>,
+) -> std::result::Result<Option<PathBuf>, String> {
+    const CANCELLED: i32 = 0x8007_04C7_u32 as i32;
+    init_com(|| {
+        let dialog = build(options)?;
+        match dialog.show() {
+            Ok(()) => dialog.get_result().map(Some),
+            Err(CANCELLED) => Ok(None),
+            Err(error) => Err(error),
+        }
+    })
+    .and_then(|selection| selection)
+    .map_err(|error| {
+        format!(
+            "Windows file dialog failed (HRESULT 0x{:08X}).",
+            error as u32
+        )
+    })
+}
+
+impl FileDialog {
+    /// Pick a file, distinguishing a system failure from cancellation.
+    pub fn try_pick_file(self) -> std::result::Result<Option<PathBuf>, String> {
+        select_path(&self, IDialog::build_pick_file)
+    }
+
+    /// Pick a folder, distinguishing a system failure from cancellation.
+    pub fn try_pick_folder(self) -> std::result::Result<Option<PathBuf>, String> {
+        select_path(&self, IDialog::build_pick_folder)
+    }
+
+    /// Pick a save path, distinguishing a system failure from cancellation.
+    pub fn try_save_file(self) -> std::result::Result<Option<PathBuf>, String> {
+        select_path(&self, IDialog::build_save_file)
+    }
+}
+
 //
 // File Picker
 //
@@ -35,14 +74,7 @@ where
 use crate::backend::FilePickerDialogImpl;
 impl FilePickerDialogImpl for FileDialog {
     fn pick_file(self) -> Option<PathBuf> {
-        fn run(opt: FileDialog) -> Result<PathBuf> {
-            init_com(|| {
-                let dialog = IDialog::build_pick_file(&opt)?;
-                dialog.show()?;
-                dialog.get_result()
-            })?
-        }
-        run(self).ok()
+        self.try_pick_file().ok().flatten()
     }
 
     fn pick_files(self) -> Option<Vec<PathBuf>> {
@@ -77,15 +109,7 @@ impl AsyncFilePickerDialogImpl for FileDialog {
 use crate::backend::FolderPickerDialogImpl;
 impl FolderPickerDialogImpl for FileDialog {
     fn pick_folder(self) -> Option<PathBuf> {
-        fn run(opt: FileDialog) -> Result<PathBuf> {
-            init_com(|| {
-                let dialog = IDialog::build_pick_folder(&opt)?;
-                dialog.show()?;
-                dialog.get_result()
-            })?
-        }
-
-        run(self).ok()
+        self.try_pick_folder().ok().flatten()
     }
 
     fn pick_folders(self) -> Option<Vec<PathBuf>> {
@@ -120,15 +144,7 @@ impl AsyncFolderPickerDialogImpl for FileDialog {
 use crate::backend::FileSaveDialogImpl;
 impl FileSaveDialogImpl for FileDialog {
     fn save_file(self) -> Option<PathBuf> {
-        fn run(opt: FileDialog) -> Result<PathBuf> {
-            init_com(|| {
-                let dialog = IDialog::build_save_file(&opt)?;
-                dialog.show()?;
-                dialog.get_result()
-            })?
-        }
-
-        run(self).ok()
+        self.try_save_file().ok().flatten()
     }
 }
 

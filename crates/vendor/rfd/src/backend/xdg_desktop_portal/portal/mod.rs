@@ -112,8 +112,7 @@ fn register_response_listener(conn: &mut Connection, handle_path: &CStr) {
 #[derive(Debug)]
 enum ResponseCode {
     Success = 0,
-    // Cancelled = 1,
-    // Other = 2,
+    Cancelled = 1,
 }
 
 fn wait_for_response(conn: &mut Connection, handle_path: &CStr) -> Option<Response> {
@@ -146,6 +145,7 @@ fn wait_for_response(conn: &mut Connection, handle_path: &CStr) -> Option<Respon
 pub enum Response {
     Selected(Vec<PathBuf>),
     Canceled,
+    Failed(u32),
 }
 
 fn parse_response(msg: &Message) -> Option<Response> {
@@ -155,8 +155,11 @@ fn parse_response(msg: &Message) -> Option<Response> {
         log::error!("Response code missing");
         return None;
     };
-    if response_code != ResponseCode::Success as u32 {
+    if response_code == ResponseCode::Cancelled as u32 {
         return Some(Response::Canceled);
+    }
+    if response_code != ResponseCode::Success as u32 {
+        return Some(Response::Failed(response_code));
     }
 
     if !iter.next() {
