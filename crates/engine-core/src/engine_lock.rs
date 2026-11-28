@@ -523,9 +523,10 @@ mod tests {
         renderer.module.clone_from(&descriptor.id);
         modules.register_module(descriptor).unwrap();
         let composition = CompositionContext::new(modules, SystemRegistry::builtin()).unwrap();
+        let sdk = crate::SdkIdentity::current();
 
         composition
-            .capture_lock(&document, profile(), None)
+            .capture_lock(&document, profile(), Some(sdk.clone()))
             .unwrap()
             .apply_to(&mut document);
         let original_pin =
@@ -538,7 +539,7 @@ mod tests {
             .remove(crate::MATERIAL_ASSET_COMPONENT)
             .unwrap();
         reseal(&mut document);
-        composition.validate_lock(&document, None).unwrap();
+        composition.validate_lock(&document, Some(&sdk)).unwrap();
         assert!(
             !composition
                 .activity(&document)
@@ -548,10 +549,10 @@ mod tests {
         );
 
         composition
-            .capture_lock(&document, profile(), None)
+            .capture_lock(&document, profile(), Some(sdk.clone()))
             .unwrap()
             .apply_to(&mut document);
-        composition.validate_lock(&document, None).unwrap();
+        composition.validate_lock(&document, Some(&sdk)).unwrap();
         assert!(
             composition
                 .activity(&document)
