@@ -380,13 +380,25 @@ impl<B: Backend> AudioOutput<B> {
         {
             voice.stop(fade(0))?;
         }
-        let mut pending = std::mem::take(&mut self.pending);
-        let count = pending.len().min(available);
-        let result = pending
-            .drain(..count)
-            .try_for_each(|voice| self.play(voice));
-        self.pending = pending;
-        result
+        for _ in 0..available {
+            let Some(next) = self.pending.first() else {
+                break;
+            };
+            let destination = match next.bus {
+                Bus::Music => &self.music,
+                Bus::Sfx => &self.sfx,
+            };
+            // An emitter may remain reserved for one more callback after its
+            // sound has released its own slot and reap has dropped the handle.
+            if next.emitter.is_some()
+                && destination.scene.num_emitters() >= self.manager.sound_capacity()
+            {
+                break;
+            }
+            let voice = self.pending.remove(0);
+            self.play(voice)?;
+        }
+        Ok(())
     }
 
     fn play(

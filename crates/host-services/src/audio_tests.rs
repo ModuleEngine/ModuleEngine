@@ -30,86 +30,88 @@ fn sound(cue: &str) -> GameEvent {
     }
 }
 
-fn control(payload: Value) -> GameEvent {
-    GameEvent {
-        name: "AudioControl".into(),
-        payload,
-    }
-}
-
-#[derive(Default)]
-struct BufferBackend(Option<Renderer>);
-
-impl Backend for BufferBackend {
-    type Settings = ();
-    type Error = ();
-
-    fn setup(_: ()) -> Result<(Self, u32), ()> {
-        Ok((Self::default(), 48_000))
+mod contracts {
+    use super::*;
+    fn control(payload: Value) -> GameEvent {
+        GameEvent {
+            name: "AudioControl".into(),
+            payload,
+        }
     }
 
-    fn start(&mut self, renderer: Renderer) -> Result<(), ()> {
-        self.0 = Some(renderer);
-        Ok(())
-    }
-}
+    #[derive(Default)]
+    struct BufferBackend(Option<Renderer>);
 
-fn render(service: &mut AudioService<BufferBackend>, ms: u32) -> [f32; 2] {
-    let renderer = service
-        .output
-        .as_mut()
-        .unwrap()
-        .manager
-        .backend_mut()
-        .0
-        .as_mut()
+    impl Backend for BufferBackend {
+        type Settings = ();
+        type Error = ();
+
+        fn setup(_: ()) -> Result<(Self, u32), ()> {
+            Ok((Self::default(), 48_000))
+        }
+
+        fn start(&mut self, renderer: Renderer) -> Result<(), ()> {
+            self.0 = Some(renderer);
+            Ok(())
+        }
+    }
+
+    fn render(service: &mut AudioService<BufferBackend>, ms: u32) -> [f32; 2] {
+        let renderer = service
+            .output
+            .as_mut()
+            .unwrap()
+            .manager
+            .backend_mut()
+            .0
+            .as_mut()
+            .unwrap();
+        renderer.on_start_processing();
+        (0..ms * 48).fold([0_f32; 2], |[l, r], _| {
+            let frame = renderer.process();
+            [
+                l.max(endpoint_sample(frame.left).abs()),
+                r.max(endpoint_sample(frame.right).abs()),
+            ]
+        })
+    }
+
+    #[test]
+    fn binding_decodes_all_formats_and_plays_through_kira() {
+        let root = fixtures();
+        let paths = [("legacy".into(), "tone.wav".into())].into();
+        let context = service_context(&root, &paths);
+        let config = parse_config(&json!({
+            "event": "Sound", "cue_field": "cue", "control_event": "AudioControl",
+            "cues": {"wav":"asset://legacy", "ogg":"tone.ogg", "mp3":"tone.mp3", "flac":"tone.flac"}
+        }))
         .unwrap();
-    renderer.on_start_processing();
-    (0..ms * 48).fold([0_f32; 2], |[l, r], _| {
-        let frame = renderer.process();
-        [
-            l.max(endpoint_sample(frame.left).abs()),
-            r.max(endpoint_sample(frame.right).abs()),
-        ]
-    })
-}
-
-#[test]
-fn binding_decodes_all_formats_and_plays_through_kira() {
-    let root = fixtures();
-    let paths = [("legacy".into(), "tone.wav".into())].into();
-    let context = service_context(&root, &paths);
-    let config = parse_config(&json!({
-        "event": "Sound", "cue_field": "cue", "control_event": "AudioControl",
-        "cues": {"wav":"asset://legacy", "ogg":"tone.ogg", "mp3":"tone.mp3", "flac":"tone.flac"}
-    }))
-    .unwrap();
-    let mut service =
-        AudioService::<BufferBackend>::new(config, &context, || (), |_| None).unwrap();
-    for extension in AUDIO_CUE_EXTENSIONS {
-        let path = root.join(format!("tone.{extension}"));
-        validate_audio_bytes(extension, &std::fs::read(&path).unwrap()).unwrap();
-        assert!(decode(&path, 30).unwrap_err().contains("frame budget"));
-        service.consume(&[sound(extension)]).unwrap();
-        let [left, right] = render(&mut service, 220);
-        assert!(left > 0.05 && right > 0.05, "{extension}: {left}, {right}");
-        assert!(
-            (left - right).abs() < 1e-6,
-            "{extension}: expected centered mono"
-        );
+        let mut service =
+            AudioService::<BufferBackend>::new(config, &context, || (), |_| None).unwrap();
+        for extension in AUDIO_CUE_EXTENSIONS {
+            let path = root.join(format!("tone.{extension}"));
+            validate_audio_bytes(extension, &std::fs::read(&path).unwrap()).unwrap();
+            assert!(decode(&path, 30).unwrap_err().contains("frame budget"));
+            service.consume(&[sound(extension)]).unwrap();
+            let [left, right] = render(&mut service, 220);
+            assert!(left > 0.05 && right > 0.05, "{extension}: {left}, {right}");
+            assert!(
+                (left - right).abs() < 1e-6,
+                "{extension}: expected centered mono"
+            );
+        }
+        assert_eq!(service.diagnostics()["played"], 4);
+        assert!(service.diagnostics()["output_error"].is_null());
+        assert!(validate_audio_bytes("ogg", b"not an audio file").is_err());
     }
-    assert_eq!(service.diagnostics()["played"], 4);
-    assert!(service.diagnostics()["output_error"].is_null());
-    assert!(validate_audio_bytes("ogg", b"not an audio file").is_err());
-}
 
-#[test]
-fn gains_spatial_fades_and_retirement_change_kira_rendered_samples() {
-    let root = fixtures();
-    let paths = BTreeMap::new();
-    let context = service_context(&root, &paths);
-    let config = || {
-        parse_config(&json!({
+    #[test]
+    fn gains_spatial_fades_and_retirement_change_kira_rendered_samples() {
+        let root = fixtures();
+        let paths = BTreeMap::new();
+        let context = service_context(&root, &paths);
+        let config = || {
+            parse_config(&json!({
         "event": "Sound", "cue_field": "cue", "control_event": "AudioControl", "max_voices": 2,
         "cues": {
             "music": {"path":"tone.wav", "bus":"music", "looping":true},
@@ -117,138 +119,176 @@ fn gains_spatial_fades_and_retirement_change_kira_rendered_samples() {
             "world": {"path":"tone.wav", "spatial":{"min_distance":1.0,"max_distance":15.0}, "looping":true}
         }
     })).unwrap()
-    };
-    let create = |context: &HostServiceContext<'_>| {
-        AudioService::<BufferBackend>::new(config(), context, || (), |_| None).unwrap()
-    };
-    let mut left_owner = create(&context);
-    let other_context = service_context(&root, &paths);
-    let mut right_owner = create(&other_context);
-    for service in [&mut left_owner, &mut right_owner] {
-        let mut events = vec![sound("music")];
-        events.extend(std::iter::repeat_with(|| sound("effect")).take(12));
-        service.consume(&events).unwrap();
-        assert_eq!(service.diagnostics()["active_voices"], 2);
-        assert_eq!(service.diagnostics()["stolen_voices"], 11);
-    }
-    assert!(render(&mut right_owner, 25)[0] > 0.15);
-    let full = render(&mut left_owner, 25)[0];
-    left_owner
-        .consume(&[control(
-            json!({"command":"volume","bus":"sfx","volume":0.0,"fade_ms":20}),
-        )])
-        .unwrap();
-    assert!(render(&mut left_owner, 10)[0] > full / 2.);
-    render(&mut left_owner, 30);
-    let music_only = render(&mut left_owner, 30)[0];
-    assert!(music_only > 0.08 && music_only < full * 0.6);
+        };
+        let create = |context: &HostServiceContext<'_>| {
+            AudioService::<BufferBackend>::new(config(), context, || (), |_| None).unwrap()
+        };
+        let mut left_owner = create(&context);
+        let other_context = service_context(&root, &paths);
+        let mut right_owner = create(&other_context);
+        for service in [&mut left_owner, &mut right_owner] {
+            let mut events = vec![sound("music")];
+            events.extend(std::iter::repeat_with(|| sound("effect")).take(12));
+            service.consume(&events).unwrap();
+            assert_eq!(service.diagnostics()["active_voices"], 2);
+            assert_eq!(service.diagnostics()["stolen_voices"], 11);
+        }
+        assert!(render(&mut right_owner, 25)[0] > 0.15);
+        let full = render(&mut left_owner, 25)[0];
+        left_owner
+            .consume(&[control(
+                json!({"command":"volume","bus":"sfx","volume":0.0,"fade_ms":20}),
+            )])
+            .unwrap();
+        assert!(render(&mut left_owner, 10)[0] > full / 2.);
+        render(&mut left_owner, 30);
+        let music_only = render(&mut left_owner, 30)[0];
+        assert!(music_only > 0.08 && music_only < full * 0.6);
 
-    left_owner
-        .consume(&[
-            control(json!({"command":"stop","fade_ms":10})),
-            control(json!({"command":"volume","bus":"sfx","volume":1.0})),
-        ])
+        left_owner
+            .consume(&[
+                control(json!({"command":"stop","fade_ms":10})),
+                control(json!({"command":"volume","bus":"sfx","volume":1.0})),
+            ])
+            .unwrap();
+        render(&mut left_owner, 35);
+        assert_eq!(render(&mut left_owner, 15), [0.; 2]);
+        assert!(left_owner.consume(&[sound("world")]).is_err());
+        left_owner
+            .consume(&[GameEvent {
+                name: "Sound".into(),
+                payload: json!({"cue":"world", "position":[5.,0.,0.]}),
+            }])
+            .unwrap();
+        let [l, r] = render(&mut left_owner, 30);
+        assert!(
+            r > 0.005 && r > 1.5 * l && r < music_only / 2.,
+            "{l} {r} {music_only}"
+        );
+        left_owner
+            .consume(&[control(
+                json!({"command":"listener","position":[10.,0.,0.],"orientation":[0.,0.,0.,1.]}),
+            )])
+            .unwrap();
+        let [l, r] = render(&mut left_owner, 30);
+        assert!(l > 1.5 * r);
+        context.retired.store(true, Ordering::Release);
+        assert_eq!(render(&mut left_owner, 20), [0.; 2]);
+        assert!(render(&mut right_owner, 30)[0] > 0.15);
+    }
+
+    #[test]
+    fn disabled_binding_counts_events_and_start_failure_retries() {
+        struct MissingBackend;
+        impl Backend for MissingBackend {
+            type Settings = ();
+            type Error = &'static str;
+            fn setup(_: ()) -> Result<(Self, u32), Self::Error> {
+                Err("endpoint")
+            }
+            fn start(&mut self, _: Renderer) -> Result<(), Self::Error> {
+                unreachable!()
+            }
+        }
+        let root = fixtures();
+        let paths = BTreeMap::new();
+        let context = service_context(&root, &paths);
+        let config = parse_config(&json!({
+            "event":"player_action", "cue_field":"audio_id", "control_event":"gain",
+            "cues":{"step":"tone.wav"}
+        }))
         .unwrap();
-    render(&mut left_owner, 35);
-    assert_eq!(render(&mut left_owner, 15), [0.; 2]);
-    assert!(left_owner.consume(&[sound("world")]).is_err());
-    left_owner
-        .consume(&[GameEvent {
+        let mut service =
+            AudioService::<MissingBackend>::new(config, &context, || (), |_| None).unwrap();
+        let step = GameEvent {
+            name: "player_action".into(),
+            payload: json!({"audio_id":"step"}),
+        };
+        service.set_enabled(false);
+        service.consume(&[sound("step"), step.clone()]).unwrap();
+        assert_eq!(service.diagnostics()["played"], 1);
+        assert!(service.diagnostics()["output_error"].is_null());
+        service.set_enabled(true);
+        for _ in 0..2 {
+            assert!(
+                service
+                    .consume(std::slice::from_ref(&step))
+                    .unwrap_err()
+                    .contains("endpoint")
+            );
+            assert!(
+                service.diagnostics()["output_error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("endpoint")
+            );
+        }
+        assert!(service.reset().unwrap_err().contains("endpoint"));
+        assert!(service.diagnostics()["output_error"].is_null());
+        assert_eq!(service.diagnostics()["played"], 0);
+    }
+
+    #[test]
+    fn overrange_float_wav_keeps_its_effective_gain() {
+        let root = fixtures();
+        let paths = BTreeMap::new();
+        let context = service_context(&root, &paths);
+        let config = parse_config(&json!({"event":"Sound", "cue_field":"cue", "cues":{}})).unwrap();
+        let mut service =
+            AudioService::<BufferBackend>::new(config, &context, || (), |_| None).unwrap();
+        let wav = crate::wav::tests::float32(&[1.0e20; 960]);
+        let mut clip =
+            crate::audio_codec::decode_source("wav", std::io::Cursor::new(&wav), 960).unwrap();
+        clip.settings = clip.settings.volume(amplitude(5.0e-21));
+        service.cues.insert(
+            "headroom".into(),
+            Cue {
+                sound: clip,
+                bus: Bus::Sfx,
+                spatial: None,
+            },
+        );
+        service.consume(&[sound("headroom")]).unwrap();
+        let [left, right] = render(&mut service, 10);
+        assert!((left - 0.5).abs() < 0.01 && left == right, "{left} {right}");
+    }
+
+    #[test]
+    fn spatial_voices_wait_until_both_kira_reservations_are_free() {
+        let root = fixtures();
+        let paths = BTreeMap::new();
+        let context = service_context(&root, &paths);
+        let config = parse_config(&json!({
+            "event":"Sound", "cue_field":"cue", "max_voices":2,
+            "cues":{"world":{"path":"tone.wav", "looping":true,
+                "spatial":{"min_distance":1.0,"max_distance":35.0}}}
+        }))
+        .unwrap();
+        let mut service =
+            AudioService::<BufferBackend>::new(config, &context, || (), |_| None).unwrap();
+        let emitter = GameEvent {
             name: "Sound".into(),
-            payload: json!({"cue":"world", "position":[5.,0.,0.]}),
-        }])
-        .unwrap();
-    let [l, r] = render(&mut left_owner, 30);
-    assert!(
-        r > 0.005 && r > 1.5 * l && r < music_only / 2.,
-        "{l} {r} {music_only}"
-    );
-    left_owner
-        .consume(&[control(
-            json!({"command":"listener","position":[10.,0.,0.],"orientation":[0.,0.,0.,1.]}),
-        )])
-        .unwrap();
-    let [l, r] = render(&mut left_owner, 30);
-    assert!(l > 1.5 * r);
-    context.retired.store(true, Ordering::Release);
-    assert_eq!(render(&mut left_owner, 20), [0.; 2]);
-    assert!(render(&mut right_owner, 30)[0] > 0.15);
-}
-
-#[test]
-fn disabled_binding_counts_events_and_start_failure_retries() {
-    struct MissingBackend;
-    impl Backend for MissingBackend {
-        type Settings = ();
-        type Error = &'static str;
-        fn setup(_: ()) -> Result<(Self, u32), Self::Error> {
-            Err("endpoint")
-        }
-        fn start(&mut self, _: Renderer) -> Result<(), Self::Error> {
-            unreachable!()
-        }
-    }
-    let root = fixtures();
-    let paths = BTreeMap::new();
-    let context = service_context(&root, &paths);
-    let config = parse_config(&json!({
-        "event":"player_action", "cue_field":"audio_id", "control_event":"gain",
-        "cues":{"step":"tone.wav"}
-    }))
-    .unwrap();
-    let mut service =
-        AudioService::<MissingBackend>::new(config, &context, || (), |_| None).unwrap();
-    let step = GameEvent {
-        name: "player_action".into(),
-        payload: json!({"audio_id":"step"}),
-    };
-    service.set_enabled(false);
-    service.consume(&[sound("step"), step.clone()]).unwrap();
-    assert_eq!(service.diagnostics()["played"], 1);
-    assert!(service.diagnostics()["output_error"].is_null());
-    service.set_enabled(true);
-    for _ in 0..2 {
-        assert!(
+            payload: json!({"cue":"world","position":[5.,0.,0.]}),
+        };
+        for _ in 0..3 {
             service
-                .consume(std::slice::from_ref(&step))
-                .unwrap_err()
-                .contains("endpoint")
-        );
+                .consume(&[emitter.clone(), emitter.clone()])
+                .unwrap();
+        }
+        assert_eq!(service.diagnostics()["active_voices"], 2);
+        assert_eq!(service.diagnostics()["stolen_voices"], 4);
+        for _ in 0..4 {
+            render(&mut service, 8);
+        }
+        service.consume(&[]).unwrap();
+        let one_voice = render(&mut service, 12);
+        service.consume(&[]).unwrap();
+        let two_voices = render(&mut service, 12);
         assert!(
-            service.diagnostics()["output_error"]
-                .as_str()
-                .unwrap()
-                .contains("endpoint")
+            one_voice[1] > 0.02 && two_voices[1] > 1.4 * one_voice[1],
+            "{one_voice:?}, {two_voices:?}"
         );
     }
-    assert!(service.reset().unwrap_err().contains("endpoint"));
-    assert!(service.diagnostics()["output_error"].is_null());
-    assert_eq!(service.diagnostics()["played"], 0);
-}
-
-#[test]
-fn overrange_float_wav_keeps_its_effective_gain() {
-    let root = fixtures();
-    let paths = BTreeMap::new();
-    let context = service_context(&root, &paths);
-    let config = parse_config(&json!({"event":"Sound", "cue_field":"cue", "cues":{}})).unwrap();
-    let mut service =
-        AudioService::<BufferBackend>::new(config, &context, || (), |_| None).unwrap();
-    let wav = crate::wav::tests::float32(&[1.0e20; 960]);
-    let mut clip =
-        crate::audio_codec::decode_source("wav", std::io::Cursor::new(&wav), 960).unwrap();
-    clip.settings = clip.settings.volume(amplitude(5.0e-21));
-    service.cues.insert(
-        "headroom".into(),
-        Cue {
-            sound: clip,
-            bus: Bus::Sfx,
-            spatial: None,
-        },
-    );
-    service.consume(&[sound("headroom")]).unwrap();
-    let [left, right] = render(&mut service, 10);
-    assert!((left - 0.5).abs() < 0.01 && left == right, "{left} {right}");
 }
 
 #[cfg(any(windows, target_os = "linux"))]
