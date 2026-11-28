@@ -137,6 +137,11 @@ pub(super) use bake::{bake_author, bake_delivery};
 
 #[cfg(feature = "texture-bake")]
 mod bake {
+    // The bundled intel_tex_2 GNU/Linux archive also contains a C++ translation unit.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[link(name = "stdc++")]
+    unsafe extern "C" {}
+
     use super::*;
     use std::{
         collections::BTreeSet,
@@ -231,7 +236,12 @@ mod bake {
         let mut mips = Vec::new();
         let mut pixels = std::borrow::Cow::Borrowed(image.rgba8.as_slice());
         let alpha = encoding == TextureEncoding::Srgb
-            && image.rgba8.chunks_exact(4).any(|rgba| rgba[3] != 255);
+            && image
+                .rgba8
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|rgba| rgba[3] != 255);
         let settings = if alpha {
             intel_tex_2::bc7::alpha_fast_settings()
         } else {

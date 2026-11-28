@@ -126,15 +126,19 @@ The indexed path requires the R2.1 timeline and allocator path,
 `shaderSampledImageArrayNonUniformIndexing`, `runtimeDescriptorArray` and
 `samplerAnisotropy`. The renderer checks the regular sampled-image limits
 per fragment stage and descriptor set for 1,024 descriptors, the aggregate
-stage limit, room for a sampler and a storage buffer, and two bound sets.
+stage limit, room for a sampler and two storage buffers, and two bound sets.
 `R8G8B8A8_SRGB` must support optimal-tiled sampling, linear filtering,
 transfer and blits. The sampler uses repeat addressing, linear filtering
 between texels and mip levels, and up to 16× anisotropy within device limits.
 
 A material descriptor set contains 1,023 usable image slots and a white
-fallback. The graphics queue uploads the original level and generates the
-remaining mip levels by linear blits in sRGB images. Each image uses its own
-device extent limit. A replacement descriptor set shares unchanged images.
+fallback. For R5.1 BC mip chains it also requires `textureCompressionBC` and
+optimal-tiled sampling, linear filtering and transfer destination support for
+`BC7_SRGB_BLOCK`, `BC7_UNORM_BLOCK` and `BC5_UNORM_BLOCK`. With no usable
+compressed chain, the graphics queue uploads RGBA8 and generates the
+remaining levels by linear blits in sRGB or linear images according to the
+map. Each image uses its own device extent limit. A replacement descriptor
+set shares unchanged images.
 On the snapshot path each set retains its own object-to-texture index buffer.
 Submitted frames keep their set, images and staging buffer until GPU completion. Descriptor sets
 are populated before submission and stay immutable, so this path needs no
