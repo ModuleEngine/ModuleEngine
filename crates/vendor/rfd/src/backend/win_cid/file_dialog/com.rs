@@ -1,6 +1,9 @@
 #![allow(non_snake_case)]
 
-use std::ffi::c_void;
+use std::{
+    ffi::{c_void, OsString},
+    os::windows::ffi::OsStringExt,
+};
 use windows_sys::core::{HRESULT, PCWSTR, PWSTR};
 pub use windows_sys::{
     core::GUID,
@@ -22,7 +25,7 @@ pub(super) fn wrap_err(hresult: HRESULT) -> Result<()> {
 }
 
 #[inline]
-unsafe fn read_to_string(ptr: *const u16) -> String {
+unsafe fn read_to_os_string(ptr: *const u16) -> OsString {
     let mut cursor = ptr;
 
     while *cursor != 0 {
@@ -30,7 +33,7 @@ unsafe fn read_to_string(ptr: *const u16) -> String {
     }
 
     let slice = std::slice::from_raw_parts(ptr, cursor.offset_from(ptr) as usize);
-    String::from_utf16(slice).unwrap()
+    OsString::from_wide(slice)
 }
 
 #[repr(C)]
@@ -100,12 +103,26 @@ impl IShellItem {
             ))?;
 
             let dname = dname.assume_init();
-            let fname = read_to_string(dname);
+            let fname = read_to_os_string(dname);
             windows_sys::Win32::System::Com::CoTaskMemFree(dname.cast());
             fname
         };
 
         Ok(filename.into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_to_os_string;
+    use std::os::windows::ffi::OsStrExt;
+
+    #[test]
+    fn shell_path_keeps_unpaired_utf16() {
+        let path = [b'C' as u16, b':' as u16, b'\\' as u16, 0xd800, 0];
+        // SAFETY: path has a readable NUL terminator.
+        let name = unsafe { read_to_os_string(path.as_ptr()) };
+        assert_eq!(name.encode_wide().collect::<Vec<_>>(), path[..4]);
     }
 }
 

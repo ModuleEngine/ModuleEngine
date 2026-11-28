@@ -12,7 +12,8 @@ use windows_sys::{
         System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER},
         UI::Shell::{
             FileOpenDialog, FileSaveDialog, SHCreateItemFromParsingName, FOS_ALLOWMULTISELECT,
-            FOS_FORCESHOWHIDDEN, FOS_PICKFOLDERS,
+            FOS_FORCEFILESYSTEM, FOS_FORCESHOWHIDDEN, FOS_NOCHANGEDIR, FOS_PATHMUSTEXIST,
+            FOS_PICKFOLDERS,
         },
     },
 };
@@ -49,11 +50,13 @@ impl DialogInner {
 
             let iptr = iptr.assume_init();
 
-            Ok(if open {
+            let dialog = if open {
                 Self::Open(IFileOpenDialog(iptr.cast()))
             } else {
                 Self::Save(IFileDialog(iptr.cast()))
-            })
+            };
+            dialog.add_options(FOS_FORCEFILESYSTEM | FOS_NOCHANGEDIR | FOS_PATHMUSTEXIST)?;
+            Ok(dialog)
         }
     }
 
@@ -347,7 +350,7 @@ impl IDialog {
         }
 
         unsafe {
-            dialog.0.set_options(opts)?;
+            dialog.0.add_options(opts)?;
         }
 
         Ok(dialog)
@@ -365,7 +368,7 @@ impl IDialog {
         }
 
         unsafe {
-            dialog.0.set_options(opts)?;
+            dialog.0.add_options(opts)?;
         }
 
         Ok(dialog)
@@ -385,7 +388,7 @@ impl IDialog {
         }
 
         unsafe {
-            dialog.0.set_options(opts)?;
+            dialog.0.add_options(opts)?;
         }
 
         Ok(dialog)
