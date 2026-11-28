@@ -96,9 +96,9 @@ impl DeviceCapabilities {
             && limits.max_bound_descriptor_sets >= 2
             && limits.max_per_stage_descriptor_sampled_images >= MATERIAL_IMAGE_COUNT
             && limits.max_descriptor_set_sampled_images >= MATERIAL_IMAGE_COUNT
-            && limits.max_per_stage_resources >= MATERIAL_IMAGE_COUNT + 2
-            && limits.max_per_stage_descriptor_storage_buffers >= 1
-            && limits.max_descriptor_set_storage_buffers >= 1
+            && limits.max_per_stage_resources >= MATERIAL_IMAGE_COUNT + 3
+            && limits.max_per_stage_descriptor_storage_buffers >= 2
+            && limits.max_descriptor_set_storage_buffers >= 2
             && limits.max_per_stage_descriptor_samplers >= 1
             && limits.max_descriptor_set_samplers >= 1
             && texture_format

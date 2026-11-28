@@ -1,17 +1,124 @@
 use super::{Buffer, DeviceLifetime, Image, VulkanError, VulkanRenderer, range};
 use crate::capabilities::MATERIAL_IMAGE_COUNT;
 use ash::vk;
-use module_engine_core::{SceneSnapshot, TextureImage};
+use module_engine_core::{AlphaMode, Material, SceneSnapshot, TextureImage};
 use std::{collections::BTreeMap, sync::Arc};
 
 pub(super) const FIRST_MATERIAL_ROW: u32 = 1;
-const FORMAT: vk::Format = vk::Format::R8G8B8A8_SRGB;
+const SRGB: vk::Format = vk::Format::R8G8B8A8_SRGB;
+const LINEAR: vk::Format = vk::Format::R8G8B8A8_UNORM;
 
-const DESCRIPTORS: [(vk::DescriptorType, u32); 3] = [
+const DESCRIPTORS: [(vk::DescriptorType, u32); 4] = [
     (vk::DescriptorType::SAMPLED_IMAGE, MATERIAL_IMAGE_COUNT),
     (vk::DescriptorType::SAMPLER, 1),
     (vk::DescriptorType::STORAGE_BUFFER, 1),
+    (vk::DescriptorType::STORAGE_BUFFER, 1),
 ];
+
+type ImageKey = (usize, TextureEncoding);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum TextureEncoding {
+    Srgb,
+    Linear,
+    Normal,
+}
+
+fn image_key(texture: &Arc<TextureImage>, encoding: TextureEncoding) -> ImageKey {
+    (Arc::as_ptr(texture) as usize, encoding)
+}
+
+fn surface_maps(material: &Material) -> [(Option<&Arc<TextureImage>>, TextureEncoding); 4] {
+    let surface = material.pbr.as_ref();
+    [
+        (
+            surface.and_then(|pbr| pbr.metallic_roughness_texture.as_ref()),
+            TextureEncoding::Linear,
+        ),
+        (
+            surface.and_then(|pbr| pbr.normal_texture.as_ref()),
+            TextureEncoding::Normal,
+        ),
+        (
+            surface.and_then(|pbr| pbr.occlusion_texture.as_ref()),
+            TextureEncoding::Linear,
+        ),
+        (
+            surface.and_then(|pbr| pbr.emissive_texture.as_ref()),
+            TextureEncoding::Srgb,
+        ),
+    ]
+}
+
+pub(super) fn texture_sources(material: &Material) -> impl Iterator<Item = &Arc<TextureImage>> {
+    material.base_color_texture.iter().chain(
+        surface_maps(material)
+            .into_iter()
+            .filter_map(|(texture, _)| texture),
+    )
+}
+
+/// Mirrors the stock HLSL Surface layout. Row zero selects legacy shading.
+type SurfaceRow = [u32; 16];
+pub(super) type AtlasSurfaceRow = [u32; 32];
+
+fn surface_row(material: &Material, map_ids: [u32; 4]) -> SurfaceRow {
+    let mut row = [0; 16];
+    if let Some(surface) = &material.pbr {
+        row[..4].copy_from_slice(&map_ids);
+        row[4..12].copy_from_slice(
+            &[
+                surface.metallic,
+                surface.roughness,
+                surface.normal_scale,
+                surface.occlusion_strength,
+                surface.emissive[0],
+                surface.emissive[1],
+                surface.emissive[2],
+                surface.alpha_cutoff,
+            ]
+            .map(f32::to_bits),
+        );
+        row[12] = 1
+            | (u32::from(surface.double_sided) << 1)
+            | match surface.alpha_mode {
+                AlphaMode::Opaque => 0,
+                AlphaMode::Mask => 4,
+                AlphaMode::Blend => 8,
+            };
+    }
+    row
+}
+
+pub(super) fn atlas_surface_rows(
+    scene: &SceneSnapshot,
+    rects: &BTreeMap<usize, [f32; 4]>,
+) -> Vec<AtlasSurfaceRow> {
+    let mut rows = vec![[0; 32]];
+    for (object, item) in scene
+        .items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| item.material.pbr.is_some())
+    {
+        rows.resize(object + 2, [0; 32]);
+        let mut row = [0; 32];
+        let maps = surface_maps(&item.material);
+        row[..16].copy_from_slice(&surface_row(
+            &item.material,
+            maps.map(|(image, _)| u32::from(image.is_some())),
+        ));
+        for (slot, (image, _)) in maps.into_iter().enumerate() {
+            if let Some(image) = image {
+                let rect = rects[&(Arc::as_ptr(image) as usize)];
+                let start = 16 + 4 * slot;
+                row[start..start + 4].copy_from_slice(&rect.map(f32::to_bits));
+            }
+        }
+        rows[object + 1] = row;
+    }
+    rows
+}
 
 pub(super) struct MaterialLayout {
     pub(super) layout: vk::DescriptorSetLayout,
@@ -27,7 +134,7 @@ impl MaterialLayout {
                 .descriptor_count(count)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT)
         });
-        let bindings = std::array::from_fn::<_, 3, _>(|i| bindings[i].binding(i as u32));
+        let bindings = std::array::from_fn::<_, 4, _>(|i| bindings[i].binding(i as u32));
         let device = &context.device;
         // SAFETY: The bindless path checked the descriptor limits and enabled sampler anisotropy.
         // The bindings live through creation and the owner retains the sampler and layout.
@@ -96,11 +203,13 @@ impl MaterialTexture {
 pub(super) struct MaterialSet {
     pub(super) set: vk::DescriptorSet,
     pool: vk::DescriptorPool,
-    rows: Vec<usize>,
-    textures: BTreeMap<usize, Arc<MaterialTexture>>,
+    rows: Vec<ImageKey>,
+    textures: BTreeMap<ImageKey, Arc<MaterialTexture>>,
     white: Arc<MaterialTexture>,
     indices: Arc<Buffer>,
-    slots: BTreeMap<usize, u32>,
+    surface_rows: Vec<SurfaceRow>,
+    surfaces: Arc<Buffer>,
+    slots: BTreeMap<ImageKey, u32>,
     layout: Arc<MaterialLayout>,
 }
 
@@ -110,7 +219,9 @@ impl MaterialSet {
     }
 
     pub(super) fn index(&self, source: Option<&Arc<TextureImage>>) -> u32 {
-        source.map_or(0, |image| self.slots[&(Arc::as_ptr(image) as usize)])
+        source.map_or(0, |image| {
+            self.slots[&image_key(image, TextureEncoding::Srgb)]
+        })
     }
 }
 
@@ -187,7 +298,6 @@ impl VulkanRenderer {
         &self,
         scene: &SceneSnapshot,
     ) -> Result<Option<(Arc<MaterialSet>, MaterialUploads)>, VulkanError> {
-        let image_key = |image: &Arc<TextureImage>| Arc::as_ptr(image) as usize;
         let rows: Vec<_> = scene
             .items
             .iter()
@@ -195,14 +305,20 @@ impl VulkanRenderer {
                 item.material
                     .base_color_texture
                     .as_ref()
-                    .map_or(0, image_key)
+                    .map_or((0, TextureEncoding::Srgb), |image| {
+                        image_key(image, TextureEncoding::Srgb)
+                    })
             })
             .collect();
         let previous = self.materials.as_ref();
-        if let Some(previous) = previous.filter(|set| set.rows == rows) {
+        if let Some(previous) = previous.filter(|set| {
+            set.rows == rows
+                && set.surface_rows.len() == 1
+                && scene.items.iter().all(|item| item.material.pbr.is_none())
+        }) {
             return Ok(Some((previous.clone(), MaterialUploads::default())));
         }
-        self.prepare_material_set(scene, previous, rows, None)
+        self.prepare_material_set(scene, previous, rows, None, &[])
     }
 
     pub(super) fn prepare_resident_materials(
@@ -210,16 +326,18 @@ impl VulkanRenderer {
         scene: &SceneSnapshot,
         previous: Option<&Arc<MaterialSet>>,
         indices: Arc<Buffer>,
+        order: &[usize],
     ) -> Result<Option<(Arc<MaterialSet>, MaterialUploads)>, VulkanError> {
-        self.prepare_material_set(scene, previous, Vec::new(), Some(indices))
+        self.prepare_material_set(scene, previous, Vec::new(), Some(indices), order)
     }
 
     fn prepare_material_set(
         &self,
         scene: &SceneSnapshot,
         previous: Option<&Arc<MaterialSet>>,
-        rows: Vec<usize>,
+        rows: Vec<ImageKey>,
         resident_indices: Option<Arc<Buffer>>,
+        order: &[usize],
     ) -> Result<Option<(Arc<MaterialSet>, MaterialUploads)>, VulkanError> {
         // SAFETY: The physical device belongs to the renderer's live instance.
         let properties = unsafe { self.instance.get_physical_device_properties(self.physical) };
@@ -233,22 +351,15 @@ impl VulkanRenderer {
             ));
         }
         let mut sources = BTreeMap::new();
-        for source in scene
-            .items
-            .iter()
-            .filter_map(|item| item.material.base_color_texture.as_ref())
-        {
-            sources
-                .entry(Arc::as_ptr(source) as usize)
-                .or_insert(source);
-        }
-        if let Some(previous) = previous.filter(|set| {
-            resident_indices
-                .as_ref()
-                .is_some_and(|indices| Arc::ptr_eq(indices, &set.indices))
-                && set.textures.keys().eq(sources.keys())
-        }) {
-            return Ok(Some((previous.clone(), MaterialUploads::default())));
+        for item in &scene.items {
+            for (source, encoding) in surface_maps(&item.material).into_iter().chain([(
+                item.material.base_color_texture.as_ref(),
+                TextureEncoding::Srgb,
+            )]) {
+                if let Some(source) = source {
+                    sources.entry(image_key(source, encoding)).or_insert(source);
+                }
+            }
         }
         if sources.len() >= MATERIAL_IMAGE_COUNT as usize {
             // More tiny textures can still fit in the compatibility atlas.
@@ -258,7 +369,11 @@ impl VulkanRenderer {
         let white = match previous {
             Some(previous) => previous.white.clone(),
             None => {
-                let texture = Arc::new(self.material_texture(None, limits.max_image_dimension2_d)?);
+                let texture = Arc::new(self.material_texture(
+                    None,
+                    TextureEncoding::Srgb,
+                    limits.max_image_dimension2_d,
+                )?);
                 uploads.add(texture.clone());
                 texture
             }
@@ -268,9 +383,11 @@ impl VulkanRenderer {
             let texture = match previous.and_then(|set| set.textures.get(&key)) {
                 Some(texture) => texture.clone(),
                 None => {
-                    let texture = Arc::new(
-                        self.material_texture(Some(source.clone()), limits.max_image_dimension2_d)?,
-                    );
+                    let texture = Arc::new(self.material_texture(
+                        Some(source.clone()),
+                        key.1,
+                        limits.max_image_dimension2_d,
+                    )?);
                     uploads.add(texture.clone());
                     texture
                 }
@@ -296,6 +413,51 @@ impl VulkanRenderer {
                 .entry(*key)
                 .or_insert_with(|| free.next().unwrap().0 as u32);
         }
+        let surface_count = scene
+            .items
+            .iter()
+            .enumerate()
+            .filter_map(|(ordinal, item)| {
+                item.material.pbr.as_ref()?;
+                Some(1 + order.get(ordinal).copied().unwrap_or(ordinal))
+            })
+            .max()
+            .unwrap_or(0)
+            + 1;
+        if surface_count as u64 * size_of::<SurfaceRow>() as u64
+            > u64::from(limits.max_storage_buffer_range)
+        {
+            return Ok(None);
+        }
+        let mut surface_rows = vec![[0; 16]; surface_count];
+        for (ordinal, item) in scene
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| item.material.pbr.is_some())
+        {
+            let row = 1 + order.get(ordinal).copied().unwrap_or(ordinal);
+            let map_ids = surface_maps(&item.material).map(|(image, encoding)| {
+                image.map_or(0, |image| slots[&image_key(image, encoding)])
+            });
+            surface_rows[row] = surface_row(&item.material, map_ids);
+        }
+        if let Some(previous) = previous.filter(|previous| {
+            previous.rows == rows
+                && previous.slots == slots
+                && previous.surface_rows == surface_rows
+                && resident_indices
+                    .as_ref()
+                    .is_none_or(|indices| Arc::ptr_eq(indices, &previous.indices))
+        }) {
+            return Ok(Some((previous.clone(), uploads)));
+        }
+        let surfaces =
+            if let Some(previous) = previous.filter(|set| set.surface_rows == surface_rows) {
+                previous.surfaces.clone()
+            } else {
+                Arc::new(self.write_host_storage(&surface_rows)?)
+            };
         let indices = if let Some(indices) = resident_indices {
             indices
         } else {
@@ -321,10 +483,20 @@ impl VulkanRenderer {
             Arc::new(indices)
         };
         let layout = self.material_layout.as_ref().unwrap();
-        let sizes = DESCRIPTORS.map(|(ty, count)| vk::DescriptorPoolSize {
-            ty,
-            descriptor_count: count,
-        });
+        let sizes = [
+            vk::DescriptorPoolSize {
+                ty: DESCRIPTORS[0].0,
+                descriptor_count: MATERIAL_IMAGE_COUNT,
+            },
+            vk::DescriptorPoolSize {
+                ty: DESCRIPTORS[1].0,
+                descriptor_count: 1,
+            },
+            vk::DescriptorPoolSize {
+                ty: DESCRIPTORS[2].0,
+                descriptor_count: 2,
+            },
+        ];
         // SAFETY: The fresh descriptor pool matches the retained layout and is unused by any
         // submission. Descriptor infos point at images, sampler and index buffer kept by the set.
         unsafe {
@@ -344,6 +516,8 @@ impl VulkanRenderer {
                 textures,
                 white,
                 indices,
+                surface_rows,
+                surfaces,
                 slots,
                 layout: layout.clone(),
             };
@@ -369,6 +543,9 @@ impl VulkanRenderer {
             let buffer_info = [vk::DescriptorBufferInfo::default()
                 .buffer(result.indices.buffer)
                 .range(result.indices.size)];
+            let surface_info = [vk::DescriptorBufferInfo::default()
+                .buffer(result.surfaces.buffer)
+                .range(result.surfaces.size)];
             let writes = [
                 vk::WriteDescriptorSet::default()
                     .dst_set(result.set)
@@ -385,15 +562,40 @@ impl VulkanRenderer {
                     .dst_binding(2)
                     .descriptor_type(DESCRIPTORS[2].0)
                     .buffer_info(&buffer_info),
+                vk::WriteDescriptorSet::default()
+                    .dst_set(result.set)
+                    .dst_binding(3)
+                    .descriptor_type(DESCRIPTORS[3].0)
+                    .buffer_info(&surface_info),
             ];
             self.device.update_descriptor_sets(&writes, &[]);
             Ok(Some((Arc::new(result), uploads)))
         }
     }
 
+    pub(super) fn write_host_storage<const N: usize>(
+        &self,
+        rows: &[[u32; N]],
+    ) -> Result<Buffer, VulkanError> {
+        let bytes = std::mem::size_of_val(rows);
+        let buffer = self.buffer(bytes as u64, vk::BufferUsageFlags::STORAGE_BUFFER)?;
+        // SAFETY: The new mapped buffer has room for all rows and has not been submitted.
+        unsafe {
+            buffer
+                .memory
+                .as_ref()
+                .unwrap()
+                .access(buffer.size, |mapped| {
+                    std::ptr::copy_nonoverlapping(rows.as_ptr().cast::<u8>(), mapped, bytes);
+                })?;
+        }
+        Ok(buffer)
+    }
+
     fn material_texture(
         &self,
         source: Option<Arc<TextureImage>>,
+        encoding: TextureEncoding,
         max_dimension: u32,
     ) -> Result<MaterialTexture, VulkanError> {
         let [width, height] = source.as_ref().map_or([1, 1], |t| [t.width, t.height]);
@@ -414,7 +616,11 @@ impl VulkanRenderer {
         }
         let info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
-            .format(FORMAT)
+            .format(if encoding == TextureEncoding::Srgb {
+                SRGB
+            } else {
+                LINEAR
+            })
             .extent(vk::Extent3D {
                 width,
                 height,

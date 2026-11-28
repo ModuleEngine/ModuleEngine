@@ -395,6 +395,7 @@ impl Frame {
         previous: Option<Self>,
         size: [u32; 2],
         objects: usize,
+        opaque_depth_seed: bool,
     ) -> Result<Option<Self>, VulkanError> {
         if renderer.culling_mode == SceneCulling::Off
             || objects == 0
@@ -405,7 +406,8 @@ impl Frame {
             return Ok(None);
         }
         let objects = objects as u32;
-        let mut want_hiz = renderer.culling_mode == SceneCulling::HiZ
+        let mut want_hiz = opaque_depth_seed
+            && renderer.culling_mode == SceneCulling::HiZ
             && renderer.capabilities.hiz_occlusion_culling
             && Scratch::size(objects, true) <= renderer.storage_buffer_limit;
         let (old_scratch, old_pyramid, old_counters) = previous

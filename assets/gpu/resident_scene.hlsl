@@ -30,6 +30,8 @@ struct SceneVarying {
 #ifdef MODULE_ENGINE_GPU_CULLING
     [[vk::location(5)]] nointerpolation uint materialRow : TEXCOORD4;
 #endif
+    [[vk::location(6)]] float3 world : TEXCOORD5;
+    [[vk::location(7)]] float4 tangent : TEXCOORD6;
 };
 
 #ifdef MODULE_ENGINE_GPU_CULLING
@@ -37,13 +39,18 @@ struct SceneVarying {
 #endif
 
 float3 worldPosition(uint vertex, Instance instance) {
-    float3 p = asfloat(vertices.Load3(vertex * 20));
+    float3 p = asfloat(vertices.Load3(vertex * 28));
     // Keep the same operation order as the neutral model transform.
     precise float3 result = float3(instance.x.x, instance.y.x, instance.z.x) * p.x;
     result += float3(instance.x.y, instance.y.y, instance.z.y) * p.y;
     result += float3(instance.x.z, instance.y.z, instance.z.z) * p.z;
     result += float3(instance.x.w, instance.y.w, instance.z.w);
     return result;
+}
+
+float3 unpackDirection(uint value) {
+    return float3((int(value << 22) >> 22), (int(value << 12) >> 22),
+                  (int(value << 2) >> 22)) / 511.0;
 }
 
 float3 cameraPosition(float3 world) {
@@ -85,17 +92,36 @@ SceneVarying mainVS(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID
     float3 c = worldPosition(indices[first + 2], instance);
     precise float3 face = cross(b - a, c - a);
     float length = sqrt(dot(face, face));
-    float3 p = cameraPosition(corner == 0 ? a : corner == 1 ? b : c);
+    float3 world = corner == 0 ? a : corner == 1 ? b : c;
+    float3 p = cameraPosition(world);
     SceneVarying o;
     o.position = clipPosition(p);
     if (!all(isfinite(a)) || !all(isfinite(b)) || !all(isfinite(c))) {
         o.position = float4(0, 0, -1, 1);
     }
     o.normal = length > 0.00001 ? face / length : float3(0, 1, 0);
+    uint offset = indices[vertexId] * 28;
+    uint2 frame = vertices.Load2(offset + 20);
+    float3 x = float3(instance.x.x, instance.y.x, instance.z.x);
+    float3 y = float3(instance.x.y, instance.y.y, instance.z.y);
+    float3 z = float3(instance.x.z, instance.y.z, instance.z.z);
+    float3 coX = cross(y, z);
+    bool mirrored = dot(x, coX) < 0.0;
+    float modelSign = mirrored ? -1.0 : 1.0;
+    if (frame.x != 0) {
+        float3 n = unpackDirection(frame.x);
+        n = (coX * n.x + cross(z, x) * n.y + cross(x, y) * n.z) * modelSign;
+        if (dot(n, n) > 1e-10) o.normal = normalize(n);
+    }
+    float3 tangent = unpackDirection(frame.y);
+    float sign = (frame.y & (1u << 30)) != 0 ? -1.0 : 1.0;
+    o.tangent = float4(x * tangent.x + y * tangent.y + z * tangent.z,
+                       sign * modelSign * (mirrored ? 2.0 : 1.0));
+    o.world = world;
     o.color = colors[instance.material];
     o.depth = p.z;
     o.ids = float2(vertexId / 3 + instance.triangleBias + triangleBias, objectId);
-    o.uv = asfloat(vertices.Load2(indices[vertexId] * 20 + 12));
+    o.uv = asfloat(vertices.Load2(offset + 12));
 #ifdef MODULE_ENGINE_GPU_CULLING
     o.materialRow = instance.material + asuint(config.values[3].w);
 #endif

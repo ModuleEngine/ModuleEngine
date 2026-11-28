@@ -146,7 +146,7 @@ impl MeshPool {
 #[derive(Default)]
 struct MeshUpload {
     meshes: MeshEntries,
-    vertices: Vec<[u32; 5]>,
+    vertices: Vec<super::geometry::ResidentVertex>,
     indices: Vec<[u32; 1]>,
     bounds: Vec<[u32; 8]>,
     corners: Vec<[u32; 1]>,
@@ -157,6 +157,8 @@ fn positions(mesh: &Mesh) -> impl Iterator<Item = u32> + '_ {
         .iter()
         .flatten()
         .chain(mesh.texcoords.iter().flatten())
+        .chain(mesh.normals.iter().flatten())
+        .chain(mesh.tangents.iter().flatten())
         .map(|v| v.to_bits())
 }
 
@@ -171,6 +173,8 @@ impl MeshUpload {
         let mut hash = DefaultHasher::new();
         mesh.vertices.len().hash(&mut hash);
         mesh.texcoords.len().hash(&mut hash);
+        mesh.normals.len().hash(&mut hash);
+        mesh.tangents.len().hash(&mut hash);
         for value in positions(mesh) {
             value.hash(&mut hash);
         }
@@ -185,6 +189,8 @@ impl MeshUpload {
             .find(|(stored, _)| {
                 stored.vertices.len() == mesh.vertices.len()
                     && stored.texcoords.len() == mesh.texcoords.len()
+                    && stored.normals.len() == mesh.normals.len()
+                    && stored.tangents.len() == mesh.tangents.len()
                     && stored.triangles == mesh.triangles
                     && positions(stored).eq(positions(mesh))
             })
@@ -203,7 +209,8 @@ impl MeshUpload {
         let cap = limit as usize;
         let vertices = pool.vertex_count + self.vertices.len();
         let indices = pool.index_count + self.indices.len();
-        if vertices.saturating_add(mesh.vertices.len()) > cap / 20
+        if vertices.saturating_add(mesh.vertices.len())
+            > cap / super::geometry::RESIDENT_VERTEX_BYTES
             || indices.saturating_add(triangles.clone().count().saturating_mul(3)) > cap / 4
         {
             return Err(VulkanError::SceneBufferLimit);
@@ -212,7 +219,15 @@ impl MeshUpload {
         self.vertices
             .extend(mesh.vertices.iter().enumerate().map(|(i, &[x, y, z])| {
                 let [u, v] = mesh.texcoords.get(i).copied().unwrap_or_default();
-                [x, y, z, u, v].map(f32::to_bits)
+                let normal = mesh
+                    .normals
+                    .get(i)
+                    .map_or(0, |n| super::geometry::pack_direction(*n, 1.));
+                let tangent = mesh.tangents.get(i).map_or(0, |&[x, y, z, sign]| {
+                    super::geometry::pack_direction([x, y, z], sign)
+                });
+                let [x, y, z, u, v] = [x, y, z, u, v].map(f32::to_bits);
+                [x, y, z, u, v, normal, tangent]
             }));
         let first = indices as u32;
         self.indices
@@ -541,6 +556,7 @@ impl GpuScene {
             scene,
             self.materials.as_ref(),
             image_rows.clone(),
+            &order,
         )?
         else {
             return Ok(None);
@@ -650,7 +666,8 @@ impl GpuScene {
         let buffers = Buffers {
             vertices: buffer(
                 prior.map(|b| &b.vertices),
-                (self.pool.vertex_count + meshes.vertices.len()) * 20,
+                (self.pool.vertex_count + meshes.vertices.len())
+                    * super::geometry::RESIDENT_VERTEX_BYTES,
                 storage,
             )?,
             indices: buffer(
