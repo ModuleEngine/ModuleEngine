@@ -4211,7 +4211,7 @@ mod content_player_tests {
             distance: 3.5,
             target: [0.; 3],
         };
-        let mut results = Vec::new();
+        let mut results = Vec::<Vec<u8>>::new();
         for force_atlas in [true, false] {
             let mut renderer = VulkanRenderer::new().unwrap();
             if force_atlas {

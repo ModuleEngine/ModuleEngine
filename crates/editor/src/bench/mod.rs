@@ -1,5 +1,6 @@
 //! Source-only R0.2 fixtures using the existing native renderer and Player bridge.
 mod fixtures;
+mod lighting;
 mod materials;
 mod meshlets;
 #[path = "../../../../examples/bench/s3_ecs.rs"]
@@ -50,6 +51,7 @@ pub fn run(id: &str, folder: &Path) -> Result<(), String> {
             s4_floor(&root, &folder, RenderPath::Forward, id == "S4-floor-atlas")
         }
         "S4-floor-deferred" => s4_floor(&root, &folder, RenderPath::Deferred, false),
+        "R52-lighting" => lighting::run(&root, &folder),
         "R2-textures" => materials::check(&root, &folder),
         "R23-structure" => structure::run(&root, &folder),
         "R24-visibility" => visibility::run(&root, &folder),

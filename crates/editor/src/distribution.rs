@@ -1086,6 +1086,7 @@ const NATIVE_FILES: &[&str] = &[
     "crates/editor/src/settings_verification.rs",
     "crates/editor/src/material_asset_ui.rs",
     "crates/editor/src/material_verification.rs",
+    "crates/editor/src/bench/lighting.rs",
     "crates/editor/src/material_khronos_sha256.txt",
     "crates/engine-core/Cargo.toml",
     "crates/engine-core/src/lib.rs",
