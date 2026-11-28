@@ -8,7 +8,7 @@ Ordinary PRs run the workspace tests, the minimal Player configuration, the
 default Release Editor's CLI test, and separate `contracts` and `clippy`
 checks on Windows and Linux.
 Executable-source changes add native and package checks.
-Documentation-only and `site/` PRs skip the build matrix. `CI required` succeeds after planning and
+Documentation, `site/` and narrowly scoped CI policy changes can skip the build matrix. `CI required` succeeds after planning and
 every job required by the selected route. Performance, desktop dialogs, hardware
 GPU and full Full/Team/Player delivery are outside this CI scope.
 
@@ -26,7 +26,14 @@ and a path with no rule runs the full matrix. Routes:
 | --- | --- | --- |
 | `docs` | `docs/**/*.md`, root `AGENTS.md` and README, README in a crate or example | Documentation and site checks only |
 | `site` | `site/**` (roadmap and site generator, its templates and tests) | Documentation and site checks only |
+| `policy` | In-place edits to `scripts/ci_plan.py` or `scripts/test_ci.py` with verified package pins and optional `docs` or `site` changes | Python CI policy tests in planning, plus documentation and site checks |
 | `full` | everything else: `crates/`, `assets/`, `examples/`, `scripts/`, `tools/`, `.github/`, root manifests, non-Markdown files in `docs/` | The full matrix below, plus the documentation job |
+
+These light routes accept a companion `.module-engine-package.json` update only for SHA-256 pins
+in `sdk_files` or Full's `backend_files`. Every updated pin must refer to a regular file changed in
+the same light diff and match the new Git blob byte for byte. Inventory keys and all other fields
+must stay the same. The diff must include both the old and new file blobs. An updated pin may
+correct a stale base pin. Manifest-only, unrelated, malformed and mixed changes run the full matrix.
 
 A PR, a merge group and a push to `main` use the same rule on the diff against the event's base, so a
 merge group or a push is the union of its changes: one code file anywhere selects the full matrix. An empty
