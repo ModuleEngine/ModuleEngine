@@ -23,7 +23,7 @@ runs:
       shell: bash
       run: |
         sudo apt-get update
-        sudo apt-get install --no-install-recommends -y build-essential pkg-config libx11-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan1 mesa-vulkan-drivers vulkan-tools lld
+        sudo apt-get install --no-install-recommends -y build-essential pkg-config libasound2-dev libx11-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan1 mesa-vulkan-drivers vulkan-tools lld
     - name: Install and select pinned native Rust
       shell: pwsh
       run: |

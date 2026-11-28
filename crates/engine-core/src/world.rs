@@ -6,6 +6,7 @@ use bevy_ecs::{
     world::WorldId,
 };
 use bevy_reflect::Reflect;
+use glam::{EulerRot, Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
@@ -267,69 +268,42 @@ impl Default for Transform {
 }
 
 impl Transform {
-    /// Compose T * Rz * Ry * Rx * S using the renderer's matrix convention.
+    /// Compose T * Rz * Ry * Rx * S using the renderer's row-major convention.
     pub fn matrix(self) -> [[f32; 4]; 4] {
         let [x, y, z] = self.rotation;
-        let (sx, cx) = x.sin_cos();
-        let (sy, cy) = y.sin_cos();
-        let (sz, cz) = z.sin_cos();
-        let rx = [
-            [1., 0., 0., 0.],
-            [0., cx, -sx, 0.],
-            [0., sx, cx, 0.],
-            [0., 0., 0., 1.],
-        ];
-        let ry = [
-            [cy, 0., sy, 0.],
-            [0., 1., 0., 0.],
-            [-sy, 0., cy, 0.],
-            [0., 0., 0., 1.],
-        ];
-        let rz = [
-            [cz, -sz, 0., 0.],
-            [sz, cz, 0., 0.],
-            [0., 0., 1., 0.],
-            [0., 0., 0., 1.],
-        ];
-        let mut result = multiply_matrices(rz, multiply_matrices(ry, rx));
-        for row in result.iter_mut().take(3) {
-            for (column, scale) in self.scale.iter().enumerate() {
-                row[column] *= scale;
-            }
-        }
-        for (row, translation) in self.translation.iter().enumerate() {
-            result[row][3] = *translation;
-        }
-        result
+        matrix_to_rows(Mat4::from_scale_rotation_translation(
+            Vec3::from_array(self.scale),
+            Quat::from_euler(EulerRot::XYZEx, x, y, z),
+            Vec3::from_array(self.translation),
+        ))
     }
+}
+
+/// Convert a renderer/SDK row-major matrix to glam's column-major representation.
+pub fn matrix_from_rows(rows: [[f32; 4]; 4]) -> Mat4 {
+    Mat4::from_cols_array_2d(&rows).transpose()
+}
+
+/// Convert a glam matrix to the renderer/SDK row-major representation.
+pub fn matrix_to_rows(matrix: Mat4) -> [[f32; 4]; 4] {
+    matrix.transpose().to_cols_array_2d()
 }
 
 /// Identity model matrix.
 pub fn identity_matrix() -> [[f32; 4]; 4] {
-    [
-        [1., 0., 0., 0.],
-        [0., 1., 0., 0.],
-        [0., 0., 1., 0.],
-        [0., 0., 0., 1.],
-    ]
+    matrix_to_rows(Mat4::IDENTITY)
 }
 
 /// Compose row-major matrices for hierarchical transforms.
 pub fn multiply_matrices(a: [[f32; 4]; 4], b: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
-    let mut result = [[0.; 4]; 4];
-    for (r, row) in result.iter_mut().enumerate() {
-        for (c, value) in row.iter_mut().enumerate() {
-            *value = (0..4).map(|k| a[r][k] * b[k][c]).sum();
-        }
-    }
-    result
+    matrix_to_rows(matrix_from_rows(a) * matrix_from_rows(b))
 }
 
 /// Apply an affine model matrix to a position.
-pub fn transform_point(matrix: [[f32; 4]; 4], p: [f32; 3]) -> [f32; 3] {
-    std::array::from_fn(|r| {
-        matrix[r][0] * p[0] + matrix[r][1] * p[1] + matrix[r][2] * p[2] + matrix[r][3]
-    })
+pub fn transform_point(matrix: [[f32; 4]; 4], point: [f32; 3]) -> [f32; 3] {
+    matrix_from_rows(matrix)
+        .transform_point3(Vec3::from_array(point))
+        .to_array()
 }
 
 #[derive(Clone)]
@@ -1854,6 +1828,24 @@ mod s3_cost;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_matrix_keeps_row_layout_and_xyz_rotation_order() {
+        let quarter_turn = std::f32::consts::FRAC_PI_2;
+        let matrix = Transform {
+            translation: [4., -2., 1.],
+            rotation: [quarter_turn, quarter_turn, -quarter_turn],
+            scale: [-2., 3., 0.5],
+        }
+        .matrix();
+        assert_eq!(matrix[3], [0., 0., 0., 1.]);
+        assert_eq!([matrix[0][3], matrix[1][3], matrix[2][3]], [4., -2., 1.]);
+        let actual = Vec3::from_array(transform_point(matrix, [2., -1., 3.]));
+        assert!(
+            actual.abs_diff_eq(Vec3::new(2.5, 1., 5.), 1.0e-5),
+            "{actual:?}"
+        );
+    }
     fn entity(
         id: u64,
         parent: Option<u64>,

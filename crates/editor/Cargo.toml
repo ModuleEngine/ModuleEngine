@@ -29,6 +29,8 @@ module-engine-script = { path = "../runtime-script" }
 module-engine-project = { path = "../project-tools" }
 module-engine-content = { path = "../engine-content", features = ["texture-bake"] }
 eframe.workspace = true
+glam.workspace = true
+rfd = { path = "../vendor/rfd", version = "0.18.0" }
 serde.workspace = true
 serde_json.workspace = true
 png.workspace = true

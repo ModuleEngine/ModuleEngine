@@ -14,6 +14,6 @@ pub fn install(registry: &mut AuthoringRegistry) -> Result<(), String> {
             source_feature: "arpg",
         },
         resources: TemplateResources::Package,
-        populate: crate::document,
+        populate: crate::document_with_rapier,
     })
 }

@@ -80,6 +80,8 @@ class RegistryTests(Fixture):
         for source_root in source_roots:
             self.assertTrue(source_root.is_dir(), "Run this inventory test in the actual checkout")
             for path in source_root.rglob("*.rs"):
+                if path.is_relative_to(repo / "crates/vendor"):
+                    continue
                 actual.extend(pattern.findall(path.read_text(encoding="utf-8")))
         registered = [s["filter"].rsplit("::", 1)[-1] for s in self.data["steps"] if s.get("ignored")]
         self.assertCountEqual(actual, registered, "Every real #[ignore] needs a purpose and profile/exclusion decision")
@@ -94,8 +96,7 @@ class RegistryTests(Fixture):
         render = verify.plan(self.data, self.steps, "render")["steps"]
         self.assertEqual([s["id"] for s in render if s.get("ignored")], ["r23-host-vulkan"])
         self.assertEqual({s["id"] for s in ignored if s.get("excluded")}, {
-            "fixture-emitter", "catchup-diagnostic", "g1-team-palette", "audio-source-clock",
-            "audio-registered-pcm8", "audio-start-retry", "audio-owner-retirement", "g1-cpu-timing",
+            "fixture-emitter", "catchup-diagnostic", "g1-team-palette", "audio-loopback", "native-dialogs", "g1-cpu-timing",
             "render-settings-history", "custom-player-settings", "custom-player-settings-rollback", "custom-player-settings-stale",
             "native-window-icons", "native-window-z-order", "native-window-acquire-recovery",
             "r12-existing-game-roundtrip", "r12-player-stable-id-ipc", "r14-s3-tick-cost", "r15-event-replay",

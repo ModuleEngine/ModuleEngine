@@ -64,17 +64,19 @@ class RenderTests(unittest.TestCase):
             with self.assertRaises(tpl.PolicyError):
                 tpl.collect(self.root, [metadata(bad)])
 
-    def test_vendored_painter_requires_the_pinned_package_and_its_notice(self):
-        directory = self.root / "crates/vendor/egui-ash-renderer"
-        painter = package(directory, "egui-ash-renderer", "MIT", source=None)
-        painter["version"] = "0.13.0"
-        with self.assertRaises(tpl.PolicyError):
-            tpl.collect(self.root, [metadata(painter)])
-        (directory / "LICENSE").write_text("Upstream MIT notice", encoding="utf-8")
-        self.assertEqual(tpl.collect(self.root, [metadata(painter)]), [painter])
-        painter["version"] = "0.14.0"
-        with self.assertRaises(tpl.PolicyError):
-            tpl.collect(self.root, [metadata(painter)])
+    def test_vendored_packages_require_the_pinned_version_and_notice(self):
+        for name, pinned in [("egui-ash-renderer", "0.13.0"), ("rfd", "0.18.0")]:
+            with self.subTest(name=name):
+                directory = self.root / "crates/vendor" / name
+                vendor = package(directory, name, "MIT", source=None)
+                vendor["version"] = pinned
+                with self.assertRaises(tpl.PolicyError):
+                    tpl.collect(self.root, [metadata(vendor)])
+                (directory / "LICENSE").write_text("Upstream MIT notice", encoding="utf-8")
+                self.assertEqual(tpl.collect(self.root, [metadata(vendor)]), [vendor])
+                vendor["version"] = "0.20.0"
+                with self.assertRaises(tpl.PolicyError):
+                    tpl.collect(self.root, [metadata(vendor)])
 
     def test_git_and_path_sources_fail(self):
         for source in ["git+https://example.com/x", None]:

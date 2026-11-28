@@ -47,6 +47,9 @@ pub struct HostServiceRequest {
 
 pub type HostServiceRequests = fn(&GameProject) -> Result<Vec<HostServiceRequest>, String>;
 
+/// Audio cue asset extensions accepted by the native sound service.
+pub const AUDIO_CUE_EXTENSIONS: [&str; 4] = ["wav", "ogg", "mp3", "flac"];
+
 /// Application-owned presentation context; it is not part of authored data,
 /// gameplay input or the Custom wire protocol. Games may display service errors
 /// without acquiring filesystem/native service access.

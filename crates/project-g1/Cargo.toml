@@ -16,6 +16,7 @@ module-engine-project = { path = "../project-tools", optional = true }
 module-engine-game-ui = { path = "../game-ui", optional = true }
 module-engine-core = { path = "../engine-core" }
 module-engine-game-kit = { path = "../game-kit", default-features = false, features = ["grid", "history", "campaign", "actions"] }
+glam.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 egui = { workspace = true, optional = true }

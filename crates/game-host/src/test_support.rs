@@ -230,7 +230,6 @@ pub(super) fn game_registry(
         overrides,
     )
 }
-#[cfg(windows)]
 pub(super) fn audio_played(host: &GameHost) -> u64 {
     host.services.diagnostics()[module_engine_host_services::WAV_SERVICE_ID]["played"]
         .as_u64()

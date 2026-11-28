@@ -1,5 +1,6 @@
 //! Renderer-neutral interpolation; gameplay storage and clocks are never modified.
-use crate::{SceneSnapshot, multiply_matrices};
+use crate::{SceneSnapshot, matrix_from_rows, matrix_to_rows};
+use glam::{Mat3, Mat4, Quat, Vec3, Vec4};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Emit this null-payload event in a committed tick that teleports objects.
@@ -70,81 +71,43 @@ pub fn interpolate_scene_models(
 }
 
 type Matrix = [[f32; 4]; 4];
-type Quaternion = [f32; 4];
-fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
-    a.iter().zip(b).map(|(a, b)| a * b).sum()
-}
-fn decompose(m: Matrix) -> Option<([f32; 3], Quaternion, [f32; 3])> {
-    if m.iter().flatten().any(|v| !v.is_finite())
-        || (0..4).any(|i| (m[3][i] - if i == 3 { 1. } else { 0. }).abs() > 1e-5)
-    {
+fn decompose(rows: Matrix) -> Option<(Vec3, Quat, Vec3)> {
+    let matrix = matrix_from_rows(rows);
+    if !matrix.is_finite() || !matrix.row(3).abs_diff_eq(Vec4::W, 1.0e-5) {
         return None;
     }
-    let mut cols: [[f32; 3]; 3] = std::array::from_fn(|c| std::array::from_fn(|r| m[r][c]));
-    let mut scale = cols.map(|v| dot(v, v).sqrt());
-    if scale.iter().any(|s| *s < 1e-7) {
-        return None;
-    }
-    for (column, length) in cols.iter_mut().zip(scale) {
-        for value in column {
-            *value /= length;
-        }
-    }
-    if dot(cols[0], cols[1]).abs() > 1e-4
-        || dot(cols[0], cols[2]).abs() > 1e-4
-        || dot(cols[1], cols[2]).abs() > 1e-4
-    {
-        return None;
-    }
-    let cross = [
-        cols[0][1] * cols[1][2] - cols[0][2] * cols[1][1],
-        cols[0][2] * cols[1][0] - cols[0][0] * cols[1][2],
-        cols[0][0] * cols[1][1] - cols[0][1] * cols[1][0],
+    let columns = [
+        matrix.x_axis.truncate(),
+        matrix.y_axis.truncate(),
+        matrix.z_axis.truncate(),
     ];
-    if dot(cross, cols[2]) < 0. {
-        scale[0] = -scale[0];
-        cols[0] = cols[0].map(|v| -v);
+    let mut scale = Vec3::from_array(columns.map(Vec3::length));
+    if !scale.is_finite() || scale.min_element() < 1.0e-7 {
+        return None;
     }
-    let r: [[f32; 3]; 3] = std::array::from_fn(|row| std::array::from_fn(|col| cols[col][row]));
-    let trace = r[0][0] + r[1][1] + r[2][2];
-    let q = if trace > 0. {
-        let s = (trace + 1.).sqrt() * 2.;
-        [
-            (r[2][1] - r[1][2]) / s,
-            (r[0][2] - r[2][0]) / s,
-            (r[1][0] - r[0][1]) / s,
-            s / 4.,
-        ]
-    } else {
-        let i = if r[0][0] > r[1][1] && r[0][0] > r[2][2] {
-            0
-        } else if r[1][1] > r[2][2] {
-            1
-        } else {
-            2
-        };
-        let j = (i + 1) % 3;
-        let k = (i + 2) % 3;
-        let s = (1. + r[i][i] - r[j][j] - r[k][k]).max(0.).sqrt() * 2.;
-        if s < 1e-7 {
-            return None;
-        }
-        let mut q = [0.; 4];
-        q[i] = s / 4.;
-        q[j] = (r[j][i] + r[i][j]) / s;
-        q[k] = (r[k][i] + r[i][k]) / s;
-        q[3] = (r[k][j] - r[j][k]) / s;
-        q
-    };
-    Some(([m[0][3], m[1][3], m[2][3]], q, scale))
+    let [mut x, y, z] = [
+        columns[0] / scale.x,
+        columns[1] / scale.y,
+        columns[2] / scale.z,
+    ];
+    if x.dot(y).abs() > 1.0e-4 || x.dot(z).abs() > 1.0e-4 || y.dot(z).abs() > 1.0e-4 {
+        return None;
+    }
+    if Mat3::from_cols(x, y, z).determinant() < 0. {
+        scale.x = -scale.x;
+        x = -x;
+    }
+    let rotation = Quat::from_mat3(&Mat3::from_cols(x, y, z)).normalize();
+    Some((matrix.w_axis.truncate(), rotation, scale))
 }
+
 pub fn interpolate_model(a: Matrix, b: Matrix, alpha: f32) -> Option<Matrix> {
     if a == b {
         return Some(b);
     }
     let (at, aq, as_) = decompose(a)?;
-    let (bt, mut bq, bs) = decompose(b)?;
-    if as_[0].is_sign_negative() != bs[0].is_sign_negative() {
+    let (bt, bq, bs) = decompose(b)?;
+    if as_.x.is_sign_negative() != bs.x.is_sign_negative() {
         return None;
     }
     if alpha == 0. {
@@ -153,62 +116,12 @@ pub fn interpolate_model(a: Matrix, b: Matrix, alpha: f32) -> Option<Matrix> {
     if alpha == 1. {
         return Some(b);
     }
-    let mut cosine: f32 = aq.iter().zip(bq).map(|(a, b)| a * b).sum();
-    if cosine < 0. {
-        bq = bq.map(|v| -v);
-        cosine = -cosine;
-    }
-    let q = if cosine > 0.9995 {
-        let q: [f32; 4] = std::array::from_fn(|i| aq[i] + alpha * (bq[i] - aq[i]));
-        let length = q.iter().map(|v| v * v).sum::<f32>().sqrt();
-        q.map(|v| v / length)
-    } else {
-        let theta = cosine.clamp(-1., 1.).acos();
-        let sine = theta.sin();
-        let x = ((1. - alpha) * theta).sin() / sine;
-        let y = (alpha * theta).sin() / sine;
-        std::array::from_fn(|i| x * aq[i] + y * bq[i])
-    };
-    let [x, y, z, w] = q;
-    let rotation = [
-        [
-            1. - 2. * (y * y + z * z),
-            2. * (x * y - z * w),
-            2. * (x * z + y * w),
-            0.,
-        ],
-        [
-            2. * (x * y + z * w),
-            1. - 2. * (x * x + z * z),
-            2. * (y * z - x * w),
-            0.,
-        ],
-        [
-            2. * (x * z - y * w),
-            2. * (y * z + x * w),
-            1. - 2. * (x * x + y * y),
-            0.,
-        ],
-        [0., 0., 0., 1.],
-    ];
-    let scale: [f32; 3] = std::array::from_fn(|i| as_[i] + alpha * (bs[i] - as_[i]));
-    let mut result = multiply_matrices(
-        rotation,
-        [
-            [scale[0], 0., 0., 0.],
-            [0., scale[1], 0., 0.],
-            [0., 0., scale[2], 0.],
-            [0., 0., 0., 1.],
-        ],
+    let result = Mat4::from_scale_rotation_translation(
+        as_.lerp(bs, alpha),
+        aq.slerp(bq, alpha),
+        at.lerp(bt, alpha),
     );
-    for (i, row) in result.iter_mut().take(3).enumerate() {
-        row[3] = at[i] + alpha * (bt[i] - at[i]);
-    }
-    result
-        .iter()
-        .flatten()
-        .all(|v| v.is_finite())
-        .then_some(result)
+    result.is_finite().then(|| matrix_to_rows(result))
 }
 
 #[cfg(test)]

@@ -67,7 +67,7 @@ arguments retain the previous heavy legacy suite**.
 | Profile | Scope | What it does not confirm |
 | --- | --- | --- |
 | `quick` | `cargo fmt --all -- --check`, all lib tests of `module-engine-core` and `module-engine-project`. | Not the workspace, Editor, Vulkan runtime, secondary Custom builds, or ignored acceptance. Cold compilation can still be slow. |
-| `contracts` | Quick plus `cargo_build::tests::`, four Inspector regressions, 99 Inspector property scenarios, four previous Save As tests, 28 workflow preservation scenarios, and two `diagnostic_personal` tests for explicit-root validation and Recent/layout isolation with source permissions preserved. | Not all UI, native dialogs, or the full authoring suite. |
+| `contracts` | Quick plus Cargo product selection, Inspector and workflow preservation, diagnostic personal-path isolation, G1/ARPG [collision replay](physics-rapier.md#verify), Kira mixing and editor transform/picker contracts. | Headless. Use the explicit loopback and picker checks for device and desktop evidence. |
 | `clippy` | Strict Clippy on all workspace targets and features, followed by the default Release Editor binary. Both passes use `-D warnings` and the pinned native toolchain. | No formatting, tests, or runtime checks; not engine or delivery acceptance. |
 | `render` | glTF import, CPU graph and cache checks, native DXC compilation, and offscreen Vulkan regressions including GameHost scene updates, rejected ticks and scene switches. | No desktop, delivery, or performance acceptance. |
 | `native` | Five explicit ignored tests: Stop/reuse, slow-UI/hot-apply, native linker, cache context, and Windows executable spellings. | Not desktop benchmark, screen latency, Full export, or strict 60 FPS. A Windows-only test is marked `skipped` on Linux, not passed. |
@@ -281,11 +281,11 @@ manual execution instructions. [Verification registry](../scripts/verification.j
   not a gate for new behavior or performance.
 - `app::panes::tests::g1_team_registered_palette_pointer_apply_history_save_preserves_frozen_execution`
   requires an actual exported Team delivery in `MODULE_ENGINE_TEST_TEAM_ROOT`.
-- Four native `audio::tests` cases in `module-engine-host-services` require the
-  `audio` feature and a real Windows audio endpoint. They cover source-clock
-  cadence, registered PCM8 playback, startup retry and independent owner retirement.
-  Run these separately and sequentially as described in the
-  [Host Services guide](../crates/host-services/README.md#concurrent-wav-music-and-effects).
+- The native Kira loopback test in `module-engine-host-services` requires the
+  `audio` feature and a quiet output with a verified monitor. It plays bound
+  WAV, OGG, MP3 and FLAC cues through the production backend and compares 16
+  warm output estimates against 50 ms. The [queue](local-queue.md) has named
+  routes for the default WASAPI output and the virtual WSLg output.
 - `tests::diagnostic_long_attempt_and_idle_cpu_cost` in `module-engine-g1` is an
   opt-in release CPU timing diagnostic requiring an uncontended run. Its results
   do not establish rendered-frame or native audio/storage performance.
@@ -308,6 +308,18 @@ The registry does not provide an arbitrary `--step` that could silently enable t
 For each new ignored test, record its purpose and select a profile or an explicit exclusion.
 
 <a id="сохранность-сериализация-и-результат"></a>
+
+<a id="native-pickers"></a>
+
+### Native picker and transform checks
+
+`r64-scene-transforms` runs the Editor geometry and gesture suite, including small and singular parents, reflection, shear, and both gimbal-lock poles. Core tests check row-major storage and XYZ rotation order. `r64-dialog-paths` tests Unicode directory hints, absent directories, exact Save As paths and cancellation without opening any windows.
+
+The desktop probe opens the production pickers for Open, Save As, folder selection and Import. Follow the test log to select the disposable files and folder. Save As covers a new name and both declining and confirming replacement of an existing path. The final Open is cancelled. The probe also checks fixture bytes and the working directory. On Linux, have an XDG Desktop Portal file chooser or Zenity ready. Use the `native-dialogs` Windows route or the `native-dialogs-wslg` Linux route on the shared stand.
+
+```sh
+cargo test --locked -p module-engine-editor --features verification --bin module-engine-editor native_dialogs::tests::native_dialogs_choose_and_cancel -- --exact --ignored --nocapture --test-threads=1
+```
 
 ## Preservation, Serialization, and Result
 

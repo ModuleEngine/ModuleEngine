@@ -15,8 +15,24 @@ The Player export selects the `rapier-physics` native feature from the active
 composition and verifies its module and schema pins. Full source inventories
 include the installed physics implementation so the project can enable it later.
 Team uses its frozen graph. A compiled-in capability alone never advances
-physics. The minimal Player does not depend on Rapier. G1 and Two Arenas use
-their existing gameplay collision rules. Migration of those rules belongs to R6.2.
+physics. The minimal Player does not depend on Rapier.
+
+## Game collision rules
+
+Crate Garden uses integer grid occupancy and game rules for walls, crate pushes
+and goals. It runs without a physics step. Two Arenas keeps the existing planar
+character movement, axis order and sliding. Its **Two arenas** creation template
+adds a Rapier step between **Movement** and **Collisions** and gives the blocking
+walls fixed box colliders. An ARPG object with both `obstacle` and a non-sensor
+`physics.collider` uses Rapier geometry when **Collisions** can query the current
+tick. A collider without `obstacle` does not block this character controller.
+Author collision shapes tall enough to cover the intended range of actor heights.
+
+Existing graphs without a preceding physics step and obstacles without a solid
+collider use the planar `obstacle.half_extents` rule. The same fallback applies
+to actor radii outside the physics query range. Combat hit regions, target
+eligibility, portal conditions, and game events stay under ARPG rules. Export
+selects Rapier for the new template and omits it for graphs without the step.
 
 ## Authoring
 
@@ -91,6 +107,14 @@ from the ticks committed in its current step invocation.
 <a id="verify"></a>
 
 ## Verification
+
+The `r62-gameplay-collisions` step in the `contracts` profile replays the ten
+Crate Garden solutions with Rapier absent and installed but inactive. For Two
+Arenas it feeds the same controls through the legacy and Rapier Player
+compositions, checks wall blocking and sliding, then compares poses, combat and
+events through both scenes to victory. Moving only the physical wall collider
+changes the stop point and confirms that the Rapier path is used. The combat
+fixture increases player health and runs headless.
 
 ```powershell
 cargo test --locked -p module-engine-physics-rapier --features debug-draw

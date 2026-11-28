@@ -75,6 +75,59 @@ fn update(ctx: &mut ScriptContext) {
     document
 }
 
+/// Create the stock authored template with the optional Rapier capability selected.
+/// The caller supplies a composition with the physics module installed.
+pub fn document_with_rapier(base: GraphDocument) -> GraphDocument {
+    let mut document = document(base);
+    let game = document.game.as_mut().expect("Two Arenas content");
+    let stages = &mut game.execution.stages;
+    let (collision, node) = stages
+        .iter()
+        .enumerate()
+        .find_map(|(stage_index, stage)| {
+            stage
+                .nodes
+                .iter()
+                .position(|node| node.module == "game.collision")
+                .map(|node_index| (stage_index, node_index))
+        })
+        .expect("Two Arenas movement schedule");
+    let after_movement = std::mem::replace(
+        &mut stages[collision].nodes[node].after,
+        vec!["physics".into()],
+    );
+    stages.insert(
+        collision,
+        SystemStage {
+            name: "Physics".into(),
+            nodes: vec![SystemNode {
+                id: "physics".into(),
+                module: "physics.rapier".into(),
+                params: json!({}),
+                bindings: [
+                    ("world".into(), "world".into()),
+                    ("events".into(), "events".into()),
+                ]
+                .into(),
+                after: after_movement,
+            }],
+        },
+    );
+    for scene in game.scenes.values_mut() {
+        for obstacle in scene
+            .objects
+            .iter_mut()
+            .filter(|object| object.components.contains_key("obstacle"))
+        {
+            obstacle.components.insert(
+                "physics.collider".into(),
+                json!({"half_extents": obstacle.object.transform.scale}),
+            );
+        }
+    }
+    document
+}
+
 /// Convenience for callers explicitly importing this example project.
 pub trait ProjectExt {
     fn demo() -> Self;

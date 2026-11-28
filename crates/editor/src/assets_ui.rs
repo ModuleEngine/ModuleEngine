@@ -35,7 +35,7 @@ impl AssetKind {
             Self::Model => "3D",
             Self::Material => "MAT",
             Self::Texture => "IMG",
-            Self::Audio => "WAV",
+            Self::Audio => "AUD",
             Self::Shader => "HLSL",
             Self::Other => "FILE",
             Self::Scene => "SCENE",
