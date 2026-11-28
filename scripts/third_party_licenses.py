@@ -180,18 +180,20 @@ def package_notices(root, package):
 
 def collect(root, metadata_by_platform):
     packages, errors = {}, []
+    vendored_versions = {("egui-ash-renderer", "0.13.0"), ("rfd", "0.18.0")}
     for metadata in metadata_by_platform:
         for package in shipped_packages(metadata):
             packages[(package["name"], package["version"])] = package
     for key in sorted(packages):
         package = packages[key]
         source = package.get("source") or ""
-        vendored_painter = (
-            not source and key == ("egui-ash-renderer", "0.13.0")
-            and Path(package["manifest_path"]).resolve() == (root / "crates/vendor/egui-ash-renderer/Cargo.toml").resolve()
-            and (root / "crates/vendor/egui-ash-renderer/LICENSE").is_file()
+        vendor_dir = root / "crates/vendor" / key[0]
+        approved_vendor = (
+            not source and key in vendored_versions
+            and Path(package["manifest_path"]).resolve() == (vendor_dir / "Cargo.toml").resolve()
+            and (vendor_dir / "LICENSE").is_file()
         )
-        if not source.startswith("registry+") and not vendored_painter:
+        if not source.startswith("registry+") and not approved_vendor:
             errors.append(f"{key[0]} {key[1]}: unsupported source {source or 'path'}")
         expression = package.get("license")
         if not expression:

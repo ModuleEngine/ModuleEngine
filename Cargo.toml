@@ -1,6 +1,6 @@
 [workspace]
 members = ["crates/native-ui", "crates/game-ui", "crates/engine-core", "crates/custom-rust", "crates/editor", "crates/editor-composition", "crates/render-vulkan", "crates/runtime-script", "crates/project-tools", "crates/engine-content", "crates/gameplay-arpg", "crates/example-two-arenas", "crates/project-puzzle", "crates/game-host", "crates/host-services", "crates/physics-rapier", "crates/player", "crates/game-kit", "crates/project-g1"]
-exclude = ["crates/vendor/egui-ash-renderer"]
+exclude = ["crates/vendor/egui-ash-renderer", "crates/vendor/rfd"]
 resolver = "3"
 
 [workspace.package]

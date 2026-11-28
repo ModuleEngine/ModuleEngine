@@ -256,6 +256,20 @@ mod tests {
             root.canonicalize().unwrap()
         );
         assert!(!copy.exists());
+        eprintln!(
+            "Save Project As: choose existing project.json, decline replacement, then cancel"
+        );
+        assert!(save_project(&project).unwrap().is_none());
+        assert_eq!(std::fs::read(&project).unwrap(), b"{}");
+        eprintln!("Save Project As: choose existing project.json and confirm replacement");
+        assert_eq!(
+            save_project(&project)
+                .unwrap()
+                .unwrap()
+                .canonicalize()
+                .unwrap(),
+            project.canonicalize().unwrap()
+        );
         eprintln!("Pick folder: select Selected");
         assert_eq!(
             pick_folder("Select an output folder", root)

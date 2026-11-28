@@ -948,6 +948,12 @@ const NATIVE_FILES: &[&str] = &[
     "crates/vendor/egui-ash-renderer/src/shaders/shader.frag.spv",
     "crates/vendor/egui-ash-renderer/src/shaders/shader.vert",
     "crates/vendor/egui-ash-renderer/src/shaders/shader.vert.spv",
+    "crates/vendor/rfd/Cargo.toml",
+    "crates/vendor/rfd/LICENSE",
+    "crates/vendor/rfd/PATCH.md",
+    "crates/vendor/rfd/build.rs",
+    "crates/vendor/rfd/src/lib.rs",
+    "crates/vendor/rfd/src/backend/win_cid/file_dialog/dialog_ffi.rs",
     "crates/native-ui/src/gpu.rs",
     "crates/native-ui/src/lib.rs",
     "crates/native-ui/src/offscreen.rs",
@@ -1152,6 +1158,12 @@ fn native_source_path(path: &str) -> bool {
                 || path.ends_with(".frag")
                 || path.ends_with(".vert")
                 || path.ends_with("/LICENSE")))
+        || matches!(
+            path,
+            "crates/vendor/rfd/LICENSE"
+                | "crates/vendor/rfd/PATCH.md"
+                | "crates/vendor/rfd/src/backend/wasm/style.css"
+        )
         || path.ends_with(".hlsl")
         || path.ends_with(".hlsli")
 }

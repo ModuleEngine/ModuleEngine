@@ -157,6 +157,8 @@ Errors appear in the **Operation result** window. While the report is open, glob
 
 Open, Save As, folder selection and Import use `rfd` on Windows and Linux. Linux needs an XDG Desktop Portal file chooser or the Zenity fallback in a graphical session. The initial directory is an optional hint. The editor resolves relative and Unicode paths and converts compatible extended-length Windows paths for Shell. Missing or incompatible hints leave the picker's default location. The hint is independent of the selected path, Recent Projects, bindings and file I/O.
 
+The bundled `rfd` 0.18.0 carries a [Windows picker fix](../crates/vendor/rfd/PATCH.md). If Windows Shell refuses the starting directory, the picker still opens in its default location.
+
 Save As uses the exact `.json` path returned by the picker after any native replacement confirmation. A selection without `.json` gets an explicit filename error. The adapter receives `None` from `rfd` when the picker returns no path, which leaves the current project open. Run the [native picker check](verification.md#native-pickers) to verify desktop selection and cancellation.
 
 The **Export project…** command in Module Library invokes the same asynchronous Full export command as the File menu. It uses system folder selection and checks unsaved changes and the Gameplay Systems draft. Copying runs outside library painting; results and errors appear in the shared operation report.
